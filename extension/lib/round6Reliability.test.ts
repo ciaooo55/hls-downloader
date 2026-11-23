@@ -56,6 +56,7 @@ it('offers a selected rendition through the refreshed signed master with its ori
     expect(result).toMatchObject({ ok: true })
     expect(native.mock.calls.find(([message]) => message.op === 'offer')?.[0].resource).toMatchObject({
       url: fresh, preferred_bandwidth: quality.bandwidth, preferred_height: quality.height,
+      preferred_variant_id: 'https://cdn.test/b.m3u8',
       request_headers: { 'x-playback-token': 'fresh-header' },
     })
   } finally {

@@ -13,48 +13,55 @@ export global Tokens {
     // 面板展开、提示出现等“回应用户操作”的过渡；减少动态效果时同样降到 1ms。
     out property <duration> motion-slow: reduce-motion ? 1ms : 220ms;
     out property <string> type-face: "Noto Sans CJK SC";
-    // 统一视觉系统 "Graphite + Cobalt"：中性石墨底色 + 单一钴蓝强调色。
-    // 只改取值、不改名字，所有窗口和 Rust 绑定保持兼容。
+    // 统一视觉系统 "Fluent Graphite + Luminous Cobalt"：中性石墨底色 + 钴蓝强调色。
+    // 保留全部既有 token 名称，所有窗口和 Rust 绑定完全兼容。
     out property <length> control-height: 34px;
-    // 圆角只有两档，与 Windows 11 / Fluent 标准控件一致：
-    // 控件（按钮、输入框、选择块、行高亮、导航项）4px；卡片、横幅、图标块、菜单、弹窗 8px。
-    // 状态胶囊、计数徽章、进度轨道用高度一半的全圆角，属于形状而不是档位。
-    out property <length> control-radius: 4px;
+    // 圆角体系：控件 6px（Fluent 原生复选框/下拉框单独保持 4px 对齐），无边框弹窗/图标块 8px（与 Win11 DWM 匹配），主面板/卡片 10px。
+    out property <length> control-radius: 6px;
     out property <length> card-radius: 8px;
-    out property <length> panel-radius: 8px;
+    out property <length> panel-radius: 10px;
     out property <length> control-gap: 8px;
-    out property <color> surface: dark ? #171a20 : #ffffff;
-    out property <color> surface-2: dark ? #1c2027 : #f6f7f9;
-    out property <color> surface-3: dark ? #262b34 : #eceef2;
-    out property <color> control-hover: dark ? #232833 : #f0f2f6;
-    out property <color> control-pressed: dark ? #2c3340 : #e6e9ef;
-    out property <color> canvas: dark ? #0f1115 : #f2f3f6;
-    out property <color> rail: dark ? #12141a : #f8f9fb;
-    out property <color> faint: dark ? #8b93a1 : #5f6b7d;
-    out property <color> selected: dark ? #1b2741 : #eef3ff;
-    out property <color> hairline: dark ? #20242c : #eef0f3;
-    out property <color> shadow: dark ? #00000040 : #1018280f;
-    out property <color> success-surface: dark ? #13301f : #ecfaf1;
-    out property <color> warn-surface: dark ? #33280f : #fff6e5;
-    out property <color> fail-surface: dark ? #3a1a1a : #fef1f0;
-    out property <color> info-surface: dark ? #182540 : #eef3ff;
-    out property <color> ink: dark ? #eef1f6 : #0c111d;
-    out property <color> muted: dark ? #b6bcc8 : #475467;
+    out property <color> surface: dark ? #161922 : #ffffff;
+    out property <color> surface-2: dark ? #1c202b : #f5f7fa;
+    out property <color> surface-3: dark ? #252b38 : #e9edf3;
+    out property <color> control-hover: dark ? #242a37 : #eef1f6;
+    out property <color> control-pressed: dark ? #2d3546 : #e2e7f0;
+    out property <color> canvas: dark ? #0c0e13 : #f1f3f7;
+    out property <color> rail: dark ? #101319 : #f7f8fb;
+    out property <color> faint: dark ? #8690a2 : #5d697c;
+    out property <color> selected: dark ? #192642 : #edf3ff;
+    out property <color> hairline: dark ? #1f2430 : #edf0f5;
+    out property <color> shadow: dark ? #0000004d : #0f172a12;
+    out property <color> success-surface: dark ? #112d1e : #eafaf0;
+    out property <color> warn-surface: dark ? #33250c : #fff6e6;
+    out property <color> fail-surface: dark ? #3b1719 : #fef0ef;
+    out property <color> info-surface: dark ? #162442 : #edf3ff;
+    out property <color> ink: dark ? #f1f4f9 : #0f172a;
+    out property <color> muted: dark ? #b3bccb : #475569;
     out property <color> accent: dark ? #7aa2ff : #2e5bea;
-    out property <color> accent-hover: dark ? #97b6ff : #2149cf;
-    out property <color> accent-soft: dark ? #7aa2ff26 : #2e5bea14;
+    out property <color> accent-top: dark ? #8cb0ff : #3e6bf2;
+    out property <color> accent-hover: dark ? #96b6ff : #234cd4;
+    out property <color> accent-soft: dark ? #7aa2ff29 : #2e5bea16;
+    out property <color> accent-border: dark ? #7aa2ff4a : #2e5bea42;
     // 主按钮按下：比悬停再深一档，代替原来整体降透明度（降透明度会让按钮看起来像被禁用）。
-    out property <color> accent-pressed: dark ? #6489e6 : #1a3cb0;
+    out property <color> accent-pressed: dark ? #6288e8 : #1a3cb3;
     // 键盘焦点环：只在 Tab 导航时出现，鼠标点击不出现，颜色取强调色。
-    out property <color> focus-ring: dark ? #97b6ff : #2e5bea;
-    out property <color> on-accent: dark ? #0f1115 : #ffffff;
+    out property <color> focus-ring: dark ? #96b6ff : #2e5bea;
+    out property <color> on-accent: dark ? #0c0e13 : #ffffff;
     // 状态色按主题取值，浅色/深色底上都保持 ≥4.5:1。
-    out property <color> done: dark ? #3ccf7a : #157f3c;
-    out property <color> warn: dark ? #f5a524 : #b54708;
-    out property <color> fail: dark ? #ff7a73 : #c4271b;
-    out property <color> media-tint: dark ? #c3b2ff : #6941c6;
-    out property <color> archive-tint: dark ? #f2c27a : #b25e09;
-    out property <color> line: dark ? #2a2f39 : #e2e5eb;
+    out property <color> done: dark ? #3ed481 : #15803d;
+    out property <color> warn: dark ? #f6ad2d : #b45309;
+    out property <color> fail: dark ? #ff7c76 : #c8231a;
+    out property <color> media-tint: dark ? #c5b4ff : #6d41cc;
+    out property <color> archive-tint: dark ? #f4c47a : #b45d09;
+    out property <color> line: dark ? #282f3d : #dfe4ec;
+    out property <color> border-strong: dark ? #394356 : #c5cedc;
+    // 播放器影院舞台与浅/深色自适应控制栏令牌。
+    out property <color> cinema-bg: #07090d;
+    out property <color> cinema-bar: dark ? #131720 : #f7f9fc;
+    out property <color> cinema-subbar: dark ? #181c26 : #eff2f7;
+    out property <color> cinema-pill: #0b0e14d9;
+    out property <color> cinema-pill-border: #ffffff24;
 }
 
 // Existing toolbar artwork is shared with the desktop UI. The remaining
@@ -178,13 +185,18 @@ export component HotButton inherits Rectangle {
             ? (root.down ? Tokens.fail-surface.darker(0.06) : Tokens.fail-surface)
             : (root.down ? Tokens.control-pressed : touch.has-hover && root.active ? Tokens.control-hover : Tokens.surface);
     border-width: 1px;
-    border-color: root.danger ? Tokens.fail.with-alpha(0.45) : root.primary ? Tokens.accent : touch.has-hover && root.active ? Tokens.faint.with-alpha(0.5) : Tokens.line;
+    border-color: root.danger ? Tokens.fail.with-alpha(0.48) : root.primary ? Tokens.accent : touch.has-hover && root.active ? Tokens.border-strong : Tokens.line;
     // 按下时阴影收起，配合内容下移 1px，形成“按进去”的反馈。
     drop-shadow-offset-y: root.down ? 0px : root.primary ? 2px : 1px;
-    drop-shadow-blur: root.down ? 0px : root.primary ? 8px : 2px;
-    drop-shadow-color: !root.enabled && !root.busy ? transparent : root.primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.18 : 0.26) : Tokens.shadow;
+    drop-shadow-blur: root.down ? 0px : root.primary ? 10px : 2px;
+    drop-shadow-color: !root.enabled && !root.busy ? transparent : root.primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.28) : Tokens.shadow;
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     animate drop-shadow-blur, drop-shadow-offset-y { duration: Tokens.motion-fast; easing: ease-out; }
+    if root.primary && !root.down && (root.enabled || root.busy): Rectangle {
+        x: 1px; y: 1px; width: parent.width - 2px; height: 1px;
+        border-radius: max(0px, parent.border-radius - 1px);
+        background: Tokens.dark ? #ffffff40 : #ffffff38;
+    }
     FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && key-focus.has-focus; }
     content := HorizontalLayout {
         y: root.down ? 1px : 0px;
@@ -262,7 +274,7 @@ export component ChoiceButton inherits Rectangle {
     height: Tokens.control-height;
     border-radius: Tokens.control-radius;
     border-width: 1px;
-    border-color: selected ? Tokens.accent.with-alpha(0.7) : Tokens.line;
+    border-color: selected ? Tokens.accent-border : touch.has-hover && root.enabled ? Tokens.border-strong : Tokens.line;
     background: selected ? (touch.pressed && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     min-width: choice-content.min-width;
@@ -337,7 +349,7 @@ export component HotCheckBox inherits Rectangle {
         alignment: start;
         Rectangle {
             width: 18px; height: 18px; y: (parent.height - self.height) / 2;
-            border-radius: Tokens.control-radius;
+            border-radius: 4px;
             background: !root.enabled ? (root.checked ? Tokens.faint : Tokens.surface-2) : root.checked ? (touch.pressed ? Tokens.accent-pressed : touch.has-hover ? Tokens.accent-hover : Tokens.accent) : (touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : Tokens.surface);
             border-width: root.checked && !root.ring ? 0px : root.ring ? 2px : 1px;
             border-color: root.ring ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.faint;
@@ -393,13 +405,20 @@ export component CheckRow inherits Rectangle {
 export component FadePanel inherits Rectangle {
     in property <string> page;
     private property <bool> entered: false;
-    public function enter() { self.entered = false; reveal.restart(); }
+    public function enter() {
+        if Tokens.reduce-motion {
+            self.entered = true;
+        } else {
+            self.entered = false;
+            reveal.restart();
+        }
+    }
     init => { self.enter(); }
     changed page => { self.enter(); }
-    opacity: entered ? 1 : 0;
+    opacity: Tokens.reduce-motion || entered ? 1 : 0;
     visible: self.opacity > 0;
     animate opacity { duration: entered ? Tokens.motion : 0ms; easing: ease-out; }
-    reveal := Timer { interval: 16ms; running: !root.entered; triggered => { root.entered = true; } }
+    reveal := Timer { interval: 16ms; running: !Tokens.reduce-motion && !root.entered; triggered => { root.entered = true; } }
     @children
 }
 
@@ -407,7 +426,7 @@ export component Panel inherits Rectangle {
     border-radius: Tokens.panel-radius;
     background: Tokens.surface;
     border-width: 1px;
-    border-color: Tokens.dark ? Tokens.line : Tokens.line.darker(0.04);
+    border-color: Tokens.dark ? Tokens.line : Tokens.line.darker(0.03);
     @children
 }
 
@@ -429,23 +448,27 @@ export struct SegmentBlock {
 
 export component SegmentMapBar inherits Rectangle {
     in property <[SegmentBlock]> segments;
-    height: 7px;
-    border-radius: 3.5px;
+    height: 8px;
+    border-radius: 4px;
     background: Tokens.surface-3;
+    border-width: 1px;
+    border-color: Tokens.line;
     clip: true;
     HorizontalLayout {
-        width: parent.width;
-        height: parent.height;
+        x: 1px;
+        y: 1px;
+        width: max(0px, parent.width - 2px);
+        height: max(1px, parent.height - 2px);
         spacing: 1px;
         for seg[i] in root.segments: Rectangle {
             horizontal-stretch: seg.width-ratio;
             height: parent.height;
             // 软件渲染器不会按圆角裁剪子元素，首尾分段自己带圆角。
-            border-top-left-radius: i == 0 ? root.border-radius : 0px;
-            border-bottom-left-radius: i == 0 ? root.border-radius : 0px;
-            border-top-right-radius: i == root.segments.length - 1 ? root.border-radius : 0px;
-            border-bottom-right-radius: i == root.segments.length - 1 ? root.border-radius : 0px;
-            background: seg.state == "done" ? Tokens.done.with-alpha(0.88) : seg.state == "active" ? Tokens.accent.with-alpha(0.28) : Tokens.surface-3;
+            border-top-left-radius: i == 0 ? max(0px, root.border-radius - 1px) : 0px;
+            border-bottom-left-radius: i == 0 ? max(0px, root.border-radius - 1px) : 0px;
+            border-top-right-radius: i == root.segments.length - 1 ? max(0px, root.border-radius - 1px) : 0px;
+            border-bottom-right-radius: i == root.segments.length - 1 ? max(0px, root.border-radius - 1px) : 0px;
+            background: seg.state == "done" ? Tokens.done.with-alpha(0.90) : seg.state == "active" ? Tokens.accent.with-alpha(0.28) : Tokens.surface-2;
             animate background { duration: Tokens.motion-fast; }
             if seg.state == "active": Rectangle {
                 x: 0px;
@@ -462,7 +485,7 @@ export component SegmentMapBar inherits Rectangle {
 }
 
 // 深色主题下 Fluent 滚动条的细线颜色是 FluentPalette.border（8% 白），几乎看不见；
-// 这里按 Fluent ScrollBar 的几何（14px 轨道、上下各 16px 留白、细线距右缘 4px、宽 2px）
+// 这里按 Fluent ScrollBar 的几何（14px 轨道、上下各 16px 留白、细线距右缘 4px、宽 3px）
 // 在同一位置叠一根可见的细线。它不含 TouchArea，拖动、滚轮、悬停仍由原滚动条处理。
 export component ScrollCue inherits Rectangle {
     in property <length> viewport-y;
@@ -474,10 +497,10 @@ export component ScrollCue inherits Rectangle {
     width: 14px;
     visible: Tokens.dark && root.maximum > 0.5px;
     Rectangle {
-        x: parent.width - 6px; width: 2px; border-radius: 1px;
+        x: parent.width - 7px; width: 3px; border-radius: 1.5px;
         y: 16px + (root.track - root.thumb) * Math.clamp(-root.viewport-y / max(1px, root.maximum), 0, 1);
         height: root.thumb;
-        background: Tokens.faint.with-alpha(0.72);
+        background: Tokens.faint.with-alpha(0.76);
     }
 }
 
@@ -539,6 +562,6 @@ export component HotComboBox {
     }
     if !root.enabled: Rectangle {
         x: 0px; y: 0px; width: root.width; height: root.height;
-        border-radius: Tokens.control-radius; border-width: 1px; border-color: Tokens.line;
+        border-radius: 4px; border-width: 1px; border-color: Tokens.line;
     }
 }

@@ -11,6 +11,8 @@ export component WorkbenchButton inherits Rectangle {
     in property <bool> danger: false;
     in property <bool> menu-item: false;
     in property <bool> outlined: false;
+    in property <bool> subtle: false;
+    in property <bool> active: false;
     in property <bool> drag-source: false;
     // 菜单按钮在菜单展开期间保持按下底色，说明菜单从哪里来。
     in property <bool> open: false;
@@ -23,26 +25,31 @@ export component WorkbenchButton inherits Rectangle {
     horizontal-stretch: menu-item ? 1 : 0;
     border-radius: Tokens.control-radius;
     private property <bool> focus-visible: false;
-    border-width: outlined || primary ? 1px : 0px;
-    border-color: primary ? Tokens.accent : Tokens.line;
-    background: primary ? (touch.pressed && enabled ? Tokens.accent-pressed : touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : danger && menu-item && touch.has-hover && enabled ? Tokens.fail-surface : (touch.pressed || root.open) && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : outlined ? Tokens.surface : transparent;
-    drop-shadow-offset-y: primary || outlined ? 1px : 0px;
-    drop-shadow-blur: primary ? 8px : outlined ? 2px : 0px;
-    drop-shadow-color: !enabled ? transparent : primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.18 : 0.26) : outlined ? Tokens.shadow : transparent;
+    border-width: outlined || primary || active || (danger && !menu-item && touch.has-hover && enabled) ? 1px : 0px;
+    border-color: primary ? Tokens.accent : active ? Tokens.accent-border : danger && touch.has-hover && enabled ? Tokens.fail.with-alpha(0.45) : outlined && touch.has-hover && enabled ? Tokens.border-strong : Tokens.line;
+    background: primary ? (touch.pressed && enabled ? Tokens.accent-pressed : touch.has-hover && enabled ? Tokens.accent-hover : Tokens.accent) : danger && touch.has-hover && enabled ? (touch.pressed ? Tokens.fail-surface.darker(0.06) : Tokens.fail-surface) : active ? (touch.pressed && enabled ? Tokens.selected.mix(Tokens.accent, 0.82) : touch.has-hover && enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : (touch.pressed || root.open) && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.control-hover : outlined ? Tokens.surface : transparent;
+    drop-shadow-offset-y: subtle ? 0px : primary ? 2px : outlined ? 1px : 0px;
+    drop-shadow-blur: subtle ? 0px : primary ? 10px : outlined ? 2px : 0px;
+    drop-shadow-color: subtle || !enabled ? transparent : primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.28) : outlined ? Tokens.shadow : transparent;
     opacity: enabled ? 1 : 0.4;
-    animate background { duration: Tokens.motion-fast; }
+    animate background, border-color { duration: Tokens.motion-fast; }
     accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: focus;
     Tooltip { text: @markdown("\{root.hint}"); }
+    if root.primary && !touch.pressed && root.enabled: Rectangle {
+        x: 1px; y: 1px; width: parent.width - 2px; height: 1px;
+        border-radius: max(0px, parent.border-radius - 1px);
+        background: Tokens.dark ? #ffffff40 : #ffffff38;
+    }
     FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
     content := HorizontalLayout {
         padding-left: root.icon-only ? 0px : root.primary ? 16px : 10px;
         padding-right: root.icon-only ? 0px : root.primary ? 16px : 10px;
         spacing: 7px;
         alignment: root.menu-item ? start : center;
-        WorkbenchIcon { name: root.icon; ink: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : touch.has-hover && root.enabled ? Tokens.ink : Tokens.muted; width: root.menu-item ? 16px : 18px; height: root.menu-item ? 16px : 18px; y: (parent.height - self.height) / 2; }
-        if !root.icon-only: Text { text: root.label; color: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : Tokens.ink; font-size: 13px; font-weight: root.primary ? 600 : root.menu-item ? 400 : 500; vertical-alignment: center; }
+        WorkbenchIcon { name: root.icon; ink: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : root.active ? Tokens.accent : touch.has-hover && root.enabled ? Tokens.ink : Tokens.muted; width: root.menu-item ? 16px : 18px; height: root.menu-item ? 16px : 18px; y: (parent.height - self.height) / 2; }
+        if !root.icon-only: Text { text: root.label; color: root.primary ? Tokens.on-accent : root.danger ? Tokens.fail : root.active ? Tokens.accent : Tokens.ink; font-size: 13px; font-weight: root.primary ? 600 : root.menu-item ? 400 : 500; vertical-alignment: center; }
     }
     focus := FocusScope {
         enabled: root.enabled;
@@ -73,8 +80,10 @@ export component NavigationItem inherits Rectangle {
     callback clicked;
     height: 36px; border-radius: Tokens.control-radius;
     private property <bool> focus-visible: false;
+    border-width: 1px;
+    border-color: active ? Tokens.accent-border : transparent;
     background: active ? (touch.pressed && enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
-    animate background { duration: Tokens.motion-fast; }
+    animate background, border-color { duration: Tokens.motion-fast; }
     opacity: root.enabled ? 1 : 0.48;
     accessible-role: tab; accessible-label: root.show-count ? root.label + "，" + root.count + " 项" : root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
@@ -90,8 +99,8 @@ export component NavigationItem inherits Rectangle {
         if !root.compact: Text { text: root.label; color: root.active ? Tokens.ink : touch.has-hover ? Tokens.ink : Tokens.muted; font-size: 13px; font-weight: root.active ? 600 : 400; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
         if !root.compact && root.show-count && root.count > 0: Rectangle {
             width: max(22px, count-label.preferred-width + 12px); height: 20px; y: (parent.height - self.height) / 2; border-radius: 10px;
-            background: root.active ? Tokens.accent : Tokens.surface-3;
-            count-label := Text { text: root.count; color: root.active ? Tokens.on-accent : Tokens.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            background: root.active ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.14) : Tokens.surface-3;
+            count-label := Text { text: root.count; color: root.active ? Tokens.accent : Tokens.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
         }
     }
     if root.compact && root.count > 0: Rectangle {
@@ -112,5 +121,7 @@ export component FileTile inherits Rectangle {
     private property <color> tint: kind == "media" ? Tokens.media-tint : kind == "archive" ? Tokens.archive-tint : kind == "program" ? Tokens.accent : Tokens.muted;
     width: 36px; height: 36px; border-radius: Tokens.card-radius;
     background: tint.with-alpha(Tokens.dark ? 0.16 : 0.10);
+    border-width: 1px;
+    border-color: tint.with-alpha(Tokens.dark ? 0.28 : 0.18);
     WorkbenchIcon { name: root.kind; ink: root.tint; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
 }

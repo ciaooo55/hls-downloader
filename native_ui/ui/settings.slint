@@ -48,13 +48,14 @@ export component SettingsWindow inherits Window {
             }
             Rectangle { width: 1px; background: Tokens.line; }
             VerticalLayout {
-            padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 16px;
-            Text { text: root.selected-group; color: Tokens.ink; font-size: 17px; font-weight: 600; }
+            padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 14px;
+            Text { text: root.selected-group; color: Tokens.ink; font-size: 18px; font-weight: 700; }
             FadePanel {
                 page: root.selected-group;
                 background: Tokens.surface;
                 border-radius: Tokens.panel-radius;
                 border-width: 1px; border-color: Tokens.line;
+                drop-shadow-offset-y: 1px; drop-shadow-blur: 6px; drop-shadow-color: Tokens.shadow;
             content := HotScrollView {
                 x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
                 horizontal-scrollbar-policy: always-off;

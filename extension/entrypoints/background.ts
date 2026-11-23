@@ -1324,6 +1324,7 @@ async function resourcePayload(
     resource_kind: resource.kind === 'hls' && resource.isLive === true ? 'live' : resource.kind,
     preferred_bandwidth: resource.preferredBandwidth || 0,
     preferred_height: resource.preferredHeight || 0,
+    preferred_variant_id: resource.preferredVariantId || '',
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
     cookie: resourceCookie ?? await cookiesFor(resource.url, pageUrl, resource.tabId, resource.frameId ?? 0),

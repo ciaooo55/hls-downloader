@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { Tokens, HotCheckBox, HotScrollView, ScrollCue } from "theme.slint";
+import { Tokens, HotCheckBox, HotScrollView, ScrollCue, SegmentBlock, SegmentMapBar, Panel } from "theme.slint";
 import { WorkbenchIcon, WorkbenchButton, NavigationItem, FileTile } from "workbench_components.slint";
 import { MediaSurface, MediaView } from "media.slint";
 
@@ -32,7 +32,7 @@ component HeaderCell inherits Rectangle {
     height: 38px;
     background: !root.sortable ? transparent : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
     animate background { duration: Tokens.motion-fast; }
-    Text { x: root.label-x; width: parent.width - root.label-x - 6px; text: root.label; color: Tokens.faint; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; vertical-alignment: center; overflow: elide; }
+    Text { x: root.label-x; width: parent.width - root.label-x - 6px; text: root.label; color: root.sortable && touch.has-hover ? Tokens.ink : Tokens.muted; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; vertical-alignment: center; overflow: elide; animate color { duration: Tokens.motion-fast; } }
     touch := TouchArea { mouse-cursor: root.sortable ? pointer : default; accessible-role: button; accessible-label: root.label; clicked => { root.clicked(); } }
 }
 
@@ -95,6 +95,19 @@ export component WorkbenchWindow inherits Window {
     in property <MediaView> media-state;
     in property <image> media-thumbnail;
     in property <string> media-notice;
+    in-out property <bool> inspector-open: false;
+    in property <string> inspector-title;
+    in property <string> inspector-kind: "file";
+    in property <string> inspector-status;
+    in property <string> inspector-status-code;
+    in property <string> inspector-transfer;
+    in property <string> inspector-connections;
+    in property <string> inspector-diagnostic;
+    in property <string> inspector-speed-stats;
+    in property <float> inspector-progress;
+    in property <[SegmentBlock]> inspector-segments;
+    in property <[float]> inspector-speed-history;
+    in property <bool> inspector-can-open-folder;
     out property <length> video-x: media.video-x;
     out property <length> video-y: media.video-y;
     out property <length> video-width: media.video-width;
@@ -135,6 +148,10 @@ export component WorkbenchWindow inherits Window {
             if (event.modifiers.control && (event.text == "n" || event.text == "N")) { root.action("new"); return accept; }
             if (event.modifiers.control && (event.text == "v" || event.text == "V")) { root.action("paste"); return accept; }
             if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.action("task:copy_file"); return accept; }
+            if (event.modifiers.control && (event.text == "f" || event.text == "F")) { search.focus(); return accept; }
+            if (event.modifiers.control && event.text == ",") { root.action("settings"); return accept; }
+            if (event.modifiers.alt && (event.text == "i" || event.text == "I")) { root.inspector-open = !root.inspector-open; return accept; }
+            if (event.text == " " && !search.has-focus && root.selected-count > 0) { root.key-command("toggle_pause", false, false); return accept; }
             return reject;
         }
         key-released(event) => { root.ctrl-down = event.modifiers.control; root.shift-down = event.modifiers.shift; return reject; }
@@ -168,6 +185,7 @@ export component WorkbenchWindow inherits Window {
                                     Text { text: "v" + root.product-version + " · 下载工作台"; color: Tokens.faint; font-size: 10px; overflow: elide; }
                                 }
                             }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.hairline; }
                         }
                         VerticalLayout {
                             // 右侧 8px 留给覆盖式滚动条，避免压住选中项与计数徽标。
@@ -210,6 +228,7 @@ export component WorkbenchWindow inherits Window {
                     spacing: 0px;
                     Rectangle {
                         height: 60px;
+                        background: Tokens.surface;
                         HorizontalLayout {
                             padding-left: root.content-inset; padding-right: root.content-inset; spacing: 8px;
                             HotScrollView {
@@ -217,7 +236,7 @@ export component WorkbenchWindow inherits Window {
                                 horizontal-scrollbar-policy: always-off;
                                 horizontal-stretch: 1;
                                 HorizontalLayout {
-                                    height: 60px; spacing: 4px; alignment: start;
+                                    height: 60px; spacing: 5px; alignment: start;
                                     for item in root.toolbar: WorkbenchButton {
                                         y: (parent.height - self.height) / 2;
                                         label: item.action == "start" && root.selected-count > 0 ? "开始 / 继续" : item.action == "pause" && root.selected-count > 0 ? "暂停" : item.label;
@@ -231,19 +250,18 @@ export component WorkbenchWindow inherits Window {
                             if root.selected-count > 0: WorkbenchButton { label: "删除所选任务"; icon: "delete"; danger: true; icon-only: true; y: (parent.height - self.height) / 2; enabled: root.can-delete; clicked => { root.action("delete"); } }
                             tools-button := WorkbenchButton { label: "工具"; icon: "more"; open: root.tools-open; icon-only: root.viewport-width < 700px; y: (parent.height - self.height) / 2; clicked => { root.context-open = false; root.tools-x = self.absolute-position.x; root.tools-y = self.absolute-position.y + self.height + 4px; root.tools-open = !root.tools-open; } }
                             Rectangle {
-                                width: root.viewport-width < 700px ? 108px : root.viewport-width < 980px ? 150px : 240px; height: Tokens.control-height;
+                                width: root.viewport-width < 700px ? 108px : root.viewport-width < 980px ? 156px : 248px; height: Tokens.control-height;
                                 y: (parent.height - self.height) / 2;
-                                background: Tokens.surface;
+                                background: search.has-focus ? Tokens.surface : Tokens.surface-2;
                                 border-width: 1px; border-color: search.has-focus ? Tokens.accent : Tokens.line; border-radius: Tokens.control-radius;
-                                drop-shadow-blur: search.has-focus ? 0px : 2px; drop-shadow-offset-y: 1px; drop-shadow-color: Tokens.shadow;
-                                animate border-color { duration: Tokens.motion-fast; }
-                                Rectangle { width: parent.width + 6px; height: parent.height + 6px; border-radius: parent.border-radius + 3px; border-width: 3px; border-color: search.has-focus ? Tokens.accent-soft : transparent; animate border-color { duration: Tokens.motion-fast; } }
+                                animate background, border-color { duration: Tokens.motion-fast; }
+                                Rectangle { x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; border-radius: parent.border-radius + 3px; border-width: 2px; border-color: search.has-focus ? Tokens.accent-soft : transparent; animate border-color { duration: Tokens.motion-fast; } }
                                 HorizontalLayout {
-                                    padding-left: 12px; padding-right: 5px; spacing: 8px;
-                                    WorkbenchIcon { name: "search"; ink: search.has-focus ? Tokens.accent : Tokens.faint; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
+                                    padding-left: 11px; padding-right: 5px; spacing: 8px;
+                                    WorkbenchIcon { name: "search"; ink: search.has-focus ? Tokens.accent : Tokens.faint; width: 15px; height: 15px; y: (parent.height - self.height) / 2; }
                                     Rectangle {
                                         horizontal-stretch: 1;
-                                        if root.query == "": Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.viewport-width < 980px ? "搜索" : "搜索任务、网址或文件名"; color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-alignment: left; overflow: elide; }
+                                        if root.query == "": Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.viewport-width < 980px ? "搜索 (Ctrl+F)" : "搜索任务、网址或文件名  Ctrl+F"; color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-alignment: left; overflow: elide; }
                                         search := TextInput {
                                             x: 0px; y: 0px; width: parent.width; height: parent.height;
                                             text <=> root.query; single-line: true; color: Tokens.ink; font-size: 13px; vertical-alignment: center; horizontal-alignment: left;
@@ -256,31 +274,32 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
                             Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.line; }
-                            WorkbenchButton { label: "设置"; icon: "settings"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
+                            WorkbenchButton { label: "设置 (Ctrl+,)"; icon: "settings"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
                             WorkbenchButton { label: "切换主题 / Cycle System, Light, Dark"; icon: Tokens.dark ? "sun" : "theme"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
                         }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.line; }
                     }
                     VerticalLayout {
-                        padding-left: root.content-inset; padding-right: root.content-inset; padding-top: 0px; padding-bottom: 16px; spacing: 0px;
+                        padding-left: root.content-inset; padding-right: root.content-inset; padding-top: 2px; padding-bottom: 14px; spacing: 0px;
                         vertical-stretch: 1;
                         Rectangle {
-                            height: root.viewport-height < 500px ? 48px : 58px;
+                            height: root.viewport-height < 500px ? 46px : 54px;
                             HorizontalLayout {
                                 width: parent.width; height: parent.height;
                                 spacing: 10px;
                                 Text {
-                                    text: root.heading; color: Tokens.ink; font-weight: 700; font-size: root.viewport-width < 900px ? 19px : 22px; vertical-alignment: center;
+                                    text: root.heading; color: Tokens.ink; font-weight: 700; font-size: root.viewport-width < 900px ? 19px : 21px; vertical-alignment: center;
                                     min-width: 0px; horizontal-stretch: 0; overflow: elide;
                                     Tooltip { text: @markdown("\{root.heading}"); }
                                 }
                                 Rectangle {
                                     width: max(26px, total.preferred-width + 14px); height: 22px; y: (parent.height - self.height) / 2;
-                                    border-radius: 11px; background: Tokens.surface-3;
-                                    total := Text { text: root.visible-count; color: Tokens.muted; font-size: 12px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; }
+                                    border-radius: 11px; background: Tokens.surface; border-width: 1px; border-color: Tokens.line;
+                                    total := Text { text: root.visible-count; color: Tokens.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; }
                                 }
                                 if root.selected-count > 0: Rectangle {
                                     width: sel-layout.preferred-width; height: 30px; y: (parent.height - self.height) / 2;
-                                    border-radius: 15px; background: Tokens.accent-soft;
+                                    border-radius: 15px; background: Tokens.selected; border-width: 1px; border-color: Tokens.accent-border;
                                     sel-layout := HorizontalLayout {
                                         padding-left: 12px; padding-right: 3px; spacing: 2px;
                                         Text { text: "已选 " + root.selected-count + " 项"; color: Tokens.accent; font-size: 12px; font-weight: 600; vertical-alignment: center; }
@@ -289,6 +308,7 @@ export component WorkbenchWindow inherits Window {
                                     }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
+                                WorkbenchButton { label: root.inspector-open ? "收起检视" : "任务检视"; hint: "切换底部实时检视面板 (Alt+I)"; icon: "details"; active: root.inspector-open; icon-only: root.viewport-width < 1180px; y: (parent.height - self.height) / 2; clicked => { root.inspector-open = !root.inspector-open; } }
                                 WorkbenchButton { label: "导入"; icon: "import"; icon-only: root.viewport-width < 1100px; y: (parent.height - self.height) / 2; clicked => { root.action("import"); } }
                                 WorkbenchButton { label: "导出"; icon: "export"; icon-only: root.viewport-width < 1100px; y: (parent.height - self.height) / 2; clicked => { root.action("export"); } }
                                 WorkbenchButton { label: "刷新"; icon: "refresh"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("refresh"); } }
@@ -324,12 +344,16 @@ export component WorkbenchWindow inherits Window {
                             for row[index] in root.tasks: Rectangle {
                                 height: root.row-height;
                                 if index < root.tasks.length - 1: Rectangle { height: 1px; x: 16px; y: parent.height - 1px; width: parent.width - 32px; background: Tokens.hairline; }
-                                // 选中/悬停底色内缩成圆角块，避免直角色带顶到卡片圆角边缘。
+                                // 选中/悬停底色内缩成圆角块，选中行左侧加 3px 钴蓝竖条强化辨识。
                                 Rectangle {
                                     x: 6px; y: 3px; width: parent.width - 12px - (task-list.viewport-height > task-list.visible-height ? 8px : 0px); height: parent.height - 6px; border-radius: Tokens.control-radius;
                                     background: row.selected ? Tokens.selected : row-touch.pressed ? Tokens.surface-3 : row-touch.has-hover ? Tokens.surface-2 : transparent;
-                                    border-width: row.selected ? 1px : 0px; border-color: Tokens.accent.with-alpha(Tokens.dark ? 0.32 : 0.22);
-                                    animate background { duration: Tokens.motion-fast; }
+                                    border-width: row.selected ? 1px : 0px; border-color: Tokens.accent-border;
+                                    animate background, border-color { duration: Tokens.motion-fast; }
+                                }
+                                if row.selected: Rectangle {
+                                    x: 6px; y: 12px; width: 3px; height: parent.height - 24px; border-radius: 1.5px;
+                                    background: Tokens.accent;
                                 }
                                 row-touch := TouchArea {
                                     accessible-role: list-item; accessible-label: row.name + " " + row.status;
@@ -364,30 +388,30 @@ export component WorkbenchWindow inherits Window {
                                     if column.id == "progress": HorizontalLayout {
                                         padding-left: root.compact-columns ? 10px : 16px; padding-right: root.compact-columns ? 8px : 14px; spacing: root.compact-columns ? 6px : 10px;
                                         Rectangle {
-                                            height: 6px; y: (parent.height - self.height) / 2; border-radius: 3px; background: Tokens.surface-3; horizontal-stretch: 1;
+                                            height: 7px; y: (parent.height - self.height) / 2; border-radius: 3.5px; background: Tokens.surface-3; horizontal-stretch: 1;
                                             Rectangle {
                                                 x: 0px; height: parent.height;
                                                 // 极小进度（如 1%–6%）也保持完整胶囊形状，不缩成一个圆点。
                                                 width: row.progress <= 0 ? 0px : max(parent.height * 2, parent.width * Math.clamp(row.progress, 0, 1));
                                                 background: row.status-code == "paused" ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.accent;
-                                                border-radius: 3px;
+                                                border-radius: 3.5px;
                                                 animate width { duration: Tokens.motion; easing: ease-out; }
                                                 animate background { duration: Tokens.motion-fast; }
                                             }
                                         }
-                                        Text { text: round(row.progress * 100) + "%"; width: root.compact-columns ? 30px : 36px; color: Tokens.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: right; }
+                                        Text { text: round(row.progress * 100) + "%"; width: root.compact-columns ? 30px : 36px; color: row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: right; }
                                     }
                                     if column.id == "status": VerticalLayout {
                                         alignment: center; padding-left: root.compact-columns ? 10px : 16px; padding-right: 6px; spacing: 3px;
                                         private property <color> tone: row.status-code == "paused" ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.status-code == "queued" ? Tokens.muted : Tokens.accent;
                                         Rectangle {
                                             width: min(parent.width - (column.width < 100 ? 16px : 24px), badge-row.preferred-width); height: 24px; border-radius: 12px;
-                                            border-width: 1px; border-color: tone.with-alpha(Tokens.dark ? 0.30 : 0.20);
+                                            border-width: 1px; border-color: tone.with-alpha(Tokens.dark ? 0.34 : 0.22);
                                             background: row.status-code == "paused" ? Tokens.warn-surface : row.status-code == "completed" || row.status-code == "done" ? Tokens.success-surface : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail-surface : row.status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
                                             animate background { duration: Tokens.motion-fast; }
                                             badge-row := HorizontalLayout {
                                                 padding-left: column.width < 100 ? 7px : 9px; padding-right: column.width < 100 ? 7px : 10px; spacing: 6px;
-                                                if column.width >= 100: Rectangle { width: 6px; Rectangle { width: 6px; height: 6px; border-radius: 3px; background: tone; } }
+                                                if column.width >= 100: Rectangle { width: 6px; Rectangle { width: 6px; height: 6px; y: (parent.height - self.height) / 2; border-radius: 3px; background: tone; } }
                                                 badge := Text { text: row.status; color: tone; font-size: 11px; font-weight: 600; vertical-alignment: center; overflow: elide; }
                                             }
                                         }
@@ -398,7 +422,7 @@ export component WorkbenchWindow inherits Window {
                                         if row.primary-action != "": WorkbenchButton {
                                             label: row.primary-label + "：" + row.name;
                                             icon: row.primary-action == "pause" ? "pause" : row.primary-action == "retry" ? "retry" : row.primary-action == "open" ? "file" : row.primary-action == "open_folder" ? "folder" : "play";
-                                            icon-only: true; width: 30px; height: 30px; y: (parent.height - self.height) / 2;
+                                            subtle: true; icon-only: true; width: 30px; height: 30px; y: (parent.height - self.height) / 2;
                                             clicked => { root.select-row(row.id,false,false); root.action("task:" + row.primary-action); }
                                         }
                                         WorkbenchButton {
@@ -436,15 +460,17 @@ export component WorkbenchWindow inherits Window {
                                 HorizontalLayout {
                                     alignment: center;
                                     Rectangle {
-                                        width: 88px; height: 88px; border-radius: Tokens.card-radius; background: Tokens.accent-soft;
+                                        width: 92px; height: 92px; border-radius: 20px; background: Tokens.accent-soft;
+                                        border-width: 1px; border-color: Tokens.accent-border;
                                         Rectangle {
-                                            width: 60px; height: 60px; border-radius: Tokens.card-radius; background: Tokens.surface;
+                                            width: 62px; height: 62px; border-radius: 14px; background: Tokens.surface;
+                                            border-width: 1px; border-color: Tokens.line;
                                             drop-shadow-offset-y: 4px; drop-shadow-blur: 14px; drop-shadow-color: Tokens.accent.with-alpha(0.22);
                                             Image { source: @image-url("../../assets/app-icon.png"); width: 38px; height: 38px; image-fit: contain; }
                                         }
                                     }
                                 }
-                                Rectangle { height: 8px; }
+                                Rectangle { height: 6px; }
                                 Text { text: root.task-count > 0 ? "当前筛选下没有任务" : "开始你的第一个下载"; color: Tokens.ink; font-size: 19px; font-weight: 700; horizontal-alignment: center; }
                                 Text { text: root.task-count > 0 ? "试试调整搜索、状态、分类或队列筛选" : "粘贴链接、拖入文件，或让浏览器插件把视频和下载交给这里"; color: Tokens.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
                                 Rectangle { height: 6px; }
@@ -457,7 +483,14 @@ export component WorkbenchWindow inherits Window {
                                     WorkbenchButton { label: "新建下载"; icon: "new"; primary: true; clicked => { root.action("new"); } }
                                     WorkbenchButton { label: "粘贴链接"; icon: "paste"; outlined: true; clicked => { root.action("paste"); } }
                                 }
-                                if root.task-count == 0: Text { text: "Ctrl+N 新建 · Ctrl+V 粘贴 · 支持 HTTP / HLS / DASH / FTP / SFTP / BT"; color: Tokens.faint; font-size: 11px; horizontal-alignment: center; }
+                                if root.task-count == 0: HorizontalLayout {
+                                    alignment: center; spacing: 6px; padding-top: 6px;
+                                    for hint in ["Ctrl+N 新建", "Ctrl+V 粘贴", "Ctrl+F 搜索", "HLS / DASH", "HTTP / FTP / SFTP / BT"]: Rectangle {
+                                        height: 22px; width: hint-lbl.preferred-width + 14px; border-radius: 11px;
+                                        background: Tokens.surface-2; border-width: 1px; border-color: Tokens.line;
+                                        hint-lbl := Text { text: hint; color: Tokens.faint; font-size: 10px; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                }
                             }
                         }
                             }
@@ -469,6 +502,80 @@ export component WorkbenchWindow inherits Window {
                         }
                         }
                         }
+                        // 非模态可折叠实时检视抽屉：点选任务无需弹窗即可看速度趋势、分片与状态。
+                        if root.inspector-open && !(root.media-visible && !root.media-detached) && root.viewport-height >= 500px: Rectangle {
+                            height: root.inspector-title == "" ? 64px : (root.inspector-diagnostic != "" ? 174px : 146px);
+                            VerticalLayout {
+                                padding-top: 10px; spacing: 0px;
+                                Panel {
+                                    vertical-stretch: 1;
+                                    clip: true;
+                                    if root.inspector-title == "": HorizontalLayout {
+                                        padding-left: 16px; padding-right: 12px; spacing: 10px;
+                                        WorkbenchIcon { name: "details"; ink: Tokens.faint; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
+                                        Text { text: "选择列表中的任意任务，即可在此实时查看传输速度、动态分片与诊断状态（Alt+I 收起）"; color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                        WorkbenchButton { label: "收起检视"; icon: "close"; icon-only: true; width: 28px; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.inspector-open = false; } }
+                                    }
+                                    if root.inspector-title != "": VerticalLayout {
+                                        padding: 12px; padding-left: 14px; padding-right: 12px; spacing: 8px;
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            FileTile { kind: root.inspector-kind; width: 30px; height: 30px; y: (parent.height - self.height) / 2; }
+                                            VerticalLayout {
+                                                alignment: center; spacing: 2px; horizontal-stretch: 1; min-width: 0px;
+                                                HorizontalLayout {
+                                                    spacing: 8px;
+                                                    Text { text: root.inspector-title; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; }
+                                                    Rectangle {
+                                                        height: 20px; width: insp-st.preferred-width + 14px; y: (parent.height - self.height) / 2; border-radius: 10px;
+                                                        background: root.inspector-status-code == "paused" ? Tokens.warn-surface : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.success-surface : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail-surface : Tokens.info-surface;
+                                                        insp-st := Text { text: root.inspector-status; color: root.inspector-status-code == "paused" ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail : Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                                    }
+                                                }
+                                                Text { text: root.inspector-transfer + (root.inspector-speed-stats != "" ? "  ·  " + root.inspector-speed-stats : ""); color: Tokens.muted; font-size: 11px; overflow: elide; }
+                                            }
+                                            if root.inspector-can-open-folder: WorkbenchButton { label: "打开位置"; icon: "folder"; outlined: true; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.action("task:open_folder"); } }
+                                            WorkbenchButton { label: "完整详情"; icon: "details"; outlined: true; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.action("details"); } }
+                                            WorkbenchButton { label: "收起检视"; icon: "close"; icon-only: true; width: 28px; height: 28px; y: (parent.height - self.height) / 2; clicked => { root.inspector-open = false; } }
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 14px;
+                                            VerticalLayout {
+                                                horizontal-stretch: 2; spacing: 6px; alignment: center;
+                                                if root.inspector-segments.length > 0: SegmentMapBar { segments: root.inspector-segments; }
+                                                if root.inspector-segments.length == 0: Rectangle {
+                                                    height: 7px; border-radius: 3.5px; background: Tokens.surface-3; clip: true;
+                                                    Rectangle { x: 0px; height: parent.height; width: parent.width * Math.clamp(root.inspector-progress, 0, 1); border-radius: 3.5px; background: root.inspector-progress >= 1 ? Tokens.done : Tokens.accent; }
+                                                }
+                                                Text { text: root.inspector-connections; color: Tokens.faint; font-size: 11px; overflow: elide; }
+                                            }
+                                            if root.inspector-speed-history.length > 0: Rectangle {
+                                                width: 196px; height: 34px; border-radius: 6px; background: Tokens.surface-2; border-width: 1px; border-color: Tokens.hairline; clip: true;
+                                                Rectangle {
+                                                    x: 6px; y: 5px; width: parent.width - 12px; height: parent.height - 10px;
+                                                    for sample[idx] in root.inspector-speed-history: Rectangle {
+                                                        width: max(2px, parent.width / max(root.inspector-speed-history.length, 1) - 1px);
+                                                        x: idx * (parent.width / max(root.inspector-speed-history.length, 1));
+                                                        height: max(2px, parent.height * sample);
+                                                        y: parent.height - self.height;
+                                                        border-top-left-radius: 1.5px; border-top-right-radius: 1.5px;
+                                                        background: Tokens.accent; opacity: 0.78;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if root.inspector-diagnostic != "": Rectangle {
+                                            height: 24px; border-radius: 6px; background: Tokens.warn-surface; border-width: 1px; border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.34 : 0.24);
+                                            HorizontalLayout {
+                                                padding-left: 8px; padding-right: 8px; spacing: 6px;
+                                                WorkbenchIcon { name: "failed"; ink: Tokens.warn; width: 13px; height: 13px; y: (parent.height - self.height) / 2; }
+                                                Text { text: root.inspector-diagnostic; color: Tokens.ink; font-size: 11px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -477,24 +584,31 @@ export component WorkbenchWindow inherits Window {
             }
             Rectangle { height: 1px; background: Tokens.line; }
             Rectangle {
-                height: root.notice != "" ? 56px : 30px; background: Tokens.rail;
+                height: root.notice != "" ? 60px : 32px; background: Tokens.rail;
                 VerticalLayout {
                     padding-left: 16px; padding-right: 16px;
                     if root.notice != "": Rectangle {
-                        height: 26px;
+                        height: 28px;
+                        Rectangle {
+                            x: -16px; width: parent.width + 32px; height: parent.height;
+                            background: Tokens.warn-surface;
+                            Rectangle { x: 0px; y: 0px; width: 3px; height: parent.height; background: Tokens.warn; }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.warn.with-alpha(Tokens.dark ? 0.30 : 0.20); }
+                        }
                         HorizontalLayout {
                             spacing: 8px;
                             WorkbenchIcon { name: "failed"; ink: Tokens.warn; width: 14px; height: 14px; y: (parent.height - self.height) / 2; }
-                            Text { text: root.notice; color: Tokens.warn; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; Tooltip { text: @markdown("\{root.notice}"); } }
+                            Text { text: root.notice; color: Tokens.warn; font-size: 11px; font-weight: 500; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; Tooltip { text: @markdown("\{root.notice}"); } }
                         }
                     }
                     HorizontalLayout {
-                        height: 30px; spacing: 8px;
+                        height: 32px; spacing: 8px;
                         // 引擎连接前（默认文案）显示琥珀色，连接后才显示绿色。
                         StatusDot { tone: root.connection == "下载引擎已连接" ? Tokens.done : Tokens.warn; y: (parent.height - self.height) / 2; }
                         Text { text: root.connection; color: Tokens.muted; font-size: 11px; vertical-alignment: center; overflow: elide; }
                         Text { text: root.summary; color: Tokens.muted; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                        WorkbenchIcon { name: "extension"; ink: Tokens.faint; width: 13px; height: 13px; y: (parent.height - self.height) / 2; }
+                        StatusDot { tone: root.browser-status == "浏览器已连接" ? Tokens.done : Tokens.faint; y: (parent.height - self.height) / 2; }
+                        WorkbenchIcon { name: "extension"; ink: root.browser-status == "浏览器已连接" ? Tokens.accent : Tokens.faint; width: 13px; height: 13px; y: (parent.height - self.height) / 2; }
                         Text { text: root.browser-status; color: Tokens.muted; font-size: 11px; vertical-alignment: center; overflow: elide; }
                     }
                 }

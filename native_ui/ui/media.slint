@@ -1,4 +1,4 @@
-import { Tokens, HotButton, HotComboBox } from "theme.slint";
+import { Tokens, HotButton, HotComboBox, WorkbenchIcon } from "theme.slint";
 import { WorkbenchButton } from "workbench_components.slint";
 
 export struct MediaView {
@@ -34,25 +34,41 @@ export component MediaSeek inherits FocusScope {
         return reject;
     }
     // 轨道、已播放段都从左缘开始（x: 0），否则 Slint 会把未指定 x 的子元素水平居中。
-    Rectangle { x: 0px; y: (parent.height - 4px)/2; height: 4px; width: parent.width; background: root.enabled && (pointer.has-hover || pointer.pressed) ? Tokens.accent-soft : Tokens.surface-3; border-radius: 2px; }
-    Rectangle { x: 0px; y: (parent.height - 4px)/2; height: 4px; width: parent.width * max(0,min(1,root.value/max(1,root.maximum))); background: root.enabled ? Tokens.accent : Tokens.faint; border-radius: 2px; }
+    private property <length> track-h: root.enabled && (pointer.has-hover || pointer.pressed) ? 6px : 4px;
     Rectangle {
-        x: max(0px,min(parent.width - self.width,parent.width*root.value/max(1,root.maximum) - self.width / 2)); y: (parent.height - self.height) / 2;
-        width: root.enabled && pointer.pressed ? 18px : root.enabled && pointer.has-hover ? 16px : 14px; height: self.width; border-radius: self.width / 2;
-        background: root.enabled && pointer.pressed ? Tokens.accent-soft : Tokens.surface; border-width: root.has-focus ? 4px : 3px; border-color: !root.enabled ? Tokens.faint : pointer.pressed ? Tokens.accent-pressed : pointer.has-hover ? Tokens.accent-hover : Tokens.accent;
+        x: 0px; y: (parent.height - root.track-h) / 2; height: root.track-h; width: parent.width;
+        background: root.enabled && (pointer.has-hover || pointer.pressed) ? Tokens.accent-soft : Tokens.surface-3;
+        border-radius: root.track-h / 2;
+        animate height, background { duration: Tokens.motion-fast; easing: ease-out; }
+    }
+    Rectangle {
+        x: 0px; y: (parent.height - root.track-h) / 2; height: root.track-h;
+        width: parent.width * max(0, min(1, root.value / max(1, root.maximum)));
+        background: root.enabled ? Tokens.accent : Tokens.faint;
+        border-radius: root.track-h / 2;
+        animate height { duration: Tokens.motion-fast; easing: ease-out; }
+    }
+    Rectangle {
+        x: max(0px, min(parent.width - self.width, parent.width * root.value / max(1, root.maximum) - self.width / 2));
+        y: (parent.height - self.height) / 2;
+        width: root.enabled && pointer.pressed ? 16px : root.enabled && pointer.has-hover ? 15px : 12px; height: self.width; border-radius: self.width / 2;
+        background: root.enabled && pointer.pressed ? Tokens.selected : Tokens.surface;
+        border-width: root.has-focus ? 3.5px : 2.5px;
+        border-color: !root.enabled ? Tokens.faint : pointer.pressed ? Tokens.accent-pressed : pointer.has-hover ? Tokens.accent-hover : Tokens.accent;
         animate width, height { duration: Tokens.motion-fast; easing: ease-out; }
         animate background, border-color { duration: Tokens.motion-fast; }
-        drop-shadow-blur: 3px; drop-shadow-offset-y: 1px; drop-shadow-color: Tokens.shadow;
+        drop-shadow-blur: 4px; drop-shadow-offset-y: 1px; drop-shadow-color: Tokens.shadow;
     }
     pointer := TouchArea {
         enabled: root.enabled;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => { root.focus(); root.seek(root.target); }
         moved => { if self.pressed { root.seek(root.target); } }
     }
 }
 
 export component MediaSurface inherits Rectangle {
-    background: Tokens.surface-2;
+    background: Tokens.cinema-bar;
     in property <MediaView> state;
     in property <bool> detached;
     in property <bool> fullscreen;
@@ -71,98 +87,145 @@ export component MediaSurface inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
         Rectangle {
-            height: Tokens.control-height + 16px;
+            height: 46px;
+            background: Tokens.cinema-bar;
             HorizontalLayout {
-                width: parent.width; height: parent.height; padding: 8px; padding-left: 14px; spacing: Tokens.control-gap;
+                width: parent.width; height: parent.height; padding: 6px; padding-left: 14px; padding-right: 12px; spacing: Tokens.control-gap;
+                Rectangle {
+                    width: 26px; height: 26px; y: (parent.height - self.height) / 2;
+                    border-radius: 6px; background: Tokens.selected; border-width: 1px; border-color: Tokens.accent-border;
+                    WorkbenchIcon { name: "media"; ink: Tokens.accent; width: 14px; height: 14px; x: 6px; y: 6px; }
+                }
                 Text { text: root.state.title; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
-                WorkbenchButton { label: root.detached ? "回到主窗" : "画中画"; icon: root.detached ? "dock" : "pip"; outlined: true; icon-only: true; clicked => { root.action(root.detached ? "dock" : "pip"); } }
-                WorkbenchButton { label: root.fullscreen ? "退出全屏" : "全屏"; icon: root.fullscreen ? "restore" : "fullscreen"; outlined: true; icon-only: true; clicked => { root.action("fullscreen"); } }
-                WorkbenchButton { label: "停止"; icon: "stop"; outlined: true; icon-only: true; clicked => { root.action("stop"); } }
+                if root.state.buffering: Rectangle {
+                    height: 22px; width: buf-chip.preferred-width + 16px; y: (parent.height - self.height) / 2;
+                    border-radius: 11px; background: Tokens.info-surface; border-width: 1px; border-color: Tokens.accent-border;
+                    buf-chip := Text { text: "缓冲中"; color: Tokens.accent; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                WorkbenchButton { label: root.detached ? "回到主窗" : "画中画"; icon: root.detached ? "dock" : "pip"; outlined: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action(root.detached ? "dock" : "pip"); } }
+                WorkbenchButton { label: root.fullscreen ? "退出全屏" : "全屏"; icon: root.fullscreen ? "restore" : "fullscreen"; outlined: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("fullscreen"); } }
+                WorkbenchButton { label: "停止"; icon: "stop"; outlined: true; danger: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("stop"); } }
             }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.line; }
         }
         // Native video occupies this rectangle only. All controls are outside
         // it, so the child HWND cannot cover a menu, track picker or preview.
         video := Rectangle {
-            background: #080a0d; min-height: 40px; vertical-stretch: 1;
-            Text { text: root.state.buffering ? "正在缓冲…" : ""; color: #b4bdc9; horizontal-alignment: center; vertical-alignment: center; }
+            background: Tokens.cinema-bg; min-height: 40px; vertical-stretch: 1;
+            if root.state.buffering: Rectangle {
+                width: buf-pill.preferred-width + 24px; height: 30px;
+                border-radius: 15px; background: Tokens.cinema-pill; border-width: 1px; border-color: Tokens.cinema-pill-border;
+                buf-pill := Text { text: "正在缓冲…"; color: #e2e8f0; font-size: 12px; font-weight: 500; horizontal-alignment: center; vertical-alignment: center; }
+            }
         }
         if root.state.translating: Rectangle {
-            // 字幕条接在视频下方，与视频同一块黑底（像影院字幕区），两种主题下都不出现浅色/白色夹条。
-            background: #080a0d;
+            // 字幕条接在视频下方，与视频同一块深色影院底，两种主题下都不出现浅色夹条。
+            background: Tokens.cinema-bg;
             // 固定高度：字幕条不参与纵向拉伸，视频区域保持最大。
-            height: root.state.caption == "" ? 30px : 62px; vertical-stretch: 0;
-            Text {
-                x: 12px; width: parent.width - 24px; height: parent.height;
-                text: root.state.caption == "" ? root.state.translation-notice : root.state.caption;
-                color: root.state.caption == "" ? #b4bdc9 : #f2f4f7;
-                font-size: root.state.caption == "" ? 12px : 16px;
-                wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
-                overflow: elide; accessible-label: "翻译字幕";
+            height: root.state.caption == "" ? 34px : 68px; vertical-stretch: 0;
+            Rectangle {
+                x: 16px; y: 4px; width: parent.width - 32px; height: parent.height - 8px;
+                border-radius: 8px;
+                background: root.state.caption == "" ? transparent : Tokens.cinema-pill;
+                border-width: root.state.caption == "" ? 0px : 1px;
+                border-color: Tokens.cinema-pill-border;
+                Text {
+                    x: 14px; width: parent.width - 28px; height: parent.height;
+                    text: root.state.caption == "" ? root.state.translation-notice : root.state.caption;
+                    color: root.state.caption == "" ? #94a3b8 : #f8fafc;
+                    font-size: root.state.caption == "" ? 12px : 16px;
+                    font-weight: root.state.caption == "" ? 400 : 500;
+                    wrap: word-wrap; horizontal-alignment: center; vertical-alignment: center;
+                    overflow: elide; accessible-label: "翻译字幕";
+                }
             }
         }
         if root.thumbnail.width > 0: Rectangle {
-            height: 110px; background: Tokens.surface;
+            height: 112px; background: Tokens.cinema-subbar;
+            Rectangle { y: 0px; height: 1px; background: Tokens.line; }
             HorizontalLayout {
-                padding: 3px;
-                Image { source: root.thumbnail; width: 184px; image-fit: contain; }
-                Text { text: "时间预览"; color: Tokens.muted; vertical-alignment: center; }
+                padding: 8px; padding-left: 14px; padding-right: 14px; spacing: 12px;
+                Rectangle {
+                    width: 176px; height: 96px; border-radius: 6px; background: Tokens.cinema-bg;
+                    border-width: 1px; border-color: Tokens.line; clip: true;
+                    Image { source: root.thumbnail; width: parent.width; height: parent.height; image-fit: contain; }
+                }
+                VerticalLayout {
+                    alignment: center; spacing: 3px;
+                    Text { text: "时间点预览"; color: Tokens.ink; font-size: 12px; font-weight: 600; }
+                    Text { text: "悬停进度条可快速定位画面"; color: Tokens.faint; font-size: 11px; }
+                }
                 Rectangle { horizontal-stretch: 1; }
-                HotButton { label: "关闭预览"; clicked => { root.action("clear_preview"); } }
+                HotButton { label: "关闭预览"; y: (parent.height - self.height) / 2; clicked => { root.action("clear_preview"); } }
             }
         }
         Rectangle {
-            height: 132px;
+            height: 138px;
+            background: Tokens.cinema-bar;
+            Rectangle { y: 0px; height: 1px; background: Tokens.line; }
             VerticalLayout {
-                padding: 8px; padding-left: 14px; padding-right: 14px; spacing: 8px;
-                HorizontalLayout {
-                    spacing: 12px;
-                    MediaSeek { maximum: max(1, root.state.duration); value: root.state.position; enabled: root.state.duration > 0; seek(value) => { root.seek(value); } preview(value) => { root.preview(value); } }
-                    Text { text: root.state.time; color: Tokens.muted; font-size: 12px; min-width: 96px; horizontal-alignment: right; vertical-alignment: center; }
-                }
-                HorizontalLayout {
-                    spacing: Tokens.control-gap;
-                    WorkbenchButton { label: root.state.paused ? "播放" : "暂停"; icon: root.state.paused ? "play" : "pause"; primary: true; icon-only: true; clicked => { root.action(root.state.paused ? "resume" : "pause"); } }
-                    WorkbenchButton { label: "后退 10 秒"; icon: "back"; outlined: true; icon-only: true; clicked => { root.action("seek_back"); } }
-                    WorkbenchButton { label: "前进 10 秒"; icon: "forward"; outlined: true; icon-only: true; clicked => { root.action("seek_fwd"); } }
-                    WorkbenchButton { label: root.state.muted ? "取消静音" : "静音"; icon: root.state.muted ? "muted" : "volume"; icon-only: true; clicked => { root.action("mute"); } }
-                    // 音量条与进度条同款（钴蓝强调色），不使用随系统强调色变化的 Fluent Slider。
-                    MediaSeek { label: "音量"; step: 5; maximum: 100; value: root.state.volume; min-width: 60px; preferred-width: 88px; horizontal-stretch: 0; height: Tokens.control-height; seek(value) => { root.volume(value); } }
-                    HotComboBox {
-                        a11y-label: "播放速度";
-                        model: ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "2×", "4×"];
-                        property <float> bound: root.state.speed;
-                        current-index: root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
-                        changed bound => {
-                            self.current-index = root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
-                            self.current-value = "" + root.state.speed + "×";
+                padding: 0px; spacing: 0px;
+                VerticalLayout {
+                    padding: 8px; padding-left: 14px; padding-right: 14px; spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        MediaSeek { maximum: max(1, root.state.duration); value: root.state.position; enabled: root.state.duration > 0; seek(value) => { root.seek(value); } preview(value) => { root.preview(value); } }
+                        Rectangle {
+                            height: 24px; width: max(96px, time-txt.preferred-width + 16px); y: (parent.height - self.height) / 2;
+                            border-radius: 6px; background: Tokens.surface-2; border-width: 1px; border-color: Tokens.line;
+                            time-txt := Text { text: root.state.time; color: Tokens.ink; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                         }
-                        current-value: "" + root.state.speed + "×";
-                        min-width: 82px; preferred-width: 82px; height: Tokens.control-height; horizontal-stretch: 0;
-                        selected(value) => { root.action("speed:" + (self.current-index == 0 ? "0.25" : self.current-index == 1 ? "0.5" : self.current-index == 2 ? "0.75" : self.current-index == 3 ? "1" : self.current-index == 4 ? "1.25" : self.current-index == 5 ? "1.5" : self.current-index == 6 ? "2" : "4")); }
                     }
-                    Rectangle { horizontal-stretch: 1; }
-                    WorkbenchButton { label: "预览帧"; icon: "media"; outlined: true; icon-only: true; clicked => { root.action("preview"); } }
+                    HorizontalLayout {
+                        spacing: Tokens.control-gap;
+                        WorkbenchButton { label: root.state.paused ? "播放" : "暂停"; icon: root.state.paused ? "play" : "pause"; primary: true; icon-only: true; width: 38px; clicked => { root.action(root.state.paused ? "resume" : "pause"); } }
+                        WorkbenchButton { label: "后退 10 秒"; icon: "back"; outlined: true; icon-only: true; clicked => { root.action("seek_back"); } }
+                        WorkbenchButton { label: "前进 10 秒"; icon: "forward"; outlined: true; icon-only: true; clicked => { root.action("seek_fwd"); } }
+                        WorkbenchButton { label: root.state.muted ? "取消静音" : "静音"; icon: root.state.muted ? "muted" : "volume"; icon-only: true; clicked => { root.action("mute"); } }
+                        // 音量条与进度条同款（钴蓝强调色），不使用随系统强调色变化的 Fluent Slider。
+                        MediaSeek { label: "音量"; step: 5; maximum: 100; value: root.state.volume; min-width: 60px; preferred-width: 88px; horizontal-stretch: 0; height: Tokens.control-height; seek(value) => { root.volume(value); } }
+                        HotComboBox {
+                            a11y-label: "播放速度";
+                            model: ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "2×", "4×"];
+                            property <float> bound: root.state.speed;
+                            current-index: root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
+                            changed bound => {
+                                self.current-index = root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
+                                self.current-value = "" + root.state.speed + "×";
+                            }
+                            current-value: "" + root.state.speed + "×";
+                            min-width: 82px; preferred-width: 82px; height: Tokens.control-height; horizontal-stretch: 0;
+                            selected(value) => { root.action("speed:" + (self.current-index == 0 ? "0.25" : self.current-index == 1 ? "0.5" : self.current-index == 2 ? "0.75" : self.current-index == 3 ? "1" : self.current-index == 4 ? "1.25" : self.current-index == 5 ? "1.5" : self.current-index == 6 ? "2" : "4")); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        WorkbenchButton { label: "预览帧"; icon: "media"; outlined: true; icon-only: true; clicked => { root.action("preview"); } }
+                    }
                 }
-                HorizontalLayout {
-                    spacing: Tokens.control-gap;
-                    Text { text: "音轨"; color: Tokens.muted; vertical-alignment: center; }
-                    HotComboBox {
-                        model: root.state.audio; a11y-label: "音轨"; min-width: 136px; height: Tokens.control-height; enabled: root.state.audio.length > 0;
-                        property <int> bound: root.state.audio-index;
-                        current-index: root.state.audio-index;
-                        changed bound => { self.current-index = root.state.audio-index; }
-                        selected(value) => { root.audio(self.current-index); }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Tokens.cinema-subbar;
+                    Rectangle { y: 0px; height: 1px; background: Tokens.hairline; }
+                    HorizontalLayout {
+                        padding-left: 14px; padding-right: 14px; spacing: Tokens.control-gap;
+                        Text { text: "音轨"; color: Tokens.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                        HotComboBox {
+                            model: root.state.audio; a11y-label: "音轨"; min-width: 136px; height: Tokens.control-height; y: (parent.height - self.height) / 2; enabled: root.state.audio.length > 0;
+                            property <int> bound: root.state.audio-index;
+                            current-index: root.state.audio-index;
+                            changed bound => { self.current-index = root.state.audio-index; }
+                            selected(value) => { root.audio(self.current-index); }
+                        }
+                        Text { text: "字幕"; color: Tokens.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                        HotComboBox {
+                            model: root.state.subtitles; a11y-label: "字幕"; min-width: 104px; height: Tokens.control-height; y: (parent.height - self.height) / 2;
+                            property <int> bound: root.state.subtitle-index;
+                            current-index: root.state.subtitle-index;
+                            changed bound => { self.current-index = root.state.subtitle-index; }
+                            selected(value) => { root.subtitle(self.current-index); }
+                        }
+                        WorkbenchButton { label: root.state.translating ? "停止翻译" : "字幕翻译"; icon: "subtitle"; outlined: !root.state.translating; active: root.state.translating; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("translate"); } }
+                        Text { text: root.notice; color: Tokens.warn; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; Tooltip { text: @markdown("\{root.notice}"); } }
                     }
-                    Text { text: "字幕"; color: Tokens.muted; vertical-alignment: center; }
-                    HotComboBox {
-                        model: root.state.subtitles; a11y-label: "字幕"; min-width: 104px; height: Tokens.control-height;
-                        property <int> bound: root.state.subtitle-index;
-                        current-index: root.state.subtitle-index;
-                        changed bound => { self.current-index = root.state.subtitle-index; }
-                        selected(value) => { root.subtitle(self.current-index); }
-                    }
-                    WorkbenchButton { label: root.state.translating ? "停止翻译" : "字幕翻译"; icon: "subtitle"; outlined: true; icon-only: true; clicked => { root.action("translate"); } }
-                    Text { text: root.notice; color: Tokens.warn; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; Tooltip { text: @markdown("\{root.notice}"); } }
                 }
             }
         }

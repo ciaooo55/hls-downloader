@@ -266,6 +266,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     seenVariants.add(key)
     dedupedVariants.push({
       url: baseUrl,
+      variantId: candidate.id || undefined,
       width: candidate.width || undefined,
       height: candidate.height || undefined,
       bandwidth: candidate.bandwidth || undefined,

@@ -31,12 +31,18 @@ component ConfirmNotice inherits Rectangle {
     border-radius: Tokens.card-radius;
     background: root.error ? Tokens.fail-surface : Tokens.warn-surface;
     border-width: 1px;
-    border-color: tone.with-alpha(Tokens.dark ? 0.34 : 0.26);
+    border-color: tone.with-alpha(Tokens.dark ? 0.36 : 0.26);
+    clip: true;
     accessible-role: AccessibleRole.text;
     accessible-label: root.text;
+    Rectangle {
+        x: 0px; y: 0px; width: 3px; height: parent.height;
+        border-top-left-radius: Tokens.card-radius; border-bottom-left-radius: Tokens.card-radius;
+        background: root.tone;
+    }
     VerticalLayout {
         padding: 9px;
-        padding-left: 10px;
+        padding-left: 13px;
         spacing: 7px;
         HorizontalLayout {
             spacing: 8px;
@@ -153,8 +159,14 @@ export component ConfirmWindow inherits Window {
             width: parent.width;
             height: parent.height;
             border-radius: Tokens.card-radius;
+            Rectangle {
+                x: 1px; y: 1px; width: parent.width - 2px; height: 3px;
+                border-top-left-radius: Tokens.card-radius - 1px; border-top-right-radius: Tokens.card-radius - 1px;
+                background: Tokens.accent;
+            }
         VerticalLayout {
             padding: root.compact ? 14px : 18px;
+            padding-top: root.compact ? 15px : 19px;
             padding-bottom: root.compact ? 12px : 16px;
             spacing: 10px;
             HorizontalLayout {
@@ -204,24 +216,26 @@ export component ConfirmWindow inherits Window {
                     padding-right: root.details_expanded ? 10px : 0px;
                     spacing: 8px;
                     Rectangle {
-                        height: 72px;
+                        height: 74px;
                         border-radius: Tokens.card-radius;
                         background: Tokens.surface-2;
                         border-width: 1px;
-                        border-color: Tokens.hairline;
+                        border-color: Tokens.line;
                         HorizontalLayout {
-                            padding: 8px;
-                            padding-left: 10px;
-                            spacing: 10px;
+                            padding: 9px;
+                            padding-left: 11px;
+                            spacing: 11px;
                             Rectangle {
-                                width: 36px;
-                                height: 36px;
+                                width: 38px;
+                                height: 38px;
                                 y: (parent.height - self.height) / 2;
                                 border-radius: Tokens.card-radius;
                                 private property <color> tint: root.category == "media" ? Tokens.media-tint : root.category == "archive" ? Tokens.archive-tint : root.category == "program" ? Tokens.accent : Tokens.muted;
                                 background: tint.with-alpha(Tokens.dark ? 0.18 : 0.12);
-                                animate background { duration: Tokens.motion-fast; }
-                                WorkbenchIcon { name: root.category == "media" || root.category == "program" || root.category == "archive" ? root.category : "file"; ink: parent.tint; width: 20px; height: 20px; x: 8px; y: 8px; }
+                                border-width: 1px;
+                                border-color: tint.with-alpha(Tokens.dark ? 0.30 : 0.20);
+                                animate background, border-color { duration: Tokens.motion-fast; }
+                                WorkbenchIcon { name: root.category == "media" || root.category == "program" || root.category == "archive" ? root.category : "file"; ink: parent.tint; width: 20px; height: 20px; x: 9px; y: 9px; }
                             }
                             VerticalLayout {
                                 horizontal-stretch: 1;
@@ -262,13 +276,25 @@ export component ConfirmWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        height: 28px;
-                        spacing: 6px;
+                        height: 34px;
+                        spacing: 8px;
                         FieldLabel { label: "分类"; width: 42px; vertical-alignment: center; }
-                        ChoiceButton { label: "媒体"; height: 28px; enabled: !root.busy; selected: root.category == "media"; clicked => { root.category = "media"; root.command("category:media"); } }
-                        ChoiceButton { label: "程序"; height: 28px; enabled: !root.busy; selected: root.category == "program"; clicked => { root.category = "program"; root.command("category:program"); } }
-                        ChoiceButton { label: "压缩包"; height: 28px; enabled: !root.busy; selected: root.category == "archive"; clicked => { root.category = "archive"; root.command("category:archive"); } }
-                        ChoiceButton { label: "其他"; height: 28px; enabled: !root.busy; selected: root.category == "other"; clicked => { root.category = "other"; root.command("category:other"); } }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 34px;
+                            border-radius: Tokens.control-radius + 2px;
+                            background: Tokens.surface-2;
+                            border-width: 1px;
+                            border-color: Tokens.hairline;
+                            HorizontalLayout {
+                                padding: 3px;
+                                spacing: 4px;
+                                ChoiceButton { horizontal-stretch: 1; label: "媒体"; height: 28px; enabled: !root.busy; selected: root.category == "media"; clicked => { root.category = "media"; root.command("category:media"); } }
+                                ChoiceButton { horizontal-stretch: 1; label: "程序"; height: 28px; enabled: !root.busy; selected: root.category == "program"; clicked => { root.category = "program"; root.command("category:program"); } }
+                                ChoiceButton { horizontal-stretch: 1; label: "压缩包"; height: 28px; enabled: !root.busy; selected: root.category == "archive"; clicked => { root.category = "archive"; root.command("category:archive"); } }
+                                ChoiceButton { horizontal-stretch: 1; label: "其他"; height: 28px; enabled: !root.busy; selected: root.category == "other"; clicked => { root.category = "other"; root.command("category:other"); } }
+                            }
+                        }
                     }
 
                     CheckRow { height: 26px; label: "记住此分类的保存位置"; enabled: !root.busy; checked <=> root.remember_directory; toggled(value) => { root.remember_directory = value; } }
@@ -282,7 +308,7 @@ export component ConfirmWindow inherits Window {
                         border-radius: Tokens.card-radius;
                         border-width: 1px;
                         border-color: Tokens.line;
-                        background: Tokens.surface;
+                        background: Tokens.surface-2;
                         // 详情逐行换行显示完整地址，不再固定 116px 高度并截断。
                         details := VerticalLayout {
                             y: 0px;
@@ -373,9 +399,16 @@ export component ProgressWindow inherits Window {
         width: parent.width;
         height: parent.height;
         border-radius: Tokens.card-radius;
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: 2.5px;
+            border-top-left-radius: Tokens.card-radius - 1px; border-top-right-radius: Tokens.card-radius - 1px;
+            background: root.action_error ? Tokens.fail : Tokens.accent;
+            animate background { duration: Tokens.motion-fast; }
+        }
         content := FadePanel {
         VerticalLayout {
             padding: 12px;
+            padding-top: 13px;
             spacing: 6px;
             HorizontalLayout {
                 height: 24px;
@@ -384,8 +417,9 @@ export component ProgressWindow inherits Window {
                     drag(dx, dy) => { root.move-window(dx, dy); }
                     HorizontalLayout {
                         spacing: 8px;
-                        Rectangle { width: 8px; background: transparent;
-                            Rectangle { width: 8px; height: 8px; y: (parent.height - self.height) / 2; border-radius: 4px; background: Tokens.accent; }
+                        Rectangle { width: 12px; background: transparent;
+                            Rectangle { width: 12px; height: 12px; y: (parent.height - self.height) / 2; border-radius: 6px; background: (root.action_error ? Tokens.fail : Tokens.accent).with-alpha(0.22); }
+                            Rectangle { width: 7px; height: 7px; x: 2.5px; y: (parent.height - self.height) / 2; border-radius: 3.5px; background: root.action_error ? Tokens.fail : Tokens.accent; }
                         }
                         Text { text: root.headline; color: Tokens.ink; font-size: 13px; font-weight: 600; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
@@ -397,6 +431,8 @@ export component ProgressWindow inherits Window {
             Rectangle {
                 background: Tokens.surface-2;
                 border-radius: Tokens.card-radius;
+                border-width: 1px;
+                border-color: Tokens.line;
                 min-height: 78px;
                 VerticalLayout {
                     padding: 10px;
@@ -407,8 +443,8 @@ export component ProgressWindow inherits Window {
                         Text { text: root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知"; color: root.progress_known ? Tokens.accent : Tokens.muted; font-size: root.progress_known ? 20px : 12px; font-weight: root.progress_known ? 700 : 500; vertical-alignment: center; }
                     }
                     Rectangle {
-                        height: 6px;
-                        border-radius: 3px;
+                        height: 7px;
+                        border-radius: 3.5px;
                         background: Tokens.surface-3;
                         clip: true;
                         // 不定进度的滑块限制在轨道内，避免在圆角端点外露出直角。
@@ -417,25 +453,35 @@ export component ProgressWindow inherits Window {
                             width: root.progress_known ? parent.width * Math.clamp(root.progress, 0, 1) : max(0px, min(parent.width, parent.sweep-x + parent.width * 0.3) - max(0px, parent.sweep-x));
                             x: root.progress_known ? 0px : max(0px, parent.sweep-x);
                             height: parent.height;
-                            border-radius: 3px;
+                            border-radius: 3.5px;
                             background: Tokens.accent;
                             animate width { duration: Tokens.motion; easing: ease-out; }
                         }
                     }
                     if root.segments.length > 1: SegmentMapBar {
-                        height: 5px;
-                        border-radius: 2.5px;
+                        height: 6px;
+                        border-radius: 3px;
                         segments: root.segments;
                     }
                     Text { text: root.transferred; color: Tokens.muted; font-size: 10px; overflow: elide; }
                 }
             }
             HorizontalLayout {
-                Text { text: root.stage_label; color: Tokens.muted; font-size: 11px; }
+                spacing: 6px;
+                if root.stage_label != "": Rectangle {
+                    height: 19px;
+                    width: stage-txt.preferred-width + 12px;
+                    border-radius: 9.5px;
+                    background: Tokens.info-surface;
+                    border-width: 1px;
+                    border-color: Tokens.accent-border;
+                    stage-txt := Text { text: root.stage_label; color: Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
                 Rectangle { horizontal-stretch: 1; }
-                Text { text: root.remaining; color: Tokens.muted; font-size: 11px; }
+                Text { text: root.remaining; color: Tokens.muted; font-size: 11px; vertical-alignment: center; }
             }
             Rectangle { vertical-stretch: 1; min-height: 0px; }
+            Rectangle { height: 1px; background: Tokens.hairline; }
             HorizontalLayout {
                 spacing: 8px;
                 Text { text: root.action_text; color: root.action_error ? Tokens.fail : Tokens.muted; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
@@ -481,10 +527,16 @@ export component CompleteWindow inherits Window {
         width: parent.width;
         height: parent.height;
         border-radius: Tokens.card-radius;
-        opacity: root.entered ? 1 : 0;
+        opacity: Tokens.reduce-motion || root.entered ? 1 : 0;
         animate opacity { duration: root.entered ? Tokens.motion : 0ms; easing: ease-out; }
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: 3px;
+            border-top-left-radius: Tokens.card-radius - 1px; border-top-right-radius: Tokens.card-radius - 1px;
+            background: Tokens.done;
+        }
         VerticalLayout {
             padding: 12px;
+            padding-top: 13px;
             spacing: 8px;
             HorizontalLayout {
                 height: 24px;
@@ -496,7 +548,7 @@ export component CompleteWindow inherits Window {
                         // 完成标记：窗口出现时从 12px 长到 20px。
                         Rectangle { width: 20px; height: 20px;
                             Rectangle {
-                                width: root.entered ? 20px : 12px; height: self.width;
+                                width: Tokens.reduce-motion || root.entered ? 20px : 12px; height: self.width;
                                 x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
                                 border-radius: self.width / 2; background: Tokens.done;
                                 animate width { duration: Tokens.motion-slow; easing: ease-out-back; }
@@ -511,10 +563,12 @@ export component CompleteWindow inherits Window {
             }
             Rectangle {
                 height: 64px; border-radius: Tokens.card-radius; background: Tokens.success-surface;
+                border-width: 1px; border-color: Tokens.done.with-alpha(Tokens.dark ? 0.36 : 0.24);
                 HorizontalLayout {
                     padding: 10px; spacing: 10px;
                     Rectangle {
                         width: 40px; height: 40px; y: (parent.height - self.height) / 2; border-radius: Tokens.card-radius; background: Tokens.surface;
+                        border-width: 1px; border-color: Tokens.done.with-alpha(Tokens.dark ? 0.30 : 0.20);
                         WorkbenchIcon { name: "file"; ink: Tokens.done; width: 20px; height: 20px; x: 10px; y: 10px; }
                     }
                     VerticalLayout {
@@ -528,11 +582,17 @@ export component CompleteWindow inherits Window {
                 border-radius: Tokens.control-radius;
                 background: Tokens.warn-surface;
                 border-width: 1px;
-                border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.34 : 0.26);
+                border-color: Tokens.warn.with-alpha(Tokens.dark ? 0.36 : 0.26);
+                clip: true;
                 accessible-role: AccessibleRole.text;
                 accessible-label: power-text.text;
+                Rectangle {
+                    x: 0px; y: 0px; width: 3px; height: parent.height;
+                    border-top-left-radius: Tokens.control-radius; border-bottom-left-radius: Tokens.control-radius;
+                    background: Tokens.warn;
+                }
                 HorizontalLayout {
-                    padding: 6px; padding-left: 8px; spacing: 6px;
+                    padding: 6px; padding-left: 10px; spacing: 6px;
                     WorkbenchIcon { name: "queued"; ink: Tokens.warn; width: 14px; height: 14px; y: (parent.height - self.height) / 2; }
                     power-text := Text {
                         text: root.power_action_label == "" ? root.power_hint : root.power_seconds > 0 ? "将在 \{root.power_seconds} 秒后\{root.power_action_label}" : "即将\{root.power_action_label}";
