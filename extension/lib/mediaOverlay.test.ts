@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect } from './mediaOverlay'
+import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayQualityOptions, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect } from './mediaOverlay'
 
 describe('media overlay visibility', () => {
   it('stays absent before playback', () => {
@@ -231,5 +231,108 @@ describe('overlay hover details', () => {
   it('keeps the source label useful for opaque and malformed locations', () => {
     expect(safeResourceLocation('https://cdn.test/a/b/video.mp4?signature=secret')).toBe('cdn.test/b/video.mp4')
     expect(safeResourceLocation('not a URL')).toBe('媒体来源')
+  })
+})
+
+describe('inline overlay quality pills', () => {
+  it('sorts multi-variant adaptive options highest quality first without leaking signed tokens', () => {
+    const options = overlayQualityOptions([{
+      id: 'master',
+      kind: 'hls',
+      url: 'https://user:secret@cdn.test/vod/master.m3u8?token=private',
+      duration: 600,
+      isLive: false,
+      variants: [
+        { url: 'https://cdn.test/vod/480.m3u8?token=private480', width: 854, height: 480, bandwidth: 1_200_000, quality: '480p' },
+        { url: 'https://cdn.test/vod/1080.m3u8?token=private1080', width: 1920, height: 1080, bandwidth: 5_200_000, quality: '1080p' },
+        { url: 'https://cdn.test/vod/720.m3u8?token=private720', width: 1280, height: 720, bandwidth: 2_500_000, quality: '720p' },
+      ],
+      seenAt: 1,
+    }])
+
+    expect(options.map(option => ({ label: option.label, detail: option.detail, recommended: option.recommended }))).toEqual([
+      { label: '1080p', detail: '5.2 Mbps · 约 372 MB', recommended: true },
+      { label: '720p', detail: '2.5 Mbps · 约 179 MB', recommended: false },
+      { label: '480p', detail: '1.2 Mbps · 约 85.8 MB', recommended: false },
+    ])
+    expect(options[0].resource).toMatchObject({
+      url: 'https://cdn.test/vod/1080.m3u8?token=private1080',
+      manifestUrl: 'https://user:secret@cdn.test/vod/master.m3u8?token=private',
+      preferredHeight: 1080,
+      preferredBandwidth: 5_200_000,
+    })
+    for (const option of options) {
+      expect(`${option.label} ${option.detail} ${option.ariaLabel}`).not.toContain('private')
+      expect(`${option.label} ${option.detail} ${option.ariaLabel}`).not.toContain('secret')
+    }
+  })
+
+  it('formats mixed-format player streams cleanly and caps at the requested limit', () => {
+    const options = overlayQualityOptions([
+      {
+        id: 'hls',
+        kind: 'hls',
+        url: 'https://cdn.test/stream/1080p.m3u8',
+        height: 1080,
+        bandwidth: 5_200_000,
+        quality: '1080p',
+        seenAt: 1,
+      },
+      {
+        id: 'mp4',
+        kind: 'media',
+        url: 'https://cdn.test/stream/video.mp4',
+        size: 120 * 1024 * 1024,
+        seenAt: 1,
+      },
+    ], 5)
+
+    expect(options.map(option => ({ label: option.label, detail: option.detail }))).toEqual([
+      { label: '1080p', detail: 'HLS · 5.2 Mbps' },
+      { label: 'MP4', detail: '120 MB' },
+    ])
+  })
+
+  it('returns empty for a single-quality stream so the hover card stays compact', () => {
+    expect(overlayQualityOptions([{
+      id: 'single',
+      kind: 'media',
+      url: 'https://cdn.test/video.mp4',
+      height: 1080,
+      size: 50 * 1024 * 1024,
+      seenAt: 1,
+    }])).toEqual([])
+  })
+})
+
+describe('overlay cursor, transitions, and keyed DOM patching guards', () => {
+  const content = readFileSync(fileURLToPath(new URL('../entrypoints/content.ts', import.meta.url)), 'utf8')
+  const popupMain = readFileSync(fileURLToPath(new URL('../entrypoints/popup/main.ts', import.meta.url)), 'utf8')
+
+  it('uses pointer cursor at rest on .video-download and grabbing only while actively dragging', () => {
+    const css = content.slice(content.indexOf('.wrap{'), content.indexOf('`', content.indexOf('.wrap{')))
+    expect(css).toMatch(/\.video-download\{[^}]*cursor:pointer/)
+    expect(css).not.toMatch(/\.video-download\{[^}]*cursor:grab\b/)
+    expect(css).not.toMatch(/\.video-download:active\{[^}]*cursor:grabbing/)
+    expect(css).toMatch(/\.video-action-group\.dragging \.video-download\{[^}]*cursor:grabbing/)
+  })
+
+  it('animates .panel, .video-action-group, and .video-hover with opacity and transform', () => {
+    const css = content.slice(content.indexOf('.wrap{'), content.indexOf('`', content.indexOf('.wrap{')))
+    expect(css).toMatch(/\.panel\{[^}]*opacity:0;[^}]*transform:translateY\([^)]*\)[^}]*transition:opacity/)
+    expect(css).toMatch(/\.video-action-group\{[^}]*opacity:0;[^}]*transform:translateY\([^)]*\)[^}]*transition:opacity/)
+    expect(css).toMatch(/\.video-hover\{[^}]*opacity:0;[^}]*transform:translateY\([^)]*\)[^}]*transition:opacity/)
+    expect(css).toContain('.quality-pill{')
+  })
+
+  it('eliminates replaceChildren() flicker from overlay and popup resource list rendering', () => {
+    expect(content).toContain('[hidden]{display:none!important}')
+    expect(content).toContain('patchKeyedChildren(')
+    expect(content).not.toContain('layer.replaceChildren(')
+    expect(content).not.toContain('list.replaceChildren(')
+    expect(popupMain).toContain('patchKeyedChildren(')
+    expect(popupMain).not.toContain('list.replaceChildren(')
+    expect(popupMain).not.toContain('filterChips.replaceChildren(')
+    expect(popupMain).not.toContain('browserTransfers.replaceChildren(')
   })
 })

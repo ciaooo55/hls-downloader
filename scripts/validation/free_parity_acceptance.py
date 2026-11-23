@@ -49,6 +49,25 @@ def zip64_empty():
     return record + locator + end
 
 
+def read_bytes_retry(path: Path) -> bytes | None:
+    """Read bytes during polling, tolerating transient Windows atomic-replace locks."""
+    try:
+        return path.read_bytes()
+    except (PermissionError, FileNotFoundError, OSError):
+        return None
+
+
+def read_text_retry(path: Path, encoding: str = 'utf-8') -> str | None:
+    """Read UTF-8 text during polling, tolerating transient Windows atomic-replace locks."""
+    data = read_bytes_retry(path)
+    if data is None:
+        return None
+    try:
+        return data.decode(encoding)
+    except UnicodeDecodeError:
+        return None
+
+
 def run(args):
     import psutil
     args.work.mkdir(parents=True, exist_ok=True)
@@ -300,7 +319,7 @@ def run(args):
             image=next(r for r in p['resources'] if r['url'].endswith('image.bin'))
             html=next(r for r in p['resources'] if r['url'].endswith('index.html'))
             target=Path(p['spec']['output_dir'])/html['local_name']
-            until(lambda:target.read_text(encoding='utf-8'),lambda t:image['local_name'] in t and '<base href="./">' in t)
+            until(lambda:read_text_retry(target),lambda t:t is not None and image['local_name'] in t and '<base href="./">' in t)
             assert len({r['url'] for r in p['resources']})==4
             return {'id':p['id'],'pages':2,'resources':4,'selection_required':True,'paused_restart':True,'rewritten_html':target.read_text(encoding='utf-8')}
         check('crawl-loop-boundaries-preview-recovery-offline',discovery_offline)
@@ -331,8 +350,9 @@ def run(args):
             assert target.read_bytes()==old
             state['broken']=False
             task_id=p['resources'][0]['task_id']; invoke('retry',task_id); invoke('crawl','sync',p['id'])
-            until(lambda:target.read_bytes(),lambda b:b==b'updated-'*8192,seconds=70)
-            return {'unchanged_get_count':after-before,'failed_update_preserved_old':True,'successful_update_sha256':hashlib.sha256(target.read_bytes()).hexdigest()}
+            until(lambda:read_bytes_retry(target),lambda b:b==b'updated-'*8192,seconds=70)
+            updated=target.read_bytes(); assert updated==b'updated-'*8192
+            return {'unchanged_get_count':after-before,'failed_update_preserved_old':True,'successful_update_sha256':hashlib.sha256(updated).hexdigest()}
         check('sync-etag-no-repeat-failure-preserves-atomic-update',sync)
 
         def crawl_limits():
@@ -386,11 +406,12 @@ def run(args):
                 periodic_get.clear()
                 state['version'] = 2
                 assert periodic_get.wait(75), 'periodic sync did not fetch changed resource'
-                until(lambda:output.read_bytes(),lambda b:b==b'updated!'*8192,seconds=15)
+                until(lambda:read_bytes_retry(output),lambda b:b==b'updated!'*8192,seconds=15)
                 invoke('crawl','pause',p['id'])
+                updated=output.read_bytes(); assert updated==b'updated!'*8192
                 return {'closed_window_zero_requests':True,'request_context_on_page_head_and_file':True,
                         'queue_assignment':queue['id'],'configured_global_queue_kib':[128,64],
-                        'periodic_without_manual_sync':True,'sha256':hashlib.sha256(output.read_bytes()).hexdigest()}
+                        'periodic_without_manual_sync':True,'sha256':hashlib.sha256(updated).hexdigest()}
             finally:
                 ipc({'type':'store_settings','request_id':1,'values':{'queue_profiles':profiles,
                      'download_speed_limit_kib':original['speed_limit_kib'],'site_rules':original['site_rules']}})

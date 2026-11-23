@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser'
-import { downloadSelectionKey, normalizeHost, selectMediaVariant, visibleMediaResources, type MediaResource } from '../../lib/resources'
+import { downloadSelectionKey, normalizeHost, resourceFingerprint, selectMediaVariant, visibleMediaResources, type MediaResource } from '../../lib/resources'
+import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../../lib/domPatch'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, hostForPage, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
@@ -71,6 +72,8 @@ const ICONS: Record<string, Array<['path' | 'circle' | 'rect', Record<string, st
 }
 function icon(name: string, label = '') {
   const node = el('span', 'hlsd-icon')
+  node.dataset.iconName = name
+  node.dataset.iconLabel = label
   const namespace = 'http://www.w3.org/2000/svg'
   const svg = document.createElementNS(namespace, 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
@@ -83,6 +86,17 @@ function icon(name: string, label = '') {
   node.append(svg)
   if (label) node.setAttribute('aria-label', label)
   return node
+}
+
+function patchIcon(container: HTMLElement, name: string, label = '') {
+  const current = container.querySelector<HTMLElement>(':scope > .hlsd-icon')
+  if (current && current.dataset.iconName === name && (current.dataset.iconLabel || '') === label) {
+    return current
+  }
+  const next = icon(name, label)
+  if (current) current.replaceWith(next)
+  else container.prepend(next)
+  return next
 }
 
 function resourceKindLabel(item: MediaResource) {
@@ -146,7 +160,7 @@ async function main() {
     themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
     removeThemeListener()
     removeThemeListener = applyTheme(document.documentElement, themePreference)
-    themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
+    patchIcon(themeBtn, themePreference, THEME_LABELS[themePreference])
     themeBtn.title = THEME_LABELS[themePreference]
     themeBtn.setAttribute('aria-label', themeBtn.title)
     try {
@@ -157,7 +171,8 @@ async function main() {
   })
   const openBtn = el('button', 'hlsd-button desktop-open')
   openBtn.type = 'button'
-  openBtn.append(icon('open'), el('span', '', '主程序'))
+  const openBtnLabel = el('span', '', '主程序')
+  openBtn.append(icon('open'), openBtnLabel)
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
   // 启动反馈条：每个阶段对应一层真实回执，失败时给出对应的恢复操作。
   const launchPanel = el('div', 'launch-status')
@@ -177,10 +192,8 @@ async function main() {
     openBtn.classList.toggle('busy', busy)
     openBtn.dataset.state = busy ? 'busy' : view.tone === 'success' ? 'ready' : view.tone === 'error' ? 'failed' : ''
     openBtn.setAttribute('aria-busy', String(busy))
-    openBtn.replaceChildren(
-      icon(busy ? 'scan' : view.tone === 'success' ? 'check' : 'open'),
-      el('span', '', busy ? '打开中' : view.tone === 'success' ? '已打开' : '主程序'),
-    )
+    patchIcon(openBtn, busy ? 'scan' : view.tone === 'success' ? 'check' : 'open')
+    setTextIfChanged(openBtnLabel, busy ? '打开中' : view.tone === 'success' ? '已打开' : '主程序')
     launchPanel.dataset.tone = view.tone
     const badge = el('span', 'launch-icon')
     badge.append(icon(busy ? 'scan' : view.tone === 'success' ? 'check' : view.tone === 'error' ? 'close' : 'open'))
@@ -210,7 +223,8 @@ async function main() {
         if (run !== launchRun) return
         launchPanel.hidden = true
         openBtn.dataset.state = ''
-        openBtn.replaceChildren(icon('open'), el('span', '', '主程序'))
+        patchIcon(openBtn, 'open')
+        setTextIfChanged(openBtnLabel, '主程序')
       }, 2_500)
     }
     const failedAction = launchPanel.querySelector<HTMLButtonElement>('[data-launch-action]')
@@ -298,6 +312,8 @@ async function main() {
   const batchBtn = el('button', 'hlsd-button batch-download-btn') as HTMLButtonElement
   batchBtn.type = 'button'
   batchBtn.title = '将当前筛选出的可下载资源批量交给桌面端队列'
+  const batchBtnLabel = el('span', '', '批量下载 (0)')
+  batchBtn.append(icon('download'), batchBtnLabel)
   filterRow.append(filterSearch, batchBtn)
   const filterChips = el('div', 'resource-chips')
   filterChips.setAttribute('role', 'group')
@@ -383,7 +399,7 @@ async function main() {
       themePreference = restoredTheme
       removeThemeListener()
       removeThemeListener = applyTheme(document.documentElement, themePreference)
-      themeBtn.replaceChildren(icon(themePreference, THEME_LABELS[themePreference]))
+      patchIcon(themeBtn, themePreference, THEME_LABELS[themePreference])
       themeBtn.title = THEME_LABELS[themePreference]
       themeBtn.setAttribute('aria-label', themeBtn.title)
     })
@@ -406,10 +422,16 @@ async function main() {
   const copyResetTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const renderCopyButton = (button: HTMLButtonElement, url: string) => {
     const state = copyStates.get(url)
-    button.setAttribute('aria-disabled', String(state === 'copying'))
-    button.setAttribute('aria-busy', String(state === 'copying'))
+    setAttrIfChanged(button, 'aria-disabled', String(state === 'copying'))
+    setAttrIfChanged(button, 'aria-busy', String(state === 'copying'))
     button.classList.toggle('copied', state === 'copied')
-    button.replaceChildren(icon(state === 'copied' ? 'check' : 'copy'), el('span', 'copy-label', state === 'copying' ? '复制中…' : state === 'copied' ? '已复制' : '复制链接'))
+    patchIcon(button, state === 'copied' ? 'check' : 'copy')
+    let labelEl = button.querySelector<HTMLSpanElement>('.copy-label')
+    if (!labelEl) {
+      labelEl = el('span', 'copy-label', '')
+      button.append(labelEl)
+    }
+    setTextIfChanged(labelEl, state === 'copying' ? '复制中…' : state === 'copied' ? '已复制' : '复制链接')
   }
   const setCopyState = (url: string, state?: 'copying' | 'copied') => {
     if (state) copyStates.set(url, state)
@@ -445,15 +467,288 @@ async function main() {
     errorBox.hidden = !message
     errorBox.textContent = message
   }
+
+  interface PopupCardState {
+    item: MediaResource
+    selected: MediaResource
+    name: HTMLElement
+    line: HTMLSpanElement
+    facts: HTMLSpanElement
+    lastMeta: string
+    qualityTrigger: HTMLSelectElement
+    mime: HTMLElement
+    manualCopyHelp: HTMLElement
+    manualCopyInput: HTMLInputElement
+    downloadBtn: HTMLButtonElement
+    downloadLabel: HTMLSpanElement
+    copyBtn: HTMLButtonElement
+    castBtn: HTMLButtonElement
+    castLabel: HTMLSpanElement
+    pushBtn: HTMLButtonElement
+    pushLabel: HTMLSpanElement
+  }
+  const popupCardStates = new WeakMap<HTMLElement, PopupCardState>()
+
+  const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
+    variant
+      ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? formatBitrate(variant.bandwidth) : ''].filter(Boolean).join(' \u00b7 ')
+      : '\u81ea\u52a8\uff08\u6700\u9ad8\uff09'
+
+  const createResourceCard = (item: MediaResource): HTMLElement => {
+    const article = el('article')
+    article.tabIndex = -1
+    const body = el('div', 'resource-body')
+    const name = el('strong')
+    // 每项不可断开，分隔点由样式画在后一项前面；换行处行首的分隔点落在裁剪区外，行尾永远不会留下孤立的“·”。
+    const line = el('span', 'resource-facts')
+    const facts = el('span', 'resource-facts-row')
+    facts.setAttribute('aria-hidden', 'true')
+    line.append(facts)
+    const qualityTrigger = el('select', 'quality-trigger') as HTMLSelectElement
+    qualityTrigger.dataset.action = 'quality'
+    qualityTrigger.setAttribute('aria-label', '选择视频清晰度')
+    qualityTrigger.hidden = true
+    const metaRow = el('div', 'resource-meta')
+    const mime = el('small')
+    metaRow.append(mime)
+    const manualCopyHelp = el('small', 'manual-copy-help', '自动复制失败，请按 Ctrl+C 复制下方完整链接')
+    manualCopyHelp.setAttribute('role', 'status')
+    manualCopyHelp.hidden = true
+    const manualCopyInput = el('input', 'manual-copy') as HTMLInputElement
+    manualCopyInput.type = 'text'
+    manualCopyInput.readOnly = true
+    manualCopyInput.dataset.action = 'manual-copy'
+    manualCopyInput.setAttribute('aria-label', '完整媒体链接，按 Ctrl+C 复制')
+    manualCopyInput.hidden = true
+    manualCopyInput.addEventListener('focus', () => manualCopyInput.select())
+    body.append(name, line, qualityTrigger, metaRow, manualCopyHelp, manualCopyInput)
+
+    const downloadBtn = el('button', 'hlsd-button primary') as HTMLButtonElement
+    downloadBtn.type = 'button'
+    downloadBtn.dataset.action = 'download'
+    const downloadLabel = el('span', '', '下载')
+    downloadBtn.append(icon('download'), downloadLabel)
+
+    const copyBtn = el('button', 'copy-link') as HTMLButtonElement
+    copyBtn.type = 'button'
+    copyBtn.dataset.action = 'copy'
+    copyBtn.append(icon('copy'), el('span', 'copy-label', '复制链接'))
+
+    const castBtn = el('button', 'hlsd-button cast-button') as HTMLButtonElement
+    castBtn.type = 'button'
+    castBtn.dataset.action = 'cast'
+    const castLabel = el('span', '', '投屏')
+    castBtn.append(icon('cast'), castLabel)
+    castBtn.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
+
+    const pushBtn = el('button', 'hlsd-button push-button') as HTMLButtonElement
+    pushBtn.type = 'button'
+    pushBtn.dataset.action = 'tvbox'
+    const pushLabel = el('span', '', 'TVBox')
+    pushBtn.append(icon('tv'), pushLabel)
+    pushBtn.title = '直接推送当前媒体链接到 TVBox'
+
+    const actionCol = el('div', 'article-actions')
+    const more = el('details', 'resource-more')
+    const summary = el('summary', '', '更多')
+    summary.dataset.action = 'more'
+    summary.setAttribute('aria-label', '更多媒体操作')
+    const extra = el('div', 'resource-extra')
+    extra.append(copyBtn, castBtn, pushBtn)
+    more.append(summary, extra)
+    actionCol.append(downloadBtn, more)
+    article.append(body, actionCol)
+
+    const state: PopupCardState = {
+      item,
+      selected: resolveSelectedVariant(item),
+      name,
+      line,
+      facts,
+      lastMeta: '',
+      qualityTrigger,
+      mime,
+      manualCopyHelp,
+      manualCopyInput,
+      downloadBtn,
+      downloadLabel,
+      copyBtn,
+      castBtn,
+      castLabel,
+      pushBtn,
+      pushLabel,
+    }
+    popupCardStates.set(article, state)
+
+    qualityTrigger.addEventListener('change', () => {
+      if (qualityTrigger.value === downloadSelectionKey(state.item)) delete chosenVariant[state.item.id]
+      else chosenVariant[state.item.id] = qualityTrigger.value
+      renderList()
+    })
+    copyBtn.addEventListener('click', () => void copyLink(state.selected.url))
+    downloadBtn.addEventListener('click', () => {
+      const sendState = sending[actionKey(state.selected)]
+      const action = sendClickAction(sendState)
+      if (action === 'open_desktop') void startLaunch()
+      else if (action !== 'none') void send(state.selected)
+    })
+    pushBtn.addEventListener('click', () => void pushToTv(state.selected))
+    castBtn.addEventListener('click', () => void castToDevice(state.selected))
+
+    return article
+  }
+
+  const updateResourceCard = (article: HTMLElement, item: MediaResource) => {
+    const state = popupCardStates.get(article)
+    if (!state) return
+    const selected = resolveSelectedVariant(item)
+    state.item = item
+    state.selected = selected
+
+    if (article.dataset.resourceId !== item.id) article.dataset.resourceId = item.id
+    const selectionKey = downloadSelectionKey(selected)
+    if (article.dataset.selectionKey !== selectionKey) article.dataset.selectionKey = selectionKey
+
+    let itemHost = selected.url
+    try { itemHost = new URL(selected.url).host } catch {}
+    const likelySize = selected.size || selected.estimatedSize || 0
+    const size = selected.size && selected.size > 0 ? formatBytes(selected.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
+    const quality = selected.quality || resourceQuality(selected.url, selected.height)
+    const resolution = selected.width && selected.height ? (selected.width + '\u00d7' + selected.height) : ''
+    const bandwidth = selected.bandwidth ? formatBitrate(selected.bandwidth) : ''
+    const duration = selected.duration ? formatDuration(selected.duration) : ''
+    const streamMode = selected.isLive === true ? '直播' : ''
+    const metaParts = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean)
+    const meta = metaParts.join(' \u00b7 ')
+
+    const cardUrl = item.url
+    setTextIfChanged(state.name, item.title || item.filename || item.url.split('/').pop() || item.url)
+    setAttrIfChanged(state.name, 'title', item.filename || item.title || cardUrl)
+
+    if (state.lastMeta !== meta) {
+      state.lastMeta = meta
+      setAttrIfChanged(state.line, 'title', meta)
+      setAttrIfChanged(state.line, 'aria-label', meta)
+      patchKeyedChildren(
+        state.facts,
+        metaParts.map((part, index) => ({ key: `${index}:${part}`, part: String(part) })),
+        entry => entry.key,
+        () => el('span', 'resource-fact'),
+        (node, entry) => setTextIfChanged(node, entry.part),
+      )
+    }
+
+    setTextIfChanged(state.mime, itemHost)
+    setAttrIfChanged(state.mime, 'title', [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 '))
+
+    if (state.copyBtn.dataset.copyUrl !== selected.url) state.copyBtn.dataset.copyUrl = selected.url
+    renderCopyButton(state.copyBtn, selected.url)
+    setAttrIfChanged(
+      state.copyBtn,
+      'title',
+      itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5',
+    )
+
+    if (item.variants?.length) {
+      state.qualityTrigger.hidden = false
+      // 原生选择框提供方向键、Escape 和越过滚动容器的菜单，原地修补选项避免重绘闪烁。
+      syncSelectOptions(
+        state.qualityTrigger,
+        [
+          { value: downloadSelectionKey(item), label: variantLabel() },
+          ...item.variants.map(variant => ({
+            value: downloadSelectionKey(selectMediaVariant(item, variant)),
+            label: variantLabel(variant),
+          })),
+        ],
+        selectionKey,
+      )
+    } else {
+      state.qualityTrigger.hidden = true
+    }
+
+    const showManualCopy = manualCopy.has(selected.url)
+    state.manualCopyHelp.hidden = !showManualCopy
+    state.manualCopyInput.hidden = !showManualCopy
+    if (showManualCopy && state.manualCopyInput.value !== selected.url) {
+      state.manualCopyInput.value = selected.url
+    }
+
+    const sendState = sending[actionKey(selected)]
+    const nextStateAttr = sendState || ''
+    if (article.dataset.state !== nextStateAttr) article.dataset.state = nextStateAttr
+    const label = sendState ? SEND_LABELS[sendState] : '下载'
+    if (state.downloadBtn.dataset.state !== nextStateAttr) state.downloadBtn.dataset.state = nextStateAttr
+    const sendPending = sendState ? SEND_PENDING.has(sendState) : false
+    patchIcon(state.downloadBtn, sendPending ? 'scan' : sendState === 'queued' || sendState === 'done' ? 'check' : sendState === 'recoverable' ? 'open' : 'download')
+    setTextIfChanged(state.downloadLabel, label)
+    const locked = sendState ? SEND_LOCKED.has(sendState) : false
+    state.downloadBtn.disabled = locked
+    state.downloadBtn.classList.toggle('busy', sendPending)
+    setAttrIfChanged(state.downloadBtn, 'aria-busy', String(sendPending))
+    setAttrIfChanged(state.downloadBtn, 'title', sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列')
+
+    const pushKey = actionKey(selected, 'tvbox')
+    const pushState = pushing[pushKey]
+    const pushStateAttr = pushState || ''
+    const pushPending = pushState === 'working' || pushState === 'awaiting'
+    if (state.pushBtn.dataset.state !== pushStateAttr) state.pushBtn.dataset.state = pushStateAttr
+    patchIcon(state.pushBtn, pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv')
+    setTextIfChanged(state.pushLabel, pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox')
+    state.pushBtn.disabled = pushState ? PUSH_BUSY.has(pushState) : false
+    state.pushBtn.classList.toggle('busy', pushPending)
+    setAttrIfChanged(state.pushBtn, 'aria-busy', String(pushPending))
+
+    const castKey = actionKey(selected, 'cast')
+    const castState = pushing[castKey]
+    const castStateAttr = castState || ''
+    const castPending = castState === 'working' || castState === 'awaiting'
+    if (state.castBtn.dataset.state !== castStateAttr) state.castBtn.dataset.state = castStateAttr
+    patchIcon(state.castBtn, castPending ? 'scan' : castState === 'sent' ? 'check' : 'cast')
+    setTextIfChanged(state.castLabel, castState ? CAST_PUSH_LABELS[castState] : '投屏')
+    state.castBtn.disabled = castState ? PUSH_BUSY.has(castState) : false
+    state.castBtn.classList.toggle('busy', castPending)
+    setAttrIfChanged(state.castBtn, 'aria-busy', String(castPending))
+  }
+
+  interface EmptyCardRefs {
+    heading: HTMLElement
+    description: HTMLSpanElement
+    actionBtn: HTMLButtonElement
+    actionLabel: HTMLSpanElement
+    mode: 'empty' | 'filtered'
+  }
+  const emptyCardRefs = new WeakMap<HTMLElement, EmptyCardRefs>()
+
+  const createEmptyCard = (): HTMLDivElement => {
+    const empty = el('div', 'empty')
+    const emptyIcon = el('div', 'empty-icon')
+    emptyIcon.append(icon('media'))
+    const heading = el('strong')
+    const description = el('span')
+    const actionBtn = el('button', 'empty-retry') as HTMLButtonElement
+    actionBtn.type = 'button'
+    const actionLabel = el('span', '', '嗅探全部资源')
+    actionBtn.append(icon('scan'), actionLabel)
+    empty.append(emptyIcon, heading, description, actionBtn)
+    const refs: EmptyCardRefs = { heading, description, actionBtn, actionLabel, mode: 'empty' }
+    emptyCardRefs.set(empty, refs)
+    actionBtn.addEventListener('click', () => {
+      if (refs.mode === 'filtered') {
+        filterCategory = 'all'
+        filterQuery = ''
+        filterSearch.value = ''
+        renderList()
+      } else {
+        void rescanPage()
+      }
+    })
+    return empty
+  }
+
   const renderList = () => {
-    const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement)
-      ? { id: document.activeElement.closest<HTMLElement>('article')?.dataset.resourceId, action: document.activeElement.dataset.action }
-      : undefined
-    const scrollTop = section.scrollTop
-    const expanded = new Set([...list.querySelectorAll<HTMLDetailsElement>('details[open]')]
-      .map(node => node.closest<HTMLElement>('article')?.dataset.resourceId))
     const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
-    count.textContent = String(visible.length)
+    setTextIfChanged(count, String(visible.length))
     const categoryCounts = countPopupCategories(visible)
     if (filterCategory !== 'all' && categoryCounts[filterCategory] === 0) {
       filterCategory = 'all'
@@ -471,21 +766,31 @@ async function main() {
       ]
       const activeNonAllCategories = chipDefs.slice(1).filter(([key]) => categoryCounts[key] > 0)
       filterChips.hidden = activeNonAllCategories.length < 2
-      filterChips.replaceChildren()
-      if (!filterChips.hidden) {
-        for (const [key, label] of chipDefs) {
-          if (key !== 'all' && categoryCounts[key] === 0) continue
+      const visibleChips = filterChips.hidden
+        ? []
+        : chipDefs.filter(([key]) => key === 'all' || categoryCounts[key] > 0)
+      patchKeyedChildren(
+        filterChips,
+        visibleChips,
+        ([key]) => key,
+        ([key, label]) => {
           const chip = el('button', 'filter-chip') as HTMLButtonElement
           chip.type = 'button'
-          chip.setAttribute('aria-pressed', String(filterCategory === key))
-          chip.append(document.createTextNode(label), el('b', '', String(categoryCounts[key])))
+          chip.append(el('span', '', label), el('b', '', '0'))
           chip.addEventListener('click', () => {
             filterCategory = key
             renderList()
           })
-          filterChips.append(chip)
-        }
-      }
+          return chip
+        },
+        (chip, [key, label]) => {
+          setAttrIfChanged(chip, 'aria-pressed', String(filterCategory === key))
+          const nameSpan = chip.querySelector('span')
+          const countEl = chip.querySelector('b')
+          if (nameSpan) setTextIfChanged(nameSpan, label)
+          if (countEl) setTextIfChanged(countEl, String(categoryCounts[key]))
+        },
+      )
       const batchTargets = filtered
         .map(resolveSelectedVariant)
         .filter(candidate => sendClickAction(sending[actionKey(candidate)]) === 'send')
@@ -498,17 +803,14 @@ async function main() {
           : batchCount > 0
             ? `批量下载 (${batchCount})`
             : '已全部发送'
-      batchBtn.replaceChildren(icon(batchRunning ? 'scan' : 'download'), el('span', '', batchLabel))
+      patchIcon(batchBtn, batchRunning ? 'scan' : 'download')
+      setTextIfChanged(batchBtnLabel, batchLabel)
       batchBtn.onclick = () => {
         if (batchRunning || batchCount === 0) return
         void sendBatch(batchTargets.slice(0, 20))
       }
     }
-    list.replaceChildren()
     if (!visible.length) {
-      const empty = el('div', 'empty')
-      const emptyIcon = el('div', 'empty-icon')
-      emptyIcon.append(icon('media'))
       const heading = resourceState === 'loading'
         ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u9875\u9762'
         : resourceState === 'scanning'
@@ -519,179 +821,49 @@ async function main() {
       const description = resourceState === 'loading' || resourceState === 'scanning'
         ? '\u6b63\u5728\u68c0\u67e5\u89c6\u9891\u3001\u97f3\u9891\u548c\u5a92\u4f53\u6e05\u5355\u3002'
         : !canScanPage ? '请切换到普通网页，播放媒体后再打开插件。' : '\u5148\u64ad\u653e\u9875\u9762\u4e2d\u7684\u5a92\u4f53\uff0c\u6216\u70b9\u51fb\u4e0b\u65b9嗅探全部资源\u3002'
-      empty.append(emptyIcon, el('strong', '', heading), el('span', '', description))
-      if (canScanPage && resourceState !== 'loading' && resourceState !== 'scanning') {
-        const retry = el('button', 'empty-retry') as HTMLButtonElement
-        retry.type = 'button'
-        retry.append(icon('scan'), el('span', '', '嗅探全部资源'))
-        retry.addEventListener('click', () => void rescanPage())
-        empty.append(retry)
-      }
-      list.append(empty)
+      const showRetry = canScanPage && resourceState !== 'loading' && resourceState !== 'scanning'
+      patchKeyedChildren(
+        list,
+        [{ mode: 'empty' as const, heading, description, showRetry }],
+        () => '__empty__',
+        createEmptyCard,
+        (empty, spec) => {
+          const refs = emptyCardRefs.get(empty)
+          if (!refs) return
+          refs.mode = spec.mode
+          setTextIfChanged(refs.heading, spec.heading)
+          setTextIfChanged(refs.description, spec.description)
+          refs.actionBtn.hidden = !spec.showRetry
+          setTextIfChanged(refs.actionLabel, '嗅探全部资源')
+        },
+      )
       return
     }
     if (!filtered.length) {
-      const empty = el('div', 'empty')
-      const emptyIcon = el('div', 'empty-icon')
-      emptyIcon.append(icon('media'))
-      empty.append(
-        emptyIcon,
-        el('strong', '', '没有匹配当前筛选的资源'),
-        el('span', '', '试试清空关键词或切回“全部”类型。'),
+      patchKeyedChildren(
+        list,
+        [{ mode: 'filtered' as const }],
+        () => '__empty__',
+        createEmptyCard,
+        empty => {
+          const refs = emptyCardRefs.get(empty)
+          if (!refs) return
+          refs.mode = 'filtered'
+          setTextIfChanged(refs.heading, '没有匹配当前筛选的资源')
+          setTextIfChanged(refs.description, '试试清空关键词或切回“全部”类型。')
+          refs.actionBtn.hidden = false
+          setTextIfChanged(refs.actionLabel, '重置筛选')
+        },
       )
-      const reset = el('button', 'empty-retry') as HTMLButtonElement
-      reset.type = 'button'
-      reset.append(icon('scan'), el('span', '', '重置筛选'))
-      reset.addEventListener('click', () => {
-        filterCategory = 'all'
-        filterQuery = ''
-        filterSearch.value = ''
-        renderList()
-      })
-      empty.append(reset)
-      list.append(empty)
       return
     }
-    for (const item of filtered) {
-      const selected = resolveSelectedVariant(item)
-      let itemHost = selected.url
-      try { itemHost = new URL(selected.url).host } catch {}
-      const likelySize = selected.size || selected.estimatedSize || 0
-      const size = selected.size && selected.size > 0 ? formatBytes(selected.size) : likelySize > 0 ? `约 ${formatBytes(likelySize)}` : '大小未知'
-      const quality = selected.quality || resourceQuality(selected.url, selected.height)
-      const resolution = selected.width && selected.height ? (selected.width + '\u00d7' + selected.height) : ''
-      const bandwidth = selected.bandwidth ? formatBitrate(selected.bandwidth) : ''
-      const duration = selected.duration ? formatDuration(selected.duration) : ''
-      const streamMode = selected.isLive === true ? '直播' : ''
-      const metaParts = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean)
-      const meta = metaParts.join(' \u00b7 ')
-      const article = el('article')
-      article.dataset.resourceId = item.id
-      article.tabIndex = -1
-      const body = el('div', 'resource-body')
-      const name = el('strong', '', item.title || item.filename || item.url.split('/').pop() || item.url)
-      const cardUrl = item.url
-      name.title = item.filename || item.title || cardUrl
-      // 每项不可断开，分隔点由样式画在后一项前面；换行处行首的分隔点落在裁剪区外，行尾永远不会留下孤立的“·”。
-      const line = el('span', 'resource-facts')
-      line.title = meta
-      line.setAttribute('aria-label', meta)
-      const facts = el('span', 'resource-facts-row')
-      facts.setAttribute('aria-hidden', 'true')
-      for (const part of metaParts) facts.append(el('span', 'resource-fact', String(part)))
-      line.append(facts)
-      const mime = el('small', '', itemHost)
-      mime.title = [item.mimeType, itemHost].filter(Boolean).join(' \u00b7 ')
-      const copyBtn = el('button', 'copy-link') as HTMLButtonElement
-      copyBtn.type = 'button'
-      copyBtn.dataset.action = 'copy'
-      copyBtn.dataset.copyUrl = selected.url
-      renderCopyButton(copyBtn, selected.url)
-      copyBtn.title = itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5'
-      copyBtn.addEventListener('click', () => void copyLink(selected.url))
-      body.append(name, line)
-      if (item.variants?.length) {
-        const variantLabel = (variant?: { quality?: string; height?: number; bandwidth?: number }) =>
-          variant
-            ? [variant.quality || (variant.height ? `${variant.height}p` : '\u7ebf\u8def'), variant.bandwidth ? formatBitrate(variant.bandwidth) : ''].filter(Boolean).join(' \u00b7 ')
-            : '\u81ea\u52a8\uff08\u6700\u9ad8\uff09'
-        // 原生选择框提供方向键、Escape 和越过滚动容器的菜单，不再维护自绘遮罩。
-        const trigger = el('select', 'quality-trigger')
-        trigger.dataset.action = 'quality'
-        trigger.setAttribute('aria-label', '选择视频清晰度')
-        trigger.append(new Option(variantLabel(), downloadSelectionKey(item)))
-        for (const variant of item.variants) trigger.append(new Option(variantLabel(variant), downloadSelectionKey(selectMediaVariant(item, variant))))
-        trigger.value = downloadSelectionKey(selected)
-        trigger.addEventListener('change', () => {
-          if (trigger.value === downloadSelectionKey(item)) delete chosenVariant[item.id]
-          else chosenVariant[item.id] = trigger.value
-          renderList()
-        })
-        body.append(trigger)
-      }
-      const metaRow = el('div', 'resource-meta')
-      metaRow.append(mime)
-      body.append(metaRow)
-      if (manualCopy.has(selected.url)) {
-        const url = el('input', 'manual-copy')
-        url.type = 'text'
-        url.readOnly = true
-        url.value = selected.url
-        url.dataset.action = 'manual-copy'
-        url.setAttribute('aria-label', '完整媒体链接，按 Ctrl+C 复制')
-        url.addEventListener('focus', () => url.select())
-        const help = el('small', 'manual-copy-help', '自动复制失败，请按 Ctrl+C 复制下方完整链接')
-        help.setAttribute('role', 'status')
-        body.append(help, url)
-      }
-      const sendState = sending[actionKey(selected)]
-      article.dataset.state = sendState || ''
-      const label = sendState ? SEND_LABELS[sendState] : '下载'
-      const button = el('button', 'hlsd-button primary')
-      button.type = 'button'
-      button.dataset.state = sendState || ''
-      const sendPending = sendState ? SEND_PENDING.has(sendState) : false
-      button.dataset.action = 'download'
-      button.append(icon(sendPending ? 'scan' : sendState === 'queued' || sendState === 'done' ? 'check' : sendState === 'recoverable' ? 'open' : 'download'), el('span', '', label))
-      const locked = sendState ? SEND_LOCKED.has(sendState) : false
-      button.disabled = locked
-      button.classList.toggle('busy', sendPending)
-      button.setAttribute('aria-busy', String(sendPending))
-      button.title = sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列'
-      button.addEventListener('click', () => {
-        const action = sendClickAction(sendState)
-        if (action === 'open_desktop') void startLaunch()
-        else if (action !== 'none') void send(selected)
-      })
-      const pushKey = actionKey(selected, 'tvbox')
-      const pushState = pushing[pushKey]
-      const pushLabel = pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox'
-      const pushButton = el('button', 'hlsd-button push-button')
-      pushButton.type = 'button'
-      pushButton.dataset.state = pushState || ''
-      const pushPending = pushState === 'working' || pushState === 'awaiting'
-      pushButton.dataset.action = 'tvbox'
-      pushButton.append(icon(pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv'), el('span', '', pushLabel))
-      pushButton.disabled = pushState ? PUSH_BUSY.has(pushState) : false
-      pushButton.classList.toggle('busy', pushPending)
-      pushButton.setAttribute('aria-busy', String(pushPending))
-      pushButton.title = '直接推送当前媒体链接到 TVBox'
-      pushButton.addEventListener('click', () => void pushToTv(selected))
-      const castKey = actionKey(selected, 'cast')
-      const castState = pushing[castKey]
-      const castLabel = castState ? CAST_PUSH_LABELS[castState] : '投屏'
-      const castButton = el('button', 'hlsd-button cast-button')
-      castButton.type = 'button'
-      castButton.dataset.state = castState || ''
-      const castPending = castState === 'working' || castState === 'awaiting'
-      castButton.dataset.action = 'cast'
-      castButton.append(icon(castPending ? 'scan' : castState === 'sent' ? 'check' : 'cast'), el('span', '', castLabel))
-      castButton.disabled = castState ? PUSH_BUSY.has(castState) : false
-      castButton.classList.toggle('busy', castPending)
-      castButton.setAttribute('aria-busy', String(castPending))
-      castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
-      castButton.addEventListener('click', () => void castToDevice(selected))
-      const actionCol = el('div', 'article-actions')
-      const more = el('details', 'resource-more')
-      more.open = expanded.has(item.id)
-      const summary = el('summary', '', '更多')
-      summary.dataset.action = 'more'
-      summary.setAttribute('aria-label', '更多媒体操作')
-      const extra = el('div', 'resource-extra')
-      extra.append(copyBtn, castButton, pushButton)
-      more.append(summary, extra)
-      actionCol.append(button, more)
-      article.append(body, actionCol)
-      list.append(article)
-    }
-    section.scrollTop = scrollTop
-    if (focused?.id) {
-      const card = [...list.querySelectorAll('article')].find(node => node.dataset.resourceId === focused.id)
-      const control = [...(card?.querySelectorAll<HTMLElement>('[data-action]') || [])]
-        .find(node => node.dataset.action === focused.action && !node.matches(':disabled'))
-      const target = control || card
-      target?.focus({ preventScroll: true })
-    }
+    patchKeyedChildren(
+      list,
+      filtered,
+      item => resourceFingerprint(item),
+      createResourceCard,
+      updateResourceCard,
+    )
   }
 
   const refreshButtons = () => {
@@ -821,8 +993,11 @@ async function main() {
       manualCopy.delete(url)
       for (const button of list.querySelectorAll<HTMLButtonElement>('[data-action=copy]')) {
         if (button.dataset.copyUrl !== url) continue
-        button.closest('article')?.querySelector('.manual-copy')?.remove()
-        button.closest('article')?.querySelector('.manual-copy-help')?.remove()
+        const card = button.closest('article')
+        const input = card?.querySelector<HTMLInputElement>('.manual-copy')
+        const help = card?.querySelector<HTMLElement>('.manual-copy-help')
+        if (input) input.hidden = true
+        if (help) help.hidden = true
       }
       setCopyState(url, 'copied')
       copyResetTimers.set(url, setTimeout(() => {
@@ -1134,21 +1309,39 @@ async function main() {
     transfersPolling = true
     try {
       const transfers = await browser.runtime.sendMessage({ type: 'local-download-progress', tabId: tab?.id })
-      browserTransfers.replaceChildren()
-      browserTransfers.hidden = !Array.isArray(transfers) || !transfers.length
-      if (!Array.isArray(transfers)) return
-      for (const transfer of transfers) {
-        const labels: Record<string, string> = {
-          receiving: '正在由浏览器接收，完成后导入', paused: '浏览器已暂停，恢复后继续接收',
-          interrupted: '浏览器接收中断，源文件保留，请在浏览器恢复',
-          importing: '浏览器接收完成，正在等待桌面确认或导入', recovering: '正在恢复交接，源文件保留',
-        }
-        const row = el('div', 'browser-transfer')
-        row.append(el('strong', '', String(transfer.filename || '浏览器下载')),
-          el('span', '', labels[String(transfer.state)] || '正在恢复交接'),
-          el('span', '', `${formatBytes(Number(transfer.bytesReceived) || 0)}${Number(transfer.totalBytes) > 0 ? ` / ${formatBytes(Number(transfer.totalBytes))}` : ''}`))
-        browserTransfers.append(row)
+      const items = Array.isArray(transfers) ? transfers : []
+      browserTransfers.hidden = !items.length
+      const labels: Record<string, string> = {
+        receiving: '正在由浏览器接收，完成后导入', paused: '浏览器已暂停，恢复后继续接收',
+        interrupted: '浏览器接收中断，源文件保留，请在浏览器恢复',
+        importing: '浏览器接收完成，正在等待桌面确认或导入', recovering: '正在恢复交接，源文件保留',
       }
+      patchKeyedChildren(
+        browserTransfers,
+        items.map((transfer, index) => ({
+          key: String(transfer.id ?? transfer.downloadId ?? `${transfer.filename || 'transfer'}:${index}`),
+          transfer,
+        })),
+        entry => entry.key,
+        () => {
+          const row = el('div', 'browser-transfer')
+          row.append(el('strong'), el('span', 'transfer-state'), el('span', 'transfer-bytes'))
+          return row
+        },
+        (row, { transfer }) => {
+          const titleEl = row.querySelector('strong')
+          const stateEl = row.querySelector('.transfer-state')
+          const bytesEl = row.querySelector('.transfer-bytes')
+          if (titleEl) setTextIfChanged(titleEl, String(transfer.filename || '浏览器下载'))
+          if (stateEl) setTextIfChanged(stateEl, labels[String(transfer.state)] || '正在恢复交接')
+          if (bytesEl) {
+            setTextIfChanged(
+              bytesEl,
+              `${formatBytes(Number(transfer.bytesReceived) || 0)}${Number(transfer.totalBytes) > 0 ? ` / ${formatBytes(Number(transfer.totalBytes))}` : ''}`,
+            )
+          }
+        },
+      )
     } catch { /* A worker restart is retried by the next visible-popup poll. */ }
     finally { transfersPolling = false }
   }

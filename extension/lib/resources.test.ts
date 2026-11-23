@@ -722,6 +722,156 @@ describe('resource rules', () => {
       mseResourceUrls: ['https://cdn.test/common/init.m4s'], startedAt: now,
     }, 1)).toEqual([])
   })
+  it('folds an MSE-correlated master and its own child variant instead of returning empty', () => {
+    const now = Date.now()
+    const segment = 'https://cdn.test/vod/ep12/1080p/seg-1.m4s'
+    const master = resource({
+      id: 'master',
+      kind: 'hls',
+      inspected: true,
+      manifestType: 'master',
+      url: 'https://cdn.test/vod/ep12/master.m3u8',
+      variants: [
+        { url: 'https://cdn.test/vod/ep12/1080p/index.m3u8', height: 1080, bandwidth: 5_200_000, quality: '1080p' },
+        { url: 'https://cdn.test/vod/ep12/720p/index.m3u8', height: 720, bandwidth: 2_500_000, quality: '720p' },
+      ],
+      playbackUrls: [segment],
+      seenAt: now,
+    })
+    // Child carries renditionUrls so compactResources keeps both master and child.
+    const child = resource({
+      id: 'child-1080',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/vod/ep12/1080p/index.m3u8',
+      renditionUrls: ['https://cdn.test/vod/ep12/audio.m3u8'],
+      playbackUrls: [segment],
+      height: 1080,
+      bandwidth: 5_200_000,
+      seenAt: now + 1,
+    })
+    expect(playerPlaybackResources([master, child], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [segment],
+      startedAt: now,
+    }, 6).map(item => item.id)).toEqual(['master'])
+  })
+  it('retains multiple MSE-correlated quality renditions from the same stream family sorted highest first', () => {
+    const now = Date.now()
+    const hd = resource({
+      id: 'hd',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/vod/ep12/1080p/index.m3u8',
+      height: 1080,
+      bandwidth: 5_200_000,
+      quality: '1080p',
+      playbackUrls: ['https://cdn.test/vod/ep12/1080p/seg-2.m4s'],
+      seenAt: now + 1,
+    })
+    const sd = resource({
+      id: 'sd',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/vod/ep12/720p/index.m3u8',
+      height: 720,
+      bandwidth: 2_500_000,
+      quality: '720p',
+      playbackUrls: ['https://cdn.test/vod/ep12/720p/seg-1.m4s'],
+      seenAt: now,
+    })
+    expect(playerPlaybackResources([sd, hd], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [
+        'https://cdn.test/vod/ep12/720p/seg-1.m4s',
+        'https://cdn.test/vod/ep12/1080p/seg-2.m4s',
+      ],
+      startedAt: now,
+    }, 6).map(item => item.id)).toEqual(['hd', 'sd'])
+
+    // Sibling renditions sharing the same explicit manifestUrl also resolve together.
+    const siblingHigh = resource({
+      id: 'sib-high',
+      kind: 'dash',
+      url: 'https://cdn.test/edge-a/track.mpd',
+      manifestUrl: 'https://cdn.test/session/master.mpd',
+      height: 1080,
+      bandwidth: 4_800_000,
+      playbackUrls: ['https://cdn.test/session/init.m4s'],
+      seenAt: now,
+    })
+    const siblingLow = resource({
+      id: 'sib-low',
+      kind: 'dash',
+      url: 'https://cdn.test/edge-b/track.mpd',
+      manifestUrl: 'https://cdn.test/session/master.mpd',
+      height: 720,
+      bandwidth: 2_000_000,
+      playbackUrls: ['https://cdn.test/session/init.m4s'],
+      seenAt: now,
+    })
+    expect(playerPlaybackResources([siblingLow, siblingHigh], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: ['https://cdn.test/session/init.m4s'],
+      startedAt: now,
+    }, 6).map(item => item.id)).toEqual(['sib-high', 'sib-low'])
+  })
+  it('still rejects cross-player MSE ambiguity when distinct videos share an init segment', () => {
+    const now = Date.now()
+    const sharedInit = 'https://cdn.test/shared/init.m4s'
+    const channelOne = resource({
+      id: 'channel-one',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/live/channel-one/master.m3u8',
+      variants: [{ url: 'https://cdn.test/live/channel-one/1080p.m3u8', height: 1080 }],
+      playbackUrls: [sharedInit],
+      seenAt: now,
+    })
+    const channelOneChild = resource({
+      id: 'channel-one-child',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/live/channel-one/1080p.m3u8',
+      renditionUrls: ['https://cdn.test/live/channel-one/audio.m3u8'],
+      playbackUrls: [sharedInit],
+      seenAt: now,
+    })
+    const channelTwo = resource({
+      id: 'channel-two',
+      kind: 'hls',
+      inspected: true,
+      url: 'https://cdn.test/live/channel-two/master.m3u8',
+      playbackUrls: [sharedInit],
+      seenAt: now,
+    })
+    expect(playerPlaybackResources([channelOne, channelOneChild, channelTwo], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [sharedInit],
+      startedAt: now,
+    }, 6)).toEqual([])
+
+    // Distinct semantic query IDs remain ambiguous even with quality query params.
+    const vidA = resource({
+      id: 'vid-a',
+      kind: 'hls',
+      url: 'https://cdn.test/stream.m3u8?vid=100&quality=1080',
+      playbackUrls: [sharedInit],
+      seenAt: now,
+    })
+    const vidB = resource({
+      id: 'vid-b',
+      kind: 'hls',
+      url: 'https://cdn.test/stream.m3u8?vid=200&quality=720',
+      playbackUrls: [sharedInit],
+      seenAt: now,
+    })
+    expect(playerPlaybackResources([vidA, vidB], {
+      sourceUrls: ['blob:https://site.test/player'],
+      mseResourceUrls: [sharedInit],
+      startedAt: now,
+    }, 6)).toEqual([])
+  })
   it('keeps images and ambiguous dynamic documents in the browser', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()
