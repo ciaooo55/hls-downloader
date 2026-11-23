@@ -110,6 +110,8 @@ jobs:
             ~/.cargo/git
             .tool-cache/build-cache/cargo-target
           key: v7-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            v7-rust-core-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Test, build and lint Rust Core
         working-directory: native_shell
@@ -132,7 +134,7 @@ jobs:
   presenter:
     name: Native presenter
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -150,6 +152,8 @@ jobs:
             ~/.cargo/git
             .tool-cache/build-cache/cargo-target
           key: v7-presenter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            v7-presenter-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Test, build and lint native presenter
         working-directory: native_ui
