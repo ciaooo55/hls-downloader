@@ -32,37 +32,51 @@ impl TaskPaths {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             // 合流产物是 MP4，网页标题或清单名称不能直接作为无扩展名的最终文件。
+            // 仅替换常见媒体/清单后缀，保留如 "Episode 1.2" 中的点号，并约束 NTFS 255 UTF-16 上限。
             if extension != "mp4" {
-                final_name = Path::new(&final_name)
-                    .with_extension("mp4")
-                    .to_string_lossy()
-                    .into_owned();
+                let base = if matches!(
+                    extension.as_str(),
+                    "m3u8" | "m3u" | "mpd" | "ts" | "m4s" | "webm" | "mkv" | "flv" | "mov" | "avi"
+                ) {
+                    Path::new(&final_name)
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or(&final_name)
+                        .to_string()
+                } else {
+                    final_name
+                };
+                final_name = clamp_utf16_with_suffix(&base, ".mp4", 255);
             }
         }
         let mut final_output = root.join(&final_name);
         if let Some(source) = spec.local_source_path.as_deref() {
-            if fs::canonicalize(source).ok() == fs::canonicalize(&final_output).ok() {
-                let source_name = Path::new(&final_name);
-                let stem = source_name
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("download");
-                let extension = source_name
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .filter(|value| !value.is_empty());
-                let mut sequence = 2u64;
-                loop {
-                    let candidate_name = match extension {
-                        Some(extension) => format!("{stem} ({sequence}).{extension}"),
-                        None => format!("{stem} ({sequence})"),
-                    };
-                    let candidate = root.join(candidate_name);
-                    if !candidate.exists() {
-                        final_output = candidate;
-                        break;
+            if let (Ok(source_canon), Ok(output_canon)) =
+                (fs::canonicalize(source), fs::canonicalize(&final_output))
+            {
+                if source_canon == output_canon {
+                    let source_name = Path::new(&final_name);
+                    let stem = source_name
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("download");
+                    let extension = source_name
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .filter(|value| !value.is_empty());
+                    let mut sequence = 2u64;
+                    loop {
+                        let candidate_name = match extension {
+                            Some(extension) => format!("{stem} ({sequence}).{extension}"),
+                            None => format!("{stem} ({sequence})"),
+                        };
+                        let candidate = root.join(candidate_name);
+                        if !candidate.exists() {
+                            final_output = candidate;
+                            break;
+                        }
+                        sequence = sequence.saturating_add(1);
                     }
-                    sequence = sequence.saturating_add(1);
                 }
             }
         }
@@ -140,6 +154,28 @@ impl TaskPaths {
 static TORRENT_SELECTION_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static TORRENT_SELECTION_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
+fn clamp_utf16_with_suffix(stem: &str, suffix: &str, max_units: usize) -> String {
+    let suffix_units = suffix.encode_utf16().count();
+    let budget = max_units.saturating_sub(suffix_units);
+    let mut clipped = String::new();
+    let mut used = 0usize;
+    for ch in stem.chars() {
+        let units = ch.len_utf16();
+        if used + units > budget {
+            break;
+        }
+        clipped.push(ch);
+        used += units;
+    }
+    let clipped = clipped.trim_end_matches([' ', '.']);
+    let base = if clipped.is_empty() {
+        "download"
+    } else {
+        clipped
+    };
+    format!("{base}{suffix}")
+}
+
 fn write_torrent_selection_locked(
     path: &Path,
     selections: &[crate::TorrentFileSelection],
@@ -164,6 +200,7 @@ fn write_torrent_selection_locked(
             .open(&temporary)?;
         file.write_all(&encoded)?;
         file.sync_all()?;
+        drop(file);
         crate::atomic_replace::replace_file(&temporary, path)
     })();
     if write_result.is_err() {

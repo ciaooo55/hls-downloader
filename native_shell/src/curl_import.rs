@@ -35,6 +35,14 @@ pub fn parse_curl_command(command: &str) -> Result<Option<CurlDownload>, String>
             } else {
                 (arg.as_str(), None)
             }
+        } else if arg.len() > 2
+            && arg.starts_with('-')
+            && matches!(
+                arg.get(..2),
+                Some("-X" | "-H" | "-A" | "-e" | "-b" | "-u" | "-d" | "-o" | "-x")
+            )
+        {
+            (&arg[..2], Some(arg[2..].to_string()))
         } else {
             (arg.as_str(), None)
         };
@@ -178,16 +186,19 @@ fn tokenize(command: &str) -> Result<Vec<String>, String> {
     let flattened = command.replace("\\\r\n", " ").replace("\\\n", " ");
     let mut values = Vec::new();
     let mut value = String::new();
+    let mut has_token = false;
     let mut quote = '\0';
     let mut escaped = false;
     for char in flattened.chars() {
         if escaped {
             value.push(char);
+            has_token = true;
             escaped = false;
             continue;
         }
         if char == '\\' && quote != '\'' {
             escaped = true;
+            has_token = true;
             continue;
         }
         if quote != '\0' {
@@ -200,20 +211,23 @@ fn tokenize(command: &str) -> Result<Vec<String>, String> {
         }
         if char == '"' || char == '\'' {
             quote = char;
+            has_token = true;
             continue;
         }
         if char.is_whitespace() {
-            if !value.is_empty() {
+            if has_token {
                 values.push(std::mem::take(&mut value));
+                has_token = false;
             }
             continue;
         }
         value.push(char);
+        has_token = true;
     }
     if quote != '\0' {
         return Err("cURL 命令的引号没有闭合".into());
     }
-    if !value.is_empty() {
+    if has_token {
         values.push(value);
     }
     Ok(values)

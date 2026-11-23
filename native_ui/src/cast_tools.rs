@@ -638,6 +638,39 @@ impl CastTools {
             };
             self.window.set_notice_tone("error".into());
             self.window.set_notice(message.into());
+            let push_gone = matches!(
+                response,
+                CorePipeResponse::Error { code, .. }
+                    if matches!(code.as_str(), "media_push_not_found" | "media_push_resolved")
+            ) || matches!(
+                response,
+                CorePipeResponse::Events { events, .. }
+                    if events.iter().any(|item| matches!(
+                        &item.event,
+                        CoreEvent::Error { code, .. }
+                            if matches!(code.as_str(), "media_push_not_found" | "media_push_resolved")
+                    ))
+            );
+            if push_gone {
+                if let Pending::Resolve { push, status } = &kind {
+                    self.remember_resolved(push);
+                    if self
+                        .current_push
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|p| p.id == *push)
+                    {
+                        self.current_push.borrow_mut().take();
+                        self.window.set_browser_request(false);
+                        self.window.set_busy(false);
+                        if status != "done" {
+                            let _ = self.window.hide();
+                        }
+                    }
+                    self.next_push();
+                    return;
+                }
+            }
             if matches!(response,CorePipeResponse::Error{code,..} if code=="cast_connection")
                 && matches!(kind, Pending::Connect { .. } | Pending::Resolve { .. })
             {
@@ -742,8 +775,13 @@ impl CastTools {
                         .as_ref()
                         .is_some_and(|push| push.id == id)
                     {
+                        self.remember_resolved(&id);
+                        self.current_push.borrow_mut().take();
+                        self.window.set_browser_request(false);
+                        self.window.set_busy(false);
                         self.window.set_notice_tone("warning".into());
                         self.window.set_notice("未找到这次浏览器推送的保存记录，请核对接收端状态后关闭窗口；不会自动重复投送。".into());
+                        self.next_push();
                     }
                 }
             }

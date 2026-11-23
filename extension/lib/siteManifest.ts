@@ -25,7 +25,8 @@ export function shouldInspectSiteResponse(url: string, pageUrl: string, mimeType
   try {
     const request = new URL(url)
     const mime = mimeType.split(';', 1)[0].trim().toLowerCase()
-    return request.protocol === 'https:' && youtubeHost(request.hostname)
+    return request.protocol === 'https:'
+      && (youtubeHost(request.hostname) || request.hostname === 'www.youtube-nocookie.com')
       && request.pathname === '/youtubei/v1/player'
       && (!mime || mime === 'application/json' || mime === 'text/plain')
   } catch { return false }

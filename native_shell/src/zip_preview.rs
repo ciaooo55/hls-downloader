@@ -37,7 +37,7 @@ impl Source {
             }
             spec.etag = response.etag;
             spec.last_modified = response.last_modified;
-            spec.url = response.final_url;
+
             let read = response.body.len() as u64;
             Ok(Self {
                 file: None,
@@ -141,7 +141,10 @@ fn u64_at(b: &[u8], at: usize) -> Result<u64, String> {
 }
 
 pub(crate) fn preview(path: &str, spec: Option<TaskSpec>) -> Result<ZipPreview, String> {
-    let mut source = Source::open(path, spec)?;
+    preview_source(Source::open(path, spec)?)
+}
+
+fn preview_source(mut source: Source) -> Result<ZipPreview, String> {
     let tail = source.tail.clone();
     let eocd = (0..tail.len().saturating_sub(21))
         .rev()
@@ -151,7 +154,11 @@ pub(crate) fn preview(path: &str, spec: Option<TaskSpec>) -> Result<ZipPreview, 
         })
         .ok_or(CORRUPT)?;
     let eocd_offset = source.total - tail.len() as u64 + eocd as u64;
-    if u16_at(&tail, eocd + 4)? != 0 || u16_at(&tail, eocd + 6)? != 0 {
+    let disk_number = u16_at(&tail, eocd + 4)?;
+    let cd_start_disk = u16_at(&tail, eocd + 6)?;
+    if (disk_number != 0 && disk_number != 0xffff)
+        || (cd_start_disk != 0 && cd_start_disk != 0xffff)
+    {
         return Err("不支持分卷 ZIP 预览".into());
     }
     let mut count = u16_at(&tail, eocd + 10)? as u64;
@@ -160,7 +167,9 @@ pub(crate) fn preview(path: &str, spec: Option<TaskSpec>) -> Result<ZipPreview, 
     }
     let mut size = u32_at(&tail, eocd + 12)? as u64;
     let mut offset = u32_at(&tail, eocd + 16)? as u64;
-    let zip64 = count == 0xffff
+    let zip64 = disk_number == 0xffff
+        || cd_start_disk == 0xffff
+        || count == 0xffff
         || size == 0xffffffff
         || offset == 0xffffffff
         || eocd >= 20 && tail.get(eocd - 20..eocd - 16) == Some(b"PK\x06\x07");
@@ -349,6 +358,28 @@ fn decode_cp437(name: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip64_disk_sentinels_require_single_volume_locator_and_record() {
+        let mut bytes = vec![0u8; 56 + 20 + 22];
+        bytes[..4].copy_from_slice(b"PK\x06\x06");
+        bytes[4..12].copy_from_slice(&44u64.to_le_bytes());
+        bytes[56..60].copy_from_slice(b"PK\x06\x07");
+        bytes[72..76].copy_from_slice(&1u32.to_le_bytes());
+        bytes[76..80].copy_from_slice(b"PK\x05\x06");
+        bytes[80..84].fill(0xff);
+        let source = |tail: Vec<u8>| Source {
+            file: None,
+            spec: None,
+            total: tail.len() as u64,
+            tail,
+            read: 0,
+            modified: None,
+        };
+        assert!(preview_source(source(bytes.clone())).unwrap().zip64);
+        bytes[72] = 2;
+        assert!(preview_source(source(bytes)).is_err());
+    }
 
     #[test]
     fn empty_remote_directory_does_not_issue_a_range_request() {

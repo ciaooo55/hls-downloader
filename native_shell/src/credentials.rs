@@ -9,12 +9,19 @@ thread_local! {
 
 /// Run `f` with replay JSON visible to HTTP fetches on this thread (HLS/DASH hops).
 pub fn with_replay_json<R>(json: &str, f: impl FnOnce() -> R) -> R {
-    REPLAY_JSON.with(|slot| {
-        let previous = slot.replace(json.to_string());
-        let result = f();
-        slot.replace(previous);
-        result
-    })
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                let _ = REPLAY_JSON.try_with(|slot| {
+                    slot.replace(previous);
+                });
+            }
+        }
+    }
+    let previous = REPLAY_JSON.with(|slot| slot.replace(json.to_string()));
+    let _restore = Restore(Some(previous));
+    f()
 }
 
 pub(crate) fn scoped_replay_json() -> String {
@@ -181,11 +188,27 @@ fn apply_scoped_request_context_inner(
                 .map(|(_, context)| context)
         });
     let request_context = url_context.or(path_context);
-    if request_context.is_some() {
-        // 同目录的音视频也可能使用不同 Token，精确请求身份优先于目录身份。
+    let scoped_has_headers = scoped.get("request_headers").is_some();
+    if request_context.is_some() || scoped_has_headers {
+        // 同目录的音视频或同站重定向目标都可能使用不同 Token，
+        // 只要目标存在作用域 request_headers 或路径/精确上下文，就先清空旧的重放头。
         for name in replay_request_header_names(json) {
             remove_header(headers, &name);
         }
+    } else if !clear_replay_headers {
+        // 同源从带 path/url 上下文的地址重定向到无上下文路径时，仍需清除仅属于子路径的头。
+        for kind in ["path_contexts", "url_contexts"] {
+            if let Some(contexts) = scoped.get(kind).and_then(|v| v.as_object()) {
+                for context in contexts.values() {
+                    let mut sub_headers = std::collections::BTreeMap::new();
+                    merge_header_map(&mut sub_headers, context.get("request_headers"));
+                    for name in sub_headers.keys() {
+                        remove_header(headers, name);
+                    }
+                }
+            }
+        }
+        merge_header_map(headers, value.get("request_headers"));
     }
     let identity = request_context.unwrap_or(scoped);
     merge_header_map(headers, identity.get("request_headers"));
@@ -287,6 +310,10 @@ fn replay_request_path(url: &str) -> &str {
     target.split(['?', '#']).next().unwrap_or("/")
 }
 
+fn header_value_safe(text: &str) -> bool {
+    !text.trim().is_empty() && !text.chars().any(|ch| ch.is_control() && ch != '\t')
+}
+
 fn insert_header(
     headers: &mut std::collections::BTreeMap<String, String>,
     name: &str,
@@ -295,9 +322,10 @@ fn insert_header(
     let Some(text) = value.and_then(value_as_header_text) else {
         return;
     };
-    if text.trim().is_empty() || text.contains('\r') || text.contains('\n') {
+    if !header_value_safe(&text) {
         return;
     }
+    remove_header(headers, name);
     headers.insert(name.to_string(), text);
 }
 
@@ -351,16 +379,39 @@ fn merge_header_map(
             continue;
         }
         if let Some(text) = value_as_header_text(&val) {
-            if !text.trim().is_empty() && !text.contains('\r') && !text.contains('\n') {
-                headers.insert(canonical_header_name(&key), text);
+            if header_value_safe(&text) {
+                let canonical = canonical_header_name(&key);
+                remove_header(headers, &canonical);
+                headers.insert(canonical, text);
             }
         }
     }
 }
 
+fn is_rfc9110_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
 fn replay_header_name_ok(name: &str) -> bool {
     !name.is_empty()
-        && !name.contains(['\r', '\n', ':', '\0'])
+        && name.bytes().all(is_rfc9110_tchar)
         && !matches!(
             name.to_ascii_lowercase().as_str(),
             "host"
@@ -392,6 +443,16 @@ fn canonical_header_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_replay_scope_restores_after_unwind() {
+        with_replay_json("outer", || {
+            let result = std::panic::catch_unwind(|| with_replay_json("inner", || panic!()));
+            assert!(result.is_err());
+            assert_eq!(scoped_replay_json(), "outer");
+        });
+        assert!(scoped_replay_json().is_empty());
+    }
 
     #[test]
     fn replay_selects_cookie_path_for_each_adaptive_media_request() {

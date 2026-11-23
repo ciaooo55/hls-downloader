@@ -34,7 +34,12 @@ export async function captureSubtitleAudio(stream: MediaStream, audible: boolean
       for (const byte of bytes) text += String.fromCharCode(byte)
       const capturedAt = Date.now()
       const finalFlush = flushComplete !== undefined
-      const pending = Promise.resolve().then(() => send(btoa(text), capturedAt, finalFlush)).catch(reason => { sendError = reason })
+      const pending = Promise.resolve()
+        .then(() => send(btoa(text), capturedAt, finalFlush))
+        .then(() => {
+          if (!finalFlush) sendError = undefined
+        })
+        .catch(reason => { sendError = reason })
       pendingSends.add(pending)
       void pending.finally(() => pendingSends.delete(pending))
     }
@@ -44,6 +49,9 @@ export async function captureSubtitleAudio(stream: MediaStream, audible: boolean
       if (cleanup) return cleanup
       cleanup = (async () => {
         let flushError: unknown
+        // Stop feeding new live audio before flushing the worklet's tail buffer.
+        try { source.disconnect() } catch {}
+        stream.getTracks().forEach(track => track.stop())
         try {
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -54,13 +62,13 @@ export async function captureSubtitleAudio(stream: MediaStream, audible: boolean
             worklet.port.postMessage({ type: 'flush' })
           })
         } catch (reason) { flushError = reason }
+        worklet.port.onmessage = null
+        try { worklet.disconnect() } catch {}
+        try { silence.disconnect() } catch {}
         try {
           await Promise.all([...pendingSends])
           if (sendError || flushError) throw sendError || flushError
         } finally {
-          worklet.port.onmessage = null
-          source.disconnect(); worklet.disconnect()
-          stream.getTracks().forEach(track => track.stop())
           await context.close()
         }
       })()

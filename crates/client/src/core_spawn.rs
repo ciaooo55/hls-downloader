@@ -107,34 +107,42 @@ pub fn install_root() -> Option<PathBuf> {
     exe.parent().map(Path::to_path_buf)
 }
 
-pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{
-            GetHandleInformation, SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        };
-        // The resident Core must not retain browser/CLI protocol pipes. Null
-        // standard streams on Command alone do not clear the original handles.
-        for handle in [
-            std::io::stdin().as_raw_handle(),
-            std::io::stdout().as_raw_handle(),
-            std::io::stderr().as_raw_handle(),
-        ] {
-            let mut flags = 0u32;
-            if !handle.is_null()
-                && handle != INVALID_HANDLE_VALUE
-                && unsafe { GetHandleInformation(handle, &mut flags) } != 0
-                && (flags & HANDLE_FLAG_INHERIT) != 0
-                && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
-            {
-                return Err(format!(
-                    "Unable to isolate download core standard handles: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
+#[cfg(windows)]
+pub fn clear_std_handle_inheritance() -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, SetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    };
+    // Spawned Core/UI/Presenter processes must not retain browser/CLI protocol pipes.
+    // Null standard streams on Command alone do not clear inheritance on the original handles.
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        let mut flags = 0u32;
+        if !handle.is_null()
+            && handle != INVALID_HANDLE_VALUE
+            && unsafe { GetHandleInformation(handle, &mut flags) } != 0
+            && (flags & HANDLE_FLAG_INHERIT) != 0
+            && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
+        {
+            return Err(format!(
+                "Unable to isolate standard handles: {}",
+                std::io::Error::last_os_error()
+            ));
         }
     }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn clear_std_handle_inheritance() -> Result<(), String> {
+    Ok(())
+}
+
+pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
+    clear_std_handle_inheritance()?;
     let started = std::time::Instant::now();
     let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
     let executable = locate_core_executable(root)
@@ -177,6 +185,9 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn spawn_desktop_ui(root: &Path, launch_id: Option<&str>) -> bool {
+    if clear_std_handle_inheritance().is_err() {
+        return false;
+    }
     let (executable, pass_workbench) = if let Some(desktop) = locate_desktop_executable(root) {
         (desktop, false)
     } else if let Some(presenter) = locate_presenter_executable(root) {
@@ -228,6 +239,7 @@ pub fn ensure_presenter(root: &Path) -> Result<(), String> {
     if crate::instance::presenter_is_running() {
         return Ok(());
     }
+    clear_std_handle_inheritance()?;
     let executable = locate_presenter_executable(root)
         .ok_or_else(|| "找不到下载确认组件，请修复主程序安装".to_string())?;
     let mut command = Command::new(&executable);

@@ -272,6 +272,19 @@ export class NativeBridge {
     }
     if (request.timer) clearTimeout(request.timer)
     request.timer = undefined
+    // If an already-accepted media_push failed its best-effort admission status check
+    // (transport error or older Host returning ok:false), return the saved pending response
+    // instead of reporting a false failure.
+    if (request.fallbackResponse !== undefined && (coreTransportFailed || response.ok === false)) {
+      if (coreTransportFailed) {
+        this.port = null
+        try { port.disconnect() } catch {}
+        this.disconnected()
+      }
+      this.resolveActiveFallback()
+      this.pump()
+      return
+    }
     const resolvedResponse = String(request.message.op || '') === 'media_push_status'
       && response.ok === false
       && !['done', 'failed', 'canceled'].includes(String(response.status || ''))

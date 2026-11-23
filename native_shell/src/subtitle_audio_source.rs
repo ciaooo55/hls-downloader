@@ -162,7 +162,9 @@ pub(crate) fn decode(
     }
     let mut child = command.spawn().map_err(|_| "无法启动音轨解码组件")?;
     let stdout = child.stdout.take().ok_or("音轨解码管道不可用")?;
-    let limit = (seconds * 32000.0).ceil() as u64;
+    // Round up to whole 16 kHz mono PCM16 (2-byte) samples so fractional durations
+    // never produce an odd byte limit that rejects a valid aligned FFmpeg output.
+    let limit = ((seconds * 16000.0).ceil() as u64).saturating_mul(2);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
         stdout

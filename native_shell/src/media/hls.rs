@@ -2673,6 +2673,7 @@ fn save_segment(
             replay_json: crate::credentials::scoped_replay_json(),
             curl_body_limit: byterange.map(|(_, length)| length),
             range_stop: None,
+            installer_download: false,
             origin_boundary: String::new(),
         };
         let mut writer = BufWriter::with_capacity(1024 * 1024, fs::File::create(&temporary)?);

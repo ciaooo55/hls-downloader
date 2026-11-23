@@ -187,10 +187,7 @@ impl TaskList {
 
     fn matches(&self, task: &TaskSnapshot) -> bool {
         let filter = match self.filter.as_str() {
-            "running" => matches!(
-                task.status.as_str(),
-                "downloading" | "processing" | "merging" | "probing"
-            ),
+            "running" => Self::is_running_status(&task.status),
             "queued" => task.status == "queued",
             "paused" => task.status == "paused",
             "completed" => matches!(task.status.as_str(), "completed" | "done"),
@@ -213,6 +210,57 @@ impl TaskList {
                 || format!("{} {} {}", task.filename, task.title, task.url)
                     .to_lowercase()
                     .contains(&self.query.to_lowercase()))
+    }
+
+    pub fn is_visible(&self, id: &str) -> bool {
+        self.visible_set.contains(id)
+    }
+
+    pub fn is_running_status(status: &str) -> bool {
+        matches!(
+            status,
+            "downloading"
+                | "recording"
+                | "processing"
+                | "merging"
+                | "checking"
+                | "parsing"
+                | "probing"
+        )
+    }
+
+    pub fn nav_counts(&self) -> HashMap<String, i32> {
+        let mut counts = HashMap::<String, i32>::new();
+        for task in self.tasks.values() {
+            *counts.entry("all".into()).or_default() += 1;
+            let status = if Self::is_running_status(&task.status) {
+                "running"
+            } else {
+                match task.status.as_str() {
+                    "completed" | "done" => "completed",
+                    "canceled" | "failed" => "failed",
+                    status => status,
+                }
+            };
+            *counts.entry(status.into()).or_default() += 1;
+            *counts
+                .entry(format!(
+                    "category:{}",
+                    hls_client::download_category(&task.filename, &task.url, task.resource_kind)
+                ))
+                .or_default() += 1;
+            *counts
+                .entry(format!(
+                    "queue:{}",
+                    if task.queue_id.is_empty() {
+                        "default"
+                    } else {
+                        &task.queue_id
+                    }
+                ))
+                .or_default() += 1;
+        }
+        counts
     }
 
     pub fn select(&mut self, id: &str, control: bool, shift: bool) {
@@ -472,5 +520,26 @@ mod tests {
             event: CoreEvent::TaskProgress { snapshot: a },
         });
         assert_eq!(list.visible, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn running_filter_and_counts_include_recording_checking_and_parsing() {
+        let mut downloading = task("a-dl", 0);
+        downloading.status = "downloading".into();
+        let mut recording = task("b-rec", 1);
+        recording.status = "recording".into();
+        let mut checking = task("c-chk", 2);
+        checking.status = "checking".into();
+        let mut parsing = task("d-prs", 3);
+        parsing.status = "parsing".into();
+        let mut paused = task("e-psd", 4);
+        paused.status = "paused".into();
+        let mut list = TaskList {
+            filter: "running".into(),
+            ..TaskList::default()
+        };
+        list.replace(vec![downloading, recording, checking, parsing, paused], 5);
+        assert_eq!(list.visible, vec!["a-dl", "b-rec", "c-chk", "d-prs"]);
+        assert_eq!(list.nav_counts().get("running").copied(), Some(4));
     }
 }

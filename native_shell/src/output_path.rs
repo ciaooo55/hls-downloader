@@ -6,6 +6,88 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+fn is_reserved_dos_component(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim();
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM0"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT0"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn validate_untrusted_dir_syntax(requested: &str) -> Result<(), String> {
+    use std::path::Prefix;
+    if requested.chars().any(char::is_control) {
+        return Err("下载目录包含非法控制字符".into());
+    }
+    if requested.starts_with(r"\\") || requested.starts_with("//") {
+        return Err("下载目录必须位于默认下载根目录内".into());
+    }
+    let mut components = Path::new(requested).components().peekable();
+    while let Some(component) = components.next() {
+        match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..) => {
+                    return Err("下载目录必须位于默认下载根目录内".into());
+                }
+                Prefix::Disk(_) | Prefix::VerbatimDisk(_) => {
+                    if !matches!(components.peek(), Some(Component::RootDir)) {
+                        return Err("下载目录不能使用盘符相对路径".into());
+                    }
+                }
+                Prefix::Verbatim(_) => {
+                    return Err("下载目录必须位于默认下载根目录内".into());
+                }
+            },
+            Component::Normal(part) => {
+                let text = part.to_string_lossy();
+                if text.contains(':')
+                    || text.ends_with([' ', '.'])
+                    || is_reserved_dos_component(&text)
+                {
+                    return Err("下载目录包含不支持的路径名".into());
+                }
+            }
+            Component::ParentDir => return Err("下载目录不能包含 ..".into()),
+            Component::RootDir | Component::CurDir => {}
+        }
+    }
+    Ok(())
+}
+
+fn disk_drive_letter(path: &Path) -> Option<u8> {
+    use std::path::Prefix;
+    match path.components().next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => Some(drive.to_ascii_uppercase()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub(crate) fn constrain_untrusted_download_dir(
     requested: &str,
     configured: &str,
@@ -21,13 +103,22 @@ pub(crate) fn constrain_untrusted_download_dir(
     if requested.is_empty() {
         return Ok(root.to_string_lossy().into_owned());
     }
+    validate_untrusted_dir_syntax(requested)?;
+    let root_canon = logical_canonical(&root);
     let path = Path::new(requested);
     let candidate = if path.is_absolute() {
+        // Reject cross-drive absolute paths before touching the filesystem via canonicalize.
+        if let (Some(req_drive), Some(root_drive)) =
+            (disk_drive_letter(path), disk_drive_letter(&root_canon))
+        {
+            if req_drive != root_drive {
+                return Err("下载目录必须位于默认下载根目录内".into());
+            }
+        }
         path.to_path_buf()
     } else {
         root.join(path)
     };
-    let root_canon = logical_canonical(&root);
     let candidate_canon = logical_canonical(&candidate);
     if candidate_canon == root_canon || candidate_canon.starts_with(&root_canon) {
         return Ok(candidate.to_string_lossy().into_owned());
@@ -234,6 +325,8 @@ pub fn typed_output_path(
     ) {
         if !mime_ext.is_empty() {
             mime_ext
+        } else if is_dangerous_executable_extension(&server_ext) {
+            ""
         } else {
             server_ext.as_str()
         }
@@ -245,6 +338,47 @@ pub fn typed_output_path(
     } else {
         requested.with_extension(extension)
     })
+}
+
+fn is_dangerous_executable_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "exe"
+            | "com"
+            | "bat"
+            | "cmd"
+            | "scr"
+            | "pif"
+            | "msi"
+            | "msp"
+            | "vbs"
+            | "vbe"
+            | "js"
+            | "jse"
+            | "wsf"
+            | "wsh"
+            | "ps1"
+            | "psm1"
+            | "psd1"
+            | "hta"
+            | "cpl"
+            | "msc"
+            | "lnk"
+            | "url"
+            | "reg"
+            | "inf"
+            | "dll"
+            | "ocx"
+            | "sys"
+            | "drv"
+            | "chm"
+            | "application"
+            | "gadget"
+            | "scf"
+            | "sct"
+            | "shb"
+            | "shs"
+    )
 }
 
 fn disposition_extension(value: &str) -> String {
@@ -341,10 +475,17 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
         fs::create_dir_all(parent).map_err(|error| format!("create output directory: {error}"))?;
     }
     let policy = normalize_policy(policy);
-    if !dest.exists() {
+    let existing = fs::symlink_metadata(&dest).ok();
+    let Some(meta) = existing else {
         return Ok(dest);
+    };
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to publish to symlink: {}",
+            dest.display()
+        ));
     }
-    let size = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+    let size = if meta.is_file() { meta.len() } else { 1 };
     if policy == "skip" && size > 0 {
         return Err(format!("target already exists: {}", dest.display()));
     }
@@ -363,7 +504,7 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     for index in 1..10_000 {
         let candidate = parent.join(format!("{stem}_{index}{ext}"));
-        if !candidate.exists() {
+        if fs::symlink_metadata(&candidate).is_err() {
             return Ok(candidate);
         }
     }
@@ -373,43 +514,50 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
     ))
 }
 
-fn backup_path(dest: &Path) -> Result<PathBuf, String> {
+pub(crate) fn stage_copy_and_replace(source: &Path, dest: &Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
-    let original = dest.file_name().unwrap_or_default();
-    for index in 0..10_000 {
-        let mut name = original.to_os_string();
-        name.push(format!(".hls-backup-{}-{index}", std::process::id()));
-        let candidate = parent.join(name);
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
+    let staging = parent.join(format!(
+        ".hls-stage-{}-{}.tmp",
+        std::process::id(),
+        NEXT_STAGE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut reader =
+        fs::File::open(source).map_err(|error| format!("publish completed output: {error}"))?;
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)
+        .map_err(|error| format!("create output staging file: {error}"))?;
+    let result = (|| -> std::io::Result<()> {
+        std::io::copy(&mut reader, &mut writer)?;
+        writer.sync_all()?;
+        drop(writer);
+        crate::atomic_replace::replace_file(&staging, dest)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&staging);
+        return Err(format!("publish completed output: {error}"));
     }
-    Err(format!(
-        "cannot allocate output backup name: {}",
-        dest.display()
-    ))
+    Ok(())
 }
 
 fn publish_payload(source: &Path, dest: &Path, keep_temp: bool) -> Result<(), String> {
     if keep_temp {
         // Keeping temporary files must have the same meaning on same-volume and
-        // cross-volume work directories. A rename would consume the working
-        // payload, so explicitly copy when the user asked to retain it.
-        return fs::copy(source, dest)
-            .map(|_| ())
-            .map_err(|error| format!("publish completed output: {error}"));
+        // cross-volume work directories. Stage into a sibling temp file, sync,
+        // and atomically replace so partial copies are never exposed.
+        return stage_copy_and_replace(source, dest);
     }
 
-    if fs::rename(source, dest).is_ok() {
+    if crate::atomic_replace::replace_file(source, dest).is_ok() {
         return Ok(());
     }
 
-    // Cross-volume publication cannot use rename. Copy the completed file,
-    // then remove the working payload so a successful download does not leave
-    // a second full-size copy under .hls-tasks.
-    fs::copy(source, dest)
-        .map(|_| ())
-        .map_err(|error| format!("publish completed output: {error}"))?;
+    // Cross-volume publication cannot use rename. Stage-copy into dest's
+    // directory, sync, atomically replace, then remove the working payload.
+    stage_copy_and_replace(source, dest)?;
     if let Err(error) = fs::remove_file(source) {
         let _ = writeln!(
             std::io::stderr(),
@@ -435,43 +583,19 @@ pub fn publish_file(
         .map_err(|_| "output publication lock poisoned".to_string())?;
 
     let dest = choose_output_path(dest, policy)?;
-    let backup = if dest.exists() {
-        if !dest.is_file() {
+    if let Ok(meta) = fs::symlink_metadata(&dest) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to publish to symlink: {}",
+                dest.display()
+            ));
+        }
+        if !meta.is_file() {
             return Err(format!("target is not a file: {}", dest.display()));
         }
-        let backup = backup_path(&dest)?;
-        fs::rename(&dest, &backup)
-            .map_err(|error| format!("prepare existing output replacement: {error}"))?;
-        Some(backup)
-    } else {
-        None
-    };
-
-    if let Err(error) = publish_payload(source, &dest, keep_temp) {
-        if dest.exists() {
-            let _ = fs::remove_file(&dest);
-        }
-        if let Some(backup) = &backup {
-            if let Err(restore_error) = fs::rename(backup, &dest) {
-                return Err(format!(
-                    "{error}; restore existing output {} failed: {restore_error}; backup kept at {}",
-                    dest.display(),
-                    backup.display()
-                ));
-            }
-        }
-        return Err(error);
     }
 
-    if let Some(backup) = backup {
-        if let Err(error) = fs::remove_file(&backup) {
-            let _ = writeln!(
-                std::io::stderr(),
-                "published output but could not remove previous-output backup {}: {error}",
-                backup.display()
-            );
-        }
-    }
+    publish_payload(source, &dest, keep_temp)?;
 
     if !keep_temp {
         if let Some(parent) = source.parent() {
@@ -485,6 +609,13 @@ pub fn publish_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_directory_rejects_device_names_and_streams() {
+        for path in ["NUL.txt", "data:stream", "folder/../elsewhere"] {
+            assert!(constrain_untrusted_download_dir(path, "downloads").is_err());
+        }
+    }
 
     #[test]
     fn untrusted_download_dir_must_stay_under_configured_root() {

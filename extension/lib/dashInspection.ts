@@ -105,33 +105,64 @@ function directSegmentTemplate(value: string): Record<string, string> | null {
   return match ? attributes(match[1]) : null
 }
 
+function httpResolvedUrl(value: string, baseUrl: string): string {
+  if (!value) return ''
+  try {
+    const parsed = new URL(value, baseUrl)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
+  } catch {
+    return ''
+  }
+}
+
 function resolveBase(value: string, baseUrl: string): string {
   if (!value) return baseUrl
-  try { return new URL(value, baseUrl).href } catch { return baseUrl }
+  return httpResolvedUrl(value, baseUrl) || baseUrl
 }
 
-function resolveHint(value: string, baseUrl: string, representationId = ''): string {
-  const substituted = decodeXml(value.trim())
-    .replace(/\$RepresentationID\$/gi, representationId)
-    .replace(/\$(?:Number|Time|Bandwidth)(?:%0\d+d)?\$/gi, '0')
-    .replace(/\$\$/g, '$')
-  if (!substituted) return ''
-  try { return new URL(substituted, baseUrl).href } catch { return '' }
+function substituteDashTemplate(
+  raw: string,
+  representationId: string,
+  bandwidth: number,
+  wildcard: boolean,
+): string {
+  return decodeXml(raw.trim()).replace(
+    /\$(\$|RepresentationID|(?:Bandwidth|Number|Time|SubNumber)(?:%0?\d*[diuxX])?)\$/gi,
+    (_match, token: string) => {
+      if (token === '$') return '$'
+      const lower = token.toLowerCase()
+      if (lower === 'representationid') return representationId
+      if (lower.startsWith('bandwidth')) {
+        if (wildcard) return '*'
+        const value = bandwidth > 0 ? Math.trunc(bandwidth) : 0
+        const widthMatch = token.match(/%0(\d+)[diuxX]$/i)
+        const base = /x$/i.test(token) ? 16 : 10
+        const formatted = value.toString(base)
+        const cased = /X$/.test(token) ? formatted.toUpperCase() : formatted
+        return widthMatch ? cased.padStart(Number(widthMatch[1]), '0') : cased
+      }
+      return wildcard ? '*' : '0'
+    },
+  )
 }
 
-function resolvePattern(value: string, baseUrl: string, representationId = ''): string {
-  const substituted = decodeXml(value.trim())
-    .replace(/\$RepresentationID\$/gi, representationId)
-    .replace(/\$(?:Number|Time|Bandwidth)(?:%0\d+d)?\$/gi, '*')
-    .replace(/\$\$/g, '$')
+function resolveHint(value: string, baseUrl: string, representationId = '', bandwidth = 0): string {
+  const substituted = substituteDashTemplate(value, representationId, bandwidth, false)
   if (!substituted) return ''
-  try { return new URL(substituted, baseUrl).href } catch { return '' }
+  return httpResolvedUrl(substituted, baseUrl)
+}
+
+function resolvePattern(value: string, baseUrl: string, representationId = '', bandwidth = 0): string {
+  const substituted = substituteDashTemplate(value, representationId, bandwidth, true)
+  if (!substituted) return ''
+  return httpResolvedUrl(substituted, baseUrl)
 }
 
 /** Parse the MPD metadata needed by the browser panel without a DOM dependency. */
 export function parseDashManifest(text: string, baseUrl: string): DashInspectionResult | null {
+  const cleaned = text.replace(/<!--[\s\S]*?-->/g, '')
   const rootName = xmlName('MPD')
-  const root = text.match(new RegExp(`<${rootName}\\b([^>]*)>([\\s\\S]*?)<\\/${rootName}\\s*>`, 'i'))
+  const root = cleaned.match(new RegExp(`<${rootName}\\b([^>]*)>([\\s\\S]*?)<\\/${rootName}\\s*>`, 'i'))
   if (!root) return null
   const rootAttributes = attributes(root[1])
   const rootBody = root[2]
@@ -151,12 +182,19 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   const video: DashCandidate[] = []
   const audioBandwidth: number[] = []
   const audioTracks: MediaAudioTrack[] = []
+  const seenAudioKeys = new Set<string>()
   for (const period of periods) {
     for (const adaptationBlock of blocks(period.body, 'AdaptationSet')) {
       const adaptation = adaptationBlock.attributes
       const kind = `${adaptation.contenttype || ''} ${adaptation.mimetype || ''}`.toLowerCase()
       if (kind.includes('audio') && audioTracks.length < 24) {
-        audioTracks.push({ label: adaptation.label || adaptation.lang || adaptation.id || '音轨', language: adaptation.lang || '' })
+        const label = adaptation.label || adaptation.lang || adaptation.id || '音轨'
+        const language = adaptation.lang || ''
+        const audioKey = `${label}\0${language}`
+        if (!seenAudioKeys.has(audioKey)) {
+          seenAudioKeys.add(audioKey)
+          audioTracks.push({ label, language })
+        }
       }
       const representations = blocks(adaptationBlock.body, 'Representation')
       const candidates = representations.length
@@ -202,19 +240,38 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     let mediaBase = baseUrl
     for (const scope of scopes) mediaBase = resolveBase(directBaseUrl(scope), mediaBase)
     const remember = (value: string) => {
-      const resolved = resolveHint(value, mediaBase, candidate.id)
+      const resolved = resolveHint(value, mediaBase, candidate.id, candidate.bandwidth)
       if (resolved && !hints.includes(resolved)) hints.push(resolved)
     }
-    if (mediaBase !== baseUrl && !mediaBase.endsWith('/')) remember(mediaBase)
+    if (mediaBase !== baseUrl && !mediaBase.endsWith('/')) {
+      const literalBase = httpResolvedUrl(mediaBase, baseUrl)
+      if (literalBase && !hints.includes(literalBase)) hints.push(literalBase)
+    }
     const template = Object.assign({}, ...scopes.map(scope => directSegmentTemplate(scope) || {}))
     remember(template.initialization || '')
-    const pattern = resolvePattern(template.media || '', mediaBase, candidate.id)
+    const pattern = resolvePattern(template.media || '', mediaBase, candidate.id, candidate.bandwidth)
     if (pattern && !patterns.includes(pattern)) patterns.push(pattern)
     const segmentList = [...scopes].reverse().map(scope => blocks(scope, 'SegmentList')[0]).find(Boolean)
     if (segmentList) {
       for (const initialization of blocks(segmentList.body, 'Initialization')) remember(initialization.attributes.sourceurl || '')
       for (const segment of blocks(segmentList.body, 'SegmentURL')) remember(segment.attributes.media || '')
     }
+  }
+
+  const seenVariants = new Set<string>()
+  const dedupedVariants = []
+  for (const candidate of video) {
+    const key = `${candidate.width}x${candidate.height}@${candidate.bandwidth}`
+    if (seenVariants.has(key)) continue
+    seenVariants.add(key)
+    dedupedVariants.push({
+      url: baseUrl,
+      width: candidate.width || undefined,
+      height: candidate.height || undefined,
+      bandwidth: candidate.bandwidth || undefined,
+      quality: candidate.height ? `${candidate.height}p` : undefined,
+    })
+    if (dedupedVariants.length >= 12) break
   }
 
   return {
@@ -227,11 +284,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     bandwidth: best?.bandwidth || undefined,
     estimatedSize: estimatedManifestBytes(duration, totalBandwidth),
     quality: best?.height ? `最高 ${best.height}p` : undefined,
-    variants: video.map(candidate => ({
-      url: baseUrl, width: candidate.width || undefined, height: candidate.height || undefined,
-      bandwidth: candidate.bandwidth || undefined,
-      quality: candidate.height ? `${candidate.height}p` : undefined,
-    })).slice(0, 12),
+    variants: dedupedVariants,
     playbackUrls: hints.slice(0, 48),
     playbackPatterns: patterns.slice(0, 48),
   }

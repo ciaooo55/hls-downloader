@@ -176,6 +176,7 @@ pub fn build_job(
         replay_json: String::new(),
         curl_body_limit: None,
         range_stop: None,
+        installer_download: false,
         origin_boundary: spec.origin_boundary.clone(),
     };
     Ok((job, paths))
@@ -1077,12 +1078,22 @@ impl CoreCoordinator {
                 })
                 .collect();
         }
-        let enable_dht = self.settings()?.bt_enable_dht;
+        let settings = self.settings()?;
+        let enable_dht = settings.bt_enable_dht;
         self.expand_new_sources(spec, auto, &dirs)?
             .into_iter()
-            .map(|spec| {
+            .map(|mut spec| {
+                if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
+                    return Err("地址不在允许的域名白名单中".into());
+                }
+                spec.mirrors.retain(|mirror| {
+                    crate::http_engine::http_fetch_url_allowed(mirror)
+                        && crate::net_policy::url_allowed(mirror, &settings.allowed_hosts)
+                });
                 let mut spec = validate_torrent_spec(spec, enable_dht)?;
-                if spec.resource_kind == crate::ResourceKind::Torrent {
+                if spec.resource_kind == crate::ResourceKind::Torrent
+                    && spec.crawl_resource_key.is_empty()
+                {
                     spec.download_dir = crate::category::resolve_category_dir(
                         &spec.download_dir,
                         &spec.filename,
@@ -1166,6 +1177,7 @@ impl CoreCoordinator {
     }
 
     fn dispatch_created(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
+        let start_paused = spec.start_paused;
         let spec = seal_spec_secrets(self, spec)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
@@ -1182,7 +1194,7 @@ impl CoreCoordinator {
                 None => return core.handle(CoreCommand::CreateTask { spec }),
             }
         };
-        self.reuse_duplicate(task_id, &status)
+        self.reuse_duplicate(task_id, &status, start_paused)
     }
 
     fn import_curl_command(
@@ -1252,6 +1264,7 @@ impl CoreCoordinator {
         };
         spec.url = parsed.url;
         spec.request_method = parsed.method;
+        spec.body_path.clear();
         spec.credential_ref = credential_ref;
         self.dispatch(CoreCommand::CreateTask { spec })
     }
@@ -1688,6 +1701,10 @@ impl CoreCoordinator {
     }
 
     pub fn prepare_for_update(&self, timeout: Duration) -> Result<(), String> {
+        self.prepare_for_update_tracking(timeout).map(|_| ())
+    }
+
+    fn prepare_for_update_tracking(&self, timeout: Duration) -> Result<Vec<String>, String> {
         self.update_shutdown.store(true, Ordering::SeqCst);
         // 退出不等于用户暂停全部队列；仅记住这次主动停止的运行任务。
         let interrupted = match self.pause_tasks(false) {
@@ -1709,6 +1726,7 @@ impl CoreCoordinator {
                 // 这是退出检查点，不发布新事件，也不推进运行态事件序号。
                 let sequence = core.latest_sequence();
                 let mut recovery = Vec::new();
+                let mut tracked = Vec::new();
                 for task_id in interrupted {
                     let Some(mut snapshot) = core
                         .snapshot(&task_id)
@@ -1721,6 +1739,7 @@ impl CoreCoordinator {
                     snapshot.status = "downloading".into();
                     snapshot.available_actions =
                         vec!["pause".into(), "cancel".into(), "delete".into()];
+                    tracked.push(task_id);
                     recovery.push(EventEnvelope {
                         sequence,
                         event: CoreEvent::TaskUpdated { snapshot },
@@ -1730,7 +1749,7 @@ impl CoreCoordinator {
                     self.update_shutdown.store(false, Ordering::SeqCst);
                     return Err(error);
                 }
-                return Ok(());
+                return Ok(tracked);
             }
             #[cfg(test)]
             if let Ok(mut sender) = self.worker_wait_started.lock() {
@@ -1813,6 +1832,13 @@ impl CoreCoordinator {
             } else {
                 settings.temp_dir.clone()
             };
+        } else if !trust_download_dir {
+            let work_root = if settings.temp_dir.trim().is_empty() {
+                &spec.download_dir
+            } else {
+                &settings.temp_dir
+            };
+            spec.work_dir = constrain_untrusted_download_dir(&spec.work_dir, work_root)?;
         }
         reject_path_escape(&spec.work_dir)?;
         if !spec.body_path.trim().is_empty() {
@@ -1830,8 +1856,10 @@ impl CoreCoordinator {
         if !header_value_allowed("Last-Modified", &spec.last_modified) {
             spec.last_modified.clear();
         }
-        spec.mirrors
-            .retain(|url| crate::http_engine::http_fetch_url_allowed(url));
+        spec.mirrors.retain(|url| {
+            crate::http_engine::http_fetch_url_allowed(url)
+                && crate::net_policy::url_allowed(url, &settings.allowed_hosts)
+        });
         if !crate::net_policy::proxy_route_sentinel(&spec.proxy) && !proxy_url_allowed(&spec.proxy)
         {
             return Err("代理地址无效".into());
@@ -1954,7 +1982,12 @@ impl CoreCoordinator {
         None
     }
 
-    fn reuse_duplicate(&self, task_id: String, status: &str) -> Result<Vec<EventEnvelope>, String> {
+    fn reuse_duplicate(
+        &self,
+        task_id: String,
+        status: &str,
+        start_paused: bool,
+    ) -> Result<Vec<EventEnvelope>, String> {
         // 先取出 spec 再释放 Core 锁；路径解析与成品存在性检查不在锁内进行。
         let (spec, task) = {
             let core = self.lock()?;
@@ -1969,7 +2002,7 @@ impl CoreCoordinator {
             .unwrap_or(true);
         let action = crate::duplicate::suggest_duplicate_action(status, output_missing);
         match action {
-            "resume" | "retry" | "start" => {
+            "resume" | "retry" | "start" if !start_paused => {
                 let events = self.dispatch_inner(CoreCommand::TaskAction {
                     task_id: task_id.clone(),
                     action: action.into(),
@@ -1977,6 +2010,12 @@ impl CoreCoordinator {
                 self.start_next_queued(false)?;
                 Ok(events)
             }
+            "resume" | "retry" | "start" => self.lock()?.emit(CoreEvent::DuplicateOffered {
+                task_id,
+                action: "none".into(),
+                output_missing,
+                message: format!("已有相同链接任务（{status} / 已按暂停模式保留）"),
+            }),
             other => self.lock()?.emit(CoreEvent::DuplicateOffered {
                 task_id,
                 action: other.into(),
@@ -4306,7 +4345,7 @@ fn spec_from_url(
     }
     spec.harvest = false;
     drop_cross_origin_task_secrets(&mut spec, &template.url, url);
-    if spec.resource_kind != crate::ResourceKind::Torrent {
+    if spec.resource_kind != crate::ResourceKind::Torrent && spec.crawl_resource_key.is_empty() {
         spec.download_dir = crate::category::resolve_category_dir(
             &template.download_dir,
             &spec.filename,
@@ -4322,13 +4361,14 @@ fn spec_from_url(
 fn drop_cross_origin_task_secrets(spec: &mut TaskSpec, from: &str, to: &str) {
     let from_origin = crate::credentials::request_origin(from);
     let to_origin = crate::credentials::request_origin(to);
-    if from_origin.is_empty() || to_origin.is_empty() || from_origin == to_origin {
+    if !from_origin.is_empty() && !to_origin.is_empty() && from_origin == to_origin {
         return;
     }
-    spec.headers.retain(|key, _| {
-        !key.eq_ignore_ascii_case("cookie") && !key.eq_ignore_ascii_case("authorization")
-    });
+    spec.headers.retain(|key, _| !sensitive_header_name(key));
     spec.credential_ref = None;
+    spec.replay_context_ref = None;
+    spec.body_path.clear();
+    spec.request_method = "GET".into();
 }
 
 fn seal_spec_secrets(
@@ -4383,7 +4423,7 @@ fn seal_spec_secrets(
     Ok(spec)
 }
 
-fn sensitive_header_name(name: &str) -> bool {
+pub(crate) fn sensitive_header_name(name: &str) -> bool {
     let normalized = name.trim().to_ascii_lowercase();
     normalized == "cookie"
         || normalized == "authorization"
@@ -4510,11 +4550,11 @@ fn play_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
     let server = shared_local_media()?;
     let url = mount_task_url(coordinator, task_id, server)?;
     let mount_token = media_token_from_url(&url).ok_or("播放地址缺少媒体标识")?;
-    let title = if spec.title.trim().is_empty() {
-        spec.filename
+    let title = crate::player::sanitize_title(if spec.title.trim().is_empty() {
+        &spec.filename
     } else {
-        spec.title
-    };
+        &spec.title
+    });
     if let Err(error) = shared_player()?.play(&url, &title) {
         server.unmount(&mount_token);
         return Err(error);
@@ -4765,11 +4805,11 @@ fn cast_task(coordinator: &CoreCoordinator, task_id: &str) -> Result<Vec<EventEn
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
-    let title = if spec.title.trim().is_empty() {
-        spec.filename
+    let title = crate::player::sanitize_title(if spec.title.trim().is_empty() {
+        &spec.filename
     } else {
-        spec.title
-    };
+        &spec.title
+    });
     let _ = crate::cast::ssdp_notify(&location);
     crate::cast::remember_lan_share("局域网播放地址");
     remember_cast_mount(&token, &location, &title, task_id);
@@ -5301,6 +5341,7 @@ fn harvest_page(
                     replay_json: String::new(),
                     curl_body_limit: None,
                     range_stop: None,
+                    installer_download: false,
                     origin_boundary: String::new(),
                 };
                 let size = crate::http_engine::probe_resource(&job)
@@ -5554,11 +5595,28 @@ fn install_update(
         &settings_proxy(&coordinator.settings()?, &info.installer_url),
     )?;
     crate::updater::verify_installer_identity(&path, &info.latest)?;
-    coordinator.prepare_for_update(Duration::from_secs(15))?;
+    let tracked = coordinator.prepare_for_update_tracking(Duration::from_secs(15))?;
     let launch = match crate::updater::launch_update_helper(&path, &info.latest, workbench_pid) {
         Ok(launch) => launch,
         Err(error) => {
+            let rollback = coordinator.lock().and_then(|mut core| {
+                let sequence = core.latest_sequence();
+                let rollback: Vec<_> = tracked
+                    .into_iter()
+                    .filter_map(|id| core.snapshot(&id).cloned())
+                    .map(|snapshot| EventEnvelope {
+                        sequence,
+                        event: CoreEvent::TaskUpdated { snapshot },
+                    })
+                    .collect();
+                core.store_mut().apply_events(&rollback)
+            });
             coordinator.update_shutdown.store(false, Ordering::SeqCst);
+            if let Err(rollback_error) = rollback {
+                return Err(format!(
+                    "{error}; update checkpoint rollback failed: {rollback_error}"
+                ));
+            }
             return Err(error);
         }
     };
@@ -5665,6 +5723,10 @@ fn refresh_task_request(
     auto_resume: bool,
 ) -> Result<Vec<EventEnvelope>, String> {
     reject_task_url(url)?;
+    let settings = coordinator.settings()?;
+    if !crate::net_policy::url_allowed(url, &settings.allowed_hosts) {
+        return Err("地址不在允许的域名白名单中".into());
+    }
     if cookie.len() > 16 * 1024 || cookie.contains(['\r', '\n', '\0']) {
         return Err("Cookie 格式无效或长度超过 16 KiB".into());
     }
@@ -5775,7 +5837,7 @@ fn player_control(action: &str) -> Result<(), String> {
             let speed = other
                 .trim_start_matches("speed:")
                 .parse::<f64>()
-                .unwrap_or(1.0);
+                .map_err(|_| "倍速无效")?;
             player.set_speed(speed)
         }
         other if other.starts_with("seek_to:") => player.seek_absolute(
@@ -5859,11 +5921,11 @@ fn player_control_events(
             "pip" => state.status = "PIP".into(),
             "unpip" => state.status = "PLAYING".into(),
             other if other.starts_with("speed:") => {
-                state.speed = other
-                    .trim_start_matches("speed:")
-                    .parse::<f64>()
-                    .unwrap_or(1.0)
-                    .clamp(0.25, 4.0);
+                if let Ok(speed) = other.trim_start_matches("speed:").parse::<f64>() {
+                    if speed.is_finite() {
+                        state.speed = speed.clamp(0.25, 4.0);
+                    }
+                }
                 state.status = if state.paused {
                     "PAUSED".into()
                 } else {

@@ -115,28 +115,142 @@ fn execute(action: &str) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn system_executable(name: &str) -> Result<std::path::PathBuf, String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    let mut buffer = vec![0u16; 260];
+    let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if len == 0 {
+        return Err(format!(
+            "GetSystemDirectoryW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let dir = if len >= buffer.len() {
+        let mut larger = vec![0u16; len + 1];
+        let actual =
+            unsafe { GetSystemDirectoryW(larger.as_mut_ptr(), larger.len() as u32) } as usize;
+        if actual == 0 || actual >= larger.len() {
+            return Err("GetSystemDirectoryW returned invalid path".into());
+        }
+        std::path::PathBuf::from(OsString::from_wide(&larger[..actual]))
+    } else {
+        std::path::PathBuf::from(OsString::from_wide(&buffer[..len]))
+    };
+    Ok(dir.join(name))
+}
+
+#[cfg(windows)]
+fn suspend() -> Result<(), String> {
+    // The process token is shared; overlapping suspend requests must restore it in order.
+    static SUSPEND_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = SUSPEND_LOCK.lock().map_err(|_| "suspend lock poisoned")?;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_NOT_ALL_ASSIGNED, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+        TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = std::ptr::null_mut();
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "OpenProcessToken failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let name: Vec<u16> = "SeShutdownPrivilege\0".encode_utf16().collect();
+    let mut luid = LUID {
+        LowPart: 0,
+        HighPart: 0,
+    };
+    let ok = unsafe { LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) } != 0;
+    if !ok {
+        let err = std::io::Error::last_os_error();
+        unsafe { CloseHandle(token) };
+        return Err(format!("LookupPrivilegeValueW failed: {err}"));
+    }
+    let privileges = TOKEN_PRIVILEGES {
+        PrivilegeCount: 1,
+        Privileges: [LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_ENABLED,
+        }],
+    };
+    let mut previous = privileges;
+    let mut size = 0;
+    let adjusted = unsafe {
+        AdjustTokenPrivileges(
+            token,
+            0,
+            &privileges,
+            std::mem::size_of_val(&previous) as u32,
+            &mut previous,
+            &mut size,
+        )
+    } != 0;
+    let last_error = unsafe { GetLastError() };
+    if !adjusted || last_error == ERROR_NOT_ALL_ASSIGNED {
+        unsafe { CloseHandle(token) };
+        return Err(format!("AdjustTokenPrivileges failed: {last_error}"));
+    }
+    let ok = unsafe { windows_sys::Win32::System::Power::SetSuspendState(0, 0, 0) };
+    let suspend_error = std::io::Error::last_os_error();
+    let restored = unsafe {
+        AdjustTokenPrivileges(
+            token,
+            0,
+            &previous,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    let restore_error = unsafe { GetLastError() };
+    unsafe { CloseHandle(token) };
+    if restored == 0 || restore_error == ERROR_NOT_ALL_ASSIGNED {
+        return Err(format!("restore shutdown privilege: {restore_error}"));
+    }
+    if ok == 0 {
+        return Err(format!("SetSuspendState failed: {suspend_error}"));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn execute_os(action: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    if action == "sleep" {
+        return suspend();
+    }
+    let shutdown_exe = system_executable("shutdown.exe")?;
     let mut command = match action {
         "shutdown" => {
-            let mut command = std::process::Command::new("shutdown.exe");
+            let mut command = std::process::Command::new(&shutdown_exe);
             command.args(["/s", "/t", "0"]);
             command
         }
         "hibernate" => {
-            let mut command = std::process::Command::new("shutdown.exe");
+            let mut command = std::process::Command::new(&shutdown_exe);
             command.args(["/h"]);
-            command
-        }
-        "sleep" => {
-            let mut command = std::process::Command::new("rundll32.exe");
-            command.args(["powrprof.dll,SetSuspendState", "0,1,0"]);
             command
         }
         _ => return Err("unknown power action".into()),
     };
     command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())

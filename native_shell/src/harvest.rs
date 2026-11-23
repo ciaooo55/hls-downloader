@@ -62,7 +62,12 @@ fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
             None => break,
         };
         rest = remaining;
-        let lookahead = after.get(..200.min(after.len())).unwrap_or(after);
+        let mut bound = 200.min(after.len());
+        while bound > 0 && !after.is_char_boundary(bound) {
+            bound -= 1;
+        }
+        let window = &after[..bound];
+        let lookahead = window.split('>').next().unwrap_or(window);
         let tag_size = parse_data_size(lookahead);
         if let Some(url) = resolve(base, value) {
             urls.push((url, tag_size));
@@ -328,6 +333,19 @@ fn decode_html_entity(value: &str) -> Option<(char, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_tag_size_does_not_apply_to_preceding_link() {
+        let html = r#"<a href="a.zip"></a><a href="b.zip" data-size="420">"#;
+        let links = extract_urls(html, "https://site.test/index.html");
+        assert_eq!(
+            links,
+            [
+                ("https://site.test/a.zip".into(), 0),
+                ("https://site.test/b.zip".into(), 420)
+            ]
+        );
+    }
 
     #[test]
     fn adversarial_unicode_links_never_split_utf8() {

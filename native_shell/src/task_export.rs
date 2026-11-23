@@ -7,6 +7,33 @@ use std::path::Path;
 
 const MAX_IMPORT_BYTES: u64 = 1024 * 1024;
 const MAX_IMPORT_TASKS: usize = 1_000;
+const MAX_EXPORT_BYTES: usize = 2 * 1024 * 1024;
+
+fn redact_export_url(url: &str) -> String {
+    let trimmed = url.trim();
+    let Some(scheme_end) = trimmed.find("://") else {
+        return trimmed.to_string();
+    };
+    let rest = &trimmed[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let Some(at) = authority.rfind('@') else {
+        return trimmed.to_string();
+    };
+    let userinfo = &authority[..at];
+    let host_port = &authority[at + 1..];
+    let tail = &rest[authority_end..];
+    let scheme = &trimmed[..scheme_end];
+    if let Some((user, _)) = userinfo.split_once(':') {
+        if user.is_empty() {
+            format!("{scheme}://{host_port}{tail}")
+        } else {
+            format!("{scheme}://{user}@{host_port}{tail}")
+        }
+    } else {
+        trimmed.to_string()
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct ExportDocument {
@@ -68,7 +95,7 @@ impl From<&TaskSnapshot> for ExportTask {
             id: task.task_id.clone(),
             title: task.title.clone(),
             filename: task.filename.clone(),
-            url: task.url.clone(),
+            url: redact_export_url(&task.url),
             resource_kind: task.resource_kind,
             status: task.status.clone(),
             downloaded_bytes: task.downloaded_bytes,
@@ -78,7 +105,11 @@ impl From<&TaskSnapshot> for ExportTask {
             speed_limit_kib: task.speed_limit_kib,
             expected_checksum: task.expected_checksum.clone(),
             max_workers: task.max_workers,
-            mirrors: task.mirrors.clone(),
+            mirrors: task
+                .mirrors
+                .iter()
+                .map(|url| redact_export_url(url))
+                .collect(),
             scheduled_start_at: task.scheduled_start_at.clone(),
             scheduled_stop_at: task.scheduled_stop_at.clone(),
             queue_id: task.queue_id.clone(),
@@ -227,13 +258,16 @@ pub fn export_tasks(
         "csv" => export_csv(&tasks),
         _ => tasks
             .iter()
-            .map(|task| task.url.trim())
+            .map(|task| redact_export_url(&task.url))
             .filter(|url| !url.is_empty())
             .collect::<Vec<_>>()
             .join("\r\n"),
     };
     if format == "json" && data.len() as u64 > MAX_IMPORT_BYTES {
         return Err("任务 JSON 超过 1 MiB，请分批选择后导出".into());
+    }
+    if data.len() > MAX_EXPORT_BYTES {
+        return Err("导出内容超过 2 MiB，请分批选择后导出".into());
     }
     Ok((format.into(), data, count))
 }
@@ -250,7 +284,7 @@ fn export_csv(tasks: &[&TaskSnapshot]) -> String {
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_string))
                 .unwrap_or_else(|| "file".into()),
-            task.url.clone(),
+            redact_export_url(&task.url),
             task.downloaded_bytes.to_string(),
             task.total_bytes
                 .map(|value| value.to_string())
@@ -260,7 +294,11 @@ fn export_csv(tasks: &[&TaskSnapshot]) -> String {
             task.speed_limit_kib.to_string(),
             task.expected_checksum.clone(),
             task.max_workers.to_string(),
-            task.mirrors.join("|"),
+            task.mirrors
+                .iter()
+                .map(|url| redact_export_url(url))
+                .collect::<Vec<_>>()
+                .join("|"),
             task.scheduled_start_at.clone(),
             task.scheduled_stop_at.clone(),
         ]
@@ -296,6 +334,17 @@ mod tests {
             url: url.into(),
             status: "paused".into(),
             ..TaskSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn export_strips_authority_passwords_from_primary_and_mirror_urls() {
+        let mut source = task("one", 0, "file.bin", "ftp://user:secret@host.test/a");
+        source.mirrors = vec!["https://:secret@mirror.test/a".into()];
+        for format in ["urls", "json", "csv"] {
+            let (_, data, _) = export_tasks(std::slice::from_ref(&source), &[], format).unwrap();
+            assert!(!data.contains("secret"));
+            assert!(data.contains("ftp://user@host.test/a"));
         }
     }
 

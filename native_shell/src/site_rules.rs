@@ -95,15 +95,26 @@ fn sanitize_rule(mut rule: SiteRule) -> Option<SiteRule> {
 }
 
 fn setting_text_ok(value: &str) -> bool {
-    !value.contains('\r') && !value.contains('\n') && !value.contains('\0')
+    !value.chars().any(char::is_control)
 }
 
-fn site_rule_match_host(host: &str) -> &str {
-    host.trim()
+fn site_rule_match_host(host: &str) -> String {
+    let trimmed = host
+        .trim()
         .strip_prefix("*.")
         .unwrap_or(host.trim())
         .trim_start_matches('.')
         .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if let Some(address) = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        if let Ok(ip) = address.parse::<std::net::Ipv6Addr>() {
+            return format!("[{ip}]");
+        }
+    }
+    trimmed
 }
 
 fn valid_site_rule_host(host: &str) -> bool {
@@ -138,7 +149,12 @@ pub fn host_of(url: &str) -> String {
     let host = if let Some(bracketed) = authority.strip_prefix('[') {
         bracketed
             .split_once(']')
-            .map(|(address, _)| format!("[{address}]"))
+            .map(|(address, _)| {
+                address
+                    .parse::<std::net::Ipv6Addr>()
+                    .map(|ip| format!("[{ip}]"))
+                    .unwrap_or_else(|_| format!("[{address}]"))
+            })
             .unwrap_or_default()
     } else {
         authority
@@ -151,13 +167,13 @@ pub fn host_of(url: &str) -> String {
 }
 
 pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
-    let rule_host = site_rule_match_host(&rule.host).to_ascii_lowercase();
+    let rule_host = site_rule_match_host(&rule.host);
     if rule_host.is_empty() {
         return;
     }
     if let Some(existing) = rules
         .iter_mut()
-        .find(|item| site_rule_match_host(&item.host).eq_ignore_ascii_case(&rule_host))
+        .find(|item| site_rule_match_host(&item.host) == rule_host)
     {
         existing.enabled = rule.enabled;
         if rule.speed_limit_kib > 0 {
@@ -198,10 +214,16 @@ pub fn format_site_rules(rules: &[SiteRule]) -> String {
 
 pub fn matching_rule<'a>(rules: &'a [SiteRule], url: &str) -> Option<&'a SiteRule> {
     let host = host_of(url);
-    rules.iter().filter(|rule| rule.enabled).find(|rule| {
-        let needle = site_rule_match_host(&rule.host).to_ascii_lowercase();
-        !needle.is_empty() && (host == needle || host.ends_with(&format!(".{needle}")))
-    })
+    rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .filter_map(|rule| {
+            let needle = site_rule_match_host(&rule.host);
+            (!needle.is_empty() && (host == needle || host.ends_with(&format!(".{needle}"))))
+                .then_some((needle.len(), rule))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, rule)| rule)
 }
 
 pub fn credential_ref_for_host(host: &str) -> String {
@@ -232,7 +254,7 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
         if !valid_site_rule_host(&host) {
             return Err("站点规则包含无效域名".into());
         }
-        let match_host = site_rule_match_host(&host).to_string();
+        let match_host = site_rule_match_host(&host);
         if !hosts.insert(match_host) {
             return Err("站点规则不能包含重复域名".into());
         }
@@ -257,13 +279,15 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
                 return Err(format!("站点规则的{label}无效"));
             }
         }
+        if !rule.download_dir.trim().is_empty() {
+            crate::output_path::reject_path_escape(&rule.download_dir)?;
+        }
         if !rule.origin.trim().is_empty()
             && !(rule.origin.starts_with("http://") || rule.origin.starts_with("https://"))
         {
             return Err("站点规则 Origin 必须是 HTTP(S) 地址".into());
         }
-        if rule.proxy_mode == "manual"
-            && !rule.proxy.trim().is_empty()
+        if !rule.proxy.trim().is_empty()
             && !matches!(
                 rule.proxy
                     .split_once("://")

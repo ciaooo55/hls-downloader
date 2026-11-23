@@ -86,12 +86,16 @@ impl Read for Conn<'_> {
 }
 
 impl<'a> Conn<'a> {
-    fn socket(&self) -> &TcpStream {
+    fn ftp_socket(&self) -> &FtpSocket<'a> {
         match self {
-            Self::Plain(stream) => &stream.stream,
+            Self::Plain(stream) => stream,
             #[cfg(windows)]
-            Self::Tls(stream, _) => &stream.get_ref().stream,
+            Self::Tls(stream, _) => stream.get_ref(),
         }
+    }
+
+    fn socket(&self) -> &TcpStream {
+        &self.ftp_socket().stream
     }
 
     fn peer_addr(&self) -> Result<std::net::SocketAddr, String> {
@@ -178,7 +182,7 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     if !tls && !lower.starts_with("ftp://") {
         return Err("not an FTP URL".into());
     }
-    let rest = url.split("://").nth(1).unwrap_or("");
+    let (_, rest) = url.split_once("://").ok_or("not an FTP URL")?;
     let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (userinfo, hostport) = if auth.contains('@') {
         auth.rsplit_once('@').unwrap()
@@ -607,7 +611,6 @@ fn transfer_ftp(
                 return transfer_segmented(
                     target,
                     output,
-                    control,
                     ctrl,
                     state,
                     connections,
@@ -819,6 +822,7 @@ struct SegmentShared<'p> {
     done: std::sync::Mutex<Vec<(u64, u64)>>,
     downloaded: std::sync::atomic::AtomicU64,
     stop: std::sync::atomic::AtomicBool,
+    fatal: std::sync::Mutex<Option<String>>,
     progress_at: std::sync::Mutex<Instant>,
     size: u64,
     output: &'p Path,
@@ -1026,11 +1030,20 @@ fn fetch_segment<'a>(
                 )));
             }
             if cursor + count as u64 > end + 1 {
-                return Err(SegmentError::Failed(format!(
+                let message = format!(
                     "FTP transfer exceeds declared size: expected {}, received at least {}",
                     shared.size,
                     cursor + count as u64
-                )));
+                );
+                let mut fatal = shared
+                    .fatal
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if fatal.is_none() {
+                    *fatal = Some(message.clone());
+                }
+                shared.stop.store(true, Ordering::SeqCst);
+                return Err(SegmentError::Failed(message));
             }
             crate::net_policy::consume(count, || control.check())?;
             control.check()?;
@@ -1081,15 +1094,29 @@ fn run_segment_worker<'a>(
         let (cursor, result) = fetch_segment(
             ctrl, target, control, &mut file, shared, start, end, on_started,
         );
+        let to_eof = end + 1 == shared.size;
+        let has_fatal = shared
+            .fatal
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some();
+        // 末段只有在收到完整 EOF 与 226/250 确认后才登记最后 1 字节，避免超长或异常中断被误记为已完成。
+        let effective_cursor = if has_fatal {
+            start
+        } else if to_eof && result.is_err() && cursor > end {
+            end
+        } else {
+            cursor
+        };
         // 先同步数据再登记完成表，与 HTTP 检查点同一语义；暂停/失败时登记已写部分。
-        let recorded = if cursor > start {
+        let recorded = if effective_cursor > start {
             file.sync_data()
                 .map_err(|error| error.to_string())
-                .and_then(|_| shared.record(start, cursor - 1))
+                .and_then(|_| shared.record(start, effective_cursor - 1))
         } else {
             Ok(())
         };
-        let remaining = (cursor <= end).then_some((cursor, end));
+        let remaining = (effective_cursor <= end).then_some((effective_cursor, end));
         if let Err(error) = recorded {
             // 未登记的字节也要重下：整段放回。
             shared.release(Some((start, end)));
@@ -1115,7 +1142,6 @@ fn run_segment_worker<'a>(
 fn transfer_segmented<'a>(
     target: &FtpTarget,
     output: &Path,
-    control: &'a FtpControl<'a>,
     mut ctrl: Conn<'a>,
     resource: ResumeState,
     connections: usize,
@@ -1123,6 +1149,7 @@ fn transfer_segmented<'a>(
     resume: bool,
 ) -> Result<u64, String> {
     use std::sync::atomic::Ordering;
+    let control = ctrl.ftp_socket().control;
     let size = resource.total;
     let connections = connections.clamp(1, MAX_FTP_CONNECTIONS);
     let state_path = output.with_extension(SEGMENT_STATE_EXTENSION);
@@ -1167,6 +1194,7 @@ fn transfer_segmented<'a>(
         done: std::sync::Mutex::new(done),
         downloaded: std::sync::atomic::AtomicU64::new(already),
         stop: std::sync::atomic::AtomicBool::new(false),
+        fatal: std::sync::Mutex::new(None),
         progress_at: std::sync::Mutex::new(Instant::now()),
         size,
         output,
@@ -1222,6 +1250,14 @@ fn transfer_segmented<'a>(
         }
         result
     });
+    let fatal = shared
+        .fatal
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(error) = fatal {
+        return Err(error);
+    }
     let done = shared
         .done
         .lock()
@@ -1412,6 +1448,16 @@ fn parse_epsv_port(reply: &str) -> Result<u16, String> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn ftp_path_preserves_embedded_scheme_separator() {
+        assert_eq!(
+            parse_ftp_url("ftp://files.test/pub/http://archive/item")
+                .unwrap()
+                .path,
+            "/pub/http://archive/item"
+        );
+    }
 
     #[test]
     fn parses_userinfo_and_ftps_port() {

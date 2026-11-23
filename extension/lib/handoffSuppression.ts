@@ -9,7 +9,7 @@ export interface HandoffSuppression {
 
 const RESOURCE_KINDS = new Set<ResourceKind>(['hls', 'dash', 'media', 'file', 'magnet'])
 
-function hostForPage(value: string): string {
+export function hostForPage(value: string): string {
   try {
     return new URL(value).hostname.toLowerCase().replace(/\.$/, '')
   } catch {

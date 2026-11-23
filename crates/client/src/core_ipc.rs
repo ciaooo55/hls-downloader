@@ -95,8 +95,10 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
         needed: usize,
         deadline: std::time::Instant,
         timeout: Duration,
-    ) -> Result<usize, String> {
+        allow_eof: bool,
+    ) -> Result<Option<usize>, String> {
         use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED};
         use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
         loop {
@@ -112,13 +114,22 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
                 )
             };
             if ok == 0 {
-                return Err(format!(
-                    "Core pipe peek: {}",
-                    std::io::Error::last_os_error()
-                ));
+                let error = std::io::Error::last_os_error();
+                if allow_eof
+                    && available == 0
+                    && matches!(
+                        error.raw_os_error(),
+                        Some(code)
+                            if code == ERROR_BROKEN_PIPE as i32
+                                || code == ERROR_PIPE_NOT_CONNECTED as i32
+                    )
+                {
+                    return Ok(None);
+                }
+                return Err(format!("Core pipe peek: {error}"));
             }
             if available as usize >= needed {
-                return Ok(available as usize);
+                return Ok(Some(available as usize));
             }
             if std::time::Instant::now() >= deadline {
                 return Err(format!(
@@ -132,10 +143,19 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
 
     // 先等完整字段可读，再进入同步 ReadFile，避免半帧永久占用连接槽位。
     let header_deadline = std::time::Instant::now() + V7_IDLE_READ_TIMEOUT;
-    wait_available(pipe, 4, header_deadline, V7_IDLE_READ_TIMEOUT)?;
     let mut header = [0u8; 4];
-    pipe.read_exact(&mut header)
-        .map_err(|error| format!("Core pipe read header: {error}"))?;
+    let mut offset = 0;
+    while offset < header.len() {
+        let Some(available) =
+            wait_available(pipe, 1, header_deadline, V7_IDLE_READ_TIMEOUT, offset == 0)?
+        else {
+            return Ok(None);
+        };
+        let end = offset + available.min(header.len() - offset);
+        pipe.read_exact(&mut header[offset..end])
+            .map_err(|error| format!("Core pipe read header: {error}"))?;
+        offset = end;
+    }
     let length = u32::from_le_bytes(header) as usize;
     if length > V7_PIPE_MAX_FRAME {
         return Err("v7 Core pipe frame too large".into());
@@ -145,7 +165,8 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
     let mut payload = vec![0u8; length];
     let mut offset = 0;
     while offset < length {
-        let available = wait_available(pipe, 1, body_deadline, V7_FRAME_READ_TIMEOUT)?;
+        let available = wait_available(pipe, 1, body_deadline, V7_FRAME_READ_TIMEOUT, false)?
+            .ok_or_else(|| "Core pipe closed during frame payload".to_string())?;
         let end = offset + available.min(length - offset);
         pipe.read_exact(&mut payload[offset..end])
             .map_err(|error| format!("Core pipe read payload: {error}"))?;
@@ -286,6 +307,12 @@ impl NamedPipeServer {
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
         mut ready: Option<std::sync::mpsc::SyncSender<Result<(), String>>>,
     ) -> Result<(), String> {
+        struct DoneGuard(Arc<AtomicBool>);
+        impl Drop for DoneGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
         if stop.load(Ordering::SeqCst) {
             let error = "named pipe startup canceled before ready".to_string();
             if let Some(ready) = ready {
@@ -293,8 +320,11 @@ impl NamedPipeServer {
             }
             return Err(error);
         }
-        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop));
+        let done = Arc::new(AtomicBool::new(false));
+        let _done_guard = DoneGuard(Arc::clone(&done));
+        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop), Arc::clone(&done));
         let active = Arc::new(AtomicUsize::new(0));
+        let mut is_first_instance = true;
         while !stop.load(Ordering::SeqCst) {
             // Reserve capacity before accepting. Recently closed clients may still
             // occupy reader threads; accepting then dropping loses valid requests.
@@ -308,15 +338,18 @@ impl NamedPipeServer {
                 thread::sleep(Duration::from_millis(10));
             };
             let first_ready = ready.take();
-            match self.serve_once_inner(first_ready.as_ref()) {
+            let first_instance = is_first_instance;
+            match self.serve_once_inner(first_ready.as_ref(), first_instance) {
                 Ok(stream) => {
+                    is_first_instance = false;
                     if stop.load(Ordering::SeqCst) {
                         break;
                     }
                     let handler = Arc::clone(&handler);
+                    let stop = Arc::clone(&stop);
                     thread::spawn(move || {
                         let _slot = slot;
-                        handle_pipe_stream(stream, handler.as_ref());
+                        handle_pipe_stream(stream, handler.as_ref(), &stop);
                     });
                 }
                 Err(error) => {
@@ -337,16 +370,19 @@ impl NamedPipeServer {
     fn serve_once_inner(
         &self,
         ready: Option<&std::sync::mpsc::SyncSender<Result<(), String>>>,
+        first_instance: bool,
     ) -> Result<std::fs::File, String> {
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
         use std::os::windows::raw::HANDLE;
         use std::ptr::null_mut;
         use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
-        use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
+        };
         use windows_sys::Win32::System::Pipes::{
-            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
-            PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
         };
 
         let name = wide(&self.name);
@@ -366,11 +402,16 @@ impl NamedPipeServer {
             lpSecurityDescriptor: owner_sd.0,
             bInheritHandle: 0,
         };
+        let open_mode = if first_instance {
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+        } else {
+            PIPE_ACCESS_DUPLEX
+        };
         let handle = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                open_mode,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
                 V7_PIPE_MAX_FRAME as u32,
                 V7_PIPE_MAX_FRAME as u32,
@@ -406,12 +447,12 @@ impl NamedPipeServer {
 fn handle_pipe_stream(
     mut stream: std::fs::File,
     handler: &(dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync),
+    stop: &AtomicBool,
 ) {
     loop {
         match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
             Ok(Some(request)) => {
-                let response = handler(request);
-                if write_message(&mut stream, &response).is_err() {
+                if dispatch_and_reply(&mut stream, request, handler, stop).is_err() {
                     break;
                 }
             }
@@ -425,20 +466,110 @@ fn handle_pipe_stream(
 }
 
 #[cfg(windows)]
-fn wake_named_pipe_accept_on_stop(name: String, stop: Arc<AtomicBool>) {
+fn wake_named_pipe_accept_on_stop(name: String, stop: Arc<AtomicBool>, done: Arc<AtomicBool>) {
     thread::spawn(move || {
         while !stop.load(Ordering::SeqCst) {
+            if done.load(Ordering::SeqCst) {
+                return;
+            }
             thread::sleep(Duration::from_millis(10));
+        }
+        if done.load(Ordering::SeqCst) {
+            return;
         }
         // Connect without sending a frame. The accept loop observes `stop` and
         // drops this stream instead of dispatching it as a normal client.
         for _ in 0..20 {
-            if NamedPipeClient::connect(&name, 100).is_ok() {
+            if done.load(Ordering::SeqCst) || NamedPipeClient::connect(&name, 100).is_ok() {
                 return;
             }
             thread::sleep(Duration::from_millis(10));
         }
     });
+}
+
+#[cfg(windows)]
+fn token_user_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
+    let mut size = 0u32;
+    unsafe {
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
+    }
+    if size < std::mem::size_of::<TOKEN_USER>() as u32 {
+        return None;
+    }
+    let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            size,
+            &mut size,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
+    if user.User.Sid.is_null() {
+        return None;
+    }
+    let sid_len = unsafe { windows_sys::Win32::Security::GetLengthSid(user.User.Sid) };
+    if sid_len == 0 {
+        return None;
+    }
+    let sid = unsafe { std::slice::from_raw_parts(user.User.Sid.cast::<u8>(), sid_len as usize) };
+    Some(sid.to_vec())
+}
+
+#[cfg(windows)]
+fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let mut server_pid = 0u32;
+    if unsafe { GetNamedPipeServerProcessId(handle, &mut server_pid) } == 0 || server_pid == 0 {
+        return Err(format!(
+            "GetNamedPipeServerProcessId failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if server_pid == std::process::id() {
+        return Ok(());
+    }
+    let mut current_token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut current_token) } == 0 {
+        return Err("Unable to inspect current process token".into());
+    }
+    let current_sid = token_user_sid(current_token);
+    unsafe { CloseHandle(current_token) };
+    let current_sid = current_sid.ok_or_else(|| "Unable to read current user SID".to_string())?;
+
+    let server_process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, server_pid) };
+    if server_process.is_null() {
+        return Err(format!(
+            "Core pipe server PID {server_pid} owner verification failed"
+        ));
+    }
+    let mut server_token = std::ptr::null_mut();
+    let opened = unsafe { OpenProcessToken(server_process, TOKEN_QUERY, &mut server_token) } != 0;
+    unsafe { CloseHandle(server_process) };
+    if !opened {
+        return Err(format!(
+            "Core pipe server PID {server_pid} token unavailable"
+        ));
+    }
+    let server_sid = token_user_sid(server_token);
+    unsafe { CloseHandle(server_token) };
+    if server_sid.as_deref() != Some(current_sid.as_slice()) {
+        return Err("Core pipe server belongs to a different user".into());
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -452,11 +583,11 @@ impl NamedPipeClient {
         use std::fs::File;
         use std::os::windows::io::FromRawHandle;
         use windows_sys::Win32::Foundation::{
-            ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
         };
         use windows_sys::Win32::Storage::FileSystem::{
             CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-            OPEN_EXISTING,
+            OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
         };
         use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
         let wide_name = wide(name);
@@ -469,11 +600,15 @@ impl NamedPipeClient {
                     0,
                     std::ptr::null(),
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
+                    FILE_ATTRIBUTE_NORMAL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                     std::ptr::null_mut(),
                 )
             };
             if handle != INVALID_HANDLE_VALUE {
+                if let Err(error) = verify_pipe_server_owner(handle) {
+                    unsafe { CloseHandle(handle) };
+                    return Err(error);
+                }
                 return Ok(Self {
                     stream: unsafe { File::from_raw_handle(handle as _) },
                 });
@@ -573,10 +708,11 @@ pub fn serve_tcp_listener(
                     continue;
                 };
                 let handler = Arc::clone(&handler);
+                let stop = Arc::clone(&stop);
                 thread::spawn(move || {
                     let _slot = slot;
                     let _ = stream.set_nonblocking(false);
-                    let _ = handle_stream(stream, handler.as_ref());
+                    let _ = handle_stream(stream, handler.as_ref(), &stop);
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -629,14 +765,38 @@ fn report_protocol_violation(stream: &mut impl Write, error: &str) {
     );
 }
 
+// Stop after the write attempt so a disconnected caller cannot strand a prepared Core.
+fn dispatch_and_reply(
+    writer: &mut impl Write,
+    request: CorePipeRequest,
+    handler: &dyn Fn(CorePipeRequest) -> CorePipeResponse,
+    stop: &AtomicBool,
+) -> Result<(), String> {
+    let shutdown = matches!(
+        request,
+        CorePipeRequest::Command {
+            command: CoreCommand::Shutdown,
+            ..
+        }
+    );
+    let response = handler(request);
+    let result = write_message(writer, &response);
+    if shutdown && matches!(response, CorePipeResponse::Events { .. }) {
+        stop.store(true, Ordering::SeqCst);
+    }
+    result
+}
+
 fn handle_stream(
     mut stream: TcpStream,
     handler: &dyn Fn(CorePipeRequest) -> CorePipeResponse,
+    stop: &AtomicBool,
 ) -> Result<(), String> {
     let _ = stream.set_nodelay(true);
+    let _ = stream.set_write_timeout(Some(V7_FRAME_READ_TIMEOUT));
     loop {
         match read_server_tcp_message::<CorePipeRequest>(&mut stream) {
-            Ok(Some(request)) => write_message(&mut stream, &handler(request))?,
+            Ok(Some(request)) => dispatch_and_reply(&mut stream, request, handler, stop)?,
             Ok(None) => return Ok(()),
             Err(error) => {
                 // 读不出下一帧（超长、半截帧头、载荷不是 CorePipeRequest、读超时）
@@ -661,10 +821,32 @@ enum IpcTransport {
     Pipe(std::fs::File),
 }
 
+fn client_request_read_timeout(request: &CorePipeRequest) -> Duration {
+    match request {
+        CorePipeRequest::WaitEvents { timeout_ms, .. }
+        | CorePipeRequest::WaitEventBatch { timeout_ms, .. } => {
+            Duration::from_millis(timeout_ms.clamp(&1, &60_000) + 30_000)
+        }
+        _ => Duration::from_secs(180),
+    }
+}
+
 impl IpcTransport {
-    fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
+    fn request_with_timeout(
+        &mut self,
+        request: &CorePipeRequest,
+        timeout: Option<Duration>,
+    ) -> Result<CorePipeResponse, String> {
         match self {
             Self::Tcp(stream) => {
+                let write_timeout = timeout.unwrap_or(V7_FRAME_READ_TIMEOUT);
+                let read_timeout = timeout.unwrap_or_else(|| client_request_read_timeout(request));
+                stream
+                    .set_write_timeout(Some(write_timeout))
+                    .map_err(|e| format!("Core stream write timeout: {e}"))?;
+                stream
+                    .set_read_timeout(Some(read_timeout))
+                    .map_err(|e| format!("Core stream read timeout: {e}"))?;
                 write_message(stream, request)?;
                 read_message(stream)?.ok_or_else(|| "Core IPC closed".into())
             }
@@ -674,6 +856,10 @@ impl IpcTransport {
                 read_message(stream)?.ok_or_else(|| "Core pipe closed".into())
             }
         }
+    }
+
+    fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
+        self.request_with_timeout(request, None)
     }
 }
 
@@ -730,10 +916,16 @@ impl CoreIpcClient {
             match TcpStream::connect_timeout(&addr, attempt) {
                 Ok(stream) => {
                     let _ = stream.set_nodelay(true);
+                    let hello_timeout = deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .max(Duration::from_millis(50));
                     let mut client = Self {
                         transport: IpcTransport::Tcp(stream),
                     };
-                    match client.request(&hello_request())? {
+                    match client
+                        .transport
+                        .request_with_timeout(&hello_request(), Some(hello_timeout))?
+                    {
                         CorePipeResponse::Hello {
                             protocol, version, ..
                         } if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION => {
@@ -1079,6 +1271,38 @@ mod tests {
     use crate::{CoreCommand, ResourceKind, TaskSpec};
 
     #[test]
+    fn shutdown_reply_is_flushed_before_stop_becomes_visible() {
+        struct Reply<'a>(&'a AtomicBool, bool);
+        impl Write for Reply<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                assert!(!self.0.load(Ordering::SeqCst));
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                assert!(!self.0.load(Ordering::SeqCst));
+                self.1 = true;
+                Ok(())
+            }
+        }
+        let stop = AtomicBool::new(false);
+        let mut reply = Reply(&stop, false);
+        dispatch_and_reply(
+            &mut reply,
+            CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::Shutdown,
+            },
+            &|_| CorePipeResponse::Events {
+                request_id: 1,
+                events: vec![],
+            },
+            &stop,
+        )
+        .unwrap();
+        assert!(reply.1 && stop.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn task_pages_reconcile_concurrent_deletion_and_reject_older_row_events() {
         use hls_protocol::{CoreEvent, EventBatch, TaskPage, TaskSnapshot};
         let task = |id: &str, title: &str| TaskSnapshot {
@@ -1414,8 +1638,16 @@ mod tests {
                 pid: 0,
             };
             // 两条连接：一条发能解析但语义不对的载荷，一条发超长帧头。
-            let unparseable = handle_stream(listener.accept().unwrap().0, &handler);
-            let oversize = handle_stream(listener.accept().unwrap().0, &handler);
+            let unparseable = handle_stream(
+                listener.accept().unwrap().0,
+                &handler,
+                &AtomicBool::new(false),
+            );
+            let oversize = handle_stream(
+                listener.accept().unwrap().0,
+                &handler,
+                &AtomicBool::new(false),
+            );
             (unparseable, oversize)
         });
 

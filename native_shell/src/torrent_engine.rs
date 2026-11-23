@@ -768,6 +768,7 @@ fn transfer_torrent(
                 replay_json: String::new(),
                 curl_body_limit: None,
                 range_stop: None,
+                installer_download: false,
                 origin_boundary: String::new(),
             };
             let run_result = if same_origin {

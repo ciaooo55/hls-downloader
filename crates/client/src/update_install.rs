@@ -591,9 +591,12 @@ fn wait_for_product_shutdown(args: &HelperArgs) -> Result<(), String> {
     {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            request_process_window_close(args.workbench_pid);
-            let core_running = process_running(args.core_pid);
-            let ui_running = process_running(args.workbench_pid);
+            let ui_running =
+                process_running_in_install_root(args.workbench_pid, &args.install_root);
+            if ui_running {
+                request_process_window_close(args.workbench_pid);
+            }
+            let core_running = process_running_in_install_root(args.core_pid, &args.install_root);
             terminate_auxiliary_processes(&args.install_root);
             if !core_running && !ui_running {
                 return Ok(());
@@ -612,51 +615,46 @@ fn wait_for_product_shutdown(args: &HelperArgs) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn process_running(pid: u32) -> bool {
+fn process_running_in_install_root(pid: u32, install_root: &Path) -> bool {
+    use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
-    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
-    if pid == 0 || pid == std::process::id() {
+    if pid == 0 || pid == std::process::id() || install_root.as_os_str().is_empty() {
         return false;
     }
-    let handle = unsafe { OpenProcess(SYNCHRONIZE_ACCESS, 0, pid) };
+    let handle = unsafe {
+        OpenProcess(
+            SYNCHRONIZE_ACCESS | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        )
+    };
     if handle.is_null() {
         return false;
     }
     let running = unsafe { WaitForSingleObject(handle, 0) == WAIT_TIMEOUT };
-    unsafe { CloseHandle(handle) };
-    running
-}
-
-#[cfg(windows)]
-fn request_process_window_close(pid: u32) {
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
-    };
-    unsafe extern "system" fn callback(window: HWND, data: LPARAM) -> BOOL {
-        let mut owner = 0u32;
-        unsafe { GetWindowThreadProcessId(window, &mut owner) };
-        if owner == data as u32 {
-            unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
+    let belongs = if running {
+        let mut image = vec![0u16; 32768];
+        let mut length = image.len() as u32;
+        if unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) } != 0 {
+            let path = PathBuf::from(OsString::from_wide(&image[..length as usize]));
+            path_is_under_install_root(&path, install_root)
+        } else {
+            false
         }
-        1
-    }
-    if pid != 0 {
-        unsafe { EnumWindows(Some(callback), pid as isize) };
-    }
+    } else {
+        false
+    };
+    unsafe { CloseHandle(handle) };
+    belongs
 }
 
 #[cfg(any(windows, test))]
-fn should_terminate_auxiliary_process(
-    exe_path: &Path,
-    install_root: &Path,
-    pid: u32,
-    current_pid: u32,
-) -> bool {
-    if pid == 0 || pid == current_pid || install_root.as_os_str().is_empty() {
-        return false;
-    }
+fn path_is_under_install_root(exe_path: &Path, install_root: &Path) -> bool {
     fn normalized(path: &Path) -> Option<Vec<String>> {
         let mut value = path.to_string_lossy().replace('\\', "/");
         if cfg!(windows) {
@@ -690,11 +688,43 @@ fn should_terminate_auxiliary_process(
     let (Some(exe), Some(root)) = (normalized(exe_path), normalized(install_root)) else {
         return false;
     };
-    exe.last().is_some_and(|name| {
-        name.eq_ignore_ascii_case("hlsdownloaderpresenter.exe")
-            || name.eq_ignore_ascii_case("hlsdownloadernativehost.exe")
-    }) && exe.len() > root.len()
-        && exe.starts_with(&root)
+    exe.len() > root.len() && exe.starts_with(&root)
+}
+
+#[cfg(windows)]
+fn request_process_window_close(pid: u32) {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    };
+    unsafe extern "system" fn callback(window: HWND, data: LPARAM) -> BOOL {
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(window, &mut owner) };
+        if owner == data as u32 {
+            unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
+        }
+        1
+    }
+    if pid != 0 {
+        unsafe { EnumWindows(Some(callback), pid as isize) };
+    }
+}
+
+#[cfg(any(windows, test))]
+fn should_terminate_auxiliary_process(
+    exe_path: &Path,
+    install_root: &Path,
+    pid: u32,
+    current_pid: u32,
+) -> bool {
+    if pid == 0 || pid == current_pid || install_root.as_os_str().is_empty() {
+        return false;
+    }
+    let filename = exe_path.to_string_lossy();
+    let name = filename.rsplit(['/', '\\']).next().unwrap_or_default();
+    (name.eq_ignore_ascii_case("hlsdownloaderpresenter.exe")
+        || name.eq_ignore_ascii_case("hlsdownloadernativehost.exe"))
+        && path_is_under_install_root(exe_path, install_root)
 }
 
 #[cfg(windows)]
@@ -780,7 +810,7 @@ pub fn sanitize_version(version: &str) -> String {
             }
         })
         .collect();
-    if value.is_empty() {
+    if value.is_empty() || value.chars().all(|ch| ch == '.') {
         "unknown".into()
     } else {
         value

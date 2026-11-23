@@ -273,6 +273,24 @@ impl Drop for PlayerSubtitles {
     }
 }
 
+fn subtitle_media_position(playback_position: f64, offset: f64) -> f64 {
+    (playback_position - offset).max(0.0)
+}
+
+fn rewind_next_audio_on_missing_gap(
+    prefetch: bool,
+    has_pending: bool,
+    ready_ahead: f64,
+    position: f64,
+    next_audio: &mut f64,
+) {
+    if prefetch && !has_pending && ready_ahead <= 0.0 && *next_audio > position + 0.01 {
+        // Small backward A/V drift within the seek threshold can land before
+        // ready_ranges[0]; rewind next_audio so the missing gap is decoded.
+        *next_audio = position;
+    }
+}
+
 struct Session {
     id: String,
     revision: u64,
@@ -374,11 +392,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                         id,
                         revision,
                         sequence: 0,
-                        next_audio: if prefetch {
-                            (playback.position - offset).max(0.0)
-                        } else {
-                            playback.position
-                        },
+                        next_audio: subtitle_media_position(playback.position, offset),
                         pending: None,
                         prefetch,
                         offset,
@@ -418,11 +432,19 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 } else {
                     4.0
                 };
-                let position = if session.prefetch {
-                    (playback.position - session.offset).max(0.0)
+                let position = subtitle_media_position(playback.position, session.offset);
+                let ready_ahead = if session.prefetch && session.pending.is_none() {
+                    output.lock().unwrap().ready_ahead(position)
                 } else {
-                    playback.position
+                    0.0
                 };
+                rewind_next_audio_on_missing_gap(
+                    session.prefetch,
+                    session.pending.is_some(),
+                    ready_ahead,
+                    position,
+                    &mut session.next_audio,
+                );
                 if poll["status"] != "running"
                     || (playback.paused && !session.prefetch)
                     || playback.buffering
@@ -830,5 +852,24 @@ mod tests {
         assert!(subtitles.display(0.0).1.is_empty());
         subtitles.input.lock().unwrap().enabled = false;
         assert!(subtitles.display(0.0).1.is_empty());
+    }
+
+    #[test]
+    fn offset_applies_to_media_position_and_backward_drift_rewinds_next_audio() {
+        assert_eq!(subtitle_media_position(10.0, 2.5), 7.5);
+        assert_eq!(subtitle_media_position(1.0, 4.0), 0.0);
+        assert_eq!(subtitle_media_position(10.0, -2.0), 12.0);
+
+        let mut next_audio = 18.0;
+        rewind_next_audio_on_missing_gap(true, false, 0.0, 14.5, &mut next_audio);
+        assert_eq!(next_audio, 14.5);
+
+        let mut covered = 18.0;
+        rewind_next_audio_on_missing_gap(true, false, 3.5, 14.5, &mut covered);
+        assert_eq!(covered, 18.0);
+
+        let mut pending = 18.0;
+        rewind_next_audio_on_missing_gap(true, true, 0.0, 14.5, &mut pending);
+        assert_eq!(pending, 18.0);
     }
 }

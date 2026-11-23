@@ -505,8 +505,7 @@ fn parse_mpd_for_recording(
                     &templates,
                     template,
                     &base_url,
-                    &id,
-                    bandwidth,
+                    (&id, bandwidth),
                     period_duration.filter(|_| !dynamic || has_timeline),
                     &mut media_durations,
                     dynamic.then_some(&mut url_budget),
@@ -1006,8 +1005,7 @@ fn save_live_dash_state(
     first_period: &Option<DashPeriod>,
     cursors: &[LiveTrackCursor],
     choices: &Option<(Representation, Option<Representation>)>,
-    primary: &LiveDashTrack,
-    audio: &LiveDashTrack,
+    (primary, audio): (&LiveDashTrack, &LiveDashTrack),
     subtitles: &[Representation],
 ) -> Result<(), String> {
     let state = LiveDashState {
@@ -1503,8 +1501,7 @@ fn download_live_dash(
                     &first_period,
                     &cursors,
                     &choices,
-                    &primary,
-                    &audio,
+                    (&primary, &audio),
                     &subtitles,
                 );
             }
@@ -1525,8 +1522,7 @@ fn download_live_dash(
                         &first_period,
                         &cursors,
                         &choices,
-                        &primary,
-                        &audio,
+                        (&primary, &audio),
                         &subtitles,
                     );
                     return Err("paused".into());
@@ -2078,6 +2074,7 @@ fn download_one(
         replay_json: crate::credentials::scoped_replay_json(),
         curl_body_limit: range.map(|range| range.length),
         range_stop: None,
+        installer_download: false,
         origin_boundary: String::new(),
     };
     if let Some(range) = range {
@@ -2961,8 +2958,7 @@ fn expand_timeline(
     templates: &[roxmltree::Node<'_, '_>],
     template: &str,
     base_url: &str,
-    id: &str,
-    bandwidth: u64,
+    (id, bandwidth): (&str, u64),
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
     mut url_budget: Option<&mut usize>,
@@ -6233,8 +6229,7 @@ mod tests {
             &active,
             &[],
             &Some((choice, None)),
-            &primary,
-            &audio,
+            (&primary, &audio),
             &subs,
         )
         .unwrap();

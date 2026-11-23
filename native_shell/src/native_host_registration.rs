@@ -116,6 +116,8 @@ fn write_manifest_pair(directory: &Path, host: &Path) -> Result<ManifestPaths, S
         )
     })?;
     let paths = manifest_paths(directory);
+    let chromium_existed = paths.chromium.exists();
+    let firefox_existed = paths.firefox.exists();
     let result = (|| {
         write_atomic(&paths.chromium, &manifest_bytes(host, "allowed_origins")?).map_err(
             |error| {
@@ -136,28 +138,35 @@ fn write_manifest_pair(directory: &Path, host: &Path) -> Result<ManifestPaths, S
         Ok(paths.clone())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&paths.chromium);
-        let _ = std::fs::remove_file(&paths.firefox);
+        if !chromium_existed {
+            let _ = std::fs::remove_file(&paths.chromium);
+        }
+        if !firefox_existed {
+            let _ = std::fs::remove_file(&paths.firefox);
+        }
     }
     result
 }
 
-/// 原子落盘：同目录临时文件 + rename（Windows 上 std::fs::rename 走
-/// MoveFileEx(MOVEFILE_REPLACE_EXISTING)，是替换语义）。浏览器随时可能
-/// connectNative 读这份清单，直接写目标文件会让它读到写了一半的 JSON，
-/// 于是"主机启动失败但诊断说清单不存在"。
+/// 原子落盘：同目录唯一临时文件 + atomic_replace::replace_file（含短暂共享冲突重试）。
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
     let mut temporary_extension = path
         .extension()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default();
-    temporary_extension.push_str(&format!(".{}.tmp", std::process::id()));
+    temporary_extension.push_str(&format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
     let temporary = path.with_extension(temporary_extension);
     if let Err(error) = std::fs::write(&temporary, bytes) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
-    if let Err(error) = std::fs::rename(&temporary, path) {
+    if let Err(error) = crate::atomic_replace::replace_file(&temporary, path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
@@ -166,26 +175,35 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 fn prepare_manifests_with_fallback(
     engine: &Path,
-    fallback: &Path,
+    fallback_directory: impl FnOnce() -> Result<PathBuf, String>,
 ) -> Result<(PathBuf, ManifestPaths), String> {
     let host = expected_host(engine, true)?;
-    let preferred = engine
-        .parent()
-        .ok_or_else(|| "Engine path has no resource directory".to_string())?;
-    match write_manifest_pair(preferred, &host) {
+    let preferred = without_verbatim_prefix(
+        engine
+            .parent()
+            .ok_or_else(|| "Engine path has no resource directory".to_string())?,
+    );
+    match write_manifest_pair(&preferred, &host) {
         Ok(paths) => Ok((host, paths)),
-        Err(preferred_error) => write_manifest_pair(fallback, &host)
-            .map(|paths| (host, paths))
-            .map_err(|fallback_error| {
+        Err(preferred_error) => {
+            let fallback = fallback_directory().map_err(|fallback_error| {
                 format!(
-                    "Native Host manifest generation failed in both locations; preferred: {preferred_error}; fallback: {fallback_error}"
+                    "Native Host manifest generation failed in preferred location ({preferred_error}) and fallback unavailable ({fallback_error})"
                 )
-            }),
+            })?;
+            write_manifest_pair(&without_verbatim_prefix(&fallback), &host)
+                .map(|paths| (host, paths))
+                .map_err(|fallback_error| {
+                    format!(
+                        "Native Host manifest generation failed in both locations; preferred: {preferred_error}; fallback: {fallback_error}"
+                    )
+                })
+        }
     }
 }
 
 fn prepare_manifests(engine: &Path) -> Result<(PathBuf, ManifestPaths), String> {
-    prepare_manifests_with_fallback(engine, &fallback_manifest_directory()?)
+    prepare_manifests_with_fallback(engine, fallback_manifest_directory)
 }
 
 fn registration_entries(paths: &ManifestPaths) -> Vec<RegistrationEntry> {
@@ -365,11 +383,11 @@ fn delete_owned_key(
     allowlist_field: &str,
     user_sid: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
-    use std::ptr::{null, null_mut};
+    use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegDeleteTreeW, RegOpenKeyExW, HKEY_CURRENT_USER, HKEY_USERS, KEY_ALL_ACCESS,
-        KEY_WOW64_64KEY,
+        RegCloseKey, RegDeleteKeyExW, RegOpenKeyExW, HKEY_CURRENT_USER, HKEY_USERS,
+        KEY_QUERY_VALUE, KEY_WOW64_64KEY,
     };
 
     let Some(current) = default_value_for_sid(key, user_sid)? else {
@@ -379,30 +397,35 @@ fn delete_owned_key(
         return Ok(None);
     }
     let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
-    let key_wide = wide(&full_key);
-    // 注册是钉在 64 位视图里写的（set_default_value），删除也必须落在同一个
-    // 视图：RegDeleteTreeW 用的是句柄自己的视图，32 位引擎进程的默认视图是
-    // Wow6432Node，直接拿 HKEY_CURRENT_USER 删会留下一条指向我们的注册，
-    // 64 位浏览器照旧启动主机。
-    let mut view = null_mut();
+    let Some((parent_path, leaf_name)) = full_key.rsplit_once('\\') else {
+        return Err(format!("invalid Native Host registry path {full_key}"));
+    };
+    let parent_wide = wide(parent_path);
+    let leaf_wide = wide(leaf_name);
+    // 打开父键时仅请求删除/枚举/查询权限（不使用 HKEY_USERS 上的 KEY_ALL_ACCESS），
+    // 确保标准用户卸载/修复也能删除自身注册项，并保持 64 位视图一致。
+    let mut parent = null_mut();
     let open = unsafe {
         RegOpenKeyExW(
             user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
-            null(),
+            parent_wide.as_ptr(),
             0,
-            KEY_WOW64_64KEY | KEY_ALL_ACCESS,
-            &mut view,
+            KEY_WOW64_64KEY | KEY_QUERY_VALUE,
+            &mut parent,
         )
     };
+    if open == ERROR_FILE_NOT_FOUND {
+        return Ok(None);
+    }
     if open != 0 {
         return Err(registry_error(
-            "open Native Host registry 64-bit view",
+            &format!("open Native Host registry parent {parent_path}"),
             open,
         ));
     }
-    let result = unsafe { RegDeleteTreeW(view, key_wide.as_ptr()) };
+    let result = unsafe { RegDeleteKeyExW(parent, leaf_wide.as_ptr(), KEY_WOW64_64KEY, 0) };
     unsafe {
-        RegCloseKey(view);
+        RegCloseKey(parent);
     }
     if result != 0 && result != ERROR_FILE_NOT_FOUND {
         return Err(registry_error(
@@ -473,21 +496,23 @@ pub fn unregister_packaged_native_host_for_sid(
     user_sid: Option<&str>,
 ) -> Result<usize, String> {
     let host = expected_host(engine, false)?;
-    let preferred = manifest_paths(
+    let preferred = manifest_paths(&without_verbatim_prefix(
         engine
             .parent()
             .ok_or_else(|| "Engine path has no resource directory".to_string())?,
-    );
-    let fallback_directory = fallback_manifest_directory()?;
-    let fallback = manifest_paths(&fallback_directory);
+    ));
     let entries = registration_entries(&preferred);
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut candidates = vec![
         (preferred.chromium, "allowed_origins"),
         (preferred.firefox, "allowed_extensions"),
-        (fallback.chromium, "allowed_origins"),
-        (fallback.firefox, "allowed_extensions"),
     ];
+    let fallback_directory = fallback_manifest_directory().ok();
+    if let Some(fallback_directory) = &fallback_directory {
+        let fallback = manifest_paths(&without_verbatim_prefix(fallback_directory));
+        candidates.push((fallback.chromium, "allowed_origins"));
+        candidates.push((fallback.firefox, "allowed_extensions"));
+    }
 
     #[cfg(windows)]
     let removed_keys = {
@@ -509,12 +534,9 @@ pub fn unregister_packaged_native_host_for_sid(
     };
 
     cleanup_owned_manifests(candidates, &host)?;
-    if fallback_directory.is_dir()
-        && std::fs::read_dir(&fallback_directory)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false)
-    {
-        let _ = std::fs::remove_dir(&fallback_directory);
+    if let Some(directory) = fallback_directory {
+        // remove_dir removes only an empty directory.
+        let _ = std::fs::remove_dir(directory);
     }
     Ok(removed_keys)
 }
@@ -546,7 +568,7 @@ mod tests {
         #[cfg(windows)]
         assert_eq!(prepare_packaged_native_host_manifests(&engine).unwrap(), 2);
         let (host, manifests) =
-            prepare_manifests_with_fallback(&engine, &root.join("fallback")).unwrap();
+            prepare_manifests_with_fallback(&engine, || Ok(root.join("fallback"))).unwrap();
         assert!(host.is_absolute());
         assert!(manifest_is_owned(
             &manifests.chromium,
