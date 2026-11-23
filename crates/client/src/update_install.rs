@@ -256,11 +256,7 @@ fn verify_installer_authenticode(
         )
     };
     let result = if status == 0 {
-        if package.is_some() {
-            verify_release_signer(trust.hWVTStateData)
-        } else {
-            Ok(())
-        }
+        verify_release_signer(trust.hWVTStateData)
     } else {
         Err(format!(
             "升级安装包 Authenticode 信任校验失败（WinVerifyTrust 0x{:08X}）",

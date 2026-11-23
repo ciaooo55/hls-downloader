@@ -1,20 +1,21 @@
 {
-  "version": "7.0.10",
+  "version": "10.0.0",
   "status": "published",
-  "source_commit": "deb42d1b77f00616a3aa0d30c66365b1c85f8b58",
-  "release": "https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.10",
+  "source_commit": "ab8fc816e26f95814b3e6170210008f9e20a859c",
+  "release": "https://github.com/ciaooo55/hls-downloader/releases/tag/v10.0.0",
   "checks": {
-    "candidate": "https://github.com/ciaooo55/hls-downloader/actions/runs/44730259839",
-    "ci": "https://github.com/ciaooo55/hls-downloader/actions/runs/44730258031",
-    "rust_security": "https://github.com/ciaooo55/hls-downloader/actions/runs/44730258118",
-    "maintenance_security": "https://github.com/ciaooo55/hls-downloader/actions/runs/44730258214",
-    "browser": "https://github.com/ciaooo55/hls-downloader/actions/runs/44734726210",
-    "native": "https://github.com/ciaooo55/hls-downloader/actions/runs/44734732616",
-    "release": "https://github.com/ciaooo55/hls-downloader/actions/runs/44740632853",
-    "installed_browser_launch": "https://github.com/ciaooo55/hls-downloader/actions/runs/44740632853"
+    "candidate": "https://github.com/ciaooo55/hls-downloader/actions/runs/44877941372",
+    "ci": "https://github.com/ciaooo55/hls-downloader/actions/runs/44877934092",
+    "rust_security": "https://github.com/ciaooo55/hls-downloader/actions/runs/44877934110",
+    "maintenance_security": "https://github.com/ciaooo55/hls-downloader/actions/runs/44877934091",
+    "browser": "https://github.com/ciaooo55/hls-downloader/actions/runs/44882007793",
+    "installer": "https://github.com/ciaooo55/hls-downloader/actions/runs/44882006138",
+    "native": "https://github.com/ciaooo55/hls-downloader/actions/runs/44883140837",
+    "release": "https://github.com/ciaooo55/hls-downloader/actions/runs/44886377104",
+    "installed_browser_launch": "https://github.com/ciaooo55/hls-downloader/actions/runs/44886377104"
   },
-  "release_evidence": "https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.10/RELEASE-EVIDENCE.json",
-  "feature_parity": "https://github.com/ciaooo55/hls-downloader/releases/download/v7.0.10/FEATURE-PARITY.json",
-  "scope": "Windows x64. Windows installers are unsigned. Firefox permanent installation requires Mozilla signing. Physical casting/TVBox, cloud subtitle quality and physical multi-monitor switching were not verified.",
+  "release_evidence": "https://github.com/ciaooo55/hls-downloader/releases/download/v10.0.0/RELEASE-EVIDENCE.json",
+  "feature_parity": "https://github.com/ciaooo55/hls-downloader/releases/download/v10.0.0/FEATURE-PARITY.json",
+  "scope": "Windows x64. Windows installers are unsigned. Firefox permanent installation requires Mozilla signing. Physical casting/TVBox, cloud subtitle quality, audible sound output, and physical multi-monitor switching were not verified.",
   "history": "git log -p -- docs/validation/current-evidence.json"
 }
