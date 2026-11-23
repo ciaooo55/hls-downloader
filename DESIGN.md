@@ -1,4 +1,4 @@
-# HLS Downloader 10.0.0 design contract
+# HLS Downloader 10.1.0 design contract
 
 ## Product structure
 
@@ -6,15 +6,16 @@ The Rust + Slint presenter is the main workbench. Rust Core is the only task, tr
 
 ## Workbench geometry
 
-- Custom Windows title bar and 48dp command bar.
-- Queue/category sidebar, virtualized task table and bottom status bar.
-- One total progress indicator per task row; connection parts belong in details.
+- Custom Windows title bar and 60px top command bar with recessed `Ctrl+F` search input.
+- Queue/category sidebar, virtualized task table, collapsible non-modal bottom Task Inspector Drawer (`Alt+I`), and bottom status bar.
+- Keyboard shortcuts: `Ctrl+F` (search), `Ctrl+,` (settings), `Alt+I` (toggle inspector drawer), and `Space` (pause/resume selected task).
+- One total progress indicator per task row; live speed chart, `SegmentMapBar`, and connection summary live in the non-modal inspector drawer and details window.
 - Minimum effective workspace 1024x600 at 100%, 125% and 150% scaling.
 - Long labels, translated text and bottom actions must remain visible.
 
 ## Visual system
 
-"Graphite + Cobalt" (7.0.7 UI refresh), shared by the Slint workbench, the hot
+"Fluent Graphite + Luminous Cobalt" (refreshed in 10.1.0), shared by the Slint workbench, the hot
 confirmation/progress/completion windows and the browser extension.
 
 - Neutral graphite surfaces with a single cobalt action colour
@@ -25,7 +26,7 @@ confirmation/progress/completion windows and the browser extension.
   and a slim status bar with engine/browser indicators.
 - Task rows: file-type tile, two-line name/metadata, left-anchored progress bar,
   status pill with a colour dot, ghost row actions and a drag handle.
-- Radii: two steps matching Windows 11 Fluent controls — controls (buttons, inputs, choice chips, row and nav highlights) 4; cards, banners, icon tiles, menus and frameless windows 8 (DWM rounded corners requested on Windows 11). Status pills, count badges and progress tracks are fully rounded. The software renderer does not clip children to a rounded parent, so any child that touches a rounded edge carries its own corner radius. Shadows only on
+- Radii: three steps matching Windows 11 Fluent controls — controls (buttons, inputs, choice chips, row and nav highlights) 6 (keeping `HotCheckBox`/`HotComboBox` flush at 4); cards, banners, icon tiles, menus and frameless windows 8 (DWM rounded corners requested on Windows 11); larger panels 10. Status pills, count badges and progress tracks are fully rounded. The software renderer does not clip children to a rounded parent, so any child that touches a rounded edge carries its own corner radius. Shadows only on
   primary buttons, the table card, menus and popups.
 - Tokens live in `native_ui/ui/theme.slint` (`Tokens`) and
   `extension/lib/theme.ts` (`THEME_TOKENS_CSS`); never hard-code colours in views.

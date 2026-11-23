@@ -526,6 +526,9 @@ mod tests {
         assert!(is_newer_version("v10.0.0", "7.0.10"));
         assert!(!is_newer_version("7.0.10", "10.0.0"));
         assert!(!is_newer_version("10.0.0", "10.0.0"));
+        assert!(is_newer_version("v10.1.0", "10.0.0"));
+        assert!(!is_newer_version("10.0.0", "10.1.0"));
+        assert!(!is_newer_version("10.1.0", "10.1.0"));
     }
 
     #[test]

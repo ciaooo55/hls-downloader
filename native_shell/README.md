@@ -1,6 +1,6 @@
-# HLS Downloader 10.0.0 Rust Core
+# HLS Downloader 10.1.0 Rust Core
 
-This crate is the only task, transfer, database and Native Messaging implementation in the active tree. Its default `full-core` feature set is the 10.0.0 product; the removed Python/Win32 supervisor remains available through historical Git tags.
+This crate is the only task, transfer, database and Native Messaging implementation in the active tree. Its default `full-core` feature set is the 10.1.0 product; the removed Python/Win32 supervisor remains available through historical Git tags.
 
 The native presenter depends on this crate with `default-features = false` and the `presenter-client` feature. That client surface keeps the shared v7 contract, IPC transport/client, Core/desktop spawn helpers, single-instance/profile-path helpers, tray notification/sound helpers and native window utilities available without compiling `CoreRuntime` or the transfer/database implementation into the presenter source graph.
 
