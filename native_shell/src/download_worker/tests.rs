@@ -107,7 +107,7 @@ fn legacy_oversized_queued_filename_does_not_block_next_download() {
         b"next task payload"
     );
     drop(coordinator);
-    fs::remove_dir_all(root).unwrap();
+    let _ = fs::remove_dir_all(root);
 }
 
 #[cfg(windows)]
@@ -136,7 +136,7 @@ fn http_download_publishes_in_a_deep_unicode_directory() {
     assert_eq!(output.file_name().unwrap(), "深目录验证.bin");
     assert_eq!(fs::read(&output).unwrap(), b"deep unicode payload");
     drop(coordinator);
-    fs::remove_dir_all(root).unwrap();
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn native_transfers_use_vaulted_proxy_auth_and_do_not_retry_direct() {
             target.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-        fs::remove_dir_all(root).unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 }
 

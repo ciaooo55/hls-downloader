@@ -29,7 +29,7 @@ Unlike downloaders whose transfer lifetime is tied to the visible window, HLS Do
 
 For Windows x64, open the [stable release](https://github.com/ciaooo55/hls-downloader/releases/latest) and choose **Windows-x64.exe**. For Chrome or Edge download handoff, also download the Chromium extension from the same release. Choose MSI for deployment or Portable ZIP for use without installation.
 
-The current version is [10.0.0](docs/releases/v10.0.0.md), the first release of the cleaned-up product line. Windows installers are unsigned and updates require manual installation. The Firefox package and its source are available for signing. Permanent installation in standard Firefox requires Mozilla signing.
+The current source targets [10.1.0 (release draft)](docs/releases/v10.1.0.md), which is not formally released yet; the latest published stable release is [10.0.0](docs/releases/v10.0.0.md). Windows installers are unsigned and updates require manual installation. The Firefox package and its source are available for signing. Permanent installation in standard Firefox requires Mozilla signing.
 
 The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
 

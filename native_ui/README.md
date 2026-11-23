@@ -1,4 +1,4 @@
-# HLS Downloader 10.0.0 native UI
+# HLS Downloader 10.1.0 native UI
 
 This workspace member contains the Rust + Slint workbench and shared confirmation, progress and completion windows. `scripts/build-v7.ps1` provides native development and candidate packages. Formal publication remains blocked by parity and release gates. The migration is tracked in `docs/architecture/native-migration-plan.md`.
 

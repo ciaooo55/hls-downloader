@@ -13,6 +13,10 @@ describe('extension version update checks', () => {
     expect(compareNumericVersions('7.0.10', '10.0.0')).toBe(-1)
     expect(extensionNeedsUpgrade('7.0.10', '10.0.0')).toBe(true)
     expect(extensionNeedsUpgrade('10.0.0', '7.0.10')).toBe(false)
+    expect(compareNumericVersions('10.1.0', '10.0.0')).toBe(1)
+    expect(compareNumericVersions('10.0.0', '10.1.0')).toBe(-1)
+    expect(extensionNeedsUpgrade('10.0.0', '10.1.0')).toBe(true)
+    expect(extensionNeedsUpgrade('10.1.0', '10.0.0')).toBe(false)
   })
 
   it('only prompts when the desktop recommends a newer extension', () => {
