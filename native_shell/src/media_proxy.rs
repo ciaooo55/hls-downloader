@@ -14,8 +14,8 @@ const MAX_REFERENCES: usize = 4096;
 
 #[derive(Default)]
 struct Routes {
-    by_id: HashMap<u64, (String, u64)>,
-    by_url: HashMap<String, u64>,
+    by_id: HashMap<u64, (String, bool, u64)>,
+    by_url: HashMap<(String, bool), u64>,
     access: BTreeMap<u64, u64>,
     clock: u64,
     next_id: u64,
@@ -24,39 +24,41 @@ struct Routes {
 
 impl Routes {
     fn touch(&mut self, id: u64) {
-        let (_, previous) = self.by_id.get_mut(&id).expect("registered route");
+        let (_, _, previous) = self.by_id.get_mut(&id).expect("registered route");
         self.access.remove(previous);
         self.clock += 1;
         *previous = self.clock;
         self.access.insert(self.clock, id);
     }
 
-    fn register(&mut self, url: String) -> u64 {
-        if let Some(&id) = self.by_url.get(&url) {
+    fn register(&mut self, url: String, is_template: bool) -> u64 {
+        let key = (url.clone(), is_template);
+        if let Some(&id) = self.by_url.get(&key) {
             self.touch(id);
             return id;
         }
         while self.by_id.len() >= MAX_ROUTES || self.bytes + url.len() > MAX_ROUTE_BYTES {
             if let Some((_, id)) = self.access.pop_first() {
-                if let Some((url, _)) = self.by_id.remove(&id) {
-                    self.bytes -= url.len();
-                    self.by_url.remove(&url);
+                if let Some((evicted_url, evicted_template, _)) = self.by_id.remove(&id) {
+                    self.bytes -= evicted_url.len();
+                    self.by_url.remove(&(evicted_url, evicted_template));
                 }
             }
         }
         self.next_id += 1;
         self.bytes += url.len();
         let id = self.next_id;
-        self.by_url.insert(url.clone(), id);
-        self.by_id.insert(id, (url, 0));
+        self.by_url.insert((url.clone(), is_template), id);
+        self.by_id.insert(id, (url, is_template, 0));
         self.touch(id);
         id
     }
 
-    fn get(&mut self, id: u64) -> Option<String> {
-        let url = self.by_id.get(&id)?.0.clone();
+    fn get(&mut self, id: u64) -> Option<(String, bool)> {
+        let (url, is_template, _) = self.by_id.get(&id)?;
+        let result = (url.clone(), *is_template);
         self.touch(id);
-        Some(url)
+        Some(result)
     }
 }
 
@@ -112,7 +114,19 @@ impl MediaProxy {
         }
     }
 
-    fn route(&self, prefix: &str, url: String) -> Result<String, String> {
+    fn route_literal(&self, prefix: &str, url: String) -> Result<String, String> {
+        if url.len() > 16 * 1024 || crate::http_engine::http_origin(&url).is_none() {
+            return Err("清单包含无效媒体地址".into());
+        }
+        let id = self
+            .routes
+            .lock()
+            .map_err(|_| "media routes poisoned")?
+            .register(url, false);
+        Ok(format!("{prefix}/r/{id}"))
+    }
+
+    fn route_template(&self, prefix: &str, url: String) -> Result<String, String> {
         if url.len() > 16 * 1024 || crate::http_engine::http_origin(&url).is_none() {
             return Err("清单包含无效媒体地址".into());
         }
@@ -121,7 +135,7 @@ impl MediaProxy {
             .routes
             .lock()
             .map_err(|_| "media routes poisoned")?
-            .register(url);
+            .register(url, true);
         let mut local = format!("{prefix}/r/{id}");
         for name in variables {
             local.push_str(&format!("/${name}$"));
@@ -141,13 +155,20 @@ impl MediaProxy {
             .next()
             .and_then(|id| id.parse::<u64>().ok())
             .ok_or("media route not found")?;
-        let url = self
+        let (url, is_template) = self
             .routes
             .lock()
             .map_err(|_| "media routes poisoned")?
             .get(id)
             .ok_or("media route not found")?;
-        instantiate_template(&url, &parts.collect::<Vec<_>>())
+        let args: Vec<&str> = parts.collect();
+        if !is_template {
+            if !args.is_empty() {
+                return Err("media route not found".into());
+            }
+            return Ok(url);
+        }
+        instantiate_template(&url, &args)
     }
 
     pub fn serve(
@@ -266,15 +287,19 @@ impl MediaProxy {
                     }
                     let text = std::str::from_utf8(&first).map_err(|_| "投屏清单不是 UTF-8")?;
                     let mut route_bytes = 0;
-                    let mut register = |url: String| {
+                    let mut register = |url: String, is_template: bool| {
                         route_bytes += url.len();
                         if route_bytes > MAX_ROUTE_BYTES / 2 {
                             return Err("投屏清单地址总长度超限".into());
                         }
-                        self.route(prefix, url)
+                        if is_template {
+                            self.route_template(prefix, url)
+                        } else {
+                            self.route_literal(prefix, url)
+                        }
                     };
                     let rewritten = if kind == "hls" {
-                        rewrite_hls(text, &response.final_url, &mut register)?
+                        rewrite_hls(text, &response.final_url, |url| register(url, false))?
                     } else {
                         rewrite_dash(text, &response.final_url, &mut register)?
                     };
@@ -606,7 +631,7 @@ fn xml_escape(text: &str) -> String {
 fn rewrite_dash(
     text: &str,
     base: &str,
-    mut route: impl FnMut(String) -> Result<String, String>,
+    mut route: impl FnMut(String, bool) -> Result<String, String>,
 ) -> Result<String, String> {
     let options = roxmltree::ParsingOptions {
         nodes_limit: 100_000,
@@ -713,41 +738,52 @@ fn rewrite_dash(
                     }
                 }
             }
-            let mut rewrite = |reference: &str| -> Result<String, String> {
+            let mut rewrite = |reference: &str, is_template: bool| -> Result<String, String> {
                 count += 1;
                 if count > MAX_REFERENCES {
                     return Err("DASH 清单引用超限".into());
                 }
-                let reference = expand_template(reference, |token| {
-                    if token == "RepresentationID" {
-                        return representation
-                            .attribute("id")
-                            .map(str::to_string)
-                            .ok_or("DASH RepresentationID 缺失".into());
-                    }
-                    if token.split('%').next() == Some("Bandwidth") {
-                        let value = representation
-                            .attribute("bandwidth")
-                            .and_then(|v| v.parse::<u64>().ok())
-                            .ok_or("DASH Bandwidth 缺失")?;
-                        return Ok(format!("{value:0width$}", width = template_width(token)?));
-                    }
-                    Ok(format!("${token}$"))
-                })?;
-                route(crate::media::resolve_http_uri(&effective_base, &reference))
+                if is_template {
+                    let reference = expand_template(reference, |token| {
+                        if token == "RepresentationID" {
+                            return representation
+                                .attribute("id")
+                                .map(str::to_string)
+                                .ok_or("DASH RepresentationID 缺失".into());
+                        }
+                        if token.split('%').next() == Some("Bandwidth") {
+                            let value = representation
+                                .attribute("bandwidth")
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .ok_or("DASH Bandwidth 缺失")?;
+                            return Ok(format!("{value:0width$}", width = template_width(token)?));
+                        }
+                        Ok(format!("${token}$"))
+                    })?;
+                    route(
+                        crate::media::resolve_http_uri(&effective_base, &reference),
+                        true,
+                    )
+                } else {
+                    route(
+                        crate::media::resolve_http_uri(&effective_base, reference),
+                        false,
+                    )
+                }
             };
             appended.push_str(&format!(
                 "<{prefix}BaseURL>{}</{prefix}BaseURL>",
-                xml_escape(&rewrite(&effective_base)?)
+                xml_escape(&rewrite(&effective_base, false)?)
             ));
+            let template_element = name == "SegmentTemplate";
             appended.push_str(&format!("<{prefix}{name}"));
-            for (name, value) in attributes {
-                let value = if matches!(name, "media" | "initialization" | "index") {
-                    rewrite(value)?
+            for (attr_name, value) in attributes {
+                let value = if matches!(attr_name, "media" | "initialization" | "index") {
+                    rewrite(value, template_element)?
                 } else {
                     value.to_string()
                 };
-                appended.push_str(&format!(" {name}=\"{}\"", xml_escape(&value)));
+                appended.push_str(&format!(" {attr_name}=\"{}\"", xml_escape(&value)));
             }
             appended.push('>');
             for nodes in children.values() {
@@ -762,7 +798,7 @@ fn rewrite_dash(
                             let span = attribute.range_value();
                             local_edits.push((
                                 span.start - node.range().start..span.end - node.range().start,
-                                xml_escape(&rewrite(attribute.value())?),
+                                xml_escape(&rewrite(attribute.value(), false)?),
                             ));
                         }
                     }
@@ -777,7 +813,7 @@ fn rewrite_dash(
             }
             appended.push_str(&format!(
                 "<{prefix}BaseURL>{}</{prefix}BaseURL>",
-                xml_escape(&route(effective_base)?)
+                xml_escape(&route(effective_base, false)?)
             ));
         }
         let span = representation.range();
@@ -829,7 +865,10 @@ fn rewrite_dash(
             }) {
                 edits.push((
                     attr.range_value(),
-                    xml_escape(&route(crate::media::resolve_http_uri(base, attr.value()))?),
+                    xml_escape(&route(
+                        crate::media::resolve_http_uri(base, attr.value()),
+                        false,
+                    )?),
                 ));
             }
         }
@@ -1283,8 +1322,12 @@ mod tests {
             String::new(),
         )
         .unwrap();
-        let rewritten = rewrite_dash(text, "https://entry.test/main.mpd", |url| {
-            proxy.route("/media/test", url)
+        let rewritten = rewrite_dash(text, "https://entry.test/main.mpd", |url, is_template| {
+            if is_template {
+                proxy.route_template("/media/test", url)
+            } else {
+                proxy.route_literal("/media/test", url)
+            }
         })
         .unwrap();
         assert!(!rewritten.contains("cdn.test") && !rewritten.contains("entry.test"));
@@ -1322,7 +1365,62 @@ mod tests {
             rewritten.contains("indexRange=\"100-199\"") && rewritten.contains("range=\"0-99\"")
         );
         assert!(proxy.source("r/1/../../http://other.test").is_err());
-        assert!(rewrite_dash(r#"<MPD xmlns:xlink="http://www.w3.org/1999/xlink"><Period xlink:href="https://other.test"/></MPD>"#, "https://cdn.test/a.mpd", Ok).is_err());
+        assert!(rewrite_dash(
+            r#"<MPD xmlns:xlink="http://www.w3.org/1999/xlink"><Period xlink:href="https://other.test"/></MPD>"#,
+            "https://cdn.test/a.mpd",
+            |url, _| Ok(url),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn literal_hls_and_dash_urls_preserve_dollar_and_double_dollar_verbatim() {
+        let proxy = MediaProxy::new(
+            TaskSpec {
+                url: "https://cdn.test/live.m3u8".into(),
+                ..Default::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+        let hls = "#EXTM3U\n#EXTINF:4,\nhttps://cdn.test/seg$1$$token=a$b.ts\n";
+        let rewritten_hls = rewrite_hls(hls, "https://cdn.test/live.m3u8", |url| {
+            proxy.route_literal("/media/p", url)
+        })
+        .unwrap();
+        let local_line = rewritten_hls
+            .lines()
+            .find(|line| line.starts_with("/media/p/"))
+            .unwrap();
+        assert_eq!(
+            proxy
+                .source(local_line.strip_prefix("/media/p/").unwrap())
+                .unwrap(),
+            "https://cdn.test/seg$1$$token=a$b.ts"
+        );
+
+        let dash = r#"<MPD><Period><AdaptationSet><SegmentList duration="2"><SegmentURL media="https://cdn.test/lit$$part$x.m4s"/></SegmentList><Representation id="v" bandwidth="100"/></AdaptationSet></Period></MPD>"#;
+        let rewritten_dash = rewrite_dash(dash, "https://cdn.test/a.mpd", |url, is_template| {
+            if is_template {
+                proxy.route_template("/media/p", url)
+            } else {
+                proxy.route_literal("/media/p", url)
+            }
+        })
+        .unwrap();
+        let doc = roxmltree::Document::parse(&rewritten_dash).unwrap();
+        let seg_url = doc
+            .descendants()
+            .find(|n| n.has_tag_name("SegmentURL"))
+            .unwrap()
+            .attribute("media")
+            .unwrap();
+        assert_eq!(
+            proxy
+                .source(seg_url.strip_prefix("/media/p/").unwrap())
+                .unwrap(),
+            "https://cdn.test/lit$$part$x.m4s"
+        );
     }
 
     #[test]

@@ -240,7 +240,7 @@ fn mux_input_args(
     }
 }
 
-fn run_ffmpeg_to_output(
+pub(crate) fn run_ffmpeg_to_output(
     command: &mut Command,
     output: &Path,
     log_path: &Path,
@@ -284,6 +284,11 @@ fn run_ffmpeg_to_output(
 fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<(), String> {
     // 写入文件避免后台 Core 的诊断管道关闭后丢失真正的合流错误。
     let log = fs::File::create(log_path).map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
