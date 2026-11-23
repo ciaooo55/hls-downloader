@@ -1,5 +1,5 @@
 const TEXT_URL = /(?:https?:\/\/|magnet:\?)[^\s<>"']+/gi
-const TRAILING_SENTENCE_PUNCTUATION = /[,.;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]+$/
+const SENTENCE_PUNCTUATION = /[,.;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]/
 const TRAILING_CLOSERS: Record<string, string> = {
   ')': '(',
   ']': '[',
@@ -11,20 +11,26 @@ const TRAILING_CLOSERS: Record<string, string> = {
 }
 
 function trimSelectedUrlPunctuation(value: string): string {
-  let candidate = value.replace(TRAILING_SENTENCE_PUNCTUATION, '')
-  while (candidate) {
-    const close = candidate.at(-1) || ''
+  let end = value.length
+  const counts = new Map<string, number>()
+  while (end > 0) {
+    const close = value[end - 1]
+    if (SENTENCE_PUNCTUATION.test(close)) { end--; continue }
     const open = TRAILING_CLOSERS[close]
     if (!open) break
-    const openCount = [...candidate].filter(char => char === open).length
-    const closeCount = [...candidate].filter(char => char === close).length
+    if (!counts.size) {
+      for (const char of value) counts.set(char, (counts.get(char) || 0) + 1)
+    }
+    const openCount = counts.get(open) || 0
+    const closeCount = counts.get(close) || 0
     // A closing delimiter that balances one inside the URL is part of the URL
     // (`file_(1).zip`, IPv6 `[::1]`, etc.). Strip only unmatched sentence
     // punctuation appended after the selected URL.
     if (closeCount <= openCount) break
-    candidate = candidate.slice(0, -1).replace(TRAILING_SENTENCE_PUNCTUATION, '')
+    counts.set(close, closeCount - 1)
+    end--
   }
-  return candidate
+  return value.slice(0, end)
 }
 
 function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = false): string {
@@ -54,14 +60,17 @@ function normalizeSelectedUrl(value: string, baseUrl: string, textExtraction = f
 
 /** Return only links covered by the user's current selection, in visual order. */
 export function selectedDownloadUrls(anchorHrefs: string[], selectedText: string, baseUrl: string): string[] {
-  const values: Array<{ value: string, textExtraction: boolean }> = [
-    ...anchorHrefs.map(value => ({ value, textExtraction: false })),
-    ...(String(selectedText || '').match(TEXT_URL) || []).map(value => ({ value, textExtraction: true })),
-  ]
   const unique = new Set<string>()
-  for (const item of values) {
-    const normalized = normalizeSelectedUrl(item.value, baseUrl, item.textExtraction)
-    if (normalized) unique.add(normalized)
+  // The content script keeps at most 40 resources for this selection.
+  for (const href of anchorHrefs) {
+    const url = normalizeSelectedUrl(href, baseUrl)
+    if (url) unique.add(url)
+    if (unique.size === 40) return [...unique]
+  }
+  for (const [value] of selectedText.matchAll(TEXT_URL)) {
+    const url = normalizeSelectedUrl(value, baseUrl, true)
+    if (url) unique.add(url)
+    if (unique.size === 40) break
   }
   return [...unique]
 }

@@ -15,11 +15,8 @@ pub fn default_v7_database_path() -> PathBuf {
     if let Some(root) = portable_v7_root() {
         return root.join("data").join("data.db");
     }
-    if let Some(root) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(root)
-            .join("HLS Downloader")
-            .join("v7")
-            .join("data.db");
+    if let Some(root) = env_override("LOCALAPPDATA") {
+        return root.join("HLS Downloader").join("v7").join("data.db");
     }
     PathBuf::from("v7-data.db")
 }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use russh::client::{self, Handle};
 use russh::keys::{load_secret_key, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession as RusshSftp;
+use russh_sftp::protocol::FileAttributes;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::sftp_engine::{
@@ -109,23 +110,23 @@ impl SftpFile for LiveFile {
     }
 }
 
+fn file_stat(meta: FileAttributes) -> Result<SftpStat, String> {
+    if meta.is_dir() {
+        return Err("SFTP 地址必须指向具体文件，不能是目录".into());
+    }
+    Ok(SftpStat {
+        size: meta.size.ok_or("SFTP 服务器未返回远程文件大小")?,
+        mtime: meta.mtime.unwrap_or(0).to_string(),
+    })
+}
+
 impl SftpSession for LiveSession {
     fn stat(&self, path: &str) -> Result<SftpStat, String> {
         let meta = self
             .rt
             .block_on(self.sftp.metadata(path.to_string()))
             .map_err(map_sftp_io)?;
-        if meta.is_dir() {
-            return Err("SFTP 地址必须指向具体文件，不能是目录".into());
-        }
-        let mtime = meta
-            .mtime
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "0".into());
-        Ok(SftpStat {
-            size: meta.len(),
-            mtime,
-        })
+        file_stat(meta)
     }
 
     fn open(&self, path: &str) -> Result<Box<dyn SftpFile>, String> {
@@ -282,4 +283,19 @@ async fn authenticate_agent(session: &mut Handle<TofuHandler>, user: &str) -> Re
     }
     let _ = (session, user);
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stat_requires_an_explicit_size_even_for_empty_files() {
+        assert!(file_stat(FileAttributes::empty()).is_err());
+        let empty = FileAttributes {
+            size: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(file_stat(empty).unwrap().size, 0);
+    }
 }

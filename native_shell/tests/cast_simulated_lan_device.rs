@@ -1,7 +1,7 @@
 //! 在**没有真实电视/机顶盒**的机器上，用一台"假局域网设备"把 `browser.media_push_device_selection`
 //! 这条链路的协议层全部走通：
 //!
-//! 1. 起一个 SSDP 响应者：收到 M-SEARCH 就回 `LOCATION: http://127.0.0.1:<port>/desc.xml`；
+//! 1. 起一个 SSDP 响应者：收到 M-SEARCH 就回 `LOCATION: http://<应答地址>:<port>/desc.xml`；
 //! 2. 起一个 HTTP 服务：给出 UPnP description（friendlyName + URLBase + AVTransport service）；
 //! 3. `discover_devices_for_mode` 走真实的 M-SEARCH → LOCATION → 抓取 description → 解析；
 //! 4. `play_on_device` 走真实的 SOAP `SetAVTransportURI` + `Play`，落到假设备的 control URL 上；
@@ -17,7 +17,7 @@
 //! 纯解析和地址校验用例不需要设备，常规检查始终执行。
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -40,20 +40,31 @@ struct DeviceLog {
 
 /// 一台可编程的假 DLNA/UPnP 设备：SSDP 应答 + UPnP description + AVTransport 控制端点。
 struct SimulatedCastDevice {
-    port: u16,
+    address: SocketAddr,
     log: Arc<Mutex<DeviceLog>>,
     shutdown: Arc<AtomicBool>,
     m_searches: Arc<AtomicUsize>,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl SimulatedCastDevice {
     fn start() -> SimulatedCastDevice {
         // 1) description + control 端点
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind device http");
+        let listener = hls_native_shell::cast::preferred_lan_ipv4()
+            .filter(|ip| !ip.is_unspecified())
+            .and_then(|ip| TcpListener::bind((ip, 0)).ok())
+            .or_else(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok())
+            .expect("bind device http");
+        let address = listener.local_addr().unwrap();
+        let SocketAddr::V4(endpoint) = address else {
+            unreachable!()
+        };
+        let announced = *endpoint.ip();
+        // Replies must originate from the address advertised in LOCATION, even on multi-homed hosts.
+        let replies = UdpSocket::bind((announced, 0)).expect("bind SSDP reply socket");
         listener
             .set_nonblocking(true)
             .expect("set_nonblocking device http");
-        let port = listener.local_addr().unwrap().port();
         let log = Arc::new(Mutex::new(DeviceLog::default()));
         let m_searches = Arc::new(AtomicUsize::new(0));
         // 2) SSDP 响应者：加入 SSDP 多播组，收到 M-SEARCH 就单播回 LOCATION。
@@ -67,8 +78,6 @@ impl SimulatedCastDevice {
         // 机器上同时有 TUN 且 TUN 是默认路由时（本仓库的开发机就是这样），
         // M-SEARCH 从 WLAN 发出去、多播组却挂在 TUN 上，假设备时收时不收，
         // 用例就变成了随机红/绿。固定到同一口之后收发两侧始终一致。
-        let announced =
-            hls_native_shell::cast::preferred_lan_ipv4().unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
         ssdp.join_multicast_v4(&group, &announced)
             .expect("join ssdp group");
         let http_log = log.clone();
@@ -76,7 +85,7 @@ impl SimulatedCastDevice {
         let http_shutdown = Arc::clone(&shutdown_tx);
         let ssdp_searches = Arc::clone(&m_searches);
 
-        thread::spawn(move || loop {
+        let http_worker = thread::spawn(move || loop {
             if http_shutdown.load(Ordering::SeqCst) {
                 break;
             }
@@ -84,7 +93,8 @@ impl SimulatedCastDevice {
                 Ok((stream, _)) => {
                     let mut stream = stream;
                     stream.set_read_timeout(Some(Duration::from_secs(4))).ok();
-                    handle_http(&mut stream, port, &http_log);
+                    stream.set_write_timeout(Some(Duration::from_secs(4))).ok();
+                    handle_http(&mut stream, address, &http_log);
                 }
                 Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
@@ -94,7 +104,7 @@ impl SimulatedCastDevice {
         });
 
         let ssdp_shutdown = Arc::clone(&shutdown_tx);
-        thread::spawn(move || {
+        let ssdp_worker = thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 if ssdp_shutdown.load(Ordering::SeqCst) {
@@ -107,10 +117,8 @@ impl SimulatedCastDevice {
                             continue;
                         }
                         ssdp_searches.fetch_add(1, Ordering::SeqCst);
-                        let reply = format!(
-                            "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=30\r\nEXT:\r\nLOCATION: http://127.0.0.1:{port}/desc.xml\r\nSERVER: simulated/7 UPnP/1.1\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:simulated-device::urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n"
-                        );
-                        let _ = ssdp.send_to(reply.as_bytes(), peer);
+                        let reply = discovery_reply(address);
+                        let _ = replies.send_to(reply.as_bytes(), peer);
                     }
                     Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -121,15 +129,16 @@ impl SimulatedCastDevice {
         });
 
         SimulatedCastDevice {
-            port,
+            address,
             log,
             shutdown: shutdown_tx,
+            workers: vec![http_worker, ssdp_worker],
             m_searches,
         }
     }
 
     fn location(&self) -> String {
-        format!("http://127.0.0.1:{}/desc.xml", self.port)
+        format!("http://{}/desc.xml", self.address)
     }
 
     /// 扫描窗口内假设备实际收到的 M-SEARCH 次数。0 次 = 环境没把多播送到本机
@@ -142,12 +151,32 @@ impl SimulatedCastDevice {
 impl Drop for SimulatedCastDevice {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(80));
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
     }
 }
 
-fn handle_http(stream: &mut std::net::TcpStream, port: u16, log: &Arc<Mutex<DeviceLog>>) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone device stream"));
+fn discovery_reply(address: SocketAddr) -> String {
+    format!(
+                            "HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=30\r\nEXT:\r\nLOCATION: http://{address}/desc.xml\r\nSERVER: simulated/7 UPnP/1.1\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:simulated-device::urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n"
+                        )
+}
+
+fn device_description(address: SocketAddr) -> String {
+    format!(
+                "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><URLBase>http://{address}</URLBase><device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType><friendlyName>{LABEL}</friendlyName><manufacturer>Simulated</manufacturer><modelName>SimDLNA</modelName><serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><serviceId>urn:upnp-org:serviceId:AVTransport</serviceId><controlURL>/ctrl</controlURL><eventSubURL>/evt</eventSubURL><SCPDURL>/avt.xml</SCPDURL></service></serviceList></device></root>"
+            )
+}
+
+fn handle_http(stream: &mut std::net::TcpStream, address: SocketAddr, log: &Arc<Mutex<DeviceLog>>) {
+    // Limit headers and body now that the fixture also accepts connections on the LAN.
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .expect("clone device stream")
+            .take(128 * 1024),
+    );
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
         return;
@@ -157,7 +186,7 @@ fn handle_http(stream: &mut std::net::TcpStream, port: u16, log: &Arc<Mutex<Devi
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => break,
+            Ok(0) => return,
             Ok(_) => {}
             Err(_) => return,
         }
@@ -182,6 +211,9 @@ fn handle_http(stream: &mut std::net::TcpStream, port: u16, log: &Arc<Mutex<Devi
                 .to_string();
         }
     }
+    if content_length > 64 * 1024 {
+        return;
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 && reader.read_exact(&mut body).is_err() {
         return;
@@ -189,12 +221,7 @@ fn handle_http(stream: &mut std::net::TcpStream, port: u16, log: &Arc<Mutex<Devi
     let body = String::from_utf8_lossy(&body).to_string();
 
     let (status, payload) = if request_line.starts_with("GET /desc.xml") {
-        (
-            "200 OK",
-            format!(
-                "<?xml version=\"1.0\"?><root xmlns=\"urn:schemas-upnp-org:device-1-0\"><specVersion><major>1</major><minor>0</minor></specVersion><URLBase>http://127.0.0.1:{port}</URLBase><device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType><friendlyName>{LABEL}</friendlyName><manufacturer>Simulated</manufacturer><modelName>SimDLNA</modelName><serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><serviceId>urn:upnp-org:serviceId:AVTransport</serviceId><controlURL>/ctrl</controlURL><eventSubURL>/evt</eventSubURL><SCPDURL>/avt.xml</SCPDURL></service></serviceList></device></root>"
-            ),
-        )
+        ("200 OK", device_description(address))
     } else if request_line.starts_with("POST /ctrl") {
         let recorded = action.clone();
         let mut guard = log.lock().expect("lock device log");
@@ -273,8 +300,9 @@ fn a_simulated_lan_device_can_be_discovered_from_ssdp_and_description() {
     );
     let mine = mine[0];
     assert_eq!(mine.label, LABEL, "friendlyName 应成为用户看到的设备名");
-    assert!(
-        mine.control_url.starts_with("http://127.0.0.1:"),
+    assert_eq!(
+        mine.control_url,
+        format!("http://{}/ctrl", device.address),
         "control_url 应由 description 的 URLBase + controlURL 解析而来，实际 {}",
         mine.control_url
     );
@@ -465,4 +493,25 @@ fn a_device_without_av_transport_is_not_a_cast_target() {
         parse_device_description(xml, "http://10.0.0.9/desc.xml").is_none(),
         "不支持 AVTransport 的设备不应被当成投屏目标"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn description_and_ssdp_reply_use_the_same_bound_address() {
+        for ip in [Ipv4Addr::LOCALHOST, Ipv4Addr::new(192, 0, 2, 12)] {
+            let address = SocketAddr::from((ip, 32123));
+            let reply = discovery_reply(address);
+            let location = hls_native_shell::cast::parse_ssdp_location(&reply).unwrap();
+            assert_eq!(location, format!("http://{address}/desc.xml"));
+            let device = hls_native_shell::cast::parse_device_description(
+                &device_description(address),
+                &location,
+            )
+            .unwrap();
+            assert_eq!(device.control_url, format!("http://{address}/ctrl"));
+        }
+    }
 }

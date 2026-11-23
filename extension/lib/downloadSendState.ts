@@ -64,11 +64,11 @@ export function sendStateFromHandoff(facts: HandoffFacts): SendState {
     case 'rejected':
     case 'canceled':
       return 'canceled'
-    case 'connection_lost':
-      return 'checking'
-    default:
-      // expired / failed：Core 已确认不会创建任务，可安全重发。
+    case 'expired':
+    case 'failed':
       return 'retry'
+    default:
+      return 'checking'
   }
 }
 

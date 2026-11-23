@@ -28,6 +28,14 @@ pub fn verify_installer_identity(
     path: &Path,
     expected_version: &str,
 ) -> Result<InstallerIdentity, String> {
+    verify_package_identity(path, expected_version, None)
+}
+
+fn verify_package_identity(
+    path: &Path,
+    expected_version: &str,
+    package: Option<&std::fs::File>,
+) -> Result<InstallerIdentity, String> {
     if !path.is_file()
         || !path
             .to_string_lossy()
@@ -38,14 +46,14 @@ pub fn verify_installer_identity(
     }
     #[cfg(windows)]
     {
-        verify_installer_authenticode(path)?;
+        verify_installer_authenticode(path, package)?;
         let identity = read_msi_identity(path)?;
         validate_installer_identity_fields(&identity, expected_version)?;
         Ok(identity)
     }
     #[cfg(not(windows))]
     {
-        let _ = expected_version;
+        let _ = (expected_version, package);
         Err("MSI 身份校验只适用于 Windows".into())
     }
 }
@@ -55,18 +63,37 @@ pub fn launch_update_helper(
     expected_version: &str,
     workbench_pid: u32,
 ) -> Result<UpdaterLaunch, String> {
+    let absolute =
+        std::path::absolute(path).map_err(|error| format!("读取升级安装包路径失败: {error}"))?;
+    let path = absolute.as_path();
     let identity = verify_installer_identity(path, expected_version)?;
     if !identity.per_user {
         return Err("升级包不是当前产品使用的每用户安装方式".into());
     }
     let source = locate_updater_executable()?;
-    let helper_path = path.with_file_name(format!(
-        "HLSDownloaderUpdater-{}-{}.exe",
-        sanitize_version(expected_version),
-        std::process::id()
-    ));
-    std::fs::copy(&source, &helper_path)
-        .map_err(|error| format!("准备独立更新助手失败: {error}"))?;
+    let mut source =
+        std::fs::File::open(source).map_err(|error| format!("打开独立更新助手失败: {error}"))?;
+    let mut attempt = 0u32;
+    let (helper_path, mut copy) = loop {
+        let candidate = path.with_file_name(format!(
+            "HLSDownloaderUpdater-{}-{}-{attempt}.exe",
+            sanitize_version(expected_version),
+            std::process::id()
+        ));
+        match std::fs::File::create_new(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 128 => {
+                attempt += 1
+            }
+            Err(error) => return Err(format!("创建独立更新助手失败: {error}")),
+        }
+    };
+    let copied = std::io::copy(&mut source, &mut copy);
+    drop(copy);
+    if let Err(error) = copied {
+        let _ = std::fs::remove_file(&helper_path);
+        return Err(format!("准备独立更新助手失败: {error}"));
+    }
     let log_path = path.with_extension("install.log");
     let result_path = update_root().join("last-install-result.json");
     let install_root = std::env::current_exe()
@@ -107,9 +134,10 @@ pub fn launch_update_helper(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    command
-        .spawn()
-        .map_err(|error| format!("启动独立更新助手失败: {error}"))?;
+    if let Err(error) = command.spawn() {
+        let _ = std::fs::remove_file(&helper_path);
+        return Err(format!("启动独立更新助手失败: {error}"));
+    }
     Ok(UpdaterLaunch {
         log_path,
         result_path,
@@ -190,8 +218,12 @@ fn normalize_guid(value: &str) -> String {
 }
 
 #[cfg(windows)]
-fn verify_installer_authenticode(path: &Path) -> Result<(), String> {
+fn verify_installer_authenticode(
+    path: &Path,
+    package: Option<&std::fs::File>,
+) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Security::WinTrust::{
         WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0,
         WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4,
@@ -202,6 +234,9 @@ fn verify_installer_authenticode(path: &Path) -> Result<(), String> {
     let mut file: WINTRUST_FILE_INFO = unsafe { std::mem::zeroed() };
     file.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
     file.pcwszFilePath = path_wide.as_ptr();
+    if let Some(package) = package {
+        file.hFile = package.as_raw_handle();
+    }
 
     let mut trust: WINTRUST_DATA = unsafe { std::mem::zeroed() };
     trust.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
@@ -220,6 +255,18 @@ fn verify_installer_authenticode(path: &Path) -> Result<(), String> {
             &mut trust as *mut _ as *mut core::ffi::c_void,
         )
     };
+    let result = if status == 0 {
+        if package.is_some() {
+            verify_release_signer(trust.hWVTStateData)
+        } else {
+            Ok(())
+        }
+    } else {
+        Err(format!(
+            "升级安装包 Authenticode 信任校验失败（WinVerifyTrust 0x{:08X}）",
+            status as u32
+        ))
+    };
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
     unsafe {
         WinVerifyTrust(
@@ -228,13 +275,119 @@ fn verify_installer_authenticode(path: &Path) -> Result<(), String> {
             &mut trust as *mut _ as *mut core::ffi::c_void,
         );
     }
-    if status != 0 {
-        return Err(format!(
-            "升级安装包 Authenticode 信任校验失败（WinVerifyTrust 0x{:08X}）",
-            status as u32
-        ));
+    result
+}
+
+#[cfg(windows)]
+fn verify_release_signer(state: windows_sys::Win32::Foundation::HANDLE) -> Result<(), String> {
+    use core::ffi::c_void;
+    use windows_sys::Win32::Security::Cryptography::{
+        CertGetCertificateContextProperty, CERT_SHA1_HASH_PROP_ID,
+    };
+    use windows_sys::Win32::Security::WinTrust::CRYPT_PROVIDER_SGNR;
+    // These two accessors use opaque WinTrust provider data. Linking to the DLL
+    // directly avoids depending on the SDK's optional catalog/SIP structure layouts.
+    #[link(name = "wintrust", kind = "raw-dylib")]
+    extern "system" {
+        fn WTHelperProvDataFromStateData(state: *mut c_void) -> *mut c_void;
+        fn WTHelperGetProvSignerFromChain(
+            provider: *mut c_void,
+            signer: u32,
+            countersigner: i32,
+            index: u32,
+        ) -> *mut CRYPT_PROVIDER_SGNR;
     }
-    Ok(())
+    if state.is_null() {
+        return Err("无法读取已验证的 Authenticode provider 状态".into());
+    }
+    let provider = unsafe { WTHelperProvDataFromStateData(state) };
+    if provider.is_null() {
+        return Err("无法读取已验证的 Authenticode provider 状态".into());
+    }
+    let signer = unsafe { WTHelperGetProvSignerFromChain(provider, 0, 0, 0).as_ref() }
+        .ok_or("无法读取已验证的 Authenticode 主签名者")?;
+    if signer.csCertChain == 0 || signer.pasCertChain.is_null() {
+        return Err("已验证的 Authenticode 签名者缺少证书".into());
+    }
+    let leaf = unsafe { (*signer.pasCertChain).pCert };
+    let mut hash = [0u8; 20];
+    let mut size = hash.len() as u32;
+    if leaf.is_null()
+        || unsafe {
+            CertGetCertificateContextProperty(
+                leaf,
+                CERT_SHA1_HASH_PROP_ID,
+                hash.as_mut_ptr().cast(),
+                &mut size,
+            )
+        } == 0
+        || size as usize != hash.len()
+    {
+        return Err("无法读取 Authenticode leaf 证书指纹".into());
+    }
+    let candidate = hash
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    authorize_release_signer(
+        &candidate,
+        option_env!("HLS_V7_SIGN_CERT_THUMBPRINT"),
+        include_str!("../../../config/release/update-signer-trust.json"),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn authorize_release_signer(
+    candidate: &str,
+    primary: Option<&str>,
+    policy: &str,
+) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Policy {
+        schema: u32,
+        identity: String,
+        policy: String,
+        rollover_signers: Vec<Rollover>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Rollover {
+        thumbprint: String,
+        reason: String,
+    }
+    let normalize = |value: &str| -> Result<String, String> {
+        let hex: String = value
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        if hex.len() == 40 && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+            Ok(hex)
+        } else {
+            Err("无效的发布证书指纹".into())
+        }
+    };
+    let primary = normalize(primary.ok_or("缺少嵌入的 HLS_V7_SIGN_CERT_THUMBPRINT")?)?;
+    let policy: Policy =
+        serde_json::from_str(policy).map_err(|error| format!("更新签名信任配置无效: {error}"))?;
+    if policy.schema != 1
+        || policy.identity != "authenticode_leaf_certificate_sha1"
+        || policy.policy != "formal-build-signer-or-explicit-rollover"
+    {
+        return Err("不支持的更新签名信任配置".into());
+    }
+    let mut rollover = std::collections::HashSet::new();
+    for entry in policy.rollover_signers {
+        if entry.reason.trim().is_empty() || !rollover.insert(normalize(&entry.thumbprint)?) {
+            return Err("无效的更新签名 rollover 条目".into());
+        }
+    }
+    if candidate == primary || rollover.contains(candidate) {
+        Ok(())
+    } else {
+        Err("升级安装包签名者不是受信任的 HLS Downloader 发布证书".into())
+    }
 }
 
 #[cfg(windows)]
@@ -249,6 +402,11 @@ fn read_msi_identity(path: &Path) -> Result<InstallerIdentity, String> {
 
 #[cfg(windows)]
 fn read_msi_property(path: &Path, property: &str) -> Result<String, String> {
+    read_optional_msi_property(path, property)?.ok_or_else(|| format!("MSI 缺少 {property}"))
+}
+
+#[cfg(windows)]
+fn read_optional_msi_property(path: &Path, property: &str) -> Result<Option<String>, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::ApplicationInstallationAndServicing::{
         MsiCloseHandle, MsiDatabaseOpenViewW, MsiOpenDatabaseW, MsiRecordGetStringW,
@@ -280,17 +438,24 @@ fn read_msi_property(path: &Path, property: &str) -> Result<String, String> {
         }
         let mut record: MSIHANDLE = 0;
         let status = unsafe { MsiViewFetch(view, &mut record) };
+        if status == windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS {
+            return Ok(None);
+        }
         if status != ERROR_SUCCESS {
-            return Err(format!("MSI 缺少 {property}（错误 {status}）"));
+            return Err(format!("无法读取 MSI {property} 记录（错误 {status}）"));
         }
         let value = (|| {
             let mut required = 0u32;
-            let first =
-                unsafe { MsiRecordGetStringW(record, 1, std::ptr::null_mut(), &mut required) };
+            let mut empty = 0u16;
+            let first = unsafe { MsiRecordGetStringW(record, 1, &mut empty, &mut required) };
             if first != ERROR_MORE_DATA && first != ERROR_SUCCESS {
                 return Err(format!("无法读取 MSI {property}（错误 {first}）"));
             }
-            let mut buffer = vec![0u16; required.saturating_add(1) as usize];
+            // Only short identity and installation-context properties are read here.
+            if required > u32::from(u16::MAX) {
+                return Err(format!("MSI {property} 属性过长"));
+            }
+            let mut buffer = vec![0u16; required as usize + 1];
             let mut capacity = buffer.len() as u32;
             let status =
                 unsafe { MsiRecordGetStringW(record, 1, buffer.as_mut_ptr(), &mut capacity) };
@@ -300,7 +465,7 @@ fn read_msi_property(path: &Path, property: &str) -> Result<String, String> {
             Ok(String::from_utf16_lossy(&buffer[..capacity as usize]))
         })();
         unsafe { MsiCloseHandle(record) };
-        value
+        value.map(Some)
     })();
     if view != 0 {
         unsafe { MsiCloseHandle(view) };
@@ -313,20 +478,15 @@ fn read_msi_property(path: &Path, property: &str) -> Result<String, String> {
 fn msi_is_per_user(path: &Path) -> Result<bool, String> {
     let all_users = read_optional_msi_property(path, "ALLUSERS")?;
     let per_user = read_optional_msi_property(path, "MSIINSTALLPERUSER")?;
-    Ok(
-        all_users.trim().is_empty()
-            || all_users.trim() == "2"
-            || per_user.eq_ignore_ascii_case("1"),
-    )
+    Ok(msi_properties_are_per_user(
+        all_users.as_deref(),
+        per_user.as_deref(),
+    ))
 }
 
-#[cfg(windows)]
-fn read_optional_msi_property(path: &Path, property: &str) -> Result<String, String> {
-    match read_msi_property(path, property) {
-        Ok(value) => Ok(value),
-        Err(error) if error.contains("MSI 缺少") => Ok(String::new()),
-        Err(error) => Err(error),
-    }
+#[cfg(any(windows, test))]
+fn msi_properties_are_per_user(all_users: Option<&str>, per_user: Option<&str>) -> bool {
+    matches!(all_users, None | Some("")) || (all_users == Some("2") && per_user == Some("1"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -351,10 +511,10 @@ struct HelperArgs {
 }
 
 pub fn run_update_helper(args: impl IntoIterator<Item = OsString>) -> Result<u8, String> {
-    run_update_helper_with_verifier(args, |_| Ok(()))
+    run_helper(args, None::<fn(&Path) -> Result<(), String>>)
 }
 
-/// Runs verification before shutdown and records failures before restarting the workbench.
+/// Adds a caller check before the mandatory release signer and MSI identity checks.
 pub fn run_update_helper_with_verifier<F>(
     args: impl IntoIterator<Item = OsString>,
     verify_msi: F,
@@ -362,18 +522,58 @@ pub fn run_update_helper_with_verifier<F>(
 where
     F: FnOnce(&Path) -> Result<(), String>,
 {
+    run_helper(args, Some(verify_msi))
+}
+
+fn run_helper<F>(
+    args: impl IntoIterator<Item = OsString>,
+    additional_check: Option<F>,
+) -> Result<u8, String>
+where
+    F: FnOnce(&Path) -> Result<(), String>,
+{
     let args = parse_helper_args(args)?;
     run_update_helper_with_hooks(
         &args,
-        verify_msi,
-        verify_installer_identity,
+        |path| {
+            #[cfg(windows)]
+            let package = {
+                use std::os::windows::fs::OpenOptionsExt;
+                use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ)
+                    .open(path)
+                    .map_err(|error| format!("无法锁定升级安装包: {error}"))?
+            };
+            if let Some(check) = additional_check {
+                check(path)?;
+            }
+            #[cfg(windows)]
+            {
+                Ok(package)
+            }
+            #[cfg(not(windows))]
+            Ok(())
+        },
+        |path, version, package| {
+            #[cfg(windows)]
+            {
+                verify_package_identity(path, version, Some(package))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = package;
+                verify_installer_identity(path, version)
+            }
+        },
         wait_for_product_shutdown,
         run_msiexec,
         restart_workbench,
     )
 }
 
-fn run_update_helper_with_hooks<V, I, W, R, S>(
+fn run_update_helper_with_hooks<G, V, I, W, R, S>(
     args: &HelperArgs,
     verify_msi: V,
     verify_identity: I,
@@ -382,16 +582,17 @@ fn run_update_helper_with_hooks<V, I, W, R, S>(
     mut restart: S,
 ) -> Result<u8, String>
 where
-    V: FnOnce(&Path) -> Result<(), String>,
-    I: FnOnce(&Path, &str) -> Result<InstallerIdentity, String>,
+    V: FnOnce(&Path) -> Result<G, String>,
+    I: FnOnce(&Path, &str, &G) -> Result<InstallerIdentity, String>,
     W: FnMut(&HelperArgs) -> Result<(), String>,
     R: FnOnce(&Path, &Path) -> Result<i32, String>,
     S: FnMut(&HelperArgs),
 {
     let mut shutdown_attempted = false;
     let outcome: Result<u8, String> = (|| {
-        verify_msi(&args.msi)?;
-        let identity = verify_identity(&args.msi, &args.version)?;
+        // Keep the verified package locked until msiexec has returned, including during shutdown.
+        let package = verify_msi(&args.msi)?;
+        let identity = verify_identity(&args.msi, &args.version, &package)?;
         if !identity.per_user {
             return Err("升级包安装上下文不是每用户安装".into());
         }
@@ -543,11 +744,27 @@ fn installer_exit_status(exit_code: i32) -> (&'static str, &'static str) {
     }
 }
 
+// Readers also acknowledge by deleting the record. Hold one stable OS lock
+// across each transaction so an acknowledgement cannot delete a newer result.
+fn lock_install_result(path: &Path) -> Result<std::fs::File, String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("json.lock"))
+        .map_err(|error| format!("打开升级结果锁失败: {error}"))?;
+    file.lock()
+        .map_err(|error| format!("锁定升级结果失败: {error}"))?;
+    Ok(file)
+}
+
 fn write_install_result(path: &Path, result: &InstallResult) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("创建升级结果目录失败: {error}"))?;
     }
+    let _lock = lock_install_result(path)?;
     let temporary = path.with_extension("json.part");
     let data =
         serde_json::to_vec_pretty(result).map_err(|error| format!("编码升级结果失败: {error}"))?;
@@ -571,12 +788,21 @@ pub fn take_install_result() -> Result<Option<InstallResult>, String> {
 /// already gone. Reading the sidecar is what makes such an upgrade report a
 /// failure instead of silently reporting nothing at all.
 fn take_install_result_at(path: &Path) -> Result<Option<InstallResult>, String> {
-    let source = if path.is_file() {
+    let sidecar = path.with_extension("json.part");
+    let exists = |p: &Path| {
+        p.try_exists()
+            .map_err(|error| format!("读取升级结果失败: {error}"))
+    };
+    if !exists(path)? && !exists(&sidecar)? {
+        return Ok(None);
+    }
+    let _lock = lock_install_result(path)?;
+    let source = if exists(path)? {
         path.to_path_buf()
     } else {
-        path.with_extension("json.part")
+        sidecar
     };
-    if !source.is_file() {
+    if !exists(&source)? {
         return Ok(None);
     }
     let data = std::fs::read(&source).map_err(|error| format!("读取升级结果失败: {error}"))?;
@@ -910,6 +1136,17 @@ mod tests {
                 "--result".into(),
                 result.clone().into_os_string(),
             ];
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("unverified.msi"), b"unsigned fixture").unwrap();
+            #[cfg(windows)]
+            if error == "rejected signer" {
+                for failure in [
+                    run_update_helper(args.clone()),
+                    run_update_helper_with_verifier(args.clone(), |_| Ok(())),
+                ] {
+                    assert!(failure.unwrap_err().contains("Authenticode"));
+                }
+            }
             let failure = run_update_helper_with_verifier(args, |path| {
                 assert_eq!(path, root.join("unverified.msi"));
                 Err(error.into())
@@ -952,7 +1189,7 @@ mod tests {
         let error = run_update_helper_with_hooks(
             &args,
             |_| Err("rejected signer".into()),
-            |_, _| panic!("identity check must not run after signer rejection"),
+            |_, _, _: &()| panic!("identity check must not run after signer rejection"),
             |_| {
                 assert!(
                     result.is_file(),
@@ -973,7 +1210,7 @@ mod tests {
         let timeout = run_update_helper_with_hooks(
             &args,
             |_| Ok(()),
-            |_, _| {
+            |_, _, _| {
                 Ok(InstallerIdentity {
                     product_name: EXPECTED_PRODUCT_NAME.into(),
                     product_version: "10.0.0".into(),
@@ -1058,8 +1295,8 @@ mod tests {
     }
     #[test]
     fn cover_install_uses_passive_msi_without_forcing_a_reboot() {
-        let msi = Path::new(r"C:\Temp\HLSDownloader-7.1.0-Windows-x64.msi");
-        let log = Path::new(r"C:\Temp\HLSDownloader-7.1.0-Windows-x64.install.log");
+        let msi = Path::new(r"C:\测试 更新\HLSDownloader-7.1.0-Windows-x64.msi");
+        let log = Path::new(r"C:\测试 更新\HLSDownloader-7.1.0-Windows-x64.install.log");
         let args: Vec<String> = msiexec_args(msi, log)
             .into_iter()
             .map(|item| item.to_string_lossy().into_owned())
@@ -1105,7 +1342,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::write(&path, b"unsigned update fixture").unwrap();
-        let error = verify_installer_authenticode(&path).unwrap_err();
+        let error = verify_installer_authenticode(&path, None).unwrap_err();
         assert!(error.contains("Authenticode"));
         std::fs::remove_file(path).unwrap();
     }
@@ -1290,5 +1527,59 @@ mod tests {
                 .unwrap_err()
                 .contains("每用户安装上下文"));
         }
+    }
+
+    #[test]
+    fn release_signer_requires_a_valid_primary_and_reviewed_rollovers() {
+        let primary = "0123456789ABCDEF0123456789ABCDEF01234567";
+        let other = "123456789ABCDEF0123456789ABCDEF012345678";
+        let policy = include_str!("../../../config/release/update-signer-trust.json");
+        assert!(authorize_release_signer(primary, Some(primary), policy).is_ok());
+        assert!(authorize_release_signer(primary, None, policy).is_err());
+        let mut policy: serde_json::Value = serde_json::from_str(policy).unwrap();
+        policy["rollover_signers"] = serde_json::json!([]);
+        assert!(authorize_release_signer(other, Some(primary), &policy.to_string()).is_err());
+        policy["rollover_signers"] = serde_json::json!([{"thumbprint":other, "reason":"rotation"}]);
+        assert!(authorize_release_signer(other, Some(primary), &policy.to_string()).is_ok());
+        policy["rollover_signers"][0]["reason"] = serde_json::json!("");
+        assert!(authorize_release_signer(primary, Some(primary), &policy.to_string()).is_err());
+    }
+
+    #[test]
+    fn per_machine_and_ambiguous_dual_context_msi_are_rejected() {
+        assert!(msi_properties_are_per_user(None, None));
+        assert!(msi_properties_are_per_user(Some("2"), Some("1")));
+        assert!(!msi_properties_are_per_user(Some("2"), None));
+        assert!(!msi_properties_are_per_user(Some("1"), Some("1")));
+    }
+
+    #[test]
+    fn concurrent_consumers_acknowledge_a_result_once() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/audit-tests")
+            .join(format!("result-consumers-{}", std::process::id()));
+        let path = root.join("result.json");
+        let result = InstallResult {
+            version: "1".into(),
+            status: "success".into(),
+            exit_code: 0,
+            message: String::new(),
+            install_log: String::new(),
+        };
+        write_install_result(&path, &result).unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let consume = || {
+                barrier.wait();
+                take_install_result_at(&path).unwrap()
+            };
+            let other = scope.spawn(consume);
+            let results = [consume(), other.join().unwrap()];
+            assert_eq!(
+                results.into_iter().flatten().collect::<Vec<_>>(),
+                vec![result]
+            );
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -46,6 +46,12 @@ pub(crate) fn replace_file(
 fn extended_path(path: &std::path::Path) -> io::Result<std::ffi::OsString> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::{Component, Prefix};
+    if path.as_os_str().encode_wide().any(|unit| unit == 0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains NUL",
+        ));
+    }
     let absolute = std::path::absolute(path)?;
     let mut components = absolute.components();
     let Some(Component::Prefix(prefix)) = components.next() else {
@@ -110,6 +116,16 @@ pub(crate) fn replace_with_retry(mut move_once: impl FnMut() -> io::Result<()>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_paths_cannot_truncate_a_win32_rename() {
+        let path = std::path::Path::new("\\\\?\\C:\\target\0suffix");
+        assert_eq!(
+            extended_path(path).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
 
     #[cfg(windows)]
     #[test]

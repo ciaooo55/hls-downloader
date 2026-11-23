@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::net::{Ipv6Addr, TcpStream};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -755,6 +755,7 @@ pub fn run_job(job: &Job) -> Result<(), EngineError> {
 }
 
 pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
+    let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let normalized_mirrors = crate::mirrors::normalize_mirror_urls(&job.url, &job.mirrors);
     let mut reports: Vec<HttpMirrorReport> = normalized_mirrors
         .iter()
@@ -921,7 +922,7 @@ pub(crate) fn fetch_bytes_limited(
     proxy: &str,
     limit: u64,
 ) -> Result<(u16, Vec<u8>), EngineError> {
-    fetch_bytes_with_transport(url, headers, proxy, false, Some(limit))
+    fetch_manifest_bytes(url, headers, proxy, false, limit).map(|(status, body, _)| (status, body))
 }
 
 #[cfg(test)]
@@ -931,6 +932,7 @@ pub fn fetch_hls_bytes(
     proxy: &str,
 ) -> Result<(u16, Vec<u8>), EngineError> {
     fetch_bytes_with_transport(url, headers, proxy, true, None)
+        .map(|(status, body, _)| (status, body))
 }
 
 pub(crate) fn fetch_hls_bytes_limited(
@@ -939,7 +941,17 @@ pub(crate) fn fetch_hls_bytes_limited(
     proxy: &str,
     limit: u64,
 ) -> Result<(u16, Vec<u8>), EngineError> {
-    fetch_bytes_with_transport(url, headers, proxy, true, Some(limit))
+    fetch_manifest_bytes(url, headers, proxy, true, limit).map(|(status, body, _)| (status, body))
+}
+
+pub(crate) fn fetch_manifest_bytes(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    browser_first: bool,
+    limit: u64,
+) -> Result<(u16, Vec<u8>, String), EngineError> {
+    fetch_bytes_with_transport(url, headers, proxy, browser_first, Some(limit))
 }
 
 fn fetch_bytes_with_transport(
@@ -948,7 +960,7 @@ fn fetch_bytes_with_transport(
     proxy: &str,
     browser_first: bool,
     limit: Option<u64>,
-) -> Result<(u16, Vec<u8>), EngineError> {
+) -> Result<(u16, Vec<u8>, String), EngineError> {
     if !http_fetch_url_allowed(url) {
         return Err(EngineError::Failed("url must be http(s)".into()));
     }
@@ -999,7 +1011,7 @@ fn fetch_bytes_with_transport(
         let status = fetched.status;
         if !(200..300).contains(&status) && status != 304 {
             check_job_control(&job)?;
-            return Ok((status, Vec::new()));
+            return Ok((status, Vec::new(), fetched.final_url));
         }
         let expected_length = if matches!(status, 200 | 206) {
             full_entity_length(&fetched)?
@@ -1050,7 +1062,7 @@ fn fetch_bytes_with_transport(
             )));
         }
         check_job_control(&job)?;
-        Ok((status, body))
+        Ok((status, body, fetched.final_url))
     })();
     let _ = fs::remove_dir_all(dir);
     result
@@ -1658,6 +1670,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let mut handles = Vec::new();
     for worker_index in 0..workers {
         let job = job.clone();
+        let network_scope = media_network_scope();
         let throttle = crate::net_policy::current_throttle_context();
         let scheduler = Arc::clone(&scheduler);
         let downloaded = Arc::clone(&downloaded);
@@ -1665,6 +1678,7 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
         let failed = Arc::clone(&failed);
         let stop = Arc::clone(&stop);
         handles.push(thread::spawn(move || {
+            let _network = set_media_network_scope(network_scope);
             crate::net_policy::with_throttle_context(throttle, || {
                 range_worker(
                     worker_index,
@@ -3005,6 +3019,7 @@ impl Drop for CurlBody {
 }
 
 struct FetchResult {
+    final_url: String,
     status: u16,
     location: Option<String>,
     content_range: Option<String>,
@@ -3124,14 +3139,14 @@ pub(crate) fn with_media_response<R>(
     apply_browser_profile(&mut job.headers);
     check_job_control(&job).map_err(|e| e.to_string())?;
     // curl 的文件型回退会先缓存整部媒体，不适合局域网流式播放。
-    let (response, final_url) =
+    let response =
         fetch_follow_restricted(&job, range, None, Some(request_url)).map_err(|e| e.to_string())?;
     if response.content_encoding {
         return Err("媒体服务器未返回 identity 编码".into());
     }
     consume(MediaResponse {
         status: response.status,
-        final_url,
+        final_url: response.final_url,
         content_type: response.content_type,
         content_length: response.content_length,
         content_range: response.content_range,
@@ -3141,6 +3156,7 @@ pub(crate) fn with_media_response<R>(
 }
 
 fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
+    let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let mut prepared = job.clone();
     apply_browser_profile(&mut prepared.headers);
     let first = fetch_follow(&prepared, range)?;
@@ -3154,6 +3170,7 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
 }
 
 fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
+    let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let browser_eligible = job.url.to_ascii_lowercase().starts_with("https://")
         && job.method.eq_ignore_ascii_case("GET");
     if browser_eligible {
@@ -3177,12 +3194,155 @@ fn validate_download_destination(job: &Job, url: &str) -> Result<(), EngineError
     Ok(())
 }
 
+#[derive(Clone)]
+pub(crate) enum NetworkScope {
+    Public,
+    Local,
+    // A user-selected DNS name with only private answers. Its own connections
+    // must stay private even if DNS changes after classification.
+    LocalDns(String),
+}
+
+thread_local! {
+    static NETWORK_SCOPE: std::cell::RefCell<Option<NetworkScope>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn media_network_scope() -> Option<NetworkScope> {
+    NETWORK_SCOPE.with_borrow(Clone::clone)
+}
+
+pub(crate) fn set_media_network_scope(scope: Option<NetworkScope>) -> impl Drop {
+    struct Restore(
+        Option<NetworkScope>,
+        std::marker::PhantomData<std::rc::Rc<()>>,
+    );
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            NETWORK_SCOPE.set(self.0.take());
+        }
+    }
+    Restore(NETWORK_SCOPE.replace(scope), std::marker::PhantomData)
+}
+
+fn private_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.octets()[0] == 0
+        }
+        IpAddr::V6(v6) => v6.to_ipv4().map_or_else(
+            || v6.is_unique_local() || v6.is_unicast_link_local(),
+            |v4| private_address(IpAddr::V4(v4)),
+        ),
+    }
+}
+
+fn local_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return private_address(ip);
+    }
+    let host = host.to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local")
+}
+
+pub(crate) fn public_entry(url: &str) -> bool {
+    media_network_scope().map_or_else(
+        || !parse_http_url(url).is_ok_and(|u| local_host(&u.host)),
+        |scope| matches!(scope, NetworkScope::Public),
+    )
+}
+
+pub(crate) fn entry_network_scope(url: &str, proxy: &str) -> NetworkScope {
+    if let Some(scope) = media_network_scope() {
+        return scope;
+    }
+    let Ok(parsed) = parse_http_url(url) else {
+        return NetworkScope::Public;
+    };
+    if local_host(&parsed.host) {
+        return NetworkScope::Local;
+    }
+    if proxy_route(proxy) == ProxyRoute::Direct && parsed.host.parse::<IpAddr>().is_err() {
+        if let Ok(mut addresses) = (parsed.host.as_str(), parsed.port).to_socket_addrs() {
+            if addresses
+                .next()
+                .is_some_and(|addr| private_address(addr.ip()))
+                && addresses.all(|addr| private_address(addr.ip()))
+            {
+                return NetworkScope::LocalDns(parsed.host);
+            }
+        }
+    }
+    NetworkScope::Public
+}
+
+impl NetworkScope {
+    fn destination(&self, parsed: &ParsedUrl, proxy: &str) -> Result<Vec<SocketAddr>, EngineError> {
+        let public = match self {
+            Self::Public => {
+                validate_public_host(&parsed.host)?;
+                if proxy_route(proxy) != ProxyRoute::Direct && !parsed.host.is_ascii() {
+                    return Err(EngineError::Failed(
+                        "proxied international host must use Punycode".into(),
+                    ));
+                }
+                true
+            }
+            Self::LocalDns(host) if parsed.host.eq_ignore_ascii_case(host) => false,
+            _ => return Ok(Vec::new()),
+        };
+        if proxy_route(proxy) != ProxyRoute::Direct || parsed.host.parse::<IpAddr>().is_ok() {
+            return Ok(Vec::new());
+        }
+        let addresses: Vec<_> = (parsed.host.as_str(), parsed.port)
+            .to_socket_addrs()
+            .map_err(|e| EngineError::Failed(e.to_string()))?
+            .filter(|addr| private_address(addr.ip()) != public)
+            .collect();
+        if addresses.is_empty() {
+            return Err(EngineError::Failed(
+                "DNS returned no address in the permitted network".into(),
+            ));
+        }
+        Ok(addresses)
+    }
+}
+
+fn validate_public_host(host: &str) -> Result<(), EngineError> {
+    let name = host.trim_end_matches('.');
+    // Some transports accept legacy numeric or escaped IPv4 spellings.
+    let ambiguous = name.parse::<IpAddr>().is_err()
+        && (name.contains('%')
+            || name.split('.').all(|part| {
+                part.bytes().all(|b| b.is_ascii_digit())
+                    || part
+                        .strip_prefix("0x")
+                        .or_else(|| part.strip_prefix("0X"))
+                        .is_some_and(|n| n.bytes().all(|b| b.is_ascii_hexdigit()))
+            }));
+    if local_host(host) || ambiguous {
+        return Err(EngineError::Failed(
+            "public URL cannot target a private network".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_media_target(public_only: bool, url: &str) -> Result<(), String> {
+    if public_only && !url.is_empty() {
+        let target = parse_http_url(url).map_err(|e| e.to_string())?;
+        validate_public_host(&target.host).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResult, EngineError>> {
     curl_exe_for(&job.url)?;
     let replay = job_replay_json(job);
     let mut url = job.url.clone();
     let mut headers = headers_for_request(job, &url);
     let mut hop = job.clone();
+    let scope = entry_network_scope(&job.url, &job.proxy);
     apply_browser_profile(&mut headers);
     for _ in 0..16 {
         if let Err(error) = validate_download_destination(job, &url) {
@@ -3201,7 +3361,11 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
             Ok(parsed) => parsed,
             Err(error) => return Some(Err(error)),
         };
-        let mut fetched = match fetch_via_curl_impersonate(&hop, range)? {
+        let destinations = match scope.destination(&parsed, &job.proxy) {
+            Ok(destinations) => destinations,
+            Err(error) => return Some(Err(error)),
+        };
+        let mut fetched = match fetch_via_curl_impersonate(&hop, range, &destinations)? {
             Ok(fetched) => fetched,
             Err(error) => return Some(Err(error)),
         };
@@ -3210,7 +3374,7 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
                 drop(fetched);
                 headers = stripped;
                 hop.headers = headers.clone();
-                fetched = match fetch_via_curl_impersonate(&hop, range)? {
+                fetched = match fetch_via_curl_impersonate(&hop, range, &destinations)? {
                     Ok(fetched) => fetched,
                     Err(error) => return Some(Err(error)),
                 };
@@ -3239,7 +3403,7 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
 }
 
 fn fetch_follow(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
-    fetch_follow_restricted(job, range, None, None).map(|(response, _)| response)
+    fetch_follow_restricted(job, range, None, None)
 }
 
 fn fetch_follow_restricted(
@@ -3247,8 +3411,9 @@ fn fetch_follow_restricted(
     range: Option<&str>,
     origin: Option<&str>,
     request_url: Option<&str>,
-) -> Result<(FetchResult, String), EngineError> {
+) -> Result<FetchResult, EngineError> {
     let mut url = request_url.unwrap_or(&job.url).to_string();
+    let scope = entry_network_scope(&job.url, &job.proxy);
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &job.url);
     if http_origin(&job.url) != http_origin(&url) {
@@ -3264,6 +3429,7 @@ fn fetch_follow_restricted(
             return Err(EngineError::Failed("redirect left project origin".into()));
         }
         let parsed = parse_http_url(&url)?;
+        let destinations = scope.destination(&parsed, &job.proxy)?;
         hop.url = url.clone();
         let request = |headers: &HashMap<String, String>| {
             let mut hop = hop.clone();
@@ -3271,14 +3437,14 @@ fn fetch_follow_restricted(
             if parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct) {
                 #[cfg(windows)]
                 {
-                    return winhttp::get(&hop, &url, range);
+                    return winhttp::get(&hop, &url, range, &destinations);
                 }
                 #[cfg(not(windows))]
                 {
                     return Err(EngineError::Failed("https/proxy needs WinHTTP".into()));
                 }
             }
-            http_get(&hop, &parsed, range)
+            http_get(&hop, &parsed, range, &destinations)
         };
         let mut fetched = request(&headers)?;
         // 修正当前响应对应的 Cookie；不能重新重放上下文而把刚移除的值加回来。
@@ -3305,7 +3471,7 @@ fn fetch_follow_restricted(
             url = next;
             continue;
         }
-        return Ok((fetched, url));
+        return Ok(fetched);
     }
     Err(EngineError::Failed("too many redirects".into()))
 }
@@ -3398,7 +3564,7 @@ pub(crate) fn read_metadata(
             origin_boundary: spec.origin_boundary.clone(),
         };
         apply_browser_profile(&mut job.headers);
-        let (fetched, final_url) =
+        let fetched =
             fetch_follow_restricted(&job, range, origin, None).map_err(|e| e.to_string())?;
         if range.is_some() && fetched.status != 206 {
             return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
@@ -3447,7 +3613,7 @@ pub(crate) fn read_metadata(
         }
         Ok(MetadataResponse {
             status,
-            final_url,
+            final_url: fetched.final_url,
             body,
             range: parsed_range,
             etag,
@@ -3558,6 +3724,7 @@ fn drop_cross_origin_secrets(
 fn fetch_via_curl_impersonate(
     job: &Job,
     range: Option<&str>,
+    destinations: &[SocketAddr],
 ) -> Option<Result<FetchResult, EngineError>> {
     let exe = curl_exe_for(&job.url)?;
     if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
@@ -3595,6 +3762,17 @@ fn fetch_via_curl_impersonate(
             // Ignore user curlrc: redirects and credential scope belong to Core.
             .arg("--disable")
             .arg("--globoff");
+        if let Some(first) = destinations.first() {
+            let ips = destinations
+                .iter()
+                .map(|addr| uri_host(&addr.ip().to_string()))
+                .collect::<Vec<_>>()
+                .join(",");
+            // This process sends one hop. The wildcard also covers curl's IDNA normalization.
+            command
+                .arg("--resolve")
+                .arg(format!("*:{}:{ips}", first.port()));
+        }
         if range.is_none() {
             command.arg("--compressed");
         }
@@ -3644,7 +3822,7 @@ fn fetch_via_curl_impersonate(
             }
             ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
             ProxyRoute::Manual(proxy) => {
-                command.arg("-x").arg(proxy);
+                command.arg("--noproxy").arg("").arg("-x").arg(proxy);
             }
         }
         command.arg(&job.url);
@@ -3796,6 +3974,7 @@ fn fetch_via_curl_impersonate(
             None
         };
         Ok(FetchResult {
+            final_url: job.url.clone(),
             status,
             location: meta.location,
             content_range: meta.content_range,
@@ -4370,8 +4549,12 @@ fn http_get(
     job: &Job,
     parsed: &ParsedUrl,
     range: Option<&str>,
+    destinations: &[SocketAddr],
 ) -> Result<FetchResult, EngineError> {
     let mut stream = match proxy_route(&job.proxy) {
+        ProxyRoute::Direct if !destinations.is_empty() => {
+            TcpStream::connect(destinations).map_err(|e| EngineError::Failed(e.to_string()))?
+        }
         ProxyRoute::Direct => TcpStream::connect((parsed.host.as_str(), parsed.port))
             .map_err(|err| EngineError::Failed(err.to_string()))?,
         ProxyRoute::System | ProxyRoute::Manual(_) => {
@@ -4501,6 +4684,7 @@ fn http_get(
         body
     };
     Ok(FetchResult {
+        final_url: job.url.clone(),
         status,
         location: meta.location,
         content_range: meta.content_range,
@@ -4781,6 +4965,26 @@ mod winhttp {
         job: &Job,
         url: &str,
         range: Option<&str>,
+        destinations: &[std::net::SocketAddr],
+    ) -> Result<super::FetchResult, EngineError> {
+        let mut addresses = destinations.iter().map(|addr| addr.ip());
+        let mut result = get_at(job, url, range, addresses.next());
+        for address in addresses {
+            // An unreachable address failed before a request was delivered.
+            if !matches!(&result, Err(EngineError::Failed(message)) if message == "WinHttpSendRequest 12029")
+            {
+                break;
+            }
+            result = get_at(job, url, range, Some(address));
+        }
+        result
+    }
+
+    fn get_at(
+        job: &Job,
+        url: &str,
+        range: Option<&str>,
+        address: Option<std::net::IpAddr>,
     ) -> Result<super::FetchResult, EngineError> {
         super::check_job_control(job)?;
         let parsed = super::parse_http_url(url)?;
@@ -4791,7 +4995,10 @@ mod winhttp {
         unsafe {
             let proxy = job.proxy.trim();
             let session = cached_session(proxy)?;
-            let connect_key = super::origin_connect_key(proxy, &parsed.host, parsed.port);
+            let mut connect_key = super::origin_connect_key(proxy, &parsed.host, parsed.port);
+            if let Some(ip) = address {
+                connect_key.push_str(&format!("|{ip}"));
+            }
             let connect = take_connect(&connect_key).unwrap_or_else(|| {
                 WinHttpConnect(
                     session,
@@ -4847,6 +5054,21 @@ mod winhttp {
                     "WinHttpSetStatusCallback {}",
                     GetLastError()
                 )));
+            }
+            if let Some(address) = address {
+                let mut name = wide(&address.to_string());
+                if WinHttpSetOption(
+                    request,
+                    windows_sys::Win32::Networking::WinHttp::WINHTTP_OPTION_RESOLUTION_HOSTNAME,
+                    name.as_mut_ptr().cast(),
+                    ((name.len() - 1) * 2) as u32,
+                ) == 0
+                {
+                    return Err(EngineError::Failed(format!(
+                        "WinHttpSetOption resolution hostname {}",
+                        GetLastError()
+                    )));
+                }
             }
             let signal = Arc::new(RequestSignal::default());
             let mut context = Arc::into_raw(Arc::clone(&signal)) as usize;
@@ -4962,6 +5184,7 @@ mod winhttp {
             let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
             body.recycle_connect = true;
             Ok(super::FetchResult {
+                final_url: url.to_string(),
                 status: status as u16,
                 location: meta.location,
                 content_range: meta.content_range,
@@ -5013,6 +5236,31 @@ mod winhttp {
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn serve_redirect_test_responses(
+    responses: Vec<String>,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    use std::io::BufRead;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        responses
+            .into_iter()
+            .map(|response| {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut socket);
+                let mut head = String::new();
+                while !head.ends_with("\r\n\r\n") {
+                    assert_ne!(reader.read_line(&mut head).unwrap(), 0);
+                }
+                socket.write_all(response.as_bytes()).unwrap();
+                head
+            })
+            .collect()
+    });
+    (origin, server)
 }
 
 #[cfg(test)]
@@ -5070,6 +5318,62 @@ mod tests {
             assert!(
                 matches!(result, Err(EngineError::Failed(error)) if error.contains("Installer redirect"))
             );
+        }
+    }
+
+    #[test]
+    fn public_entry_rejects_private_redirect_targets_before_connecting() {
+        let job = post_test_job("https://203.0.113.20/entry".into(), PathBuf::new());
+        let base = parse_http_url(&job.url).unwrap();
+        for host in [
+            "127.0.0.1",
+            "127.9.8.7",
+            "169.254.169.254",
+            "[::1]",
+            "10.0.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "localhost.",
+            "[fe80::1]",
+            "[fd01::1]",
+            "0.0.0.0",
+            "[::]",
+            "[::ffff:10.0.0.1]",
+            "127.1",
+            "0x7f000001",
+        ] {
+            let next = resolve_location(&base, &format!("https://{host}/child"));
+            assert!(
+                matches!(fetch_follow_restricted(&job, None, None, Some(&next)),
+                Err(EngineError::Failed(message)) if message.contains("private network")),
+                "{host}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn public_proxy_response_cannot_redirect_to_loopback() {
+        let entry = "http://203.0.113.20/entry";
+        for via_curl in [false, true] {
+            if via_curl && curl_exe_for(entry).is_none() {
+                continue;
+            }
+            let (proxy, server) = serve_redirect_test_responses(vec![
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/private\r\nContent-Length: 0\r\n\r\n".into(),
+            ]);
+            let mut job = post_test_job(entry.into(), PathBuf::new());
+            job.method = "GET".into();
+            job.proxy = proxy;
+            let result = if via_curl {
+                fetch_curl_follow(&job, None).unwrap()
+            } else {
+                fetch_follow(&job, None)
+            };
+            assert!(
+                matches!(result, Err(EngineError::Failed(error)) if error.contains("private network"))
+            );
+            assert!(server.join().unwrap()[0].contains("/entry"));
         }
     }
 
@@ -5159,7 +5463,7 @@ mod tests {
         let body_path = dir.join("request.bin");
         fs::write(&body_path, b"alpha=1&beta=two").unwrap();
         let job = post_test_job(format!("http://{address}/upload"), body_path);
-        let fetched = winhttp::get(&job, &job.url, None).unwrap();
+        let fetched = winhttp::get(&job, &job.url, None, &[]).unwrap();
         assert_eq!(fetched.status, 200);
         drop(fetched);
         let (head, body) = received.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -6092,7 +6396,7 @@ mod tests {
                     let _ = stream.write_all(&response);
                 });
                 let (job, dir) = temp_job(&url, true, 0, 1);
-                let result = http_get(&job, &parse_http_url(&url).unwrap(), None);
+                let result = http_get(&job, &parse_http_url(&url).unwrap(), None, &[]);
                 if delimiter_at == 65533 {
                     let error = result.err().expect("oversized headers must be rejected");
                     assert!(error.to_string().contains("response headers truncated"));
@@ -6134,7 +6438,7 @@ mod tests {
                 let _ = reader.get_mut().write_all(response.as_bytes());
             });
             let (job, dir) = temp_job(&url, true, 0, 1);
-            let result = http_get(&job, &parse_http_url(&url).unwrap(), None);
+            let result = http_get(&job, &parse_http_url(&url).unwrap(), None, &[]);
             server.join().unwrap();
             fs::remove_dir_all(dir).unwrap();
             let error = result
@@ -8167,7 +8471,7 @@ mod tests {
         let body: &'static [u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
         let url = serve_body(body);
         let (job, dir) = temp_job(&url, false, body.len() as u64, 1);
-        let mut fetched = winhttp::get(&job, &url, Some("bytes=4-9")).unwrap();
+        let mut fetched = winhttp::get(&job, &url, Some("bytes=4-9"), &[]).unwrap();
         let mut received = Vec::new();
         fetched.body.read_to_end(&mut received).unwrap();
         assert_eq!(fetched.status, 206);
@@ -8995,7 +9299,7 @@ mod tests {
                 Some("bytes=0-7")
             };
             let worker = thread::spawn(move || {
-                let result = fetch_via_curl_impersonate(&worker_job, worker_range)
+                let result = fetch_via_curl_impersonate(&worker_job, worker_range, &[])
                     .unwrap()
                     .and_then(|mut fetched| {
                         let mut bytes = Vec::new();
@@ -9076,7 +9380,7 @@ mod tests {
                 let worker_job = job.clone();
                 let (done_tx, done_rx) = mpsc::channel();
                 let worker = thread::spawn(move || {
-                    let result = fetch_via_curl_impersonate(&worker_job, None)
+                    let result = fetch_via_curl_impersonate(&worker_job, None, &[])
                         .unwrap()
                         .and_then(|mut fetched| {
                             fetched

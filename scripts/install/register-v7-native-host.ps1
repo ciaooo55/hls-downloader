@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 
 if ([String]::IsNullOrWhiteSpace($EngineExecutable)) {
     $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $root '.tool-cache\build-cache' }
@@ -26,7 +26,7 @@ if ([String]::IsNullOrWhiteSpace($EngineExecutable) -or -not (Test-Path -Literal
 }
 
 $argument = if ($Unregister) { '--unregister-native-host' } else { '--register-native-host' }
-$process = Start-Process -FilePath ([IO.Path]::GetFullPath($EngineExecutable)) -ArgumentList $argument -NoNewWindow -Wait -PassThru
+$process = Start-Process -FilePath (Resolve-Path -LiteralPath $EngineExecutable).ProviderPath -ArgumentList $argument -NoNewWindow -Wait -PassThru
 if ($process.ExitCode -ne 0) {
     throw "v7 Native Host command failed with exit $($process.ExitCode)"
 }

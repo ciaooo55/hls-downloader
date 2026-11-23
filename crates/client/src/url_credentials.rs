@@ -22,24 +22,29 @@ pub fn map_ftp_passwords(
         let end = text[authority_start..]
             .find('/')
             .map_or(text.len(), |offset| authority_start + offset);
-        let whole_url = start == 0
-            && !text[authority_start..]
-                .find("://")
-                .is_some_and(|offset| authority_start + offset < end);
+        // A pathless URL followed by another scheme can put that scheme's colon
+        // inside our candidate authority. Leave the next scheme for the next pass.
+        let mut end = end;
+        let another_scheme =
+            text[end..].starts_with("//") && text[authority_start..end].ends_with(':');
+        if another_scheme {
+            let letters = &text[authority_start..end - 1];
+            end -= 1 + letters
+                .bytes()
+                .rev()
+                .take_while(u8::is_ascii_alphabetic)
+                .count();
+        }
+        let whole_url = start == 0 && !another_scheme;
         let end = if whole_url {
             end
         } else {
             let authority = &text[authority_start..end];
             let delimiter =
                 |c: char| c.is_whitespace() || matches!(c, '?' | '#' | '"' | '\'' | '<' | '>');
-            let first_delimiter = authority.find(delimiter).unwrap_or(authority.len());
             let host_start = authority
                 .rfind('@')
-                .filter(|at| {
-                    authority[..*at]
-                        .find(':')
-                        .is_some_and(|colon| colon < first_delimiter)
-                })
+                .filter(|at| authority[..*at].contains(':'))
                 .map_or(0, |at| at + 1);
             authority[host_start..]
                 .find(delimiter)
@@ -153,6 +158,19 @@ mod tests {
         assert_eq!(
             map_ftp_passwords("ftp://u:p@host/a", |_, _| Err("vault unavailable".into())),
             Err("vault unavailable".into())
+        );
+    }
+
+    #[test]
+    fn embedded_urls_keep_ipv6_and_path_or_query_at_signs() {
+        let input = "error: sftp://first last:p@ss@[::1]:22/file@user?q=a@b";
+        assert_eq!(
+            redact_ftp_passwords(input),
+            "error: sftp://first last@[::1]:22/file@user?q=a@b"
+        );
+        assert_eq!(
+            redact_ftp_passwords("ftp://user:one@a,sftp://user:two@b/a"),
+            "ftp://user@a,sftp://user@b/a"
         );
     }
 }

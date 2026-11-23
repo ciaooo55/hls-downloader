@@ -38,17 +38,41 @@ pub fn init_runtime_log(data_dir: &Path) -> io::Result<()> {
 /// 请求地址、标题、头、正文、密钥和未经处理的第三方错误不得传入。
 pub fn record_runtime_log(event: &str, fields: serde_json::Value) {
     let Some(sender) = SENDER.get() else { return };
+    let Some(line) = runtime_log_line(event, fields) else {
+        return;
+    };
+    // 调用点可处于任务锁内；诊断拥塞不能阻塞传输或 IPC。
+    let _ = sender.try_send(line);
+}
+
+fn runtime_log_line(event: &str, mut fields: serde_json::Value) -> Option<String> {
+    // 第三方错误可能含有完整请求或密码；保留事件名和结构化错误码。
+    let fields = fields.as_object_mut()?;
+    fields.retain(|key, value| match key.as_str() {
+        "task_id" | "handoff_id" | "stage" | "status" | "code" | "version" | "operation" => {
+            value.as_str().is_some_and(|text| {
+                text.len() <= 128
+                    && text
+                        .chars()
+                        .all(|ch| ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+            })
+        }
+        "elapsed_ms" | "downloaded_bytes" | "total_bytes" | "http_status" | "attempt" | "rows" => {
+            value.is_u64() || value.is_null()
+        }
+        "child_exited" => value.is_boolean(),
+        _ => false,
+    });
     let record = serde_json::json!({
         "timestamp_ms": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
         "pid": std::process::id(), "event": event, "fields": fields,
     });
-    let mut line = crate::url_credentials::redact_ftp_passwords(&record.to_string());
+    let mut line = record.to_string();
     if line.len() > 4095 {
-        return;
+        return None;
     }
     line.push('\n');
-    // 调用点可处于任务锁内；诊断拥塞不能阻塞传输或 IPC。
-    let _ = sender.try_send(line);
+    Some(line)
 }
 
 struct RuntimeLog {
@@ -166,5 +190,23 @@ mod tests {
         );
         drop(log);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn error_details_are_omitted_and_individual_fields_remain_valid_json() {
+        let line = runtime_log_line(
+            "progress_writer_failed",
+            serde_json::json!({
+                "rows": 3, "error": "https://host/?token=private",
+                "stage": "ftp://user:private@host", "status": "stopped", "cookie": "private"
+            }),
+        )
+        .unwrap();
+        let record: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(!line.contains("private"));
+        assert_eq!(
+            record["fields"],
+            serde_json::json!({"rows":3, "status":"stopped"})
+        );
     }
 }

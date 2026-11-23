@@ -1,6 +1,9 @@
 //! Native DASH downloader. Compatible tracks are stitched in Period order.
 
-use crate::http_engine::{fetch_bytes_limited, run_job, Job};
+use crate::http_engine::{
+    entry_network_scope, fetch_manifest_bytes, public_entry, run_job, set_media_network_scope,
+    validate_media_target, Job,
+};
 use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::{HashMap, HashSet};
@@ -10,6 +13,7 @@ use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashManifest {
+    document_url: String,
     pub dynamic: bool,
     pub period_count: usize,
     pub representations: Vec<Representation>,
@@ -281,6 +285,7 @@ fn parse_mpd_for_recording(
         .filter(|node| mpd_element(*node, "Period", root))
         .collect();
     let period_durations = period_durations(&periods, root);
+    let public_only = public_entry(base);
     let mut representations = Vec::new();
     let mut live_segment_budget = 20_000;
     let mut expired_periods = HashSet::new();
@@ -332,6 +337,7 @@ fn parse_mpd_for_recording(
                     .filter_map(|node| node.text())
                     .collect();
                 base_url = resolve(&base_url, &value);
+                validate_media_target(public_only, &base_url)?;
                 if base_url.is_empty() {
                     return Err("invalid DASH BaseURL".into());
                 }
@@ -410,6 +416,9 @@ fn parse_mpd_for_recording(
                 })
                 .transpose()?
         };
+        if let Some(uri) = &init {
+            validate_media_target(public_only, uri)?;
+        }
         if init_range.is_some() && init.as_ref().is_none_or(|url| url.is_empty()) {
             return Err("invalid DASH initialization URL".into());
         }
@@ -592,6 +601,9 @@ fn parse_mpd_for_recording(
             }
         }
         consume_url_budget(&base_url, &mut url_budget)?;
+        for uri in &media {
+            validate_media_target(public_only, uri)?;
+        }
         if let Some(url) = &init {
             consume_url_budget(url, &mut url_budget)?;
         }
@@ -622,6 +634,7 @@ fn parse_mpd_for_recording(
         return Err("DASH manifest has no representations".into());
     }
     Ok(DashManifest {
+        document_url: base.into(),
         dynamic,
         expired_periods,
         before_start_window_periods,
@@ -727,6 +740,7 @@ pub fn download_dash_selected(
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
+    let _network = set_media_network_scope(Some(entry_network_scope(url, proxy)));
     super::with_media_headers(url, headers, || {
         download_dash_scoped(
             url,
@@ -742,6 +756,22 @@ pub fn download_dash_selected(
     })
 }
 
+fn load_mpd(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+) -> Result<(DashManifest, String), String> {
+    let (status, body, final_url) =
+        fetch_manifest_bytes(url, headers, proxy, false, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
+    if status != 200 && status != 206 {
+        return Err(format!("DASH manifest HTTP {status}"));
+    }
+    let xml = String::from_utf8(body).map_err(|_| "DASH 清单不是 UTF-8")?;
+    let manifest = parse_mpd(&xml, &final_url)?;
+    Ok((manifest, xml))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn download_dash_scoped(
     url: &str,
@@ -754,13 +784,7 @@ fn download_dash_scoped(
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
-    let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
-        .map_err(|error| error.to_string())?;
-    if status != 200 && status != 206 {
-        return Err(format!("DASH manifest HTTP {status}"));
-    }
-    let xml = String::from_utf8(body).map_err(|_| "DASH 清单不是 UTF-8")?;
-    let manifest = parse_mpd(&xml, url)?;
+    let (manifest, xml) = load_mpd(url, headers, proxy)?;
     let mut vod = DashCheckpoint::load(task_dir);
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
     if manifest.dynamic {
@@ -1389,9 +1413,13 @@ fn download_live_dash(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_secs_f64();
-        if let Ok(anchored) =
-            parse_mpd_for_recording(&xml, url, now, super::MAX_EXPANDED_MEDIA_BYTES, &cursors)
-        {
+        if let Ok(anchored) = parse_mpd_for_recording(
+            &xml,
+            &manifest.document_url,
+            now,
+            super::MAX_EXPANDED_MEDIA_BYTES,
+            &cursors,
+        ) {
             manifest = anchored;
         }
     }
@@ -1583,7 +1611,7 @@ fn download_live_dash(
             "finish" => break,
             _ => return Err(control_stop_error(control)),
         }
-        let Some(body) = refresh_live_manifest(url, headers, proxy, control)? else {
+        let Some((body, final_url)) = refresh_live_manifest(url, headers, proxy, control)? else {
             break;
         };
         xml = String::from_utf8(body).map_err(|_| "DASH 清单不是 UTF-8")?;
@@ -1591,8 +1619,13 @@ fn download_live_dash(
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_secs_f64();
-        manifest =
-            parse_mpd_for_recording(&xml, url, now, super::MAX_EXPANDED_MEDIA_BYTES, &cursors)?;
+        manifest = parse_mpd_for_recording(
+            &xml,
+            &final_url,
+            now,
+            super::MAX_EXPANDED_MEDIA_BYTES,
+            &cursors,
+        )?;
     }
     if primary.durations.is_empty() {
         return Err("DASH representation produced no segments".into());
@@ -1635,17 +1668,18 @@ fn refresh_live_manifest(
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<(Vec<u8>, String)>, String> {
     for attempt in 0..4 {
         match read_control(control).as_str() {
             "run" => {}
             "finish" => return Ok(None),
             _ => return Err(control_stop_error(control)),
         }
-        let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
-            .map_err(|error| error.to_string())?;
+        let (status, body, final_url) =
+            fetch_manifest_bytes(url, headers, proxy, false, super::MAX_MANIFEST_BYTES)
+                .map_err(|error| error.to_string())?;
         if status == 200 || status == 206 {
-            return Ok(Some(body));
+            return Ok(Some((body, final_url)));
         }
         if !matches!(status, 408 | 429 | 500..=599) || attempt == 3 {
             return Err(format!(
@@ -3205,6 +3239,43 @@ fn apply_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redirected_mpd_resolves_base_and_template_at_final_document() {
+        use crate::http_engine::serve_redirect_test_responses;
+        let xml = r#"<MPD mediaPresentationDuration="PT2S"><BaseURL>media/</BaseURL><Period><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="2" initialization="init.mp4" media="$Number$.m4s"/></Representation></Period></MPD>"#;
+        let (origin, server) = serve_redirect_test_responses(vec![
+            "HTTP/1.1 307 Redirect\r\nLocation: /new/path/live.mpd\r\nContent-Length: 0\r\n\r\n"
+                .into(),
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{xml}",
+                xml.len()
+            ),
+        ]);
+        let (mpd, _) = load_mpd(&format!("{origin}/entry"), &HashMap::new(), "").unwrap();
+        let rep = &mpd.representations[0];
+        assert_eq!(rep.base_url, format!("{origin}/new/path/media/"));
+        assert_eq!(
+            rep.init.as_ref().unwrap(),
+            &format!("{origin}/new/path/media/init.mp4")
+        );
+        assert_eq!(rep.media, [format!("{origin}/new/path/media/1.m4s")]);
+        assert!(server.join().unwrap()[1].starts_with("GET /new/path/live.mpd "));
+    }
+
+    #[test]
+    fn public_mpd_rejects_private_base_and_segment_urls() {
+        for contents in [
+            "<BaseURL>http://[fc00::1]/</BaseURL>",
+            r#"<SegmentList><SegmentURL media="//10.0.0.1/video"/></SegmentList>"#,
+        ] {
+            let xml =
+                format!("<MPD><Period><Representation>{contents}</Representation></Period></MPD>");
+            assert!(parse_mpd(&xml, "https://cdn.example/video.mpd")
+                .unwrap_err()
+                .contains("private network"));
+        }
+    }
 
     #[test]
     fn mpd_xml_namespaces_comments_and_signed_urls_keep_the_same_tracks() {
@@ -5947,7 +6018,7 @@ mod tests {
             let (url, server) = dash_status_server(statuses);
             let result = refresh_live_manifest(&url, &HashMap::new(), "", &control);
             if success {
-                assert_eq!(result.unwrap().as_deref(), Some(&b"ok"[..]));
+                assert_eq!(result.unwrap(), Some((b"ok".to_vec(), url)));
             } else {
                 assert!(result.unwrap_err().contains(&format!("HTTP {last}")));
             }

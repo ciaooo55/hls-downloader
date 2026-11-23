@@ -61,24 +61,46 @@ pub fn sanitize_http_method(raw: &str) -> String {
 }
 
 pub fn http_fetch_url_allowed(url: &str) -> bool {
-    let url = url.trim().trim_start_matches('\u{feff}');
-    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
+    if url.chars().any(char::is_control) {
         return false;
     }
-    let lower = url.to_ascii_lowercase();
+    let lower = url
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
 pub fn remote_resource_url_allowed(url: &str) -> bool {
-    let url = url.trim().trim_start_matches('\u{feff}');
-    if url.is_empty() || url.chars().any(|ch| ch.is_control()) {
+    if url.chars().any(char::is_control) {
         return false;
     }
-    let lower = url.to_ascii_lowercase();
+    let lower = url
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .to_ascii_lowercase();
     lower.starts_with("http://")
         || lower.starts_with("https://")
         || lower.starts_with("ftp://")
         || lower.starts_with("ftps://")
         || lower.starts_with("sftp://")
         || lower.starts_with("magnet:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_validation_rejects_controls_before_whitespace_normalization() {
+        for value in [
+            "https://cdn.test/a\r\n",
+            "\nftp://server/file",
+            "\tmagnet:?xt=x",
+        ] {
+            assert!(!http_fetch_url_allowed(value));
+            assert!(!remote_resource_url_allowed(value));
+        }
+        assert!(http_fetch_url_allowed(" https://cdn.test/a "));
+    }
 }

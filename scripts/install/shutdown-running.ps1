@@ -5,8 +5,13 @@
     [switch]$RequireCheckpoint
 )
 
-$ErrorActionPreference = "SilentlyContinue"
-$script:processPathCache = @{}
+$ErrorActionPreference = 'Stop'
+if ([String]::IsNullOrWhiteSpace($InstallDir)) { throw 'Shutdown requires an install directory.' }
+$InstallDir = (Resolve-Path -LiteralPath $InstallDir).ProviderPath
+if (-not [IO.Directory]::Exists($InstallDir) -or $InstallDir.TrimEnd('\') -eq [IO.Path]::GetPathRoot($InstallDir).TrimEnd('\')) {
+    throw "Invalid install directory: $InstallDir"
+}
+$installRoot = $InstallDir.TrimEnd('\') + '\'
 $script:shutdownStarted = [DateTime]::UtcNow
 
 function Write-ShutdownStage {
@@ -19,18 +24,15 @@ Write-ShutdownStage "entry user=$env:USERNAME pid=$PID"
 function Get-ProcessExecutablePath {
     param([System.Diagnostics.Process]$Process)
 
-    $cacheKey = [string]$Process.Id
-    if ($script:processPathCache.ContainsKey($cacheKey)) {
-        return [string]$script:processPathCache[$cacheKey]
-    }
     $resolved = ""
     try {
+        if ($Process.HasExited) { return "" }
         $resolved = [string]$Process.Path
     } catch {
     }
     # A 32-bit caller cannot always read MainModule/Path for a 64-bit target.
     # CIM remains architecture-neutral and keeps shutdown scoped to InstallDir.
-    # Bound and cache this fallback: repeatedly starting an unbounded WMI query
+    # Bound this fallback: repeatedly starting an unbounded WMI query
     # from the installer progress page was able to exceed the advertised
     # shutdown timeout and made an otherwise healthy cover upgrade look hung.
     if (-not $resolved) {
@@ -43,7 +45,6 @@ function Get-ProcessExecutablePath {
             $resolved = ""
         }
     }
-    $script:processPathCache[$cacheKey] = $resolved
     return $resolved
 }
 
@@ -51,16 +52,6 @@ function Get-TargetProcesses {
     param([string[]]$Names)
 
     $processes = @(Get-Process -Name $Names -ErrorAction SilentlyContinue)
-    if (-not $InstallDir) { return $processes }
-    try {
-        $installRoot = [IO.Path]::GetFullPath($InstallDir)
-        $directorySeparator = [string][IO.Path]::DirectorySeparatorChar
-        if (-not $installRoot.EndsWith($directorySeparator, [System.StringComparison]::Ordinal)) {
-            $installRoot += $directorySeparator
-        }
-    } catch {
-        return @()
-    }
     return @(
         $processes | Where-Object {
             try {
@@ -81,49 +72,93 @@ if ($IncludeNativeHost) { $targetProcessNames += "HLSDownloaderNativeHost*" }
 $targetRunningAtStart = @(Get-TargetProcesses $targetProcessNames)
 Write-ShutdownStage "processes count=$($targetRunningAtStart.Count)"
 $overallDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(3, $TimeoutSeconds))
-$shutdownEngine = ""
-$runningEngine = $targetRunningAtStart |
-    Where-Object { $_.ProcessName -in @("HLSDownloaderEngine", "hls-downloader-engine") } |
-    Select-Object -First 1
+$engineNames = @('HLSDownloaderEngine', 'hls-downloader-engine')
 $gracefulCoreExit = "not-running"
 # 先关闭会重新连接 Core 的工作台及桥接进程，防止停机期间再次启动引擎。
 if ($RequireCheckpoint) {
     Write-ShutdownStage 'close-clients'
-    if (-not $InstallDir) { Write-Error '升级停机必须指定安装目录'; exit 1 }
     foreach ($desktop in @(Get-TargetProcesses @('HLSDownloader'))) {
         $desktop.CloseMainWindow() | Out-Null
     }
     Start-Sleep -Milliseconds 300
     foreach ($desktop in @(Get-TargetProcesses @('HLSDownloader'))) {
         # 不使用 /T：Core 可能是其子进程，必须先单独保存续传状态。
-        $desktop | Stop-Process -Force
+        $desktop | Stop-Process -Force -ErrorAction SilentlyContinue
     }
-    Get-TargetProcesses @('HLSDownloaderNativeHost*') | Stop-Process -Force
+    Get-TargetProcesses @('HLSDownloaderNativeHost*') | Stop-Process -Force -ErrorAction SilentlyContinue
 }
-if ($runningEngine) {
-    $shutdownEngine = Get-ProcessExecutablePath $runningEngine
-    if (-not $shutdownEngine -and $InstallDir) {
-        $shutdownEngine = Join-Path $InstallDir "app\resources\HLSDownloaderEngine.exe"
+function Read-CheckpointBytes($Pipe, [byte[]]$Buffer, [DateTime]$Deadline) {
+    $offset = 0
+    while ($offset -lt $Buffer.Length) {
+        $read = $Pipe.ReadAsync($Buffer, $offset, $Buffer.Length - $offset)
+        $remaining = [Math]::Max(0, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if (-not $read.Wait([int]$remaining) -or $read.Result -eq 0) { throw 'Incomplete checkpoint response.' }
+        $offset += $read.Result
     }
 }
-if ($shutdownEngine -and (Test-Path -LiteralPath $shutdownEngine -PathType Leaf)) {
+
+function Request-Checkpoint([Diagnostics.Process]$Engine) {
+    # Send on the handle whose server PID was checked. Engine --shutdown
+    # opens a new connection and can select a different installation.
+    if (-not ('HlsShutdown.Pipe' -as [type])) {
+        Add-Type -Namespace HlsShutdown -Name Pipe -MemberDefinition '
+            [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+            public static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint pid);'
+    }
+    $names = @("HLSDownloader.v7.maintenance.$($Engine.Id)")
+    if ($env:HLS_V7_PIPE -and $env:HLS_V7_PIPE.StartsWith('\\.\pipe\', [StringComparison]::OrdinalIgnoreCase)) {
+        $names += $env:HLS_V7_PIPE.Substring(9)
+    }
+    $names += 'HLSDownloader.v7'
+    foreach ($name in $names) {
+        if ($Engine.HasExited) { return }
+        $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::InOut,
+            [IO.Pipes.PipeOptions]::Asynchronous, [Security.Principal.TokenImpersonationLevel]::Identification)
+        try {
+            try { $pipe.Connect(250) } catch [TimeoutException] { continue }
+            $serverId = [uint32]0
+            if (-not [HlsShutdown.Pipe]::GetNamedPipeServerProcessId($pipe.SafePipeHandle, [ref]$serverId) -or
+                $serverId -ne $Engine.Id -or $Engine.HasExited) { continue }
+            $body = [Text.Encoding]::UTF8.GetBytes('{"type":"command","request_id":1,"command":{"kind":"shutdown"}}')
+            [byte[]]$frame = [BitConverter]::GetBytes([int]$body.Length) + $body
+            $pipe.Write($frame, 0, $frame.Length)
+            $deadline = [DateTime]::UtcNow.AddSeconds(12)
+            $header = New-Object byte[] 4
+            Read-CheckpointBytes $pipe $header $deadline
+            $length = [BitConverter]::ToInt32($header, 0)
+            if ($length -lt 1 -or $length -gt 4MB) { throw 'Invalid checkpoint response length.' }
+            $data = New-Object byte[] $length
+            Read-CheckpointBytes $pipe $data $deadline
+            $reply = [Text.Encoding]::UTF8.GetString($data) | ConvertFrom-Json
+            if ($reply.type -ne 'events' -or $reply.request_id -ne 1 -or
+                @($reply.events | Where-Object { $_.event.kind -eq 'error' }).Count -gt 0) {
+                throw 'Core rejected the checkpoint request.'
+            }
+            return
+        } finally {
+            $pipe.Dispose()
+        }
+    }
+    throw "No matching checkpoint pipe for Core $($Engine.Id)."
+}
+
+foreach ($engine in @(Get-TargetProcesses $engineNames)) {
     Write-ShutdownStage 'checkpoint-start'
-    # v7 has no HTTP supervisor. Ask the resident Core to checkpoint and stop
-    # through its versioned named-pipe contract before the bounded kill fallback.
-    # Engine 是窗口型 EXE；显式等待，避免把尚未返回的空 LASTEXITCODE 当成失败。
-    $shutdownRequest = Start-Process -FilePath $shutdownEngine -ArgumentList '--shutdown' -WindowStyle Hidden -PassThru
-    if ($shutdownRequest.WaitForExit(8000)) {
-        $gracefulCoreExit = [string]$shutdownRequest.ExitCode
-    } else {
-        $shutdownRequest | Stop-Process -Force
-        $gracefulCoreExit = 'timeout'
+    try {
+        Request-Checkpoint $engine
+        $gracefulCoreExit = '0'
+    } catch {
+        $gracefulCoreExit = $_.Exception.Message
+        if ($RequireCheckpoint -and -not $engine.HasExited) { throw }
     }
     Write-ShutdownStage "checkpoint-finished code=$gracefulCoreExit"
-    if ($RequireCheckpoint -and $gracefulCoreExit -ne '0' -and
-        @(Get-TargetProcesses @('HLSDownloaderEngine', 'hls-downloader-engine')).Count -gt 0) {
-        Write-Output '任务状态未能安全保存，已停止升级；旧版本仍保留。'
-        exit 1
+}
+if ($RequireCheckpoint) {
+    # A checkpointed Core exits itself. Never force-stop a newly started Core.
+    foreach ($engine in @(Get-TargetProcesses $engineNames)) {
+        if (-not $engine.WaitForExit(1000)) { throw 'Core is still running after checkpoint.' }
     }
+    $targetProcessNames = @($targetProcessNames | Where-Object { $_ -notin $engineNames })
 }
 
 $gracefulDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(4, [Math]::Max(1, $TimeoutSeconds)))
@@ -134,20 +169,18 @@ while ([DateTime]::UtcNow -lt $gracefulDeadline) {
 }
 
 foreach ($desktop in @(Get-TargetProcesses @("HLSDownloader"))) {
-    & "$env:SystemRoot\System32\taskkill.exe" /PID $desktop.Id /T /F 2>$null | Out-Null
-    $desktop | Stop-Process -Force
+    $desktop | Stop-Process -Force -ErrorAction SilentlyContinue
 }
-Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force
+Get-TargetProcesses @("HLSDownloaderCore") | Stop-Process -Force -ErrorAction SilentlyContinue
 
 if ($IncludeNativeHost) {
     # 卸载和升级预停机都必须关闭桥接进程，防止它在事务期间再次启动 Core。
-    Get-TargetProcesses @("HLSDownloaderNativeHost") | Stop-Process -Force
+    Get-TargetProcesses @("HLSDownloaderNativeHost") | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Test-ApplicationFilesWritable {
     $script:lastLockedFile = ""
     $script:lastLockError = ""
-    if (-not $InstallDir) { return $true }
     # The Native Messaging host is deliberately excluded.  A browser can keep
     # it alive indefinitely, and the installer now deploys it under a new
     # versioned name rather than replacing that locked executable.
@@ -173,9 +206,10 @@ function Test-ApplicationFilesWritable {
 
 do {
     $running = Get-TargetProcesses $targetProcessNames
+    if ($RequireCheckpoint -and @(Get-TargetProcesses $engineNames).Count -gt 0) { throw 'Core restarted after checkpoint.' }
     if (-not $running -and (Test-ApplicationFilesWritable)) { Write-ShutdownStage 'finished'; exit 0 }
     if ($running) {
-        $running | Stop-Process -Force
+        $running | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $overallDeadline)

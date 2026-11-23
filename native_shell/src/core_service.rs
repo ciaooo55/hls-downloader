@@ -1,5 +1,6 @@
 //! Durable command boundary shared by the UI and protocol front-ends.
 
+use crate::url_credentials::redact_urls;
 use crate::{
     AvScanStatus, CoreCommand, CoreRuntime, CoreStore, EventEnvelope, MirrorStatus, TaskFailure,
     TaskSnapshot, TaskSpec,
@@ -49,9 +50,9 @@ impl PersistentCore {
     }
 
     pub(crate) fn admit_handoff(&mut self, encoded: &str) -> Result<String, String> {
-        let encoded = self.store.sanitize_urls(encoded.to_string())?;
-        let handoff: crate::contract::BrowserHandoff = serde_json::from_str(&encoded)
+        let original: crate::contract::BrowserHandoff = serde_json::from_str(encoded)
             .map_err(|error| format!("decode browser handoff: {error}"))?;
+        let handoff = redact_urls(original.clone())?;
         if handoff.id.trim().is_empty()
             || handoff.offer.handoff_id != handoff.id
             || handoff.status != "pending"
@@ -84,7 +85,7 @@ impl PersistentCore {
         let events = self.runtime.handle(CoreCommand::OfferResource {
             offer: handoff.offer.clone(),
         });
-        if let Err(error) = self.store.apply_events_and_handoff(&events, &handoff) {
+        if let Err(error) = self.store.apply_events_and_handoff(&events, &original) {
             self.runtime = before;
             return Err(error);
         }
@@ -102,7 +103,10 @@ impl PersistentCore {
             }
             _ => {}
         }
-        let command = self.store.sanitize_urls(command)?;
+        // Runtime state, errors and idempotent replies only see redacted values.
+        // The store takes the original accepted payload in the event transaction.
+        let original = command;
+        let command = redact_urls(original.clone())?;
         if let CoreCommand::GetTaskLog { task_id } = &command {
             let mut lines = self.store.load_task_log(task_id, 500)?;
             if lines.is_empty() {
@@ -236,26 +240,51 @@ impl PersistentCore {
             }
         }
         let before = self.runtime.clone();
-        let created_spec = match &command {
-            CoreCommand::CreateTask { spec } => Some(spec.clone()),
-            _ => None,
-        };
         let events = self.runtime.handle(command);
-        let spec = created_spec.or_else(|| {
-            events.iter().find_map(|envelope| match &envelope.event {
-                crate::CoreEvent::TaskCreated { snapshot } => {
-                    self.runtime.task_spec(&snapshot.task_id).cloned()
-                }
-                _ => None,
-            })
+        let spec = events.iter().find_map(|envelope| match &envelope.event {
+            crate::CoreEvent::TaskCreated { snapshot } => self.runtime.task_spec(&snapshot.task_id),
+            _ => None,
         });
-        if let Some(spec) = spec.as_ref() {
+        if let Some(spec) = spec {
             if let Err(error) = crate::download_worker::validate_filename(&spec.filename) {
                 self.runtime = before;
                 return Err(error);
             }
         }
-        if let Err(error) = self.store.apply_events_and_spec(&events, spec.as_ref()) {
+        let stored = match (original, events.as_slice()) {
+            (
+                CoreCommand::CreateTask { spec },
+                [EventEnvelope {
+                    event: crate::CoreEvent::TaskCreated { .. },
+                    ..
+                }],
+            ) => self.store.apply_events_and_spec(&events, Some(&spec)),
+            (
+                CoreCommand::OfferResource { mut offer },
+                [EventEnvelope {
+                    sequence,
+                    event: crate::CoreEvent::HandoffOffered { offer: admitted },
+                }],
+            ) => {
+                offer.handoff_id.clone_from(&admitted.handoff_id);
+                self.store.apply_events(&[EventEnvelope {
+                    sequence: *sequence,
+                    event: crate::CoreEvent::HandoffOffered { offer },
+                }])
+            }
+            (
+                CoreCommand::RequestMediaPush { request },
+                [EventEnvelope {
+                    sequence,
+                    event: crate::CoreEvent::MediaPushRequested { .. },
+                }],
+            ) => self.store.apply_events(&[EventEnvelope {
+                sequence: *sequence,
+                event: crate::CoreEvent::MediaPushRequested { request },
+            }]),
+            _ => self.store.apply_events_and_spec(&events, spec),
+        };
+        if let Err(error) = stored {
             self.runtime = before;
             return Err(error);
         }
@@ -269,13 +298,28 @@ impl PersistentCore {
         queue_id: String,
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Vec<EventEnvelope>, String> {
+        if queue_id.trim().is_empty() {
+            return Err("队列编号不能为空".into());
+        }
+        let changed = crate::CoreEvent::SettingsChanged {
+            keys: values.keys().cloned().collect(),
+        };
+        if task_ids.is_empty() {
+            let envelope = EventEnvelope {
+                sequence: self.runtime.latest_sequence() + 1,
+                event: changed,
+            };
+            self.store
+                .apply_events_and_settings(std::slice::from_ref(&envelope), values)?;
+            let events = self.runtime.emit(envelope.event);
+            self.committed(&events);
+            return Ok(events);
+        }
         let before = self.runtime.clone();
         let mut events = self
             .runtime
             .handle(CoreCommand::AssignQueue { task_ids, queue_id });
-        events.extend(self.runtime.emit(crate::CoreEvent::SettingsChanged {
-            keys: values.keys().cloned().collect(),
-        }));
+        events.extend(self.runtime.emit(changed));
         if let Err(error) = self.store.apply_events_and_settings(&events, values) {
             self.runtime = before;
             return Err(error);
@@ -285,14 +329,18 @@ impl PersistentCore {
     }
 
     pub fn emit(&mut self, event: crate::CoreEvent) -> Result<Vec<EventEnvelope>, String> {
-        let event = self.store.sanitize_urls(event)?;
+        let clean = redact_urls(event.clone())?;
         let envelope = EventEnvelope {
             sequence: self.runtime.latest_sequence() + 1,
-            event,
+            event: if matches!(event, crate::CoreEvent::Error { .. }) {
+                clean.clone()
+            } else {
+                event
+            },
         };
         // 单事件发布只改变事件环和序号；先提交数据库，无需复制整个运行态来回滚。
         self.store.apply_events(std::slice::from_ref(&envelope))?;
-        let events = self.runtime.emit(envelope.event);
+        let events = self.runtime.emit(clean);
         self.committed(&events);
         Ok(events)
     }
@@ -347,7 +395,7 @@ impl PersistentCore {
     ) -> Result<Vec<EventEnvelope>, String> {
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
-        self.runtime.report_failure(task_id, failure);
+        self.runtime.report_failure(task_id, redact_urls(failure)?);
         let events = self.runtime.events_after(sequence, 16);
         if events.is_empty() {
             return Ok(events);
@@ -454,10 +502,13 @@ impl PersistentCore {
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
         crate::download_worker::validate_filename(&spec.filename)?;
-        let spec = self.store.sanitize_urls(spec)?;
+        if self.runtime.snapshot(task_id).is_none() {
+            return Err("任务不存在".into());
+        }
+        let clean = redact_urls(spec.clone())?;
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
-        self.runtime.replace_spec(task_id, spec.clone());
+        self.runtime.replace_spec(task_id, clean);
         let events = self.runtime.events_after(sequence, 16);
         if let Err(error) = self.store.apply_events_and_spec(&events, Some(&spec)) {
             self.runtime = before;
@@ -721,6 +772,57 @@ mod tests {
             "created_at_ms": 1
         })
         .to_string()
+    }
+
+    #[test]
+    fn rejected_commands_and_failed_commits_preserve_the_account_password() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let accepted = "sftp://alice:accepted@host/file";
+        let rejected = "sftp://alice:rejected@host/file";
+        let clean = core.store().sanitize_urls(accepted.to_owned()).unwrap();
+        let events = core
+            .handle(CoreCommand::GetTask {
+                task_id: rejected.into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(&events[0].event, crate::CoreEvent::Error { message, .. } if message.contains(&clean) && !message.contains("rejected"))
+        );
+        let spec = TaskSpec {
+            url: rejected.into(),
+            resource_kind: ResourceKind::Sftp,
+            filename: "file".into(),
+            ..Default::default()
+        };
+        assert!(core.replace_spec("missing", spec.clone()).is_err());
+        assert_eq!(core.store().hydrate_url(&clean).unwrap(), accepted);
+        core.store().connection.execute_batch(
+            "CREATE TRIGGER reject_spec BEFORE INSERT ON task_specs BEGIN SELECT RAISE(ABORT, 'reject'); END;"
+        ).unwrap();
+        assert!(core.handle(CoreCommand::CreateTask { spec }).is_err());
+        assert!(core.tasks().is_empty());
+        assert_eq!(core.store().hydrate_url(&clean).unwrap(), accepted);
+    }
+
+    #[test]
+    fn handoff_replay_cannot_replace_the_admitted_password() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let encoded = browser_admission("first", "same-request");
+        let record = |password: &str| {
+            encoded.replace(
+                "https://cdn.test/setup.exe",
+                &format!("ftp://user:{password}@host/setup.exe"),
+            )
+        };
+        let first = core.admit_handoff(&record("first-secret")).unwrap();
+        assert!(!first.contains("first-secret"));
+        assert_eq!(core.admit_handoff(&record("second-secret")).unwrap(), first);
+        assert_eq!(
+            core.store()
+                .hydrate_url("ftp://user@host/setup.exe")
+                .unwrap(),
+            "ftp://user:first-secret@host/setup.exe"
+        );
     }
 
     #[test]

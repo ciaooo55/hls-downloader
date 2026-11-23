@@ -6,7 +6,7 @@ use std::sync::{mpsc, OnceLock};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
-static POWER_THREAD: OnceLock<Option<mpsc::Sender<bool>>> = OnceLock::new();
+static POWER_THREAD: OnceLock<Option<mpsc::Sender<()>>> = OnceLock::new();
 
 #[cfg(windows)]
 const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
@@ -27,22 +27,24 @@ pub fn set_active(active: bool) {
             }
             return;
         };
-        if sender.send(active).is_err() && active {
+        if sender.send(()).is_err() && active {
             ACTIVE.store(false, Ordering::SeqCst);
         }
     }
 }
 
 #[cfg(windows)]
-fn power_thread() -> Option<&'static mpsc::Sender<bool>> {
+fn power_thread() -> Option<&'static mpsc::Sender<()>> {
     POWER_THREAD
         .get_or_init(|| {
             let (sender, receiver) = mpsc::channel();
             std::thread::Builder::new()
                 .name("v7-sleep-inhibit".into())
                 .spawn(move || {
-                    while let Ok(active) = receiver.recv() {
-                        apply_execution_state(active);
+                    // Concurrent callers can send their notifications in a different
+                    // order from their atomic updates. Apply the latest request.
+                    while receiver.recv().is_ok() {
+                        apply_execution_state(ACTIVE.load(Ordering::SeqCst));
                     }
                     apply_execution_state(false);
                 })

@@ -12,6 +12,9 @@ fn clamp_centered_axis(work_start: i32, work_size: i32, window_size: i32) -> i32
 }
 
 pub fn window_handle_by_title(title: &str) -> Option<i64> {
+    if title.is_empty() || title.contains('\0') {
+        return None;
+    }
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -361,5 +364,11 @@ mod tests {
 
         // 恰好相等：偏移 0，不越界也不留缝。
         assert_eq!(clamp_centered_axis(0, 584, 584), 0);
+    }
+
+    #[test]
+    fn empty_or_truncated_window_titles_are_rejected() {
+        assert!(window_handle_by_title("").is_none());
+        assert!(window_handle_by_title("HLS Downloader\0other").is_none());
     }
 }

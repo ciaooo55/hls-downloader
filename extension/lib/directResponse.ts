@@ -17,7 +17,7 @@ export interface ObservedDirectResponse {
 
 function hasDownloadHeaders(disposition: string, resource: ObservedDownloadResource | null): boolean {
   if (!resource) return false
-  return /(?:^|;)\s*attachment(?:;|$)/i.test(disposition)
+  return /^\s*attachment\s*(?:;|$)/i.test(disposition)
     || Boolean(resource.filename)
     || resource.mimeType?.toLowerCase().includes('application/octet-stream') === true
 }
@@ -50,6 +50,8 @@ export function isEarlyDirectDownloadResponse(
   // started a download. If the browser later creates a DownloadItem anyway,
   // the normal takeover path can still handle it with the real browser item.
   if (!explicitDownload && explicitlyInline(observed.disposition)) return false
+  if (!explicitDownload && /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i.test(observed.resource?.mimeType || '')
+    && !/^\s*attachment\s*(?:;|$)/i.test(observed.disposition)) return false
   if (hasDownloadHeaders(observed.disposition, observed.resource)) return true
   const resource = observed.resource
   if (!resource) return false

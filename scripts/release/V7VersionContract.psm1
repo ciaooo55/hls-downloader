@@ -1,5 +1,12 @@
 Set-StrictMode -Version Latest
 
+function ConvertTo-MsiVersion([string]$Text) {
+    if ($Text -notmatch '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z') { throw "Invalid MSI version: $Text" }
+    $version = [version]$Text
+    if ($version.Major -gt 255 -or $version.Minor -gt 255 -or $version.Build -gt 65535) { throw "MSI version is out of range: $Text" }
+    return $version
+}
+
 function Resolve-V7CandidateVersion {
     [CmdletBinding()]
     param(
@@ -29,13 +36,13 @@ function Resolve-V7CandidateVersion {
     }
 
     try {
-        $expectedVersion = [version]$expectedVersionText
+        $expectedVersion = ConvertTo-MsiVersion $expectedVersionText
     } catch {
         throw "Canonical feature parity product_version is not a valid version: $expectedVersionText"
     }
 
     try {
-        $baseline = [version]$BaselineVersion
+        $baseline = ConvertTo-MsiVersion $BaselineVersion
     } catch {
         throw "Baseline MSI version is not a valid version: $BaselineVersion"
     }
@@ -67,8 +74,8 @@ function Assert-V7CandidateMsiVersion {
     }
 
     try {
-        [void][version]$ExpectedVersion
-        [void][version]$MsiProductVersion
+        [void](ConvertTo-MsiVersion $ExpectedVersion)
+        [void](ConvertTo-MsiVersion $MsiProductVersion)
     } catch {
         throw "Candidate version contract contains an invalid version: expected=$ExpectedVersion msi=$MsiProductVersion"
     }

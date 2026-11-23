@@ -327,7 +327,7 @@ pub struct ZipPreview {
     pub zip64: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSpec {
     #[serde(default)]
     pub origin_boundary: String,
@@ -401,6 +401,16 @@ pub struct TaskSpec {
     pub torrent_selection: Vec<TorrentFileSelection>,
     #[serde(default)]
     pub torrent_piece_count: u64,
+}
+
+impl std::fmt::Debug for TaskSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskSpec")
+            .field("resource_kind", &self.resource_kind)
+            .field("concurrency", &self.concurrency)
+            .field("start_paused", &self.start_paused)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for TaskSpec {
@@ -541,7 +551,7 @@ pub struct MediaPushRequest {
     pub created_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CoreCommand {
     CreateTask {
@@ -724,6 +734,60 @@ pub enum CoreCommand {
     ControlCast {
         action: String,
     },
+}
+
+impl std::fmt::Debug for CoreCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Payloads may carry credentials, signed URLs or serialized handoffs.
+        f.write_str(match self {
+            Self::CreateTask { .. } => "CreateTask",
+            Self::ImportCurl { .. } => "ImportCurl",
+            Self::GetTask { .. } => "GetTask",
+            Self::TaskAction { .. } => "TaskAction",
+            Self::UpdateProgress { .. } => "UpdateProgress",
+            Self::OfferResource { .. } => "OfferResource",
+            Self::OpenMain { .. } => "OpenMain",
+            Self::HideMain => "HideMain",
+            Self::UiReady { .. } => "UiReady",
+            Self::Shutdown => "Shutdown",
+            Self::Ping => "Ping",
+            Self::SetSetting { .. } => "SetSetting",
+            Self::AcceptHandoff { .. } => "AcceptHandoff",
+            Self::RejectHandoff { .. } => "RejectHandoff",
+            Self::PresentHandoff { .. } => "PresentHandoff",
+            Self::PlayTask { .. } => "PlayTask",
+            Self::CastTask { .. } => "CastTask",
+            Self::PlayerControl { .. } => "PlayerControl",
+            Self::ReorderQueue { .. } => "ReorderQueue",
+            Self::CheckUpdate { .. } => "CheckUpdate",
+            Self::DownloadUpdate => "DownloadUpdate",
+            Self::InstallUpdate { .. } => "InstallUpdate",
+            Self::ProbeUrl { .. } => "ProbeUrl",
+            Self::RefreshTaskRequest { .. } => "RefreshTaskRequest",
+            Self::ProbeTorrent { .. } => "ProbeTorrent",
+            Self::SelectTorrentFiles { .. } => "SelectTorrentFiles",
+            Self::GetTaskTorrentFiles { .. } => "GetTaskTorrentFiles",
+            Self::SetTaskTorrentFiles { .. } => "SetTaskTorrentFiles",
+            Self::DiscoverCastDevices { .. } => "DiscoverCastDevices",
+            Self::CastToDevice { .. } => "CastToDevice",
+            Self::ShareMedia { .. } => "ShareMedia",
+            Self::RequestMediaPush { .. } => "RequestMediaPush",
+            Self::ResolveMediaPush { .. } => "ResolveMediaPush",
+            Self::OpenCompleted { .. } => "OpenCompleted",
+            Self::ConfirmPowerAction => "ConfirmPowerAction",
+            Self::CancelPowerAction => "CancelPowerAction",
+            Self::ClearCompleted => "ClearCompleted",
+            Self::SaveSiteProfile { .. } => "SaveSiteProfile",
+            Self::ImportPaths { .. } => "ImportPaths",
+            Self::ExportTasks { .. } => "ExportTasks",
+            Self::PlaceQueue { .. } => "PlaceQueue",
+            Self::AssignQueue { .. } => "AssignQueue",
+            Self::HarvestPage { .. } => "HarvestPage",
+            Self::GetTaskLog { .. } => "GetTaskLog",
+            Self::BrowserHello { .. } => "BrowserHello",
+            Self::ControlCast { .. } => "ControlCast",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1253,5 +1317,19 @@ mod tests {
             serde_json::from_value::<CoreCommand>(task_value).unwrap(),
             task_command
         );
+    }
+
+    #[test]
+    fn command_diagnostics_keep_private_request_fields_off_logs() {
+        let mut spec = TaskSpec::default();
+        spec.headers
+            .insert("Authorization".into(), "private".into());
+        assert!(!format!("{spec:?}").contains("private"));
+        let command = CoreCommand::ImportCurl {
+            command: "private".into(),
+            options: spec,
+        };
+        assert_eq!(format!("{command:?}"), "ImportCurl");
+        assert!(serde_json::to_string(&command).unwrap().contains("private"));
     }
 }

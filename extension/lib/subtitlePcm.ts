@@ -15,7 +15,9 @@ export class SubtitlePcm {
     const ratio = this.inputRate / 16000
     for (let i = 0; i < channels[0].length; i++) {
       let sample = 0
-      for (const channel of channels) sample += channel[i] || 0
+      for (const channel of channels) {
+        if (Number.isFinite(channel[i])) sample += channel[i]
+      }
       sample /= channels.length
       let remaining = 1
       while (remaining > 1e-9) {

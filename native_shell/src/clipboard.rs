@@ -50,6 +50,9 @@ pub fn read_text() -> Option<String> {
 }
 
 pub fn write_text(text: &str) -> Result<(), String> {
+    if text.contains('\0') {
+        return Err("剪贴板文本不能包含 NUL".into());
+    }
     #[cfg(windows)]
     {
         windows_write(text)
@@ -107,38 +110,62 @@ fn windows_clipboard() -> Option<String> {
 
 #[cfg(windows)]
 fn windows_write(text: &str) -> Result<(), String> {
+    use std::ptr::{null, null_mut};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, HWND_MESSAGE,
+    };
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     wide.push(0);
     let bytes = wide.len() * 2;
     unsafe {
-        if OpenClipboard(0) == 0 {
-            return Err("无法打开剪贴板".into());
-        }
-        if EmptyClipboard() == 0 {
-            CloseClipboard();
-            return Err("无法清空剪贴板".into());
-        }
         let handle = GlobalAlloc(0x0002, bytes);
         if handle == 0 {
-            CloseClipboard();
             return Err("无法分配剪贴板内存".into());
         }
         let ptr = GlobalLock(handle) as *mut u16;
         if ptr.is_null() {
             GlobalFree(handle);
-            CloseClipboard();
             return Err("无法锁定剪贴板内存".into());
         }
         std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
         GlobalUnlock(handle);
-        if SetClipboardData(13, handle) == 0 {
+        // EmptyClipboard makes this window the owner before SetClipboardData.
+        let class: Vec<_> = "STATIC\0".encode_utf16().collect();
+        let owner = CreateWindowExW(
+            0,
+            class.as_ptr(),
+            null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            null_mut(),
+            null_mut(),
+            null(),
+        );
+        if owner.is_null() {
             GlobalFree(handle);
-            CloseClipboard();
-            return Err("无法写入剪贴板".into());
+            return Err("无法创建剪贴板窗口".into());
         }
-        CloseClipboard();
+        let result = if OpenClipboard(owner as isize) == 0 {
+            Err("无法打开剪贴板".into())
+        } else {
+            let written = EmptyClipboard() != 0 && SetClipboardData(13, handle) != 0;
+            CloseClipboard();
+            if written {
+                Ok(())
+            } else {
+                Err("无法写入剪贴板".into())
+            }
+        };
+        DestroyWindow(owner);
+        if result.is_err() {
+            GlobalFree(handle);
+        }
+        result
     }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -164,6 +191,11 @@ unsafe extern "system" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_nul_is_rejected_before_opening_clipboard() {
+        assert!(write_text("before\0after").unwrap_err().contains("NUL"));
+    }
 
     #[test]
     fn accepts_http_and_magnet() {

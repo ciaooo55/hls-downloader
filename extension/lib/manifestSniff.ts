@@ -12,7 +12,7 @@ const MEDIA_URL = /\.(?:m3u8?|mpd|mp4|m4v|m4a|webm|mkv|mov|avi|flv|mp3|aac|flac|
 const MEDIA_MIME = /^(?:audio|video)\//i
 const DIRECT_STREAM_PATH = /\/videoplayback(?:\/|$)/i
 const API_ROUTE_PATH = /(?:^|\/)(?:api|ajax|graphql|x\/player|player\/playurl|playurl)(?:\/|$)/i
-const PASSIVE_RESPONSE_MIME = /^(?:application\/(?:ecmascript|javascript|json|ld\+json|manifest\+json|wasm)|font\/|image\/|text\/(?:css|html|javascript))(?:;|$)/i
+const PASSIVE_RESPONSE_MIME = /^(?:application\/(?:ecmascript|javascript|json|ld\+json|manifest\+json|wasm)|(?:font|image)\/[^;]+|text\/(?:css|html|javascript))$/i
 
 /**
  * Extensionless media CDNs used by current video sites.
@@ -37,7 +37,7 @@ export function isCommonMediaStreamUrl(url: string): boolean {
 }
 
 export function shouldInspectManifestResponse(url: string, mimeType = ''): boolean {
-  const mime = String(mimeType || '').toLowerCase()
+  const mime = String(mimeType || '').split(';', 1)[0].trim().toLowerCase()
   if (mime.includes('mpegurl') || mime.includes('dash+xml')) return true
   // Avoid cloning ordinary JSON/HTML/image responses merely because an API
   // route contains words such as playlist or manifest.  Unknown, text/plain,

@@ -1181,16 +1181,19 @@ impl CoreCoordinator {
         let spec = seal_spec_secrets(self, spec)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
-            let spec = core.store().sanitize_urls(spec)?;
-            let duplicate = if spec.local_source_path.is_none() && !spec.allow_duplicate {
-                Self::duplicate_of(&core, &spec)
+            let lookup = crate::url_credentials::redact_urls(spec.clone())?;
+            let duplicate = if lookup.local_source_path.is_none() && !lookup.allow_duplicate {
+                Self::duplicate_of(&core, &lookup)
             } else {
                 None
             };
             // Duplicate lookup and durable creation share one lock. Concurrent
             // clients must not both commit after observing an absent task.
             match duplicate {
-                Some(duplicate) => duplicate,
+                Some(duplicate) => {
+                    core.store().sanitize_urls(spec)?;
+                    duplicate
+                }
                 None => return core.handle(CoreCommand::CreateTask { spec }),
             }
         };

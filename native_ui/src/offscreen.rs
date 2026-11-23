@@ -94,20 +94,21 @@ impl Platform for OffscreenPlatform {
                     }
                 }
             };
+            frame_dimensions(logical.width * self.scale, logical.height * self.scale)?;
             window.window().set_size(logical);
             window.dispatch_event(WindowEvent::Resized { size: logical });
             // Settle layout, timers and (reduced) animations before the frame.
             for _ in 0..3 {
                 slint::platform::update_timers_and_animations();
                 window.request_redraw();
-                let _ = render(window);
+                let _ = render(window)?;
             }
             if let Ok(script) = std::env::var("HLS_V7_RENDER_INPUT") {
                 replay_input(window, &script);
                 for _ in 0..3 {
                     slint::platform::update_timers_and_animations();
                     window.request_redraw();
-                    let _ = render(window);
+                    let _ = render(window)?;
                 }
             }
             // 动效逐帧：HLS_V7_RENDER_FRAMES=张数，HLS_V7_RENDER_FRAME_MS=间隔（真实时间）。
@@ -133,7 +134,7 @@ impl Platform for OffscreenPlatform {
                         }
                     }
                     slint::platform::update_timers_and_animations();
-                    if let Some(pixels) = render(window) {
+                    if let Some(pixels) = render(window)? {
                         let path =
                             std::path::PathBuf::from(format!("{}-f{frame:03}.png", stem.display()));
                         save_png(&path, window.window().size(), &pixels)
@@ -143,7 +144,7 @@ impl Platform for OffscreenPlatform {
                 }
             }
             let physical = window.window().size();
-            let pixels = render(window)
+            let pixels = render(window)?
                 .ok_or_else(|| slint::PlatformError::Other("nothing rendered".into()))?;
             save_png(&self.path_for(index), physical, &pixels)
                 .map_err(slint::PlatformError::Other)?;
@@ -152,15 +153,29 @@ impl Platform for OffscreenPlatform {
     }
 }
 
-fn render(window: &MinimalSoftwareWindow) -> Option<Vec<Rgb8Pixel>> {
+// Slint's software renderer uses signed 16-bit coordinates. Bound the whole
+// frame as well: 32 Mi pixels already need 96 MiB for each RGB buffer.
+fn frame_dimensions(width: f32, height: f32) -> Result<(usize, usize), slint::PlatformError> {
+    let width = width.round();
+    let height = height.round();
+    let range = 1.0..=f32::from(i16::MAX);
+    if !range.contains(&width) || !range.contains(&height) || width * height > 33_554_432.0 {
+        return Err(slint::PlatformError::Other(format!(
+            "unsupported physical render size {width}x{height}"
+        )));
+    }
+    Ok((width as usize, height as usize))
+}
+
+fn render(window: &MinimalSoftwareWindow) -> Result<Option<Vec<Rgb8Pixel>>, slint::PlatformError> {
     let size = window.window().size();
-    let (width, height) = (size.width.max(1) as usize, size.height.max(1) as usize);
+    let (width, height) = frame_dimensions(size.width as f32, size.height as f32)?;
     let mut buffer = vec![Rgb8Pixel { r: 0, g: 0, b: 0 }; width * height];
     window.request_redraw();
     let drawn = window.draw_if_needed(|renderer| {
         renderer.render(&mut buffer, width);
     });
-    drawn.then_some(buffer)
+    Ok(drawn.then_some(buffer))
 }
 
 /// Writes a binary PPM next to the PNG path and converts it with any
@@ -226,6 +241,20 @@ mod tests {
     use super::*;
     use crate::{native_window, SettingsWindow, Tokens, WorkbenchWindow};
     use slint::ComponentHandle;
+
+    #[test]
+    fn frame_allocation_checks_scaled_dimensions_and_pixel_count() {
+        assert_eq!(frame_dimensions(3840.0, 2160.0).unwrap(), (3840, 2160));
+        for (w, h) in [
+            (0.0, 1.0),
+            (f32::NAN, 1.0),
+            (1.0, f32::INFINITY),
+            (32768.0, 1.0),
+            (8192.0, 8192.0),
+        ] {
+            assert!(frame_dimensions(w, h).is_err());
+        }
+    }
 
     #[test]
     fn workbench_dialog_inherits_changes_to_reduced_motion() {

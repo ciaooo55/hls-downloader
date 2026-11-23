@@ -45,6 +45,7 @@ export class InspectionCache {
 
   /** Keep a failed key quiet briefly, then allow a renewed observation. */
   defer(key: string, retryAfterMs = 3_000, now = Date.now()): void {
+    if (!this.entries.has(key)) return
     this.entries.delete(key)
     const delay = Math.max(0, Math.min(this.ttlMs, retryAfterMs))
     this.entries.set(key, now - this.ttlMs + delay)

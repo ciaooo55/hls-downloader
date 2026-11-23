@@ -2,7 +2,7 @@
 param([switch]$RequireUpgrade)
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
 
 function Read-Utf8([string]$RelativePath) {

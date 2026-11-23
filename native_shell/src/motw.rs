@@ -87,6 +87,9 @@ fn ipv4_is_public(v4: Ipv4Addr) -> bool {
 }
 
 pub fn redact_url(value: &str) -> String {
+    if value.chars().any(char::is_control) {
+        return String::new();
+    }
     let Some((scheme, authority, suffix)) = http_parts(value) else {
         return String::new();
     };
@@ -116,12 +119,32 @@ pub fn zone_identifier_text(source_url: &str) -> String {
 }
 
 pub fn mark_downloaded_file(path: &Path, source_url: &str) {
-    if !is_public_download_url(source_url) || !path.is_file() {
+    if !is_public_download_url(source_url) {
         return;
     }
     #[cfg(windows)]
     {
-        let ads = format!("{}:Zone.Identifier", path.display());
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        // Pin the base file against rename/deletion while opening its named stream.
+        let Ok(file) = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+        else {
+            return;
+        };
+        if !file.metadata().is_ok_and(|meta| {
+            meta.is_file() && meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        }) {
+            return;
+        }
+        let mut ads = path.as_os_str().to_os_string();
+        ads.push(":Zone.Identifier");
         let _ = std::fs::write(ads, zone_identifier_text(source_url));
     }
     #[cfg(not(windows))]
@@ -133,6 +156,18 @@ pub fn mark_downloaded_file(path: &Path, source_url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsafe_source_metadata_keeps_only_the_internet_zone() {
+        for control in ['\r', '\n', '\0'] {
+            let source = format!("https://cdn.example.test/file{control}ZoneId=0");
+            assert!(is_public_download_url(&source));
+            assert_eq!(
+                zone_identifier_text(&source),
+                "[ZoneTransfer]\r\nZoneId=3\r\n"
+            );
+        }
+    }
 
     #[test]
     fn public_http_is_marked_and_local_addresses_are_not() {

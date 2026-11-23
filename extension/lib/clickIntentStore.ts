@@ -86,7 +86,7 @@ export class ClickIntentStore {
             controlHint: Boolean(item.controlHint),
             downloadAttribute: Boolean(item.downloadAttribute),
             filename: String(item.filename || ''),
-            at: Number(item.at) || now,
+            at: typeof item.at === 'number' ? item.at : Number.NaN,
           }))
         this.intents = normalizeIntents([...this.intents, ...restored], now)
         this.hydrated = true

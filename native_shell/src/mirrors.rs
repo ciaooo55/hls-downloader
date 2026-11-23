@@ -22,16 +22,15 @@ pub fn canonical_http_url(value: &str) -> String {
         .map(|(index, _)| index)
         .unwrap_or(rest.len());
     let (authority, path_query) = rest.split_at(boundary);
-    let authority = authority.trim_end_matches('.').to_ascii_lowercase();
-    if authority.is_empty() {
+    let (userinfo, host_port) = authority
+        .rfind('@')
+        .map_or(("", authority), |at| authority.split_at(at + 1));
+    let host_port = host_port.trim_end_matches('.').to_ascii_lowercase();
+    if host_port.is_empty() {
         return String::new();
     }
-    let suffix = if path_query.starts_with('?') {
-        format!("/{path_query}")
-    } else {
-        format!("/{}", path_query.trim_start_matches('/'))
-    };
-    format!("{scheme}://{authority}{suffix}")
+    let slash = if path_query.starts_with('/') { "" } else { "/" };
+    format!("{scheme}://{userinfo}{host_port}{slash}{path_query}")
 }
 
 pub fn normalize_mirror_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
@@ -43,9 +42,7 @@ pub fn normalize_mirror_urls(primary: &str, mirrors: &[String]) -> Vec<String> {
         if url.is_empty()
             || url.starts_with('#')
             || url.len() > MAX_MIRROR_URL_LENGTH
-            || url.contains('\r')
-            || url.contains('\n')
-            || url.contains('\0')
+            || url.chars().any(char::is_control)
         {
             continue;
         }
@@ -95,6 +92,16 @@ fn strong_etag(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirror_keys_preserve_case_sensitive_userinfo_and_empty_path_segments() {
+        let primary = "https://User@host//a";
+        let mirrors = [
+            "https://user@HOST//a".to_owned(),
+            "https://User@host/a".to_owned(),
+        ];
+        assert_eq!(normalize_mirror_urls(primary, &mirrors), mirrors);
+    }
 
     #[test]
     fn empty_mirrors_are_noop() {

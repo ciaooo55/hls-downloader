@@ -35,7 +35,7 @@ pub struct PlayerEmbed {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeRequest {
     CastControl {
@@ -167,8 +167,41 @@ pub enum CorePipeRequest {
     },
 }
 
+impl std::fmt::Debug for CorePipeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Payloads may carry credentials, signed URLs or serialized handoffs.
+        f.write_str(match self {
+            Self::CastControl { .. } => "CastControl",
+            Self::PlayerControl { .. } => "PlayerControl",
+            Self::PlayerEmbed { .. } => "PlayerEmbed",
+            Self::Crawl { .. } => "Crawl",
+            Self::PreviewZip { .. } => "PreviewZip",
+            Self::Hello { .. } => "Hello",
+            Self::Command { .. } => "Command",
+            Self::Snapshot { .. } => "Snapshot",
+            Self::ListTasks { .. } => "ListTasks",
+            Self::WaitEventBatch { .. } => "WaitEventBatch",
+            Self::Capabilities { .. } => "Capabilities",
+            Self::WaitEvents { .. } => "WaitEvents",
+            Self::StoreSetting { .. } => "StoreSetting",
+            Self::StoreSettings { .. } => "StoreSettings",
+            Self::LoadSettings { .. } => "LoadSettings",
+            Self::SetDefaultCookie { .. } => "SetDefaultCookie",
+            Self::SetSiteRuleCredential { .. } => "SetSiteRuleCredential",
+            Self::StoreCredential { .. } => "StoreCredential",
+            Self::LoadCredential { .. } => "LoadCredential",
+            Self::DeleteCredential { .. } => "DeleteCredential",
+            Self::AdmitHandoff { .. } => "AdmitHandoff",
+            Self::SaveHandoff { .. } => "SaveHandoff",
+            Self::LoadHandoffs { .. } => "LoadHandoffs",
+            Self::Subtitle { .. } => "Subtitle",
+            Self::PlayerThumbnail { .. } => "PlayerThumbnail",
+        })
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CorePipeResponse {
     TaskPage {
@@ -366,6 +399,28 @@ pub enum CorePipeResponse {
     },
 }
 
+impl std::fmt::Debug for CorePipeResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Payloads may carry credentials, signed URLs or serialized handoffs.
+        f.write_str(match self {
+            Self::TaskPage { .. } => "TaskPage",
+            Self::EventBatch { .. } => "EventBatch",
+            Self::Crawl { .. } => "Crawl",
+            Self::ZipPreview { .. } => "ZipPreview",
+            Self::Hello { .. } => "Hello",
+            Self::Events { .. } => "Events",
+            Self::Snapshot { .. } => "Snapshot",
+            Self::Capabilities { .. } => "Capabilities",
+            Self::Settings { .. } => "Settings",
+            Self::Credential { .. } => "Credential",
+            Self::Handoffs { .. } => "Handoffs",
+            Self::Subtitle { .. } => "Subtitle",
+            Self::PlayerThumbnail { .. } => "PlayerThumbnail",
+            Self::Error { .. } => "Error",
+        })
+    }
+}
+
 fn default_task_page_limit() -> usize {
     128
 }
@@ -423,14 +478,27 @@ fn default_bt_connections() -> u64 {
 }
 
 pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {
-    let payload = serde_json::to_vec(message).map_err(|error| error.to_string())?;
-    if payload.len() > V7_PIPE_MAX_FRAME {
-        return Err("v7 Core pipe frame too large".into());
+    struct Frame(Vec<u8>);
+
+    impl std::io::Write for Frame {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > 4 + V7_PIPE_MAX_FRAME - self.0.len() {
+                return Err(std::io::Error::other("v7 Core pipe frame too large"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
-    let mut frame = Vec::with_capacity(payload.len() + 4);
-    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload);
-    Ok(frame)
+
+    let mut frame = Frame(vec![0; 4]);
+    serde_json::to_writer(&mut frame, message).map_err(|error| error.to_string())?;
+    let length = (frame.0.len() - 4) as u32;
+    frame.0[..4].copy_from_slice(&length.to_le_bytes());
+    Ok(frame.0)
 }
 
 pub fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, String> {
@@ -438,9 +506,52 @@ pub fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, S
         return Err("Core pipe frame truncated".into());
     }
     let length = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
-    if length > V7_PIPE_MAX_FRAME || frame.len() < length + 4 {
+    if length > V7_PIPE_MAX_FRAME || frame.len() - 4 != length {
         return Err("v7 Core pipe frame invalid length".into());
     }
-    serde_json::from_slice(&frame[4..4 + length])
-        .map_err(|error| format!("v7 Core pipe JSON invalid: {error}"))
+    serde_json::from_slice(&frame[4..]).map_err(|error| {
+        format!(
+            "v7 Core pipe JSON invalid at line {}, column {}",
+            error.line(),
+            error.column()
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_lengths_are_exact_and_bounded_during_encoding() {
+        let mut frame = encode_message(&"x").unwrap();
+        assert_eq!(decode_message::<String>(&frame).unwrap(), "x");
+        frame.push(0);
+        assert!(decode_message::<String>(&frame).is_err());
+        let limit = "x".repeat(V7_PIPE_MAX_FRAME - 2);
+        assert_eq!(encode_message(&limit).unwrap().len(), V7_PIPE_MAX_FRAME + 4);
+        assert!(encode_message(&(limit + "!")).is_err());
+    }
+
+    #[test]
+    fn request_and_unexpected_response_diagnostics_omit_credentials() {
+        let request = CorePipeRequest::SetDefaultCookie {
+            request_id: 7,
+            cookie: "private".into(),
+        };
+        let response = CorePipeResponse::Credential {
+            request_id: 7,
+            protected_blob: Some("private".into()),
+        };
+        assert_eq!(format!("{request:?}"), "SetDefaultCookie");
+        assert_eq!(format!("{response:?}"), "Credential");
+        assert_eq!(
+            decode_message::<CorePipeRequest>(&encode_message(&request).unwrap()).unwrap(),
+            request
+        );
+        let bad = encode_message(&serde_json::json!({"type": "private"})).unwrap();
+        assert!(!decode_message::<CorePipeRequest>(&bad)
+            .unwrap_err()
+            .contains("private"));
+    }
 }

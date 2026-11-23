@@ -11,12 +11,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $manifestFullPath = if ([IO.Path]::IsPathRooted($CandidateManifestPath)) { [IO.Path]::GetFullPath($CandidateManifestPath) } else { [IO.Path]::GetFullPath((Join-Path $repo $CandidateManifestPath)) }
 if (-not (Test-Path -LiteralPath $manifestFullPath -PathType Leaf)) { throw "Candidate manifest is missing: $manifestFullPath" }
 $manifest = Get-Content -LiteralPath $manifestFullPath -Raw -Encoding UTF8 | ConvertFrom-Json
 Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
-$exclusions = Get-V7ReleaseExclusions (Get-Content (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
+$exclusions = Get-V7ReleaseExclusions (Get-Content -LiteralPath (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
 $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'candidate' -or [string]$manifest.source_commit -ne $currentCommit -or [string]$manifest.source_tree -ne $currentTree) {
@@ -110,5 +110,7 @@ Invoke-Gate 'rollback' $rollbackCommand "candidate MSI failure injection; previo
 $aggregate = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
 $evidence = Get-Content -LiteralPath $aggregate -Raw -Encoding UTF8 | ConvertFrom-Json
 $passed = @($evidence.gates | Where-Object { ($_.result -eq 'passed' -or ($_.result -eq 'excluded' -and $exclusions.gates -contains $_.id)) -and [int]$_.exit_status -eq 0 })
-if (@($evidence.gates).Count -ne 5 -or $passed.Count -ne 5) { throw 'A required release gate failed or is missing.' }
+$requiredIds = @('browser', 'browser_media_push', 'installer', 'performance', 'rollback')
+$passedIds = @($passed | ForEach-Object { [string]$_.id } | Sort-Object -Unique)
+if (@($evidence.gates).Count -ne $requiredIds.Count -or ($passedIds -join ',') -ne ($requiredIds -join ',')) { throw 'A required release gate failed or is missing.' }
 Write-Output ([ordered]@{ schema = 1; passed = $true; product_version = [string]$manifest.product_version; source_commit = $currentCommit; gates = @($evidence.gates | ForEach-Object { $_.id }) } | ConvertTo-Json -Compress)

@@ -10,7 +10,7 @@ fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec
     if total == 0 {
         return Vec::new();
     }
-    let done = subtract(&merge(done), active);
+    let done = merge(done);
     let active = merge(active);
     let mut points = std::collections::BTreeSet::new();
     points.insert(0);
@@ -24,7 +24,7 @@ fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec
         }
     }
     let ordered: Vec<u64> = points.into_iter().collect();
-    let mut parts = Vec::new();
+    let mut parts: Vec<ConnectionPart> = Vec::new();
     for window in ordered.windows(2) {
         let start = window[0];
         let end = window[1];
@@ -38,16 +38,22 @@ fn paint_file_map(total: u64, done: &[(u64, u64)], active: &[(u64, u64)]) -> Vec
         } else {
             ("queued", 0)
         };
+        if let Some(last) = parts.last_mut() {
+            if last.state == state {
+                last.end = end - 1;
+                last.done += done_bytes;
+                continue;
+            }
+        }
+        if parts.len() == PARTS_LIMIT {
+            break;
+        }
         parts.push(ConnectionPart {
             start,
             end: end.saturating_sub(1),
             done: done_bytes,
             state: state.into(),
         });
-    }
-    coalesce(&mut parts);
-    if parts.len() > PARTS_LIMIT {
-        parts.truncate(PARTS_LIMIT);
     }
     parts
 }
@@ -212,64 +218,28 @@ fn merge(intervals: &[(u64, u64)]) -> Vec<(u64, u64)> {
     merged
 }
 
-fn subtract(base: &[(u64, u64)], holes: &[(u64, u64)]) -> Vec<(u64, u64)> {
-    if base.is_empty() {
-        return Vec::new();
-    }
-    if holes.is_empty() {
-        return base.to_vec();
-    }
-    let mut remaining = Vec::new();
-    for &(start, end) in base {
-        let mut pieces = vec![(start, end)];
-        for &(hole_start, hole_end) in holes {
-            let mut next = Vec::new();
-            for (piece_start, piece_end) in pieces {
-                if hole_end <= piece_start || hole_start >= piece_end {
-                    next.push((piece_start, piece_end));
-                    continue;
-                }
-                if piece_start < hole_start {
-                    next.push((piece_start, hole_start));
-                }
-                if hole_end < piece_end {
-                    next.push((hole_end, piece_end));
-                }
-            }
-            pieces = next;
-        }
-        remaining.extend(pieces);
-    }
-    merge(&remaining)
-}
-
 fn covers(intervals: &[(u64, u64)], position: u64) -> bool {
+    let index = intervals.partition_point(|&(_, end)| end <= position);
     intervals
-        .iter()
-        .any(|(start, end)| *start <= position && position < *end)
-}
-
-fn coalesce(parts: &mut Vec<ConnectionPart>) {
-    if parts.len() < 2 {
-        return;
-    }
-    let mut out: Vec<ConnectionPart> = Vec::with_capacity(parts.len());
-    for part in parts.drain(..) {
-        if let Some(last) = out.last_mut() {
-            if last.state == part.state && last.end + 1 == part.start {
-                last.end = part.end;
-                last.done = last.done.saturating_add(part.done);
-                continue;
-            }
-        }
-        out.push(part);
-    }
-    *parts = out;
+        .get(index)
+        .is_some_and(|&(start, _)| start <= position)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fragmented_ranges_keep_active_precedence_and_the_full_last_visible_part() {
+        let active: Vec<_> = (0..1000).map(|n| (4 * n + 2, 4 * n + 4)).collect();
+        let parts = paint_file_map(4000, &[(0, 127), (128, 4000)], &active);
+        assert_eq!(parts.len(), PARTS_LIMIT);
+        let last = parts.last().unwrap();
+        assert_eq!(
+            (last.state.as_str(), last.start, last.end, last.done),
+            ("active", 126, 127, 2)
+        );
+    }
 
     #[test]
     fn fallback_activity_starts_at_the_first_unfinished_byte() {
