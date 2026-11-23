@@ -1,7 +1,12 @@
 use crate::{ResourceKind, StreamVariant};
 
 pub fn classify_url(url: &str) -> ResourceKind {
-    let lower = url.trim().to_ascii_lowercase();
+    let lower = url
+        .split('#')
+        .next()
+        .unwrap_or(url)
+        .trim()
+        .to_ascii_lowercase();
     let path = lower.split(['?', '#']).next().unwrap_or(&lower);
     if lower.starts_with("magnet:") || path.ends_with(".torrent") {
         ResourceKind::Torrent
@@ -38,10 +43,10 @@ fn path_marks_live(url_without_query: &str) -> bool {
 }
 
 fn query_marks_live(url: &str) -> bool {
-    let Some((_, query)) = url.split_once('?') else {
+    let resource = url.split('#').next().unwrap_or(url);
+    let Some((_, query)) = resource.split_once('?') else {
         return false;
     };
-    let query = query.split('#').next().unwrap_or(query);
     query.split('&').any(|pair| {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         if !key.eq_ignore_ascii_case("live") {
@@ -119,60 +124,64 @@ pub fn probe_with_harvest_context(
     let mut variants = Vec::new();
     let mut harvest = Vec::new();
     if matches!(kind, ResourceKind::Hls | ResourceKind::Live) {
-        let (status, body) = crate::http_engine::fetch_bytes_limited(
+        let (status, body, final_url) = crate::http_engine::fetch_manifest_bytes(
             url,
             headers,
             proxy,
+            true,
             crate::media::MAX_MANIFEST_BYTES,
         )
         .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别播放列表失败 HTTP {status}"));
         }
-        let playlist = crate::media::parse_playlist(&String::from_utf8_lossy(&body), url)?;
+        let playlist = crate::media::parse_playlist(&String::from_utf8_lossy(&body), &final_url)?;
         variants = crate::media::variant_choices(&playlist);
         variants.extend(crate::media::audio_choices(&playlist));
     } else if kind == ResourceKind::Dash {
-        let (status, body) = crate::http_engine::fetch_bytes_limited(
+        let (status, body, final_url) = crate::http_engine::fetch_manifest_bytes(
             url,
             headers,
             proxy,
+            true,
             crate::media::MAX_MANIFEST_BYTES,
         )
         .map_err(|error| error.to_string())?;
         if status != 200 && status != 206 {
             return Err(format!("识别 DASH 失败 HTTP {status}"));
         }
-        let manifest = crate::media::parse_mpd(&String::from_utf8_lossy(&body), url)?;
+        let manifest = crate::media::parse_mpd(&String::from_utf8_lossy(&body), &final_url)?;
         variants = crate::media::representation_choices(&manifest);
         variants.extend(crate::media::dash_audio_choices(&manifest));
     } else if kind == ResourceKind::File && is_http_resource_url(url) {
-        if let Ok((status, body)) = crate::http_engine::fetch_bytes_limited(
+        if let Ok((status, body, final_url)) = crate::http_engine::fetch_manifest_bytes(
             url,
             headers,
             proxy,
+            true,
             crate::media::MAX_MANIFEST_BYTES,
         ) {
             if status == 200 || status == 206 {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
-                    kind = if path_marks_live(&path_lower) || query_marks_live(url) {
-                        ResourceKind::Live
-                    } else {
-                        ResourceKind::Hls
-                    };
-                    if let Ok(playlist) = crate::media::parse_playlist(&text, url) {
+                    if let Ok(playlist) = crate::media::parse_playlist(&text, &final_url) {
+                        kind = if path_marks_live(&path_lower) || query_marks_live(url) {
+                            ResourceKind::Live
+                        } else {
+                            ResourceKind::Hls
+                        };
                         variants = crate::media::variant_choices(&playlist);
                         variants.extend(crate::media::audio_choices(&playlist));
                     }
                 } else if text.contains("<MPD") || text.contains("urn:mpeg:dash") {
-                    kind = ResourceKind::Dash;
-                    if let Ok(manifest) = crate::media::parse_mpd(&text, url) {
+                    if let Ok(manifest) = crate::media::parse_mpd(&text, &final_url) {
+                        kind = ResourceKind::Dash;
                         variants = crate::media::representation_choices(&manifest);
                         variants.extend(crate::media::dash_audio_choices(&manifest));
                     }
-                } else if looks_html(&text) {
-                    harvest = crate::harvest_html(&text, url);
+                }
+                if kind == ResourceKind::File && looks_html(&text) {
+                    harvest = crate::harvest_html(&text, &final_url);
                 }
             }
         }
@@ -231,6 +240,15 @@ mod tests {
 
     #[test]
     fn query_values_do_not_reclassify_the_resource_path() {
+        assert_eq!(
+            classify_url("https://cdn/movie.m3u8#?live=1"),
+            ResourceKind::Hls
+        );
+        assert!(!query_marks_live("https://cdn/media#?live=1"));
+        assert_eq!(
+            classify_url("https://cdn/file#application/dash+xml"),
+            ResourceKind::File
+        );
         assert_eq!(
             classify_url("https://cdn/file.mp4?next=https://edge/live.m3u8"),
             ResourceKind::File

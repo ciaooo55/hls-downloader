@@ -33,11 +33,11 @@ function Resolve-SignTool([string]$ExplicitPath) {
     throw 'signtool.exe was not found. Install a Windows SDK or set HLS_V7_SIGNTOOL.'
 }
 
-function Resolve-Certificate([string]$Scope, [string]$ExpectedThumbprint, [bool]$RequirePrivateKey) {
+function Resolve-Certificate([string]$Scope, [string]$ExpectedThumbprint) {
     $certificatePath = "Cert:\$Scope\My\$ExpectedThumbprint"
     $certificate = Get-Item -LiteralPath $certificatePath -ErrorAction SilentlyContinue
     if (-not $certificate) { throw "Signing certificate was not found at $certificatePath." }
-    if ($RequirePrivateKey -and -not $certificate.HasPrivateKey) { throw 'Signing certificate does not expose a private key to the release runner.' }
+    if (-not $certificate.HasPrivateKey) { throw 'Signing certificate does not expose a private key to the release runner.' }
     if ((Get-Date) -lt $certificate.NotBefore -or (Get-Date) -gt $certificate.NotAfter) { throw 'Signing certificate is not currently valid.' }
     return $certificate
 }
@@ -50,7 +50,7 @@ function Invoke-SignTool([string[]]$Arguments, [string]$Operation, [string]$Targ
 }
 
 $signTool = Resolve-SignTool $SignToolPath
-$certificate = Resolve-Certificate $CertificateStore $thumbprint (-not $VerifyOnly)
+if (-not $VerifyOnly) { [void](Resolve-Certificate $CertificateStore $thumbprint) }
 $files = @($Path | ForEach-Object { (Resolve-Path -LiteralPath $_).Path } | Select-Object -Unique)
 if ($files.Count -eq 0) { throw 'No Authenticode targets were supplied.' }
 
@@ -62,10 +62,10 @@ foreach ($file in $files) {
         Invoke-SignTool $arguments 'sign' $file
     }
 
-    Invoke-SignTool @('verify', '/pa', '/all', '/v', $file) 'verify' $file
+    Invoke-SignTool @('verify', '/pa', '/all', '/tw', '/v', $file) 'verify' $file
     $signature = Get-AuthenticodeSignature -LiteralPath $file
     if ($signature.Status -ne 'Valid') { throw "Authenticode status is $($signature.Status) for $file." }
-    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $certificate.Thumbprint.ToUpperInvariant()) {
+    if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $thumbprint) {
         throw "Unexpected Authenticode signer for $file."
     }
     if (-not $signature.TimeStamperCertificate) { throw "Authenticode timestamp is missing for $file." }

@@ -56,12 +56,12 @@ export function isAuthenticationNavigation(value?: string): boolean {
   if (!value) return false
   try {
     const url = new URL(value)
-    const host = url.hostname.toLowerCase()
+    const host = url.hostname.toLowerCase().replace(/\.$/, '')
     if (AUTHENTICATION_HOSTS.has(host)) return true
     const parameterCount = OAUTH_PARAMETERS.filter(name => url.searchParams.has(name)).length
     const hasOAuthHandshake = url.searchParams.has('client_id')
       && (url.searchParams.has('redirect_uri') || url.searchParams.has('response_type') || url.searchParams.has('code_challenge'))
-    return (AUTHENTICATION_PATH.test(url.pathname) && parameterCount >= 2) || hasOAuthHandshake
+    return (AUTHENTICATION_PATH.test(url.pathname) && (url.searchParams.has('client_id') || parameterCount >= 2)) || hasOAuthHandshake
   } catch {
     return false
   }

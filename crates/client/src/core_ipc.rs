@@ -1532,12 +1532,17 @@ mod tests {
         frame.extend_from_slice(payload);
         assert!(decode_message::<CorePipeRequest>(&frame).is_err());
 
-        // 空载荷：长度合法但没有任何 JSON。
+        // 空载荷与仅空白载荷：长度合法但没有任何 JSON；带尾随字节的帧必须被拒绝。
         let mut frame = 0u32.to_le_bytes().to_vec();
-        assert!(decode_message::<CorePipeRequest>(&frame).is_err());
-        frame.extend_from_slice(b" ");
         let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
         assert!(err.contains("JSON invalid"), "unexpected error: {err}");
+        let mut blank_frame = 1u32.to_le_bytes().to_vec();
+        blank_frame.extend_from_slice(b" ");
+        let err = decode_message::<CorePipeRequest>(&blank_frame).unwrap_err();
+        assert!(err.contains("JSON invalid"), "unexpected error: {err}");
+        frame.extend_from_slice(b" ");
+        let err = decode_message::<CorePipeRequest>(&frame).unwrap_err();
+        assert!(err.contains("invalid length"), "unexpected error: {err}");
     }
 
     // 第五轮发现 6 的回归。这三个"写入类"方法原来用 `_ => Ok(())` 兜底：对端换了构建、

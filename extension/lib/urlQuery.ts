@@ -18,8 +18,8 @@ function splitRaw(value: string): { base: string, query: string, fragment: strin
 /** Remove selected query names without normalizing any remaining signature bytes. */
 export function removeRawQueryParameters(value: string, names: Set<string>): string {
   const parts = splitRaw(value)
-  if (!parts.query) return `${parts.base}${parts.fragment}`
-  const kept = parts.query.split('&').filter(pair => pair && !names.has(decodedName(pair).toLowerCase()))
+  if (!parts.query) return value
+  const kept = parts.query.split('&').filter(pair => !names.has(decodedName(pair).toLowerCase()))
   return `${parts.base}${kept.length ? `?${kept.join('&')}` : ''}${parts.fragment}`
 }
 
@@ -28,7 +28,7 @@ export function inheritManifestAccessQuery(baseUrl: string, resolvedUrl: string)
   try {
     const base = new URL(baseUrl)
     const child = new URL(resolvedUrl)
-    if (!base.search || base.origin !== child.origin) return resolvedUrl
+    if (!base.search || !['https:', 'http:'].includes(base.protocol) || base.protocol !== child.protocol || base.origin !== child.origin) return resolvedUrl
     const rawPairs = splitRaw(baseUrl).query.split('&').filter(Boolean)
     const childParts = splitRaw(resolvedUrl)
     const childPairs = childParts.query.split('&').filter(Boolean)
@@ -43,7 +43,8 @@ export function inheritManifestAccessQuery(baseUrl: string, resolvedUrl: string)
       return ACCESS_QUERY.test(name) || (terseSignature && ['s', 'e', '_t'].includes(lowered))
     })
     if (!inherited.length) return resolvedUrl
-    return `${childParts.base}?${[...childPairs, ...inherited].join('&')}${childParts.fragment}`
+    const prefix = childParts.query ? childParts.query + '&' : ''
+    return `${childParts.base}?${prefix}${inherited.join('&')}${childParts.fragment}`
   } catch {
     return resolvedUrl
   }

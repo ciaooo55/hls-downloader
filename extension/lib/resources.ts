@@ -126,8 +126,9 @@ function cleanName(value = '', pathValue = false): string {
   try { result = decodeURIComponent(result) } catch {}
   if (pathValue) result = result.replace(/\\/g, '/').split('/').pop() || ''
   result = result.split(/[?#]/, 1)[0].replace(MANIFEST_EXT, '').replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim().replace(/^[. ]+|[. ]+$/g, '')
-  const truncated = result.slice(0, 200)
-  return /[\uD800-\uDBFF]$/.test(truncated) ? truncated.slice(0, -1) : truncated
+  result = result.replace(/[\x00-\x1f\x7f]/g, '_')
+  if (/^(?:con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9¹²³]) *(?:\.|$)/i.test(result)) result = '_' + result
+  return result.slice(0, 200).replace(/[\uD800-\uDBFF]$/, '').replace(/[. ]+$/, '')
 }
 
 /** Server MIME types that already name a file, not a page or octet-stream guess. */
@@ -249,6 +250,21 @@ function stringArray(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((item): item is string => typeof item === 'string') : []
 }
 
+/** Match SegmentTemplate wildcards without backtracking over a manifest-supplied pattern. */
+function matchesPlaybackPath(pattern: string, path: string): boolean {
+  const [prefix, ...parts] = pattern.split('*')
+  if (!parts.length) return path === prefix
+  const suffix = parts.pop()!
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) return false
+  let offset = prefix.length
+  for (const part of parts) {
+    const index = path.indexOf(part, offset)
+    if (index < 0) return false
+    offset = index + part.length
+  }
+  return offset <= path.length - suffix.length
+}
+
 function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number {
   if (stringArray(resource.playbackUrlHashes).includes(resourceId(resourceFingerprint({ kind: resource.kind, url: mediaUrl })))) return 1_000
   const candidates = [resource.url, ...(resource.playbackUrls || [])]
@@ -267,12 +283,8 @@ function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number 
       const expected = stableResourceUrl({ kind: resource.kind, url: candidate })
       const actual = stableResourceUrl({ kind: resource.kind, url: mediaUrl })
       if (expected.origin !== actual.origin || expected.search !== actual.search) return -1
-      const expression = expected.pathname
-        .split('*')
-        .map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        .join('.*')
       // Path specificity must never outrank an exact response URL/hash.
-      return new RegExp(`^${expression}$`).test(actual.pathname)
+      return matchesPlaybackPath(expected.pathname, actual.pathname)
         ? 900 + Math.min(99, expected.pathname.replace(/\*/g, '').length)
         : -1
     } catch {
@@ -288,7 +300,7 @@ function mseCorrelatedResources(
 ): MediaResource[] {
   const evidence = playback.mseResourceUrls || []
   if (!evidence.length) return []
-  const ranked = compactResources(resources, 40)
+  const ranked = compactResources(resources, resources.length)
     .filter(item => {
       // 实际追加的分片已证明归属；提前加载后长时间暂停不能使清单失配。
       if (['hls', 'dash', 'media'].includes(item.kind)) return true
@@ -435,7 +447,7 @@ export function isShortLivedMediaSignatureUsable(
 ): boolean {
   if (!usesShortLivedMediaSignature(resource)) return true
   try {
-    const raw = new URL(resource.url).searchParams.get('e') || ''
+    const raw = Array.from(new URL(resource.url).searchParams).find(([key]) => key.toLowerCase() === 'e')?.[1] || ''
     if (!/^\d{10}(?:\d{3})?$/.test(raw)) return true
     const expiresAt = raw.length === 10 ? Number(raw) * 1_000 : Number(raw)
     return Number.isFinite(expiresAt) && expiresAt > now + minimumRemainingMs
@@ -552,7 +564,7 @@ export function visiblePlaybackResources(
   // We still require a user-started playback event and only accept adaptive
   // manifests; generic video responses remain too ambiguous for MSE players.
   const adaptiveSessionFloor = playback.startedAt - 3 * 60_000
-  const candidates = compactResources(resources, 40)
+  const candidates = compactResources(resources, resources.length)
     .filter(item => ['hls', 'dash', 'media'].includes(item.kind))
     .map(item => ({
       item,
@@ -699,10 +711,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       confidence: Math.max(boundedConfidence(older.confidence), boundedConfidence(newer.confidence)),
       replayContext: mergedReplayContext,
       variants: newer.variants?.length ? newer.variants : older.variants,
-      renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
-      playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),
+      renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(0, 24),
+      playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(0, 48),
       playbackUrlHashes: mergedHashes,
-      playbackPatterns: [...new Set([...(newer.playbackPatterns || []), ...(older.playbackPatterns || [])])].slice(-48),
+      playbackPatterns: [...new Set([...(newer.playbackPatterns || []), ...(older.playbackPatterns || [])])].slice(0, 48),
       seenAt: Math.max(previous.seenAt || 0, resource.seenAt || 0),
     })
   }
@@ -763,9 +775,9 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       ...(parentPlaybackHashes.get(index) || []),
     ])].slice(-512)
     return seenAt === item.seenAt
-      && playbackUrls.length === (item.playbackUrls || []).length
-      && playbackPatterns.length === (item.playbackPatterns || []).length
-      && playbackUrlHashes.length === currentHashes.length
+      && playbackUrls.length === (item.playbackUrls || []).length && playbackUrls.every((url, i) => url === item.playbackUrls![i])
+      && playbackPatterns.length === (item.playbackPatterns || []).length && playbackPatterns.every((pattern, i) => pattern === item.playbackPatterns![i])
+      && playbackUrlHashes.length === currentHashes.length && playbackUrlHashes.every((hash, i) => hash === currentHashes[i])
       && (item.playbackUrlHashes === undefined || Array.isArray(item.playbackUrlHashes))
       ? item
       : { ...item, seenAt, playbackUrls, playbackPatterns, playbackUrlHashes }
@@ -893,16 +905,15 @@ export function shouldTakeover(input: {
   // stale intent or Ctrl click is present. This is a second boundary behind
   // the content-script filter because old session intents can survive briefly.
   if (isAuthenticationNavigation(input.url)) return false
-  if (input.ctrlForce) return true
-  if (!input.explicitClick && !input.strongEvidence) return false
-  if (!input.enabled) return false
   try {
     const url = new URL(input.url)
-    const hosts = [url.hostname, hostnameOf(input.sourcePageUrl || '')].filter(Boolean)
-    const excluded = hosts.some(host => isExcludedHost(host, input.excludedHosts))
     const supported = ['http:', 'https:', 'magnet:'].includes(url.protocol)
       || (input.localBrowserDownload === true && ['blob:', 'data:'].includes(url.protocol))
-    if (!supported || excluded) return false
+    if (!supported) return false
+    if (input.ctrlForce) return true
+    if (!input.enabled || (!input.explicitClick && !input.strongEvidence)) return false
+    const hosts = [url.hostname, hostnameOf(input.sourcePageUrl || '')].filter(Boolean)
+    if (hosts.some(host => isExcludedHost(host, input.excludedHosts))) return false
   } catch {
     return false
   }
@@ -953,18 +964,26 @@ export function resourceBelongsToFrame(resource: Pick<MediaResource, 'frameId'>,
 const UNSAFE_REPLAY_HEADERS = new Set([
   'accept-encoding', 'connection', 'content-length', 'cookie', 'host', 'keep-alive',
   'proxy-authenticate', 'proxy-authorization', 'range', 'te', 'trailer',
-  'transfer-encoding', 'upgrade',
+  'transfer-encoding', 'upgrade', 'proxy-connection', '__proto__', 'constructor', 'prototype',
 ])
 
 export function replayableRequestHeaders(values: Record<string, string> | undefined): Record<string, string> {
   const result: Record<string, string> = {}
+  const connectionFields = new Set<string>()
+  const entries = Object.entries(values || {})
+  for (const [name, value] of entries) {
+    if (name.toLowerCase() !== 'connection') continue
+    if (typeof value !== 'string' || value.length > 32 * 1024) return result
+    for (const field of value.split(',')) connectionFields.add(field.trim().toLowerCase())
+  }
   let total = 0
-  for (const [rawName, rawValue] of Object.entries(values || {}).slice(0, 64)) {
-    const name = rawName.trim().toLowerCase()
-    const value = String(rawValue || '').trim()
-    if (!name || !value || UNSAFE_REPLAY_HEADERS.has(name) || /[\r\n]/.test(name + value)) continue
+  for (const [rawName, rawValue] of entries.slice(0, 64)) {
+    const name = rawName.toLowerCase()
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(rawName) || UNSAFE_REPLAY_HEADERS.has(name) || connectionFields.has(name)) continue
+    if (typeof rawValue !== 'string' || rawValue.length > 32 * 1024 || /[^\t\x20-\x7e\x80-\xff]/.test(rawValue)) continue
+    const value = rawValue.trim()
+    if (!value || total + name.length + value.length > 32 * 1024) continue
     total += name.length + value.length
-    if (total > 32 * 1024) break
     result[name] = value
   }
   return result
@@ -994,7 +1013,7 @@ export function normalizeHost(value = ''): string {
   if (!raw) return ''
   try {
     const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`)
-    return parsed.hostname.replace(/^www\./, '')
+    return parsed.hostname.replace(/^\*\./, '').replace(/^www\./, '').replace(/\.$/, '')
   } catch {
     return raw.replace(/^\*\./, '').replace(/:\d+$/, '').replace(/^www\./, '').replace(/\.$/, '')
   }

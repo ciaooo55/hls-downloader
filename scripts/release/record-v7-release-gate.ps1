@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $productVersion = [string](Get-Content -LiteralPath (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $repoPrefix = $repo.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -38,9 +38,14 @@ function Invoke-Git([string[]]$Arguments) {
 
 function Write-JsonAtomic([string]$Path, $Value) {
     New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($Path)) | Out-Null
-    $temporary = "$Path.tmp"
-    [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 10), $utf8NoBom)
-    Move-Item -LiteralPath $temporary -Destination $Path -Force
+    $temporary = "$Path.$([guid]::NewGuid().ToString('n')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Depth 10), $utf8NoBom)
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $Path) }
+    } finally {
+        [IO.File]::Delete($temporary)
+    }
 }
 
 $manifestPath = Resolve-RepositoryPath $CandidateManifestPath 'artifacts\v7-productization\candidate\ARTIFACT-MANIFEST.json'
@@ -60,7 +65,7 @@ if ([int]$manifest.schema -ne 1 -or
 $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifestRelativePath = $manifestPath.Substring($repoPrefix.Length).Replace('\', '/')
 Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
-$exclusions = Get-V7ReleaseExclusions (Get-Content (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
+$exclusions = Get-V7ReleaseExclusions (Get-Content -LiteralPath (Join-Path $repo 'config\release\feature-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
 if ($Exclude -and ($exclusions.gates -notcontains $GateId -or $GateInput -ne $exclusions.reasons[$GateId])) {
     throw 'Only an explicitly declared release exclusion may be recorded without execution.'
 }
@@ -100,40 +105,52 @@ $report = [ordered]@{
     recorded_at_utc = [DateTime]::UtcNow.ToString('o')
 }
 $reportPath = Resolve-RepositoryPath '' "artifacts\v7-productization\release-evidence\$GateId.json"
-Write-JsonAtomic $reportPath $report
-$reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$reportRelativePath = $reportPath.Substring($repoPrefix.Length).Replace('\', '/')
+$hasher = [Security.Cryptography.SHA256]::Create()
+try { $lockName = 'Local\HlsReleaseEvidence-' + [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($repo.ToUpperInvariant()))).Replace('-', '') }
+finally { $hasher.Dispose() }
+$lock = [Threading.Mutex]::new($false, $lockName)
+$held = $false
+try {
+    try { $held = $lock.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $held = $true }
+    if (-not $held) { throw 'Timed out acquiring the release evidence lock.' }
+    Write-JsonAtomic $reportPath $report
+    $reportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $reportRelativePath = $reportPath.Substring($repoPrefix.Length).Replace('\', '/')
 
-$evidenceFullPath = Resolve-RepositoryPath $EvidencePath 'artifacts\v7-productization\release-evidence.json'
-$existingGates = @()
-if (Test-Path -LiteralPath $evidenceFullPath -PathType Leaf) {
-    $existing = [IO.File]::ReadAllText($evidenceFullPath, $utf8NoBom) | ConvertFrom-Json
-    if ([int]$existing.schema -eq 1 -and
-        [string]$existing.source_commit -eq $commit -and
-        [string]$existing.source_tree -eq $tree -and
-        [string]$existing.candidate_artifact_manifest.sha256 -eq $manifestHash) {
-        $existingGates = @($existing.gates | Where-Object { [string]$_.id -ne $GateId })
+    $evidenceFullPath = Resolve-RepositoryPath $EvidencePath 'artifacts\v7-productization\release-evidence.json'
+    $existingGates = @()
+    if (Test-Path -LiteralPath $evidenceFullPath -PathType Leaf) {
+        $existing = [IO.File]::ReadAllText($evidenceFullPath, $utf8NoBom) | ConvertFrom-Json
+        if ([int]$existing.schema -eq 1 -and
+            [string]$existing.source_commit -eq $commit -and
+            [string]$existing.source_tree -eq $tree -and
+            [string]$existing.candidate_artifact_manifest.sha256 -eq $manifestHash) {
+            $existingGates = @($existing.gates | Where-Object { [string]$_.id -ne $GateId })
+        }
     }
+    $gate = [ordered]@{
+        id = $GateId
+        command = $Command
+        input = $GateInput
+        output = $output
+        result = $result
+        exit_status = [int]$exitStatus
+        candidate_artifact_manifest_sha256 = $manifestHash
+        report = [ordered]@{ path = $reportRelativePath; sha256 = $reportHash }
+    }
+    $evidence = [ordered]@{
+        schema = 1
+        product_version = $productVersion
+        source_commit = $commit
+        source_tree = $tree
+        candidate_artifact_manifest = [ordered]@{ path = $manifestRelativePath; sha256 = $manifestHash }
+        gates = @($existingGates + $gate | Sort-Object { [string]$_.id })
+    }
+    Write-JsonAtomic $evidenceFullPath $evidence
+} finally {
+    if ($held) { $lock.ReleaseMutex() }
+    $lock.Dispose()
 }
-$gate = [ordered]@{
-    id = $GateId
-    command = $Command
-    input = $GateInput
-    output = $output
-    result = $result
-    exit_status = [int]$exitStatus
-    candidate_artifact_manifest_sha256 = $manifestHash
-    report = [ordered]@{ path = $reportRelativePath; sha256 = $reportHash }
-}
-$evidence = [ordered]@{
-    schema = 1
-    product_version = $productVersion
-    source_commit = $commit
-    source_tree = $tree
-    candidate_artifact_manifest = [ordered]@{ path = $manifestRelativePath; sha256 = $manifestHash }
-    gates = @($existingGates + $gate | Sort-Object { [string]$_.id })
-}
-Write-JsonAtomic $evidenceFullPath $evidence
 
 $captured | Write-Output
 Write-Output "RELEASE_GATE=$GateId; RESULT=$result; EXIT_STATUS=$exitStatus; REPORT=$reportRelativePath"

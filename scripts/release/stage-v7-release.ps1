@@ -8,7 +8,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $manifestFullPath = if ([IO.Path]::IsPathRooted($ManifestPath)) { [IO.Path]::GetFullPath($ManifestPath) } else { [IO.Path]::GetFullPath((Join-Path $repo $ManifestPath)) }
 $manifest = Get-Content -LiteralPath $manifestFullPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
@@ -19,60 +21,74 @@ if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'formal' 
 $version = [string]$manifest.product_version
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid release version: $version" }
 $packageRoot = Split-Path $manifestFullPath -Parent
-$stage = if ([IO.Path]::IsPathRooted($ReleaseRoot)) { [IO.Path]::GetFullPath($ReleaseRoot) } else { [IO.Path]::GetFullPath((Join-Path $repo $ReleaseRoot)) }
-Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $stage | Out-Null
-
-function Resolve-VerifiedArtifact($Entry) {
-    $full = [IO.Path]::GetFullPath((Join-Path $packageRoot ([string]$Entry.path)))
-    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw "Formal artifact is missing: $full" }
-    $actual = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne ([string]$Entry.sha256).ToLowerInvariant()) { throw "Formal artifact SHA-256 mismatch: $full" }
-    return $full
+$destinationRoot = if ([IO.Path]::IsPathRooted($ReleaseRoot)) { [IO.Path]::GetFullPath($ReleaseRoot) } else { [IO.Path]::GetFullPath((Join-Path $repo $ReleaseRoot)) }
+$destinationRoot = $destinationRoot.TrimEnd('\', '/')
+$parent = [IO.Path]::GetDirectoryName($destinationRoot)
+if (-not $parent) { throw 'Release staging needs a dedicated directory.' }
+$previous = $null
+function Assert-StagingDirectory([string]$Directory) {
+    $items = @(Get-ChildItem -LiteralPath $Directory -Force)
+    if (-not [IO.Directory]::Exists($Directory) -or
+        ([IO.File]::GetAttributes($Directory) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid release staging directory.' }
+    if ($items.Count -gt 0) {
+        $names = @($items | ForEach-Object { $_.Name })
+        foreach ($required in @('ARTIFACT-MANIFEST.json', 'FEATURE-PARITY.json', 'RELEASE-EVIDENCE.json', 'SHA256SUMS.txt')) {
+            if ($required -notin $names) { throw "Refusing to replace unrelated staging directory: $Directory" }
+        }
+        foreach ($item in $items) {
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                $item.Name -notmatch '\A(ARTIFACT-MANIFEST\.json|FEATURE-PARITY\.json|RELEASE-EVIDENCE\.json|SHA256SUMS\.txt|README-[0-9.]+\.txt|HLSDownloader-(Extension-[0-9.]+-(Chromium|Firefox|Firefox-Sources)\.zip|[0-9.]+-(Windows-x64\.(exe|msi)|Windows-x64-Portable\.zip|Release-Evidence\.zip|SBOM\.cdx\.json)))\z') {
+                throw "Refusing to replace unrelated staging item: $($item.FullName)"
+            }
+        }
+    }
 }
+if (Test-Path -LiteralPath $destinationRoot) { Assert-StagingDirectory $destinationRoot }
+$stage = Join-Path $parent ('.stage-' + [guid]::NewGuid().ToString('n'))
+[void][IO.Directory]::CreateDirectory($stage)
+
 function Copy-ReleaseAsset([string]$Source, [string]$Name) {
     $destination = Join-Path $stage $Name
-    Copy-Item -LiteralPath $Source -Destination $destination -Force
+    [IO.File]::Copy($Source, $destination)
     return $destination
 }
 
-$exe = Resolve-VerifiedArtifact $manifest.artifacts.exe
-$msi = Resolve-VerifiedArtifact $manifest.artifacts.msi
-$portable = Resolve-VerifiedArtifact $manifest.artifacts.portable
-[void](Copy-ReleaseAsset $exe "HLSDownloader-$version-Windows-x64.exe")
-[void](Copy-ReleaseAsset $msi "HLSDownloader-$version-Windows-x64.msi")
-[void](Copy-ReleaseAsset $portable "HLSDownloader-$version-Windows-x64-Portable.zip")
-foreach ($browser in @('Chromium', 'Firefox')) {
-    $entry = $manifest.extensions.$browser
-    $source = Resolve-VerifiedArtifact $entry
-    [void](Copy-ReleaseAsset $source "HLSDownloader-Extension-$version-$browser.zip")
-}
-if (-not [String]::IsNullOrWhiteSpace($FirefoxSources)) {
-    $source = (Resolve-Path -LiteralPath $FirefoxSources).Path
-    [void](Copy-ReleaseAsset $source "HLSDownloader-Extension-$version-Firefox-Sources.zip")
-}
+try {
+    $exe = Resolve-V7PackageFile $packageRoot $manifest.artifacts.exe.path $manifest.artifacts.exe.sha256
+    $msi = Resolve-V7PackageFile $packageRoot $manifest.artifacts.msi.path $manifest.artifacts.msi.sha256
+    $portable = Resolve-V7PackageFile $packageRoot $manifest.artifacts.portable.path $manifest.artifacts.portable.sha256
+    [void](Copy-ReleaseAsset $exe "HLSDownloader-$version-Windows-x64.exe")
+    [void](Copy-ReleaseAsset $msi "HLSDownloader-$version-Windows-x64.msi")
+    [void](Copy-ReleaseAsset $portable "HLSDownloader-$version-Windows-x64-Portable.zip")
+    foreach ($browser in @('Chromium', 'Firefox')) {
+        $entry = $manifest.extensions.$browser
+        $source = Resolve-V7PackageFile $packageRoot $entry.path $entry.sha256
+        [void](Copy-ReleaseAsset $source "HLSDownloader-Extension-$version-$browser.zip")
+    }
+    if (-not [String]::IsNullOrWhiteSpace($FirefoxSources)) {
+        $source = (Resolve-Path -LiteralPath $FirefoxSources).Path
+        [void](Copy-ReleaseAsset $source "HLSDownloader-Extension-$version-Firefox-Sources.zip")
+    }
 
-foreach ($name in @('FEATURE-PARITY.json', 'ARTIFACT-MANIFEST.json')) {
-    $source = if ($name -eq 'FEATURE-PARITY.json') { Join-Path $packageRoot $name } elseif ($name -eq 'ARTIFACT-MANIFEST.json') { $manifestFullPath } else { Join-Path $packageRoot $name }
-    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Required release metadata is missing: $source" }
-    [void](Copy-ReleaseAsset $source $name)
-}
-$releaseEvidence = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
-if (-not (Test-Path -LiteralPath $releaseEvidence -PathType Leaf)) { throw 'Release evidence is missing.' }
-[void](Copy-ReleaseAsset $releaseEvidence 'RELEASE-EVIDENCE.json')
-$evidenceDir = Join-Path $repo 'artifacts\v7-productization\release-evidence'
-if (-not (Test-Path -LiteralPath $evidenceDir -PathType Container)) { throw 'Per-gate release evidence is missing.' }
-$gateBundle = Join-Path $stage "HLSDownloader-$version-Release-Evidence.zip"
-Compress-Archive -Path (Join-Path $evidenceDir '*') -DestinationPath $gateBundle -CompressionLevel Optimal -Force
+    $feature = Resolve-V7PackageFile $packageRoot $manifest.feature_parity_path $manifest.feature_parity_sha256
+    [void](Copy-ReleaseAsset $feature 'FEATURE-PARITY.json')
+    [void](Copy-ReleaseAsset $manifestFullPath 'ARTIFACT-MANIFEST.json')
+    $releaseEvidence = Join-Path $repo 'artifacts\v7-productization\release-evidence.json'
+    if (-not (Test-Path -LiteralPath $releaseEvidence -PathType Leaf)) { throw 'Release evidence is missing.' }
+    [void](Copy-ReleaseAsset $releaseEvidence 'RELEASE-EVIDENCE.json')
+    $evidenceDir = Join-Path $repo 'artifacts\v7-productization\release-evidence'
+    if (-not (Test-Path -LiteralPath $evidenceDir -PathType Container)) { throw 'Per-gate release evidence is missing.' }
+    $gateBundle = Join-Path $stage "HLSDownloader-$version-Release-Evidence.zip"
+    [IO.Compression.ZipFile]::CreateFromDirectory($evidenceDir, $gateBundle)
 
-$sbom = Join-Path $stage "HLSDownloader-$version-SBOM.cdx.json"
-if ([string]$manifest.ui_runtime -ne 'native') { throw 'Release requires the native UI runtime.' }
-$uiRuntime = 'native'
-& $Python (Join-Path $PSScriptRoot 'generate_sbom.py') --version $version --output $sbom --ui-runtime $uiRuntime
-if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE." }
+    $sbom = Join-Path $stage "HLSDownloader-$version-SBOM.cdx.json"
+    if ([string]$manifest.ui_runtime -ne 'native') { throw 'Release requires the native UI runtime.' }
+    $uiRuntime = 'native'
+    & $Python (Join-Path $PSScriptRoot 'generate_sbom.py') --version $version --output $sbom --ui-runtime $uiRuntime
+    if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE." }
 
-$notesPath = Join-Path $stage "README-$version.txt"
-$notes = @"
+    $notesPath = Join-Path $stage "README-$version.txt"
+    $notes = @"
 HLS Downloader $version
 
 Source commit: $currentCommit
@@ -82,15 +98,30 @@ This release was built from one frozen source commit. Executed gates and explici
 
 Firefox extension ZIP: unsigned package for temporary loading and subsequent Mozilla signing. Permanent installation in standard Firefox requires a signed XPI. This release does not claim that signing or permanent-install acceptance was completed.
 "@
-$changesPath = Join-Path $repo "docs\releases\v$version.md"
-if (Test-Path -LiteralPath $changesPath -PathType Leaf) {
-    $notes += "`r`n`r`n" + [IO.File]::ReadAllText($changesPath, [Text.Encoding]::UTF8).Trim()
-}
-[IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
+    $changesPath = Join-Path $repo "docs\releases\v$version.md"
+    if (Test-Path -LiteralPath $changesPath -PathType Leaf) {
+        $notes += "`r`n`r`n" + [IO.File]::ReadAllText($changesPath, [Text.Encoding]::UTF8).Trim()
+    }
+    [IO.File]::WriteAllText($notesPath, $notes.Trim() + "`r`n", [Text.UTF8Encoding]::new($false))
 
-$checksumPath = Join-Path $stage 'SHA256SUMS.txt'
-$checksumLines = @(Get-ChildItem -LiteralPath $stage -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name | ForEach-Object {
-    "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
-})
-[IO.File]::WriteAllLines($checksumPath, $checksumLines, [Text.UTF8Encoding]::new($false))
-Write-Output ([ordered]@{ schema = 1; version = $version; source_commit = $currentCommit; release_root = $stage; asset_count = @(Get-ChildItem -LiteralPath $stage -File).Count } | ConvertTo-Json -Compress)
+    $checksumPath = Join-Path $stage 'SHA256SUMS.txt'
+    $checksumLines = @(Get-ChildItem -LiteralPath $stage -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name | ForEach-Object {
+        "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+    })
+    [IO.File]::WriteAllLines($checksumPath, $checksumLines, [Text.UTF8Encoding]::new($false))
+    if ([IO.Directory]::Exists($destinationRoot)) {
+        $previous = Join-Path $parent ('.previous-stage-' + [guid]::NewGuid().ToString('n'))
+        [IO.Directory]::Move($destinationRoot, $previous)
+    }
+    try {
+        if ($previous) { Assert-StagingDirectory $previous }
+        [IO.Directory]::Move($stage, $destinationRoot)
+    } catch {
+        if ($previous) { [IO.Directory]::Move($previous, $destinationRoot) }
+        throw
+    }
+    if ($previous) { Remove-Item -LiteralPath $previous -Recurse -Force }
+} finally {
+    if ([IO.Directory]::Exists($stage)) { Remove-Item -LiteralPath $stage -Recurse -Force }
+}
+Write-Output ([ordered]@{ schema = 1; version = $version; source_commit = $currentCommit; release_root = $destinationRoot; asset_count = @(Get-ChildItem -LiteralPath $destinationRoot -File).Count } | ConvertTo-Json -Compress)

@@ -5,7 +5,7 @@ use super::{
     CoreCoordinator,
 };
 use crate::output_path::reject_path_escape;
-use crate::{CoreEvent, QueueProfile};
+use crate::QueueProfile;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -121,7 +121,10 @@ impl CoreCoordinator {
             torrent_watch_enabled: core.store().setting_bool("watch_torrents", false)?,
             download_dir,
             temp_dir: core.store().setting_string("temp_dir", "")?,
-            default_concurrency: core.store().setting_u64("default_concurrency", 12)?.max(1),
+            default_concurrency: core
+                .store()
+                .setting_u64("default_concurrency", 12)?
+                .clamp(1, 64),
             proxy_url: core.store().setting_string("proxy_url", "")?,
             ffmpeg_path: core.store().setting_string("ffmpeg_path", "")?,
             clipboard_watch: core.store().setting_bool("clipboard_watch", false)?,
@@ -216,32 +219,36 @@ impl CoreCoordinator {
                 Value::String(crate::LEGAL_TERMS_VERSION.into()),
             );
         }
-        let start_login = values.get("start_on_login").and_then(Value::as_bool);
-        if let Some(flag) = start_login {
-            crate::startup::apply(flag)?;
-        }
-        if let Some(profiles) = &queue_profiles {
+        let mut core = self.lock()?;
+        let orphaned = if let Some(profiles) = &queue_profiles {
             let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
-            let mut core = self.lock()?;
-            let orphaned = core
-                .tasks()
+            core.tasks()
                 .into_iter()
                 .filter(|task| !ids.contains(task.queue_id.as_str()))
                 .map(|task| task.task_id)
-                .collect();
-            core.assign_queue_and_set_settings(orphaned, crate::DEFAULT_QUEUE_ID.into(), &values)?;
-            if values.contains_key("ffmpeg_path") {
-                super::sync_configured_ffmpeg(core.store());
-            }
+                .collect()
         } else {
-            let mut core = self.lock()?;
-            core.store_mut().set_settings(&values)?;
-            if values.contains_key("ffmpeg_path") {
-                super::sync_configured_ffmpeg(core.store());
+            Vec::new()
+        };
+        let previous_startup =
+            if let Some(flag) = values.get("start_on_login").and_then(Value::as_bool) {
+                let previous = core.store().setting_bool("start_on_login", false)?;
+                crate::startup::apply(flag)?;
+                Some(previous)
+            } else {
+                None
+            };
+        if let Err(error) =
+            core.assign_queue_and_set_settings(orphaned, crate::DEFAULT_QUEUE_ID.into(), &values)
+        {
+            if let Some(previous) = previous_startup {
+                crate::startup::apply(previous)
+                    .map_err(|rollback| format!("{error}；恢复开机启动失败：{rollback}"))?;
             }
-            core.emit(CoreEvent::SettingsChanged {
-                keys: values.keys().cloned().collect(),
-            })?;
+            return Err(error);
+        }
+        if values.contains_key("ffmpeg_path") {
+            super::sync_configured_ffmpeg(core.store());
         }
         if values.keys().any(|key| {
             matches!(
@@ -253,7 +260,6 @@ impl CoreCoordinator {
                     | "download_speed_schedule_kib"
             )
         }) {
-            let core = self.lock()?;
             crate::net_policy::configure_global_schedule(
                 core.store().setting_u64("download_speed_limit_kib", 0)?,
                 core.store()
@@ -286,6 +292,50 @@ impl CoreCoordinator {
     pub(super) fn validate_setting(key: &str, value: &Value) -> Result<(), String> {
         if !PUBLIC_SETTING_KEYS.contains(&key) && key != "legal_terms_version" {
             return Err(format!("未知设置项: {key}"));
+        }
+        match key {
+            "browser_takeover_enabled"
+            | "legal_terms_accepted"
+            | "download_speed_schedule_enabled"
+            | "auto_category_dirs"
+            | "av_scan_enabled"
+            | "watch_torrents"
+            | "clipboard_watch"
+            | "completion_sound_enabled"
+            | "download_progress_window_enabled"
+            | "download_complete_popup_enabled"
+            | "resume_interrupted_on_startup"
+            | "download_subtitles"
+            | "skip_ad_segments"
+            | "hls_remux_ts_to_mp4"
+            | "keep_temp_files"
+            | "allow_duplicate"
+            | "queue_auto_start_enabled"
+            | "queue_auto_stop_enabled"
+            | "start_on_login"
+            | "reduce_motion"
+            | "av_scan_fail_on_threat"
+            | "bt_enable_dht"
+                if !value.is_boolean() =>
+            {
+                return Err(format!("设置项 {key} 必须是布尔值"))
+            }
+            "queue_max_active" | "default_concurrency" | "http_chunk_size_mb"
+                if !value.as_u64().is_some_and(|n| (1..=64).contains(&n)) =>
+            {
+                return Err(format!("设置项 {key} 必须是 1 到 64 的整数"))
+            }
+            "browser_takeover_minimum_bytes"
+            | "download_speed_limit_kib"
+            | "download_speed_schedule_kib"
+            | "auto_retry_failed_max"
+            | "live_record_max_minutes"
+            | "harvest_minimum_bytes"
+                if !value.is_u64() =>
+            {
+                return Err(format!("设置项 {key} 必须是非负整数"))
+            }
+            _ => {}
         }
         if matches!(
             key,
@@ -402,6 +452,11 @@ impl CoreCoordinator {
                 | "allowed_hosts"
                 | "default_user_agent"
                 | "tvbox_endpoint"
+                | "download_dir"
+                | "temp_dir"
+                | "torrent_watch_dir"
+                | "ffmpeg_path"
+                | "av_scan_command"
                 | "proxy_mode"
                 | "proxy_bypass"
                 | "queue_active_days"
@@ -502,6 +557,7 @@ pub(super) fn validate_queue_profiles(value: &Value) -> Result<(), String> {
     for profile in &profiles {
         let id = profile.id.trim();
         if id.is_empty()
+            || id != profile.id
             || id.len() > 40
             || !id
                 .bytes()
@@ -513,7 +569,7 @@ pub(super) fn validate_queue_profiles(value: &Value) -> Result<(), String> {
         let name = profile.name.trim();
         if name.is_empty()
             || name.chars().count() > 40
-            || name.chars().any(char::is_control)
+            || profile.name.chars().any(char::is_control)
             || !names.insert(name.to_lowercase())
         {
             return Err("队列名称必须为 1 到 40 个可见字符".into());
@@ -634,3 +690,44 @@ pub const PUBLIC_SETTING_KEYS: &[&str] = &[
     "preferred_cast_device_id",
     "task_sort",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn failed_settings_event_preserves_the_previous_value() {
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("clipboard_watch", json!(true))
+            .unwrap();
+        {
+            let core = coordinator.lock().unwrap();
+            core.store().connection.execute_batch(
+                "CREATE TRIGGER reject_settings_checkpoint BEFORE INSERT ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'reject'); END;"
+            ).unwrap();
+        }
+        assert!(coordinator
+            .set_setting("clipboard_watch", json!(false))
+            .is_err());
+        assert!(coordinator.settings().unwrap().clipboard_watch);
+    }
+
+    #[test]
+    fn malformed_policy_settings_are_rejected_before_persistence() {
+        for (key, value) in [
+            ("av_scan_enabled", json!("true")),
+            ("download_speed_limit_kib", json!(-1)),
+            ("download_speed_schedule_kib", json!("128")),
+            ("default_concurrency", json!(1_u64 << 32)),
+            ("temp_dir", json!("temp\u{0}dir")),
+        ] {
+            assert!(
+                CoreCoordinator::validate_setting(key, &value).is_err(),
+                "{key}"
+            );
+        }
+        assert!(CoreCoordinator::validate_setting("download_speed_limit_kib", &json!(0)).is_ok());
+    }
+}

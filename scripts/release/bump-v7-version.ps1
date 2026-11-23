@@ -7,15 +7,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $utf8 = [Text.UTF8Encoding]::new($false)
 
+$pending = [ordered]@{}
+Import-Module (Join-Path $PSScriptRoot 'V7VersionContract.psm1') -Force
+[void](Assert-V7CandidateMsiVersion -ExpectedVersion $Version -MsiProductVersion $Version)
+
 function Read-Utf8([string]$RelativePath) {
+    if ($pending.Contains($RelativePath)) { return $pending[$RelativePath] }
     [IO.File]::ReadAllText((Join-Path $repo $RelativePath), [Text.Encoding]::UTF8).Replace("`r`n", "`n")
 }
 
 function Write-Utf8([string]$RelativePath, [string]$Content) {
-    [IO.File]::WriteAllText((Join-Path $repo $RelativePath), $Content, $utf8)
+    $pending[$RelativePath] = $Content
 }
 
 function Replace-Required([string]$RelativePath, [string]$Pattern, [string]$Replacement, [int]$ExpectedCount = 1) {
@@ -74,4 +79,7 @@ if (Test-Path -LiteralPath (Join-Path $repo $readmeEnPath) -PathType Leaf) {
     Write-Utf8 $readmeEnPath $readmeEn
 }
 
+foreach ($path in $pending.Keys) {
+    [IO.File]::WriteAllText((Join-Path $repo $path), $pending[$path], $utf8)
+}
 Write-Host "Updated v7 product version and local Cargo lock entries to $Version (release_ready=$([bool]$ReleaseReady))."

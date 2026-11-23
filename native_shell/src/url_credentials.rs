@@ -23,6 +23,10 @@ fn url_password_key(authority: &str) -> String {
     }
 }
 
+pub(crate) fn redact_urls<T: Serialize + DeserializeOwned>(value: T) -> Result<T, String> {
+    collect_url_passwords(value).map(|(clean, _)| clean)
+}
+
 impl CoreStore {
     fn protect_url_password(&self, authority: &str, password: &str) -> Result<(), String> {
         let key = url_password_key(authority);

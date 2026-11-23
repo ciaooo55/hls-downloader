@@ -1582,7 +1582,7 @@ export default defineContentScript({
         const urls = selectedDownloadUrls(
           [...root.querySelectorAll<HTMLAnchorElement>('a[href]')].map(anchor => anchor.getAttribute('href') || ''),
           selection.toString(),
-          location.href,
+          document.baseURI || location.href,
         )
         selectionMode = true
         selectionResourceIds = new Set<string>()

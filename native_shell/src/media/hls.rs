@@ -1,8 +1,9 @@
 //! HLS / LL-HLS downloader. Segments use the HTTP engine; mux is local.
 
 use crate::http_engine::{
-    copy_hls_body, extract_http_status, fetch_hls_bytes_limited, retryable_http_status,
-    EngineError, Job, MediaTransferError,
+    copy_hls_body, entry_network_scope, extract_http_status, fetch_hls_bytes_limited,
+    fetch_manifest_bytes, media_network_scope, public_entry, retryable_http_status,
+    set_media_network_scope, validate_media_target, EngineError, Job, MediaTransferError,
 };
 use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
@@ -78,6 +79,12 @@ pub struct MediaKey {
 }
 
 pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
+    let public_only = public_entry(base);
+    let resolve = |reference: &str| -> Result<String, String> {
+        let url = super::resolve_http_uri(base, reference);
+        validate_media_target(public_only, &url)?;
+        Ok(url)
+    };
     let mut lines = text
         .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
         .lines();
@@ -159,7 +166,8 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             pending_audio_group = attr_str(attrs, "AUDIO").unwrap_or_default();
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MAP:") {
             let uri = attr_str(attrs, "URI")
-                .map(|uri| resolve(base, &uri))
+                .map(|uri| resolve(&uri))
+                .transpose()?
                 .filter(|uri| !uri.is_empty());
             let uri = uri.ok_or("HLS MAP 缺少有效 URI")?;
             if current_key.as_ref().is_some_and(|key| key.iv.is_none()) {
@@ -201,7 +209,8 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             let key = MediaKey {
                 method,
                 uri: attr_str(attrs, "URI")
-                    .map(|uri| resolve(base, &uri))
+                    .map(|uri| resolve(&uri))
+                    .transpose()?
                     .filter(|uri| !uri.is_empty())
                     .unwrap_or_default(),
                 iv: attr_str(attrs, "IV")
@@ -219,7 +228,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             pending_range = Some(parse_byterange(value)?);
         } else if let Some(attrs) = tag_value(line, "#EXT-X-PART:") {
             if let Some(uri) = attr_str(attrs, "URI") {
-                let resolved = resolve(base, &uri);
+                let resolved = resolve(&uri)?;
                 if resolved.is_empty() {
                     pending_daterange_ad = false;
                     discontinuity = false;
@@ -277,7 +286,8 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 name: attr_str(attrs, "NAME").unwrap_or_default(),
                 language: attr_str(attrs, "LANGUAGE").unwrap_or_default(),
                 uri: attr_str(attrs, "URI")
-                    .map(|uri| resolve(base, &uri))
+                    .map(|uri| resolve(&uri))
+                    .transpose()?
                     .filter(|uri| !uri.is_empty()),
                 default: attr_str(attrs, "DEFAULT")
                     .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
@@ -290,7 +300,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 .ok_or("HLS 清单展开超过长度上限")?;
             playlist.renditions.push(rendition);
         } else if !line.starts_with('#') {
-            let uri = resolve(base, line);
+            let uri = resolve(line)?;
             if uri.is_empty() {
                 pending_bandwidth = 0;
                 pending_codecs.clear();
@@ -614,6 +624,7 @@ pub fn download_hls_with(
     control: &Path,
     options: HlsDownloadOptions,
 ) -> Result<PathBuf, String> {
+    let _network = set_media_network_scope(Some(entry_network_scope(url, proxy)));
     super::with_media_headers(url, headers, || {
         download_hls_scoped(url, headers, proxy, task_dir, control, options)
     })
@@ -1755,6 +1766,7 @@ fn download_prepared_segments(
     let errors = Arc::new(Mutex::new(Vec::new()));
     let completed: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
     let batch = Mutex::new(SegmentBatch::default());
+    let network_scope = media_network_scope();
     let replay = crate::credentials::scoped_replay_json();
     let throttle = crate::net_policy::current_throttle_context();
     // VOD 一次提交全部分片；不能等整批结束后才报告下载字节。
@@ -1774,10 +1786,12 @@ fn download_prepared_segments(
             let errors = Arc::clone(&errors);
             let completed = Arc::clone(&completed);
             let replay = replay.clone();
+            let network_scope = network_scope.clone();
             let throttle = throttle.clone();
             let downloaded = &downloaded;
             let batch = &batch;
             scope.spawn(move || {
+                let _network = set_media_network_scope(network_scope);
                 crate::net_policy::with_throttle_context(throttle, || {
                     crate::with_replay_json(&replay, || loop {
                         let work = queue.lock().ok().and_then(|mut queue| {
@@ -2016,11 +2030,13 @@ impl LiveAudioRecorder {
         let proxy = proxy.to_string();
         let audio_dir = task_dir.join("audio");
         let thread_control = control.clone();
+        let network_scope = media_network_scope();
         let replay = crate::credentials::scoped_replay_json();
         let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
         // 保留主任务的限速/配额，但子请求须读取音轨自己的取消信号，否则 Drop 会等到网络超时。
         throttle.control = thread_control.clone();
         let handle = std::thread::spawn(move || {
+            let _network = set_media_network_scope(network_scope);
             crate::net_policy::with_throttle_context(Some(throttle), || {
                 crate::with_replay_json(&replay, || {
                     download_hls(&uri, &headers, &proxy, &audio_dir, &thread_control, true)
@@ -2235,8 +2251,8 @@ fn capture_live_subtitle_track(
     task_dir: &Path,
     control: &Path,
 ) -> Result<(), String> {
-    let (status, body) =
-        fetch_hls_bytes_limited(&track.uri, headers, proxy, super::MAX_MANIFEST_BYTES)
+    let (status, body, final_url) =
+        fetch_manifest_bytes(&track.uri, headers, proxy, true, super::MAX_MANIFEST_BYTES)
             .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Ok(());
@@ -2255,7 +2271,7 @@ fn capture_live_subtitle_track(
         }
         return Ok(());
     }
-    let playlist = match parse_playlist(text, &track.uri) {
+    let playlist = match parse_playlist(text, &final_url) {
         Ok(parsed) if !parsed.is_master => parsed,
         _ => return Ok(()),
     };
@@ -2317,8 +2333,9 @@ fn download_vod_subtitle(
         "pause" => return Err("paused".into()),
         _ => {}
     }
-    let (status, body) = fetch_hls_bytes_limited(uri, headers, proxy, super::MAX_MANIFEST_BYTES)
-        .map_err(|error| error.to_string())?;
+    let (status, body, final_url) =
+        fetch_manifest_bytes(uri, headers, proxy, true, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS subtitle HTTP {status}"));
     }
@@ -2330,7 +2347,7 @@ fn download_vod_subtitle(
     {
         text.to_owned()
     } else {
-        let playlist = parse_playlist(text, uri)?;
+        let playlist = parse_playlist(text, &final_url)?;
         if playlist.is_master {
             return Err("HLS subtitle rendition must reference a media playlist".into());
         }
@@ -2378,13 +2395,14 @@ fn load_playlist(
     headers: &HashMap<String, String>,
     proxy: &str,
 ) -> Result<Playlist, String> {
-    let (status, body) = fetch_hls_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
-        .map_err(|error| error.to_string())?;
+    let (status, body, final_url) =
+        fetch_manifest_bytes(url, headers, proxy, true, super::MAX_MANIFEST_BYTES)
+            .map_err(|error| error.to_string())?;
     if status != 200 && status != 206 {
         return Err(format!("HLS playlist HTTP {status}"));
     }
     let text = std::str::from_utf8(&body).map_err(|_| "HLS 文本不是 UTF-8")?;
-    parse_playlist(text, url)
+    parse_playlist(text, &final_url)
 }
 
 // 只重试可恢复的网络失败；解密和写盘失败不应重新请求相同资源。
@@ -2948,10 +2966,6 @@ fn parse_hls_duration(value: &str) -> Result<f64, String> {
         .ok_or_else(|| "无效 HLS 时长".into())
 }
 
-fn resolve(base: &str, reference: &str) -> String {
-    super::resolve_http_uri(base, reference)
-}
-
 fn parse_resolution(value: &str) -> (u32, u32) {
     let Some((width, height)) = value.split_once('x') else {
         return (0, 0);
@@ -2985,6 +2999,58 @@ fn read_control(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redirected_playlist_resolves_children_without_replaying_entry_credentials() {
+        use crate::http_engine::serve_redirect_test_responses;
+        let manifest = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"aes.key\"\n#EXTINF:1,\nvideo.ts\n#EXT-X-ENDLIST\n";
+        let (cdn, cdn_server) = serve_redirect_test_responses(vec![
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{manifest}",
+                manifest.len()
+            ),
+            "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n0123456789abcdef".into(),
+        ]);
+        let (entry, entry_server) = serve_redirect_test_responses(vec![format!(
+            "HTTP/1.1 302 Found\r\nLocation: {cdn}/vod/rendition.m3u8\r\nContent-Length: 0\r\n\r\n"
+        )]);
+        let url = format!("{entry}/entry.m3u8?token=entry-only");
+        let headers = HashMap::from([("Authorization".into(), "Bearer entry-only".into())]);
+        crate::media::with_media_headers(&url, &headers, || {
+            let playlist = load_playlist(&url, &headers, "").unwrap();
+            let segment = &playlist.segments[0];
+            assert_eq!(segment.uri, format!("{cdn}/vod/video.ts"));
+            let key = segment.key.as_ref().unwrap();
+            assert_eq!(key.uri, format!("{cdn}/vod/aes.key"));
+            assert_eq!(
+                load_key(key, &headers, "", &mut HashMap::new()).unwrap(),
+                b"0123456789abcdef"
+            );
+        });
+        assert!(entry_server.join().unwrap()[0].contains("Bearer entry-only"));
+        let requests = cdn_server.join().unwrap();
+        assert!(requests[0].starts_with("GET /vod/rendition.m3u8 "));
+        assert!(requests[1].starts_with("GET /vod/aes.key "));
+        assert!(requests.iter().all(|head| !head.contains("entry-only")));
+    }
+
+    #[test]
+    fn public_playlist_rejects_private_children() {
+        for line in [
+            "//127.0.0.1/video.ts",
+            "#EXT-X-KEY:METHOD=AES-128,URI=\"http://169.254.169.254/key\"",
+            "#EXT-X-MAP:URI=\"http://[::1]/init\"",
+            "#EXT-X-PART:DURATION=1,URI=\"http://[::ffff:10.0.0.1]/part\"",
+            "#EXT-X-MEDIA:TYPE=AUDIO,URI=\"http://localhost/audio.m3u8\"",
+        ] {
+            assert!(
+                parse_playlist(&format!("#EXTM3U\n{line}"), "https://cdn.example/live.m3u8")
+                    .unwrap_err()
+                    .contains("private network"),
+                "{line}"
+            );
+        }
+    }
+
     #[test]
     fn segment_budget_accounts_for_inherited_map_keys() {
         let key = MediaKey {

@@ -30,23 +30,32 @@ def component(kind: str, ecosystem: str, name: str, version: str) -> dict:
 
 def cargo_components(lock_path: Path) -> list[dict]:
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-    return [
-        component("library", "cargo", str(item["name"]), str(item["version"]))
-        for item in lock.get("package", [])
-        if item.get("name") and item.get("version")
-    ]
+    packages = lock.get("package")
+    if not isinstance(packages, list) or not packages:
+        raise ValueError(f"{lock_path}: missing Cargo packages")
+    values = []
+    for item in packages:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(key), str) and item[key].strip() for key in ("name", "version")
+        ):
+            raise ValueError(f"{lock_path}: malformed Cargo package")
+        values.append(component("library", "cargo", item["name"], item["version"]))
+    return values
 
 
 def npm_components(lock_path: Path) -> list[dict]:
-    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict) or not packages:
+        raise ValueError(f"{lock_path}: missing pnpm packages")
     values = []
-    for key in (lock.get("packages") or {}):
-        raw = str(key)
-        if "@" not in raw:
-            continue
-        name, version = raw.rsplit("@", 1)
-        if name and version:
-            values.append(component("library", "npm", name, version))
+    for key in packages:
+        if not isinstance(key, str):
+            raise ValueError(f"{lock_path}: invalid pnpm package key {key!r}")
+        name, _, version = key.partition("(")[0].rpartition("@")
+        if not name.strip() or not version.strip():
+            raise ValueError(f"{lock_path}: invalid pnpm package key {key!r}")
+        values.append(component("library", "npm", name, version))
     return values
 
 
@@ -59,7 +68,7 @@ def build_sbom(version: str, ui_runtime: str = "native") -> dict:
     ]
     unique = {item["bom-ref"]: item for item in values}
     components = [unique[key] for key in sorted(unique)]
-    identity = "\n".join(unique)
+    identity = "\n".join([version, *(item["bom-ref"] for item in components)])
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.6",

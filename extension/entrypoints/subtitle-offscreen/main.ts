@@ -1,66 +1,93 @@
 import { browser } from 'wxt/browser'
 import { captureSubtitleAudio } from '../../lib/subtitleAudio'
-let stop: (() => void | Promise<void>) | undefined
-let current = ''
-let generation = 0
-let heartbeat: ReturnType<typeof setInterval> | undefined
-browser.runtime.onMessage.addListener((message, _sender, respond) => {
-  if (message?.target !== 'subtitle-offscreen') return
-  if (message.type === 'stop') {
-    if (message.sessionId && message.sessionId !== current) {
-      respond({ ok: true })
-      return
-    }
-    const sessionId = current
-    const cleanup = stop; stop = undefined
-    clearInterval(heartbeat)
-    void Promise.resolve(cleanup?.()).then(() => {
-      if (current === sessionId) { generation++; current = '' }
-      respond({ ok: true })
-    }, () => {
-      if (current === sessionId) { generation++; current = '' }
-      respond({ ok: false, error: '音频尾部未能提交给字幕服务' })
+import { withDeadline } from '../../lib/asyncDeadline'
+
+interface CaptureSession {
+  id: string
+  cleanup?: () => Promise<void>
+  stopping?: Promise<void>
+  heartbeat?: ReturnType<typeof setTimeout>
+}
+let current: CaptureSession | undefined
+
+function stop(session: CaptureSession): Promise<void> {
+  if (!session.stopping) {
+    clearTimeout(session.heartbeat)
+    session.stopping = Promise.resolve().then(() => session.cleanup?.()).finally(() => {
+      if (current === session) current = undefined
     })
+  }
+  return session.stopping
+}
+
+function scheduleHeartbeat(session: CaptureSession): void {
+  if (current !== session || session.stopping) return
+  session.heartbeat = setTimeout(async () => {
+    try {
+      const response = await withDeadline(browser.runtime.sendMessage({ target: 'subtitle-background', type: 'heartbeat', sessionId: session.id }), 15_000)
+      if (response?.ok) { scheduleHeartbeat(session); return }
+    } catch {}
+    await stop(session).catch(() => undefined)
+  }, 5000)
+}
+
+async function start(session: CaptureSession, streamId: string): Promise<boolean> {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: { mandatory: {
+    chromeMediaSource: 'tab', chromeMediaSourceId: streamId,
+  } } as MediaTrackConstraints })
+  if (current !== session || session.stopping) {
+    stream.getTracks().forEach(track => track.stop())
+    return false
+  }
+  const cleanup = await captureSubtitleAudio(stream, true, async (audio, capturedAt, finalFlush) => {
+    if (current !== session) return
+    const response = await withDeadline(browser.runtime.sendMessage({ target: 'subtitle-background', type: 'audio', sessionId: session.id, audio, capturedAt, finalFlush }), 15_000)
+    if (!response?.ok) throw new Error('音频尾部未能提交给字幕服务')
+  })
+  if (current !== session || session.stopping) {
+    await cleanup()
+    return false
+  }
+  const track = stream.getAudioTracks()[0]
+  if (!track || track.readyState === 'ended') {
+    await cleanup()
+    return false
+  }
+  const ended = () => {
+    if (current !== session || session.stopping) return
+    void browser.runtime.sendMessage({ target: 'subtitle-background', type: 'capture-ended', sessionId: session.id })
+      .catch(() => undefined).then(() => stop(session)).catch(() => undefined)
+  }
+  track.addEventListener('ended', ended, { once: true })
+  session.cleanup = () => {
+    track.removeEventListener('ended', ended)
+    return cleanup()
+  }
+  scheduleHeartbeat(session)
+  return true
+}
+
+browser.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.target !== 'subtitle-offscreen') return
+  if (sender.id !== browser.runtime.id || sender.tab || typeof message.sessionId !== 'string' || !message.sessionId) {
+    respond({ ok: false })
+    return
+  }
+  if (message.type === 'stop') {
+    if (!current || current.id !== message.sessionId) { respond({ ok: true }); return }
+    void stop(current).then(() => respond({ ok: true }), () => respond({ ok: false, error: '音频尾部未能提交给字幕服务' }))
     return true
   }
   if (message.type !== 'start') return
-  const attempt = ++generation
-  const previousCleanup = stop; stop = undefined
-  void Promise.resolve(previousCleanup?.()).catch(() => undefined)
-  clearInterval(heartbeat)
-  current = String(message.sessionId)
-  const sessionId = current
-  void (async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: { mandatory: {
-      chromeMediaSource: 'tab', chromeMediaSourceId: message.streamId,
-    } } as MediaTrackConstraints })
-    const cleanup = await captureSubtitleAudio(stream, true, (audio, capturedAt, finalFlush) => {
-      if (attempt === generation) return browser.runtime.sendMessage({ target: 'subtitle-background', type: 'audio', sessionId, audio, capturedAt, finalFlush }).then(response => {
-        if (!response?.ok) throw new Error('音频尾部未能提交给字幕服务')
-      })
-    })
-    if (attempt !== generation) { await cleanup().catch(() => undefined); return }
-    stop = cleanup
-    stream.getAudioTracks()[0]?.addEventListener('ended', () => {
-      void browser.runtime.sendMessage({ target: 'subtitle-background', type: 'capture-ended', sessionId }).catch(() => undefined)
-    })
-    // 离屏文档的心跳能在暂停视频时唤醒 MV3 worker；单靠 setInterval 不行。
-    heartbeat = setInterval(() => {
-      void browser.runtime.sendMessage({ target: 'subtitle-background', type: 'heartbeat', sessionId }).then(response => {
-        if (!response?.ok && current === sessionId) {
-          const cleanup = stop; stop = undefined; clearInterval(heartbeat)
-          const done = () => { if (current === sessionId) { generation++; current = '' } }
-          void Promise.resolve(cleanup?.()).then(done, done)
-        }
-      }).catch(() => {
-        if (current !== sessionId) return
-        const cleanup = stop; stop = undefined; clearInterval(heartbeat)
-        const done = () => { if (current === sessionId) { generation++; current = '' } }
-        void Promise.resolve(cleanup?.()).then(done, done)
-      })
-    }, 5000)
-  })().then(() => respond({ ok: attempt === generation })).catch(() => {
-    if (attempt === generation) current = ''
+  if (typeof message.streamId !== 'string' || !message.streamId) { respond({ ok: false }); return }
+  if (current) void stop(current).catch(() => undefined)
+  const session: CaptureSession = { id: message.sessionId }
+  current = session
+  void start(session, message.streamId).then(ok => {
+    if (!ok && current === session) current = undefined
+    respond({ ok })
+  }, () => {
+    if (current === session) current = undefined
     respond({ ok: false, error: '无法采集当前标签页音频，请从插件弹窗重新开始' })
   })
   return true

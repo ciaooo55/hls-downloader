@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 #[cfg(windows)]
-static KEEP_MUTEX: OnceLock<isize> = OnceLock::new();
+static KEEP_MUTEX: OnceLock<std::os::windows::io::OwnedHandle> = OnceLock::new();
 #[cfg(windows)]
-static KEEP_PRESENTER_MUTEX: OnceLock<isize> = OnceLock::new();
+static KEEP_PRESENTER_MUTEX: OnceLock<std::os::windows::io::OwnedHandle> = OnceLock::new();
 static KEEP_LOCK: OnceLock<File> = OnceLock::new();
 static KEEP_PRESENTER_LOCK: OnceLock<File> = OnceLock::new();
 
@@ -73,11 +73,13 @@ pub fn is_already_running_error(message: &str) -> bool {
 
 pub fn claim_v7_instance() -> Result<(), String> {
     #[cfg(windows)]
-    claim_session_mutex()?;
-    if cfg!(test) {
-        return Ok(());
+    let handle = claim_session_mutex("Local\\HLSDownloader.v7", "native shell")?;
+    if !cfg!(test) {
+        claim_profile_lock()?;
     }
-    claim_profile_lock()
+    #[cfg(windows)]
+    let _ = KEEP_MUTEX.set(handle);
+    Ok(())
 }
 
 /// Claims the latency-sensitive handoff presenter independently from the
@@ -85,10 +87,16 @@ pub fn claim_v7_instance() -> Result<(), String> {
 /// the lock also lets a crashed presenter be replaced without touching Core.
 pub fn claim_v7_presenter_instance() -> Result<(), String> {
     #[cfg(windows)]
-    claim_presenter_session_mutex()?;
-    if cfg!(test) {
-        return Ok(());
+    let handle = claim_session_mutex("Local\\HLSDownloader.v7.presenter", "v7 presenter")?;
+    if !cfg!(test) {
+        claim_presenter_profile_lock()?;
     }
+    #[cfg(windows)]
+    let _ = KEEP_PRESENTER_MUTEX.set(handle);
+    Ok(())
+}
+
+fn claim_presenter_profile_lock() -> Result<(), String> {
     let path = crate::default_v7_database_path().with_file_name("presenter.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -127,41 +135,25 @@ fn session_mutex_name(base: &str) -> Vec<u16> {
 }
 
 #[cfg(windows)]
-fn claim_session_mutex() -> Result<(), String> {
-    use std::ptr::null;
+fn claim_session_mutex(
+    base: &str,
+    target: &str,
+) -> Result<std::os::windows::io::OwnedHandle, String> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name = session_mutex_name("Local\\HLSDownloader.v7");
-    let handle = unsafe { CreateMutexW(null(), 1, name.as_ptr()) };
-    if handle.is_null() {
-        return Err(format!("CreateMutexW failed: {}", unsafe {
-            GetLastError()
-        }));
+    let name = session_mutex_name(base);
+    // Existence marks the instance. The profile file supplies the exclusive lock.
+    let raw = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    let error = unsafe { GetLastError() };
+    if raw.is_null() {
+        return Err(format!("CreateMutexW {target} failed: {error}"));
     }
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Err(already_running_error("native shell"));
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    if error == ERROR_ALREADY_EXISTS {
+        return Err(already_running_error(target));
     }
-    let _ = KEEP_MUTEX.set(handle as isize);
-    Ok(())
-}
-
-#[cfg(windows)]
-fn claim_presenter_session_mutex() -> Result<(), String> {
-    use std::ptr::null;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
-    let name = session_mutex_name("Local\\HLSDownloader.v7.presenter");
-    let handle = unsafe { CreateMutexW(null(), 1, name.as_ptr()) };
-    if handle.is_null() {
-        return Err(format!("CreateMutexW presenter failed: {}", unsafe {
-            GetLastError()
-        }));
-    }
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Err(already_running_error("v7 presenter"));
-    }
-    let _ = KEEP_PRESENTER_MUTEX.set(handle as isize);
-    Ok(())
+    Ok(handle)
 }
 
 pub fn presenter_is_running() -> bool {
@@ -179,7 +171,12 @@ pub fn presenter_is_running() -> bool {
     }
     #[cfg(not(windows))]
     {
-        false
+        let path = crate::default_v7_database_path().with_file_name("presenter.lock");
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
     }
 }
 
@@ -245,8 +242,11 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn try_exclusive_lock(_file: &File) -> Result<(), String> {
-    Ok(())
+fn try_exclusive_lock(file: &File) -> Result<(), String> {
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => already_running_error("native shell"),
+        std::fs::TryLockError::Error(error) => format!("lock instance file: {error}"),
+    })
 }
 
 #[cfg(test)]
@@ -277,5 +277,38 @@ mod tests {
         let unexpected = lock_failure(ERROR_ACCESS_DENIED);
         assert!(!is_already_running_error(&unexpected));
         assert!(unexpected.starts_with("LockFileEx failed:"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn duplicate_mutex_attempt_does_not_keep_the_object_alive() {
+        let name = format!("Local\\HLSDownloader.test.mutex.{}", std::process::id());
+        let owner = claim_session_mutex(&name, "test").unwrap();
+        assert!(is_already_running_error(
+            &claim_session_mutex(&name, "test").unwrap_err()
+        ));
+        drop(owner);
+        assert!(claim_session_mutex(&name, "test").is_ok());
+    }
+
+    #[test]
+    fn profile_file_lock_excludes_a_second_open_until_drop() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/audit-tests");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(format!("instance-{}.test.lock", std::process::id()));
+        let owner = File::create_new(&path).unwrap();
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        try_exclusive_lock(&owner).unwrap();
+        assert!(is_already_running_error(
+            &try_exclusive_lock(&contender).unwrap_err()
+        ));
+        drop(owner);
+        try_exclusive_lock(&contender).unwrap();
+        drop(contender);
+        std::fs::remove_file(path).unwrap();
     }
 }

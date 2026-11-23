@@ -32,8 +32,8 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   const item = value as Record<string, unknown>
   const handoffId = String(item.handoffId || '')
   const clientRequestId = String(item.clientRequestId || '')
-  const downloadId = Number(item.downloadId)
-  if ((!handoffId && !clientRequestId) || !Number.isInteger(downloadId) || downloadId < 0) return null
+  const downloadId = item.downloadId
+  if ((!handoffId && !clientRequestId) || typeof downloadId !== 'number' || !Number.isSafeInteger(downloadId) || downloadId < 0) return null
   const phase: PausedHandoffFollowUpPhase = item.phase === 'cleanup' ? 'cleanup'
     : item.phase === 'readiness' ? 'readiness' : 'resolution'
   const deadline = Number(item.deadline)

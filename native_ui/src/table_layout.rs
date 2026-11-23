@@ -8,6 +8,7 @@ pub struct Column {
 }
 
 pub fn columns(viewport: f32) -> Vec<Column> {
+    let viewport = if viewport.is_finite() { viewport } else { 0.0 };
     let compact = viewport < 930.0;
     let mut columns = vec![
         Column {
@@ -45,7 +46,7 @@ pub fn columns(viewport: f32) -> Vec<Column> {
         label: "操作",
         width: if compact { 96.0 } else { 104.0 },
     });
-    columns[0].width = viewport - columns.iter().map(|column| column.width).sum::<f32>();
+    columns[0].width = (viewport - columns.iter().map(|column| column.width).sum::<f32>()).max(0.0);
     columns
 }
 
@@ -66,6 +67,15 @@ mod tests {
             for id in ["name", "progress", "status", "actions"] {
                 assert!(columns.iter().any(|column| column.id == id));
             }
+        }
+    }
+
+    #[test]
+    fn unmeasured_viewport_keeps_column_widths_finite_and_nonnegative() {
+        for viewport in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(columns(viewport)
+                .iter()
+                .all(|column| column.width.is_finite() && column.width >= 0.0));
         }
     }
 
