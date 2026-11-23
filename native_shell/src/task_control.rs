@@ -140,19 +140,19 @@ pub(crate) fn register(path: &Path) -> ControlRegistration {
     }
 }
 
-/// Writes a control value: the in-memory token first (so running workers see
-/// it on their next poll), then the file. The registry lock is held across
-/// both so a concurrent [`register`] cannot read the file between them.
+/// Publish the token after the file write succeeds. The registry lock keeps
+/// registration and token readers consistent with the write.
 pub(crate) fn set(path: &Path, value: &str) -> Result<(), String> {
     let map = controls()
         .write()
         .unwrap_or_else(|error| error.into_inner());
+    write_file_atomically(path, value).map_err(|error| format!("write task control: {error}"))?;
     let parsed = parse(value);
     if let Some(entry) = map.get(path) {
         entry.state.store(parsed, Ordering::SeqCst);
         entry.file_seen.store(parsed, Ordering::SeqCst);
     }
-    fs::write(path, value).map_err(|error| format!("write task control: {error}"))
+    Ok(())
 }
 
 fn current_at(path: &Path, now: u64) -> Option<u8> {
@@ -256,18 +256,29 @@ fn release_progress_dir(dir: &Path) {
     for (path, file) in pending {
         // A cleanup that already removed the file must not be undone.
         if file.dirty && path.exists() {
-            write_file_atomically(&path, &file.text);
+            let _ = write_file_atomically(&path, &file.text);
         }
     }
 }
 
-fn write_file_atomically(path: &Path, text: &str) {
+fn write_file_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".tmp");
+    name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp = path.with_file_name(name);
-    if fs::write(&tmp, text).is_ok() && crate::atomic_replace::replace_file(&tmp, path).is_err() {
-        let _ = fs::remove_file(&tmp);
+    let mut file = fs::File::create_new(&tmp)?;
+    let written = file.write_all(text.as_bytes());
+    drop(file);
+    let result = written.and_then(|()| crate::atomic_replace::replace_file(&tmp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(tmp);
     }
+    result
 }
 
 /// Publishes a progress file. Inside a registered task directory the value is
@@ -279,37 +290,31 @@ pub(crate) fn publish_progress_file(path: &Path, text: &str, force: bool) {
 }
 
 fn publish_progress_file_at(path: &Path, text: &str, force: bool, now: u64) {
-    // Serialize mirror publication and the atomic replacement (shared .tmp path).
     let mut dirs = progress_dirs()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let write = {
-        match path.parent().and_then(|dir| dirs.get_mut(dir)) {
-            None => true,
-            Some(dir) => {
-                let file = dir
-                    .files
-                    .entry(path.to_path_buf())
-                    .or_insert_with(|| ProgressFile {
-                        text: String::new(),
-                        written_ms: 0,
-                        dirty: false,
-                    });
-                file.text.clear();
-                file.text.push_str(text);
-                let due = force
-                    || file.written_ms == 0
-                    || now.saturating_sub(file.written_ms) >= PROGRESS_FILE_INTERVAL_MS;
-                if due {
-                    file.written_ms = now;
-                }
-                file.dirty = !due;
-                due
-            }
-        }
+    let Some(dir) = path.parent().and_then(|dir| dirs.get_mut(dir)) else {
+        let _ = write_file_atomically(path, text);
+        return;
     };
-    if write {
-        write_file_atomically(path, text);
+    let file = dir
+        .files
+        .entry(path.to_path_buf())
+        .or_insert_with(|| ProgressFile {
+            text: String::new(),
+            written_ms: 0,
+            dirty: false,
+        });
+    file.text.clear();
+    file.text.push_str(text);
+    file.dirty = true;
+    if (force
+        || file.written_ms == 0
+        || now.saturating_sub(file.written_ms) >= PROGRESS_FILE_INTERVAL_MS)
+        && write_file_atomically(path, text).is_ok()
+    {
+        file.written_ms = now;
+        file.dirty = false;
     }
 }
 
@@ -370,6 +375,23 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn failed_control_write_preserves_token_and_failed_progress_is_retried() {
+        let dir = temp_dir("failed-write");
+        let missing = dir.join("missing");
+        let control = missing.join("control");
+        let registration = register(&control);
+        assert!(set(&control, "cancel").is_err());
+        assert_eq!(current(&control), Some(RUN));
+        let progress = missing.join("progress");
+        publish_progress_file_at(&progress, "first", false, 50);
+        fs::create_dir(&missing).unwrap();
+        publish_progress_file_at(&progress, "second", false, 51);
+        assert_eq!(fs::read_to_string(progress).unwrap(), "second");
+        drop(registration);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -78,8 +78,8 @@ impl MediaProxy {
             return Err("媒体地址无效".into());
         }
         Ok(Self {
+            replay: crate::credentials::bind_replay_source_url(&replay, &spec.url),
             spec,
-            replay,
             canceled: Arc::new(AtomicBool::new(false)),
             routes: Mutex::new(Routes::default()),
         })
@@ -226,6 +226,11 @@ impl MediaProxy {
             return status(&stream, 416);
         }
         let mut spec = self.spec.clone();
+        if crate::http_engine::http_origin(&self.spec.url) != crate::http_engine::http_origin(&url)
+        {
+            spec.headers
+                .retain(|name, _| !crate::download_worker::sensitive_header_name(name));
+        }
         spec.url = url;
         let range = if kind.is_some() { None } else { range };
         // Share the accepted socket without creating an inheritable Windows handle.
@@ -462,10 +467,11 @@ fn manifest_kind(url: &str, content_type: &str, first: &[u8]) -> Option<&'static
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    let text = std::str::from_utf8(first)
-        .unwrap_or("")
-        .trim_start_matches('\u{feff}')
-        .trim_start();
+    // The fixed-size sniff window can end in the middle of a UTF-8 scalar.
+    let valid = std::str::from_utf8(first).unwrap_or_else(|error| {
+        std::str::from_utf8(&first[..error.valid_up_to()]).unwrap_or_default()
+    });
+    let text = valid.trim_start_matches('\u{feff}').trim_start();
     if path.ends_with(".m3u8")
         || path.ends_with(".m3u")
         || kind.contains("mpegurl")
@@ -496,7 +502,7 @@ fn rewrite_hls(
     }
     let mut out = String::new();
     let mut count = 0;
-    for line in text.lines() {
+    for line in text.trim_start_matches('\u{feff}').lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("#EXT-X-CONTENT-STEERING:") {
             continue;
@@ -603,6 +609,10 @@ fn expand_template(
     text: &str,
     mut replace: impl FnMut(&str) -> Result<String, String>,
 ) -> Result<String, String> {
+    const MAX_TEMPLATE_BYTES: usize = 16 * 1024;
+    if text.len() > MAX_TEMPLATE_BYTES {
+        return Err("DASH 模板地址过长".into());
+    }
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find('$') {
@@ -614,8 +624,15 @@ fn expand_template(
             continue;
         }
         let end = rest.find('$').ok_or("DASH 模板未闭合")?;
-        out.push_str(&replace(&rest[..end])?);
+        let replacement = replace(&rest[..end])?;
+        if out.len().saturating_add(replacement.len()) > MAX_TEMPLATE_BYTES {
+            return Err("DASH 模板地址过长".into());
+        }
+        out.push_str(&replacement);
         rest = &rest[end + 1..];
+    }
+    if out.len() + rest.len() > MAX_TEMPLATE_BYTES {
+        return Err("DASH 模板地址过长".into());
     }
     out.push_str(rest);
     Ok(out)
@@ -625,6 +642,7 @@ fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('"', "&quot;")
+        .replace('\'', "&apos;")
         .replace('>', "&gt;")
 }
 
@@ -657,6 +675,7 @@ fn rewrite_dash(
     };
     let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let mut count = 0;
+    let mut remaining_output = crate::media::MAX_MANIFEST_BYTES as usize;
     // Flatten inherited addressing per representation before rewriting URLs. A
     // parent's template may use a different child BaseURL for every rendition.
     for representation in root
@@ -722,21 +741,17 @@ fn rewrite_dash(
                         attributes.insert(attribute.name(), attribute.value());
                     }
                 }
+                let mut local_children = BTreeMap::new();
                 for child in node.children().filter(|n| n.is_element()) {
                     // SegmentURL is an ordered list; inherit the whole list from
                     // the nearest SegmentList that actually defines one.
                     let key = child.tag_name().name();
-                    children.entry(key).or_insert_with(Vec::new);
+                    local_children
+                        .entry(key)
+                        .or_insert_with(Vec::new)
+                        .push(child);
                 }
-                for key in children.keys().copied().collect::<Vec<_>>() {
-                    let found: Vec<_> = node
-                        .children()
-                        .filter(|n| n.is_element() && n.tag_name().name() == key)
-                        .collect();
-                    if !found.is_empty() {
-                        children.insert(key, found);
-                    }
-                }
+                children.extend(local_children);
             }
             let mut rewrite = |reference: &str, is_template: bool| -> Result<String, String> {
                 count += 1;
@@ -789,6 +804,9 @@ fn rewrite_dash(
             for nodes in children.values() {
                 for node in nodes {
                     let raw = &text[node.range()];
+                    if raw.len().saturating_add(appended.len()) > remaining_output {
+                        return Err("DASH 投屏清单展开超过长度上限".into());
+                    }
                     let mut local_edits = Vec::new();
                     for descendant in node.descendants().filter(|n| n.is_element()) {
                         for attribute in descendant
@@ -816,6 +834,9 @@ fn rewrite_dash(
                 xml_escape(&route(effective_base, false)?)
             ));
         }
+        remaining_output = remaining_output
+            .checked_sub(appended.len())
+            .ok_or("DASH 投屏清单展开超过长度上限")?;
         let span = representation.range();
         let raw = &text[span.clone()];
         if raw.ends_with("/>") {
@@ -904,6 +925,29 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn manifest_sniff_and_rewrite_preserve_utf8_hls_headers() {
+        assert_eq!(
+            manifest_kind("https://cdn.test/live", "", b"#EXTM3U\n#\xe4"),
+            Some("hls")
+        );
+        let rewritten = rewrite_hls("\u{feff}#EXTM3U\nseg.ts", "https://cdn.test/live", |_| {
+            Ok("/local".into())
+        })
+        .unwrap();
+        assert_eq!(rewritten, "#EXTM3U\n/local\n");
+    }
+
+    #[test]
+    fn expanded_dash_template_has_a_byte_limit() {
+        assert!(
+            expand_template("$RepresentationID$$RepresentationID$", |_| Ok(
+                "v".repeat(9_000)
+            ))
+            .is_err()
+        );
+    }
 
     struct Upstream {
         address: std::net::SocketAddr,

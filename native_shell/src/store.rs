@@ -95,27 +95,28 @@ impl CoreStore {
         Ok(store)
     }
 
-    fn commit_with_durability<R>(
+    fn commit_with_durability<T: serde::Serialize + serde::de::DeserializeOwned, R>(
         &mut self,
         durable: bool,
-        operation: impl FnOnce(&mut Connection) -> Result<R, String>,
+        value: T,
+        operation: impl FnOnce(T, &Transaction<'_>) -> Result<R, String>,
     ) -> Result<R, String> {
         if !durable {
-            return operation(&mut self.connection);
+            return self.write_sanitized(value, operation);
         }
         let previous: i64 = self
             .connection
             .query_row("PRAGMA synchronous", [], |row| row.get(0))
             .map_err(|error| format!("read Core durability: {error}"))?;
         if previous >= 2 {
-            return operation(&mut self.connection);
+            return self.write_sanitized(value, operation);
         }
         // SQLite forbids this switch inside a transaction. The owning Core lock
         // covers the switch, transaction and restoration.
         self.connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|error| format!("enable Core durable commit: {error}"))?;
-        let result = operation(&mut self.connection);
+        let result = self.write_sanitized(value, operation);
         if let Err(error) = self.connection.pragma_update(None, "synchronous", previous) {
             // A successful COMMIT must stay successful. Retaining FULL is safe;
             // reporting failure here would roll memory back behind durable data.
@@ -169,13 +170,14 @@ impl CoreStore {
     }
 
     pub(crate) fn save_crawl(&self, state: &crate::crawl::CrawlState) -> Result<(), String> {
-        let state = self.sanitize_urls(state.clone())?;
+        self.write_sanitized(state.clone(), |state, transaction| {
         let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
         if json.len() > 3 * 1024 * 1024 {
             return Err("抓站项目状态超过 3 MiB 上限".into());
         }
-        self.connection.execute("INSERT INTO crawl_projects(project_id,state_json) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET state_json=excluded.state_json", params![state.project.id, json]).map_err(|e| e.to_string())?;
+        transaction.execute("INSERT INTO crawl_projects(project_id,state_json) VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET state_json=excluded.state_json", params![state.project.id, json]).map_err(|e| e.to_string())?;
         Ok(())
+        })
     }
 
     pub fn schema_version(&self) -> Result<u32, String> {
@@ -347,14 +349,6 @@ impl CoreStore {
         settings: Option<&BTreeMap<String, serde_json::Value>>,
         handoff: Option<&crate::contract::BrowserHandoff>,
     ) -> Result<(), String> {
-        let events = self.sanitize_urls(events.to_vec())?;
-        let spec = self.sanitize_urls(spec.cloned())?;
-        let settings = self.sanitize_urls(settings.cloned())?;
-        let handoff = self.sanitize_urls(handoff.cloned())?;
-        let events = events.as_slice();
-        let spec = spec.as_ref();
-        let settings = settings.as_ref();
-        let handoff = handoff.as_ref();
         if events.is_empty()
             && spec.is_none()
             && settings.is_none_or(BTreeMap::is_empty)
@@ -375,15 +369,22 @@ impl CoreStore {
                 | CoreEvent::BrowserStatus { .. } => false,
                 _ => true,
             });
-        self.commit_with_durability(durable, |connection| {
-            let transaction = connection
-                .transaction()
-                .map_err(|error| format!("begin Core event transaction: {error}"))?;
+        let values = (
+            events.to_vec(),
+            spec.cloned(),
+            settings.cloned(),
+            handoff.cloned(),
+        );
+        self.commit_with_durability(durable, values, |(events, spec, settings, handoff), transaction| {
+            let events = events.as_slice();
+            let spec = spec.as_ref();
+            let settings = settings.as_ref();
+            let handoff = handoff.as_ref();
             if let Some(handoff) = handoff {
                 let encoded = serde_json::to_string(handoff)
                     .map_err(|error| format!("encode Core handoff: {error}"))?;
                 upsert_handoff_row(
-                    &transaction,
+                    transaction,
                     &handoff.id,
                     &encoded,
                     &handoff.status,
@@ -394,17 +395,17 @@ impl CoreStore {
             for envelope in events {
                 match &envelope.event {
                     CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
-                        upsert_task(&transaction, snapshot, envelope.sequence)?;
+                        upsert_task(transaction, snapshot, envelope.sequence)?;
                         if snapshot.status == "failed" {
                             if let Some(line) = snapshot.log_tail.last() {
-                                append_task_log(&transaction, snapshot, "error", line)?;
+                                append_task_log(transaction, snapshot, "error", line)?;
                             }
                         }
                     }
                     CoreEvent::TaskProgress { snapshot } => {
-                        upsert_task(&transaction, snapshot, envelope.sequence)?;
+                        upsert_task(transaction, snapshot, envelope.sequence)?;
                         if let Some(line) = snapshot.log_tail.last() {
-                            append_task_log(&transaction, snapshot, "progress", line)?;
+                            append_task_log(transaction, snapshot, "progress", line)?;
                         }
                     }
                     CoreEvent::TaskDeleted { task_id } => {
@@ -452,7 +453,7 @@ impl CoreStore {
                     | CoreEvent::CastSession { .. }
                     | CoreEvent::PlayerSession { .. } => {}
                 }
-                sync_event_side_rows(&transaction, &envelope.event)?;
+                sync_event_side_rows(transaction, &envelope.event)?;
             }
             if let Some(spec) = spec {
                 let task_id = events.iter().find_map(|event| match &event.event {
@@ -473,31 +474,21 @@ impl CoreStore {
                         .map_err(|error| format!("persist Core task spec {task_id}: {error}"))?;
                 }
             }
-            if let Some(sequence) = events.last().map(|event| event.sequence) {
+            if let Some(sequence) = events.iter().map(|event| event.sequence).max() {
+                let sequence = i64::try_from(sequence)
+                    .map_err(|_| "Core event checkpoint exceeds SQLite INTEGER range".to_string())?;
                 transaction
                     .execute(
                         "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
                      ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
-                        params![sequence as i64],
+                        params![sequence],
                     )
                     .map_err(|error| format!("persist Core event checkpoint: {error}"))?;
             }
             if let Some(settings) = settings {
-                for (key, value) in settings {
-                    let encoded = serde_json::to_string(value)
-                        .map_err(|error| format!("encode Core setting {key}: {error}"))?;
-                    transaction
-                        .execute(
-                            r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
-                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
-                            params![key, encoded],
-                        )
-                        .map_err(|error| format!("write Core setting {key}: {error}"))?;
-                }
+                write_settings(transaction, settings)?;
             }
-            transaction
-                .commit()
-                .map_err(|error| format!("commit Core event transaction: {error}"))
+            Ok(())
         })
     }
 
@@ -560,42 +551,19 @@ impl CoreStore {
     }
 
     pub fn set_setting<T: serde::Serialize>(&mut self, key: &str, value: T) -> Result<(), String> {
-        let value = self.sanitize_urls(serde_json::to_value(value).map_err(|e| e.to_string())?)?;
-        let value = serde_json::to_string(&value)
-            .map_err(|error| format!("encode Core setting {key}: {error}"))?;
-        self.connection
-            .execute(
-                r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
-                   ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
-                params![key, value],
-            )
-            .map_err(|error| format!("write Core setting {key}: {error}"))?;
-        Ok(())
+        self.set_settings(&BTreeMap::from([(
+            key.to_string(),
+            serde_json::to_value(value).map_err(|e| e.to_string())?,
+        )]))
     }
 
     pub fn set_settings(
         &mut self,
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        let values = self.sanitize_urls(values.clone())?;
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|error| format!("begin Core settings transaction: {error}"))?;
-        for (key, value) in &values {
-            let encoded = serde_json::to_string(value)
-                .map_err(|error| format!("encode Core setting {key}: {error}"))?;
-            transaction
-                .execute(
-                    r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
-                       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
-                    params![key, encoded],
-                )
-                .map_err(|error| format!("write Core setting {key}: {error}"))?;
-        }
-        transaction
-            .commit()
-            .map_err(|error| format!("commit Core settings transaction: {error}"))
+        self.write_sanitized(values.clone(), |settings, transaction| {
+            write_settings(transaction, &settings)
+        })
     }
 
     /// Apply a credential mutation together with the settings that name it, as
@@ -612,12 +580,7 @@ impl CoreStore {
         write: Option<CredentialWrite<'_>>,
         settings: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        let settings = self.sanitize_urls(settings.clone())?;
-        let settings = &settings;
-        self.commit_with_durability(true, |connection| {
-        let transaction = connection.transaction()
-            .map_err(|error| format!("begin Core credential transaction: {error}"))?;
-        let applied = (|| -> Result<(), String> {
+        self.commit_with_durability(true, settings.clone(), |settings, transaction| {
             match write {
                 Some(CredentialWrite::Store {
                     credential_ref,
@@ -646,28 +609,7 @@ impl CoreStore {
                 }
                 None => {}
             }
-            for (key, value) in settings {
-                let encoded = serde_json::to_string(value)
-                    .map_err(|error| format!("encode Core setting {key}: {error}"))?;
-                transaction
-                    .execute(
-                        r#"INSERT INTO settings(key, value_json) VALUES (?1, ?2)
-                           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json"#,
-                        params![key, encoded],
-                    )
-                    .map_err(|error| format!("write Core setting {key}: {error}"))?;
-            }
-            Ok(())
-        })();
-        match applied {
-            Ok(()) => transaction
-                .commit()
-                .map_err(|error| format!("commit Core credential transaction: {error}")),
-            Err(error) => {
-                let _ = transaction.rollback();
-                Err(error)
-            }
-        }
+            write_settings(transaction, &settings)
         })
     }
 
@@ -713,16 +655,15 @@ impl CoreStore {
         task_id: Option<&str>,
         created_at_ms: u64,
     ) -> Result<(), String> {
-        let handoff_json = self.sanitize_urls(handoff_json.to_string())?;
-        self.commit_with_durability(true, |connection| {
-        connection.execute(
-                "INSERT INTO handoffs(handoff_id, public_json, status, task_id, created_at_ms)\
-                 VALUES (?1, ?2, ?3, ?4, ?5)\
-                 ON CONFLICT(handoff_id) DO UPDATE SET public_json = excluded.public_json, status = excluded.status, task_id = excluded.task_id",
-                params![handoff_id, handoff_json, status, task_id, created_at_ms as i64],
+        self.commit_with_durability(true, handoff_json.to_owned(), |json, transaction| {
+            upsert_handoff_row(
+                transaction,
+                handoff_id,
+                &json,
+                status,
+                task_id,
+                created_at_ms,
             )
-            .map_err(|error| format!("save Core handoff {handoff_id}: {error}"))?;
-        Ok(())
         })
     }
 
@@ -927,6 +868,19 @@ impl CoreStore {
     }
 }
 
+fn write_settings(
+    transaction: &Transaction<'_>,
+    settings: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    for (key, value) in settings {
+        let encoded = serde_json::to_string(value)
+            .map_err(|error| format!("encode Core setting {key}: {error}"))?;
+        transaction.execute("INSERT INTO settings(key, value_json) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json", params![key, encoded])
+            .map_err(|error| format!("write Core setting {key}: {error}"))?;
+    }
+    Ok(())
+}
+
 fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Result<(), String> {
     match event {
         CoreEvent::HandoffResolved {
@@ -1015,12 +969,14 @@ fn upsert_handoff_row(
     task_id: Option<&str>,
     created_at_ms: u64,
 ) -> Result<(), String> {
+    let created_at_ms = i64::try_from(created_at_ms)
+        .map_err(|_| format!("Core handoff {handoff_id} timestamp exceeds SQLite INTEGER range"))?;
     transaction
         .execute(
             "INSERT INTO handoffs(handoff_id, public_json, status, task_id, created_at_ms)\
              VALUES (?1, ?2, ?3, ?4, ?5)\
              ON CONFLICT(handoff_id) DO UPDATE SET public_json = excluded.public_json, status = excluded.status, task_id = excluded.task_id",
-            params![handoff_id, public_json, status, task_id, created_at_ms as i64],
+            params![handoff_id, public_json, status, task_id, created_at_ms],
         )
         .map_err(|error| format!("save Core handoff {handoff_id}: {error}"))?;
     Ok(())
@@ -1740,6 +1696,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.setting_string("site_rules", "").unwrap(), "[\"b\"]");
+    }
+
+    #[test]
+    fn checkpoint_checks_entire_batch_and_rejects_integer_overflow() {
+        let mut store = CoreStore::in_memory().unwrap();
+        let events = |sequence| EventEnvelope {
+            sequence,
+            event: CoreEvent::TaskDeleted {
+                task_id: "missing".into(),
+            },
+        };
+        store.apply_events(&[events(9), events(5)]).unwrap();
+        assert_eq!(store.latest_sequence().unwrap(), 9);
+        assert!(store.apply_events(&[events(u64::MAX)]).is_err());
+        assert_eq!(store.latest_sequence().unwrap(), 9);
+        assert!(store
+            .save_handoff("overflow", "{}", "pending", None, u64::MAX)
+            .is_err());
+        assert!(store.load_handoffs().unwrap().is_empty());
     }
 
     #[test]

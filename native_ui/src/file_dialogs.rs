@@ -65,11 +65,12 @@ pub fn files(_owner: Option<i64>, _save: bool) -> Result<Vec<String>, String> {
 #[cfg(windows)]
 pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
     use windows_sys::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
         System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED},
         UI::Shell::*,
     };
     let initialized = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-    if initialized < 0 {
+    if initialized < 0 && initialized != RPC_E_CHANGED_MODE {
         return Err(format!("无法初始化文件夹选择器：{initialized:#x}"));
     }
     struct Apartment;
@@ -80,7 +81,11 @@ pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
             }
         }
     }
-    let _apartment = Apartment;
+    let _apartment = if initialized >= 0 {
+        Some(Apartment)
+    } else {
+        None
+    };
     let mut display = vec![0u16; 32_768];
     let title: Vec<u16> = "选择下载保存位置\0".encode_utf16().collect();
     let info = BROWSEINFOW {
@@ -88,7 +93,13 @@ pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
         pidlRoot: std::ptr::null_mut(),
         pszDisplayName: display.as_mut_ptr(),
         lpszTitle: title.as_ptr(),
-        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        // The newer dialog requires STA. Keep the caller's existing apartment.
+        ulFlags: BIF_RETURNONLYFSDIRS
+            | if initialized == RPC_E_CHANGED_MODE {
+                0
+            } else {
+                BIF_NEWDIALOGSTYLE
+            },
         lpfn: None,
         lParam: 0,
         iImage: 0,
@@ -97,7 +108,14 @@ pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
     if selected.is_null() {
         return Ok(None);
     }
-    let ok = unsafe { SHGetPathFromIDListW(selected, display.as_mut_ptr()) };
+    let ok = unsafe {
+        SHGetPathFromIDListEx(
+            selected,
+            display.as_mut_ptr(),
+            display.len() as u32,
+            GPFIDL_DEFAULT,
+        )
+    };
     unsafe { CoTaskMemFree(selected as _) };
     if ok == 0 {
         return Err("选中的项目不是本地文件夹".into());
@@ -141,8 +159,8 @@ pub fn confirm(owner: Option<i64>, title: &str, message: &str) -> bool {
 pub fn open(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        if target.contains('\0') {
-            return Err("打开地址包含无效字符".into());
+        if !safe_open_target(target) {
+            return Err("只能打开网页链接或现有文件夹".into());
         }
         let target: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
         let operation: Vec<u16> = "open\0".encode_utf16().collect();
@@ -169,6 +187,21 @@ pub fn open(target: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn safe_open_target(target: &str) -> bool {
+    if target.is_empty() || target != target.trim() || target.chars().any(char::is_control) {
+        return false;
+    }
+    if let Some((scheme, rest)) = target.split_once("://") {
+        return (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
+            && !rest.starts_with(['/', '?', '#'])
+            && !rest.is_empty()
+            && !rest.contains('\\');
+    }
+    let path = std::path::Path::new(target);
+    path.is_absolute() && path.is_dir()
+}
+
 pub fn write_export(path: &std::path::Path, data: &str) -> std::io::Result<()> {
     use std::io::Write;
     // Publish from the same directory so a short write or sync failure leaves
@@ -193,4 +226,26 @@ pub fn write_export(path: &std::path::Path, data: &str) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_open_accepts_web_links_and_directories_only() {
+        assert!(safe_open_target("https://addons.mozilla.org/"));
+        assert!(safe_open_target(env!("CARGO_MANIFEST_DIR")));
+        for target in [
+            "file:///C:/app.exe",
+            "shell:AppsFolder",
+            "https:///path",
+            "foo.cmd",
+            "https://site.test/\0x",
+        ] {
+            assert!(!safe_open_target(target));
+        }
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(!safe_open_target(source.to_str().unwrap()));
+    }
 }

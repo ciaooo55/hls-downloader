@@ -3,7 +3,6 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,7 +22,21 @@ pub fn scan_file(path: &Path, template: &str) -> ScanResult {
             detail: "output is not a file".into(),
         };
     }
-    let (engine, argv) = resolve_command(path, template);
+    let Ok(absolute) = std::path::absolute(path) else {
+        return ScanResult {
+            state: "error".into(),
+            engine: "none".into(),
+            detail: "无法解析扫描目标路径".into(),
+        };
+    };
+    if absolute.to_str().is_none() {
+        return ScanResult {
+            state: "error".into(),
+            engine: "none".into(),
+            detail: "扫描目标路径无法准确编码".into(),
+        };
+    }
+    let (engine, argv) = resolve_command(&absolute, template);
     if argv.is_empty() {
         // 只有"压根没配扫描器、机器上也没有 Defender"才是可以接受的跳过。
         // 模板填了却被校验拒绝（缺 {file}、解释器黑名单、非法字符）属于
@@ -70,6 +83,11 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
         return Err("扫描命令必须包含 {file}".into());
     }
     let normalized = program.trim_end_matches(['.', ' ']);
+    if normalized.to_ascii_lowercase().ends_with(".bat")
+        || normalized.to_ascii_lowercase().ends_with(".cmd")
+    {
+        return Err("扫描命令不能调用批处理脚本".into());
+    }
     let name = Path::new(normalized)
         .file_stem()
         .and_then(|name| name.to_str())
@@ -239,10 +257,22 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
             detail: "empty scanner argv".into(),
         };
     }
+    let (mut output_reader, stdout) = match scanner_pipe() {
+        Ok(pipe) => pipe,
+        Err(error) => {
+            return ScanResult {
+                state: "error".into(),
+                engine: engine.into(),
+                detail: error.to_string(),
+            }
+        }
+    };
+    let mut output = Vec::new();
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
-        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(stdout)
         .stderr(Stdio::null());
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -254,25 +284,20 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
             }
         }
     };
-    let mut output_reader = child.stdout.take().map(|mut stdout| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stdout.read_to_end(&mut bytes);
-            bytes
-        })
-    });
+    drop(command);
     let started = Instant::now();
     loop {
+        drain_output(&mut output_reader, &mut output);
         match child.try_wait() {
             Ok(Some(status)) => {
-                let code = status.code().unwrap_or(1);
-                let text = collect_output(&mut output_reader);
+                let code = status.code().unwrap_or(-1);
+                drain_output(&mut output_reader, &mut output);
+                let text = String::from_utf8_lossy(&output).trim().replace('\n', " ");
                 return interpret(engine, code, &text);
             }
             Ok(None) if started.elapsed() >= timeout => {
                 let kill_error = child.kill().err();
                 let wait_error = child.wait().err();
-                let _ = collect_output(&mut output_reader);
                 let mut detail = timeout_detail(timeout);
                 if let Some(error) = kill_error {
                     detail.push_str(&format!("; kill failed: {error}"));
@@ -290,7 +315,6 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = collect_output(&mut output_reader);
                 return ScanResult {
                     state: "error".into(),
                     engine: engine.into(),
@@ -301,12 +325,62 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
     }
 }
 
-fn collect_output(reader: &mut Option<JoinHandle<Vec<u8>>>) -> String {
-    let bytes = reader
-        .take()
-        .and_then(|reader| reader.join().ok())
-        .unwrap_or_default();
-    String::from_utf8_lossy(&bytes).trim().replace('\n', " ")
+// Poll the output alongside the process: a scanner's descendants can inherit
+// stdout and keep the pipe open after the scanner itself has already exited.
+#[cfg(windows)]
+type ScannerReader = std::io::PipeReader;
+#[cfg(unix)]
+type ScannerReader = std::os::unix::net::UnixStream;
+
+#[cfg(windows)]
+fn scanner_pipe() -> std::io::Result<(ScannerReader, Stdio)> {
+    let (read, write) = std::io::pipe()?;
+    Ok((read, write.into()))
+}
+
+#[cfg(unix)]
+fn scanner_pipe() -> std::io::Result<(ScannerReader, Stdio)> {
+    let (read, write) = ScannerReader::pair()?;
+    read.set_nonblocking(true)?;
+    Ok((read, std::os::fd::OwnedFd::from(write).into()))
+}
+
+fn drain_output(reader: &mut ScannerReader, output: &mut Vec<u8>) {
+    let mut buf = [0; 8192];
+    for _ in 0..32 {
+        #[cfg(windows)]
+        let available = {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+            let mut bytes = 0;
+            // The handle belongs to reader and bytes is writable for this call.
+            if unsafe {
+                PeekNamedPipe(
+                    reader.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut bytes,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+                || bytes == 0
+            {
+                break;
+            }
+            buf.len().min(bytes as usize)
+        };
+        #[cfg(unix)]
+        let available = buf.len();
+        match reader.read(&mut buf[..available]) {
+            Ok(0) => break,
+            Ok(n) => {
+                output.extend_from_slice(&buf[..n.min(1200usize.saturating_sub(output.len()))])
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
 }
 
 fn timeout_detail(timeout: Duration) -> String {
@@ -469,6 +543,32 @@ mod tests {
         let (_, argv) = resolve_command(&path, r#"{file}"#);
         assert!(argv.is_empty());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bounded_scanner_output_preserves_the_prefix_with_an_open_writer() {
+        use std::io::Write;
+        assert!(validate_custom_command("scanner.CmD {file}").is_err());
+        let (mut reader, stdout) = scanner_pipe().unwrap();
+        drop(stdout);
+        let mut bytes = Vec::new();
+        drain_output(&mut reader, &mut bytes);
+        assert!(bytes.is_empty());
+        let (mut reader, mut writer) = {
+            #[cfg(windows)]
+            {
+                std::io::pipe().unwrap()
+            }
+            #[cfg(unix)]
+            {
+                let (r, w) = ScannerReader::pair().unwrap();
+                r.set_nonblocking(true).unwrap();
+                (r, w)
+            }
+        };
+        writer.write_all(&[7; 1500]).unwrap();
+        drain_output(&mut reader, &mut bytes);
+        assert_eq!(bytes, vec![7; 1200]);
     }
 
     #[test]

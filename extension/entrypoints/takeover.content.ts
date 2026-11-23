@@ -66,7 +66,8 @@ export default defineContentScript({
       const localHref = htmlLink?.href || ''
       if (/^(blob:|data:)/i.test(localHref) && htmlLink?.hasAttribute('download')) {
         // 导出按钮常在可信点击中调用隐藏 a.click()；绑定真实本地 URL，避免缺失 referrer 时丢掉来源和 Alt。
-        const modifiers = Date.now() - lastTrustedClick.at < 1_500 ? lastTrustedClick : { alt: false, ctrl: false }
+        if (!event.isTrusted && Date.now() - lastTrustedClick.at >= 1_500) return
+        const modifiers = lastTrustedClick
         const key = `${localHref}:${modifiers.alt}:${modifiers.ctrl}`
         if (lastIntent.key === key && Date.now() - lastIntent.at < 1_500) return
         lastIntent = { key, at: Date.now() }
@@ -83,7 +84,7 @@ export default defineContentScript({
         svgHrefAttribute: svgLink ? attribute(svgLink, 'href') : '',
         svgXlinkHref: svgLink ? attribute(svgLink, 'xlink:href') : '',
         svgBaseVal: svgLink?.href?.baseVal || '',
-        baseUrl: location.href,
+        baseUrl: document.baseURI,
       })
       const rawDownloadHref = attribute(htmlLink, 'data-download-url')
         || attribute(control, 'data-download-url')
@@ -104,10 +105,10 @@ export default defineContentScript({
       const formActionHref = resolveFormDownloadUrl(
         formOwner?.getAttribute('action') || '',
         attribute(control, 'formaction'),
-        location.href,
+        document.baseURI,
       )
-      const downloadHref = resolveDownloadTarget(rawDownloadHref, location.href)
-      const hintedHref = resolveDownloadTarget(rawHintedHref, location.href) || formActionHref
+      const downloadHref = resolveDownloadTarget(rawDownloadHref, document.baseURI)
+      const hintedHref = resolveDownloadTarget(rawHintedHref, document.baseURI) || formActionHref
       const controlHints = [
         htmlLink?.textContent,
         htmlLink?.getAttribute('aria-label'),

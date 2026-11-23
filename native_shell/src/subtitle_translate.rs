@@ -122,12 +122,7 @@ impl SubtitleService {
                 let workspace = string(request, "workspace");
                 let region = string(request, "region");
                 if provider == DASHSCOPE {
-                    if workspace.is_empty()
-                        || workspace.len() > 128
-                        || !workspace
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                    {
+                    if !valid_workspace(workspace) {
                         return Err("请填写有效的百炼业务空间 ID".into());
                     }
                     if !matches!(region, "cn-beijing" | "ap-southeast-1") {
@@ -333,6 +328,11 @@ impl SubtitleService {
         let action = string(request, "action");
         {
             let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+            if matches!(action, "commit" | "audio" | "prepare_audio")
+                && request["epoch"].as_u64() != Some(state.epoch)
+            {
+                return Err("字幕音频请求已过期".into());
+            }
             state.last_seen = Instant::now();
             if matches!(action, "prepare_audio" | "commit" | "audio" | "reset")
                 && matches!(state.status, "stopping" | "stopped" | "failed")
@@ -356,9 +356,7 @@ impl SubtitleService {
                     .filter(|v| v.is_finite() && *v > 0.0 && *v <= 12.0)
                     .ok_or("音轨预取窗口必须在 12 秒以内")?;
                 let epoch = request["epoch"].as_u64().ok_or("字幕时间轴无效")?;
-                if session.state.lock().map_err(|_| "字幕状态不可用")?.epoch != epoch {
-                    return Err("字幕音频请求已过期".into());
-                }
+
                 session
                     .decode_active
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -441,11 +439,16 @@ impl SubtitleService {
                     .get("epoch")
                     .and_then(Value::as_u64)
                     .ok_or("字幕时间轴无效")?;
+                let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+                if epoch <= state.epoch || matches!(state.status, "failed" | "stopped" | "stopping")
+                {
+                    return Err("字幕重置请求已过期".into());
+                }
                 session
                     .input
                     .try_send(Input::Reset(epoch))
                     .map_err(|_| "无法重置字幕连接")?;
-                let mut state = session.state.lock().unwrap();
+                state.events.clear();
                 state.epoch = epoch;
                 state.status = "connecting";
                 Ok(json!({"ok": true}))
@@ -461,7 +464,8 @@ impl SubtitleService {
                     .events
                     .iter()
                     .filter(|e| e["sequence"].as_u64().unwrap_or(0) > after)
-                    .take(48)
+                    // JSON control-character escapes can use six bytes per cue character.
+                    .take(36)
                     .collect::<Vec<_>>();
                 let delivered = events
                     .last()
@@ -516,9 +520,21 @@ fn configuration(core: &CoreCoordinator) -> Result<Value, String> {
     )
 }
 
+fn valid_workspace(workspace: &str) -> bool {
+    !workspace.is_empty()
+        && workspace.len() <= 63
+        && !workspace.starts_with('-')
+        && !workspace.ends_with('-')
+        && workspace
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+}
+
 fn realtime_endpoint(provider: &str, workspace: &str, region: &str) -> Result<String, String> {
     let base = match provider {
-        DASHSCOPE if !workspace.is_empty() && matches!(region, "cn-beijing" | "ap-southeast-1") => {
+        DASHSCOPE
+            if valid_workspace(workspace) && matches!(region, "cn-beijing" | "ap-southeast-1") =>
+        {
             format!("wss://{workspace}.{region}.maas.aliyuncs.com/api-ws/v1/realtime")
         }
         QWENCLOUD => QWENCLOUD_ENDPOINT.into(),
@@ -550,15 +566,22 @@ struct AudioMark {
 }
 
 #[derive(Default)]
+struct SubtitleItem {
+    previous: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    window: Option<(f64, f64)>,
+}
+
+#[derive(Default)]
 struct Decoder {
     marks: VecDeque<AudioMark>,
     audio_ms: f64,
-    links: BTreeMap<String, String>,
-    starts: BTreeMap<String, f64>,
-    ends: BTreeMap<String, f64>,
+    items: BTreeMap<String, SubtitleItem>,
+    item_order: VecDeque<String>,
     // 提前模式一次只提交一个窗口；只有对应 response.done 后才能推进就绪范围。
     pending_window: Option<(f64, f64)>,
-    window_items: BTreeMap<String, (f64, f64)>,
+
     response_id: String,
     uncommitted: Option<(f64, f64)>,
     manual: bool,
@@ -614,6 +637,18 @@ impl Decoder {
         )
     }
 
+    fn item(&mut self, id: &str) -> &mut SubtitleItem {
+        if !self.items.contains_key(id) {
+            if self.item_order.len() == 512 {
+                if let Some(oldest) = self.item_order.pop_front() {
+                    self.items.remove(&oldest);
+                }
+            }
+            self.item_order.push_back(id.into());
+        }
+        self.items.entry(id.into()).or_default()
+    }
+
     fn decode(&mut self, event: &Value) -> Option<Value> {
         let kind = string(event, "type");
         let id = event
@@ -621,21 +656,26 @@ impl Decoder {
             .and_then(Value::as_str)
             .or_else(|| event.pointer("/item/id").and_then(Value::as_str))
             .unwrap_or("");
+        if id.is_empty() || id.len() > 160 {
+            return None;
+        }
         // QwenCloud 手动提交实测不会创建 user 项，音频项 ID 由 committed 确认。
-        if self.manual && kind == "input_audio_buffer.committed" && !id.is_empty() {
+        if self.manual && kind == "input_audio_buffer.committed" {
             if let Some(window) = self.pending_window {
-                self.window_items.insert(id.into(), window);
+                self.item(id).window = Some(window);
             }
         }
         if kind == "conversation.item.created" {
             if self.manual && event.pointer("/item/role").and_then(Value::as_str) == Some("user") {
                 if let Some(window) = self.pending_window {
-                    self.window_items.insert(id.into(), window);
+                    self.item(id).window = Some(window);
                 }
             }
             if let Some(previous) = event.get("previous_item_id").and_then(Value::as_str) {
-                if event.pointer("/item/role").and_then(Value::as_str) == Some("assistant") {
-                    self.links.insert(id.into(), previous.into());
+                if previous.len() <= 160
+                    && event.pointer("/item/role").and_then(Value::as_str) == Some("assistant")
+                {
+                    self.item(id).previous = Some(previous.into());
                 }
             }
         }
@@ -645,7 +685,7 @@ impl Decoder {
                 .and_then(Value::as_f64)
                 .and_then(|t| self.position(t))
             {
-                self.starts.insert(id.into(), position);
+                self.item(id).start = Some(position);
             }
         }
         if kind == "input_audio_buffer.speech_stopped" {
@@ -654,7 +694,7 @@ impl Decoder {
                 .and_then(Value::as_f64)
                 .and_then(|t| self.position(t))
             {
-                self.ends.insert(id.into(), position);
+                self.item(id).end = Some(position);
             }
         }
         let source = kind.starts_with("conversation.item.input_audio_transcription.");
@@ -670,11 +710,15 @@ impl Decoder {
         let utterance = if source {
             id
         } else {
-            self.links.get(id).map(String::as_str).unwrap_or(id)
+            self.items
+                .get(id)
+                .and_then(|item| item.previous.as_deref())
+                .unwrap_or(id)
         }
         .to_string();
+        let item = self.items.get(&utterance);
         let window = if self.manual {
-            Some(*self.window_items.get(&utterance)?)
+            Some(item?.window?)
         } else {
             None
         };
@@ -700,30 +744,17 @@ impl Decoder {
         } else {
             format!("{}{}", text, string(event, "stash"))
         };
-        let start = self
-            .starts
-            .get(&utterance)
-            .copied()
+        let start = item
+            .and_then(|item| item.start)
             .or_else(|| window.map(|v| v.0))
             .or_else(|| self.marks.back().map(|m| m.position))
             .unwrap_or(0.0);
-        let end = self
-            .ends
-            .get(&utterance)
-            .copied()
+        let end = item
+            .and_then(|item| item.end)
             .or_else(|| window.map(|v| v.1))
             .unwrap_or(start + 5.0)
             .max(start + 0.5);
-        // 服务端长会话会产生无限项 ID，只保留当前活跃窗口。
-        if self.starts.len() > 256 {
-            self.starts.clear();
-            self.ends.clear();
-            self.links.clear();
-        }
-        if self.window_items.len() > 256 {
-            self.window_items
-                .retain(|_, v| Some(*v) == self.pending_window);
-        }
+
         Some(
             json!({"type": "cue", "id": utterance, "role": if source { "source" } else { "translation" },
             "text": text.chars().take(4096).collect::<String>(), "final": final_text,
@@ -866,7 +897,7 @@ async fn run(
                         decoder.commit_window(start, end)?;
                         send(&mut socket, json!({"type": "input_audio_buffer.commit"})).await?;
                     }
-                    None => {},
+                    None => return Ok(()),
                 },
                 _ = stop.notified() => {},
                 frame = socket.next() => {
@@ -1211,6 +1242,15 @@ mod tests {
             format!("{QWENCLOUD_ENDPOINT}?model={MODEL}")
         );
         assert!(realtime_endpoint("unknown", "space", "cn-beijing").is_err());
+        for invalid in [
+            "workspace/other",
+            "bad.example",
+            "u@host",
+            "-space",
+            "space-",
+        ] {
+            assert!(realtime_endpoint(DASHSCOPE, invalid, "cn-beijing").is_err());
+        }
 
         assert!(service
             .dispatch(&core, &json!({"action":"configure","provider":"unknown"}))
@@ -1342,6 +1382,16 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(receiver.try_recv().unwrap(), Input::Reset(8)));
+        for action in ["reset", "audio"] {
+            assert!(service
+                .dispatch(
+                    &core,
+                    &json!({"action":action,"session_id":"test",
+                "owner":"owner","epoch":7,"audio":STANDARD.encode([0,0]),"position":1,"rate":1})
+                )
+                .is_err());
+        }
+        assert!(receiver.try_recv().is_err());
         service
             .dispatch(
                 &core,
@@ -1387,7 +1437,8 @@ mod tests {
             last_seen: Instant::now(),
         };
         for index in 0..100 {
-            state.push(json!({"type":"cue","id":index.to_string(),"text":"😀".repeat(4096),"start":index,"end":index+1}));
+            let character = if index < 50 { "\u{1}" } else { "😀" };
+            state.push(json!({"type":"cue","id":index.to_string(),"text":character.repeat(4096),"start":index,"end":index+1}));
         }
         let (input, _receiver) = mpsc::channel(1);
         service.sessions.lock().unwrap().insert(
@@ -1486,6 +1537,20 @@ mod tests {
                 .expect("failure boundary timed out");
             }
         });
+    }
+
+    #[test]
+    fn metadata_only_events_evict_old_items_and_keep_recent_associations() {
+        let mut decoder = Decoder::default();
+        for index in 0..600 {
+            decoder.decode(
+                &json!({"type":"conversation.item.created", "previous_item_id":"utterance",
+                "item":{"id":index.to_string(),"role":"assistant"}}),
+            );
+        }
+        assert_eq!(decoder.items.len(), 512);
+        assert!(!decoder.items.contains_key("0"));
+        assert_eq!(decoder.items["599"].previous.as_deref(), Some("utterance"));
     }
 
     #[test]

@@ -47,7 +47,13 @@ impl<W: Write> Aes128CbcWriter<W> {
         }
         let block = self.decrypt_pending();
         let pad = block[15] as usize;
-        if pad == 0 || pad > 16 || block[16 - pad..].iter().any(|byte| *byte as usize != pad) {
+        // Read every byte of the final block regardless of the first mismatch.
+        let mut mismatch = 0u8;
+        for (index, byte) in block.iter().rev().enumerate() {
+            let mask = 0u8.wrapping_sub(u8::from(index < pad));
+            mismatch |= (byte ^ block[15]) & mask;
+        }
+        if !(1..=16).contains(&pad) || mismatch != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "invalid PKCS7 padding",
@@ -122,7 +128,7 @@ impl Sha256Hasher {
     }
 
     pub fn update(&mut self, mut data: &[u8]) {
-        self.total_bytes += data.len() as u64;
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
         if self.filled > 0 {
             let take = (64 - self.filled).min(data.len());
             self.buffer[self.filled..self.filled + take].copy_from_slice(&data[..take]);
@@ -146,7 +152,7 @@ impl Sha256Hasher {
     }
 
     pub fn finish(mut self) -> [u8; 32] {
-        let bit_len = self.total_bytes * 8;
+        let bit_len = self.total_bytes.wrapping_mul(8);
         self.buffer[self.filled] = 0x80;
         self.filled += 1;
         if self.filled > 56 {
@@ -187,7 +193,7 @@ impl Sha1Hasher {
     }
 
     pub fn update(&mut self, mut data: &[u8]) {
-        self.total_bytes += data.len() as u64;
+        self.total_bytes = self.total_bytes.wrapping_add(data.len() as u64);
         if self.filled > 0 {
             let take = (64 - self.filled).min(data.len());
             self.buffer[self.filled..self.filled + take].copy_from_slice(&data[..take]);
@@ -211,7 +217,7 @@ impl Sha1Hasher {
     }
 
     pub fn finish(mut self) -> [u8; 20] {
-        let bit_len = self.total_bytes * 8;
+        let bit_len = self.total_bytes.wrapping_mul(8);
         self.buffer[self.filled] = 0x80;
         self.filled += 1;
         if self.filled > 56 {
@@ -486,6 +492,31 @@ const K: [u32; 64] = [
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_final_padding_byte_is_validated() {
+        let key = [0; 16];
+        let ciphertext = [0; 16];
+        let mut decrypted = ciphertext;
+        super::decrypt_block(&super::expand_key(&key), &mut decrypted);
+        for pad in 1..=16 {
+            let mut iv = decrypted;
+            for byte in &mut iv[16 - pad..] {
+                *byte ^= pad as u8;
+            }
+            assert_eq!(
+                super::decrypt_aes128_cbc_pkcs7(&key, &iv, &ciphertext)
+                    .unwrap()
+                    .len(),
+                16 - pad
+            );
+            for index in 16 - pad..15 {
+                iv[index] ^= 1;
+                assert!(super::decrypt_aes128_cbc_pkcs7(&key, &iv, &ciphertext).is_err());
+                iv[index] ^= 1;
+            }
+        }
+    }
+
     use super::*;
 
     fn unhex(text: &str) -> Vec<u8> {

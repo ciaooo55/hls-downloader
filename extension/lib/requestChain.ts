@@ -224,7 +224,9 @@ function mediaRequestKey(value: string): string {
 function appendUrl(values: string[], value: string | undefined): string[] {
   if (!value) return values
   const key = normalized(value)
-  return values.some(item => normalized(item) === key) ? values : [...values, value]
+  if (values.some(item => normalized(item) === key)) return values
+  // Keep the gateway and recent hops even if a browser reports a redirect loop.
+  return [...(values.length >= 32 ? [values[0], ...values.slice(-30)] : values), value]
 }
 
 export function httpOrigin(value: string): string {
@@ -238,12 +240,19 @@ export function httpOrigin(value: string): string {
 
 export class RequestChainStore {
   private readonly chains = new Map<string, RequestChain>()
+  private readonly finished = new WeakSet<RequestChain>()
 
   constructor(private readonly maxEntries = 1_500) {}
 
   observeRequest(details: RequestDetailsLike): RequestChain {
     const now = details.timeStamp || Date.now()
-    const previous = this.chains.get(details.requestId)
+    const cached = this.chains.get(details.requestId)
+    // observeRedirect moves finalUrl to the expected next hop. An unrelated
+    // URL or browsing context must establish its own headers and POST body.
+    const previous = cached && !this.finished.has(cached) && !cached.failedAt
+      && cached.tabId === details.tabId && cached.finalUrl === details.url
+      && (details.frameId === undefined || cached.frameId < 0 || cached.frameId === details.frameId)
+      ? cached : undefined
     const urls = appendUrl(previous?.urls || [], details.url)
     const method = details.method || previous?.method || 'GET'
     const capturedHeaders = headers(details.requestHeaders)
@@ -385,9 +394,9 @@ export class RequestChainStore {
     if (matches.some(chain => chain.tabId !== first.tabId || chain.frameId !== first.frameId)) return { kind: 'ambiguous' }
     // Identical URL/metadata cannot identify two concurrent authenticated
     // responses. Keep the body unresolved instead of borrowing newer headers.
-    if (hasResponseIdentity && !download.requestId && matches.length > 1) {
+    if (match === 'exact' && !download.requestId && matches.length > 1) {
       const requestIdentity = (chain: RequestChain) => JSON.stringify([
-        chain.method, chain.requestBody, Object.entries(chain.requestHeaders).sort(([left], [right]) => left.localeCompare(right)),
+        key(chain.finalUrl), chain.method, chain.requestBody, Object.entries(chain.requestHeaders).sort(([left], [right]) => left.localeCompare(right)),
       ])
       const identity = requestIdentity(first)
       if (matches.some(chain => requestIdentity(chain) !== identity)) return { kind: 'ambiguous' }
@@ -471,17 +480,16 @@ export class RequestChainStore {
     return [...this.chains.values()]
       .filter(chain => chain.tabId === tabId)
       .filter(chain => ['main_frame', 'sub_frame', 'xmlhttprequest'].includes(chain.type))
-      .filter(chain => !page || normalized(chain.finalUrl) === page || normalized(chain.pageUrl) === page)
-      .sort((left, right) => {
-        const leftExact = normalized(left.finalUrl) === page ? 1 : 0
-        const rightExact = normalized(right.finalUrl) === page ? 1 : 0
-        return rightExact - leftExact || right.updatedAt - left.updatedAt
-      })[0]
+      .filter(chain => Boolean(page) && normalized(chain.finalUrl) === page)
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0]
   }
 
   finish(requestId: string, now = Date.now()): void {
     const chain = this.chains.get(requestId)
-    if (chain) chain.updatedAt = now
+    if (chain) {
+      chain.updatedAt = now
+      this.finished.add(chain)
+    }
   }
 
   fail(requestId: string, now = Date.now()): void {

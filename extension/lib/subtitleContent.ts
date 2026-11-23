@@ -5,7 +5,7 @@ import { subtitlePage, subtitleSettings, visibleSubtitle, type SubtitleCue, type
 
 export function installSubtitleContent(ctx: { onInvalidated(callback: () => void): void },
   resolveSource: (media: HTMLMediaElement) => MediaResource | undefined): (node: ParentNode) => void {
-  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; options: HTMLDetailsElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement; hold: HTMLButtonElement }>()
+  const players = new Map<HTMLMediaElement, { id: string; host: HTMLElement; button: HTMLButtonElement; caption: HTMLElement; source: HTMLElement; status: HTMLElement; options: HTMLDetailsElement; back: HTMLButtonElement; next: HTMLButtonElement; earlier: HTMLButtonElement; later: HTMLButtonElement; hold: HTMLButtonElement; starting: boolean; startError: string }>()
   let nextId = 0
   const documentId = [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16)).join('-')
   let settings: SubtitleSettings = subtitleSettings(null)
@@ -37,7 +37,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   const send = (message: Record<string, unknown>) => browser.runtime.sendMessage(message)
   const button = (text: string, click: () => void) => {
     const node = document.createElement('button'); node.textContent = text; node.type = 'button'
-    node.addEventListener('click', event => { event.stopPropagation(); click() }); return node
+    node.addEventListener('click', event => { event.stopPropagation(); if (event.isTrusted) click() }); return node
   }
   const clock = () => {
     if (selected && sessionId && !['stopped', 'failed'].includes(status)) void send({
@@ -45,7 +45,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       playing: !selected.paused && !selected.ended && !selected.seeking && selected.readyState >= 2, epoch,
     }).catch(() => undefined)
   }
-  const reset = () => { if (selected && sessionId) {
+  const reset = () => { if (selected && sessionId && !['stopping', 'stopped', 'failed'].includes(status)) {
     epoch++; live = undefined; readyEnd = selected.currentTime
     if (capture === 'prefetch') {
       preparing = true; resumeAfterPrepare = resumeAfterPrepare || !selected.paused; selected.pause()
@@ -111,10 +111,6 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       .captions{position:absolute;bottom:48px;left:5%;width:90%;text-align:center;font:600 clamp(15px,2vw,24px)/1.4 system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:pre-wrap;overflow-wrap:anywhere}
       .line{display:table;margin:2px auto;padding:2px 8px;background:#000b;border-radius:4px}.line:empty{display:none}.source{font-size:.76em;font-weight:400;color:#eee}`
     const tools = document.createElement('div'); tools.className = 'tools'
-    const failStart = (message: string) => {
-      if (selected !== media) { detachSelectedListeners(); releaseStopCapture(); clearInterval(clockTimer); clockTimer = undefined }
-      error = message; selected = media; status = 'failed'; render()
-    }
     const start = button('翻译字幕', () => {
       if (selected === media && !['stopped', 'failed'].includes(status)) {
         const targetSessionId = sessionId
@@ -122,9 +118,10 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
           if (invalidated || sessionId !== targetSessionId) return
           status = 'stopped'
           error = ''
+          detachSelectedListeners()
+          releaseStopCapture()
           preparing = false
           resumeAfterPrepare = false
-          releaseStopCapture()
           live = undefined
           clearInterval(clockTimer)
           clockTimer = undefined
@@ -136,10 +133,13 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
           resetLocalStop()
         })
       } else {
-        start.disabled = true; error = ''
+        const ui = players.get(media)
+        if (!ui || ui.starting) return
+        ui.starting = true; ui.startError = ''; render()
         void send({ type: 'subtitle-start', mediaId: id }).then(response => {
-          if (!response?.ok) failStart(response?.error || '字幕启动失败')
-        }).catch(() => failStart('插件连接失败，请刷新网页'))
+          if (!response?.ok) ui.startError = response?.error || '字幕启动失败'
+        }).catch(() => { ui.startError = '插件连接失败，请刷新网页' })
+          .finally(() => { ui.starting = false; render() })
       }
     })
     const back = button('上一句', () => seekCue(media, -1)); back.title = '跳到已翻译的上一句'
@@ -168,7 +168,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const caption = document.createElement('div'); caption.className = 'line translation'
     captions.append(source, caption); shadow.append(style, tools, captions)
     document.documentElement.append(host)
-    players.set(media, { id, host, button: start, caption, source, status: state, options, back, next, earlier, later, hold })
+    players.set(media, { id, host, button: start, caption, source, status: state, options, back, next, earlier, later, hold, starting: false, startError: '' })
   }
   const inventory = async () => {
     if (invalidated || reporting) return
@@ -219,9 +219,9 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         const ahead = Math.max(0, readyEnd - selected.currentTime)
         const remaining = Math.max(0, selected.duration - selected.currentTime)
         if (!selected.paused && ahead < Math.min(1, remaining) && remaining > .05) pauseForBuffer()
-        if (preparing && ahead >= Math.min(16, 8 * selected.playbackRate, remaining) - .01 && ahead > 0) {
+        if (preparing && !selected.seeking && ahead >= Math.min(16, 8 * selected.playbackRate, remaining) - .01 && ahead > 0) {
           preparing = false
-          if (resumeAfterPrepare && !resumePending && !selected.seeking) {
+          if (resumeAfterPrepare && !resumePending) {
             resumeAfterPrepare = false; resumePending = true
             void selected.play().catch(() => { note = '字幕已准备，请点击播放器播放' }).finally(() => { resumePending = false })
           }
@@ -256,12 +256,12 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.back.hidden = ui.next.hidden = !allowed || !active && !(selected === media && cues.size)
       ui.earlier.hidden = ui.later.hidden = !active
       ui.hold.hidden = !active || selected !== media || !preparing || !resumeAfterPrepare
-      ui.status.hidden = selected !== media || (!active && !error)
-      ui.button.disabled = !allowed
+      ui.status.hidden = !ui.startError && (selected !== media || (!active && !error))
+      ui.button.disabled = !allowed || ui.starting
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
       ui.button.title = !allowed ? '在主程序启用字幕翻译，并检查插件的网页开关' : '在线翻译当前播放器音频'
-      ui.status.textContent = selected !== media ? '' : error || (active ? status === 'running'
-        ? `${capture === 'prefetch' ? `${preparing ? '等待字幕' : '同步字幕'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放' : '实时翻译'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : '')
+      ui.status.textContent = ui.startError || (selected !== media ? '' : error || (active ? status === 'running'
+        ? `${capture === 'prefetch' ? `${preparing ? '等待字幕' : '同步字幕'} · 已备好 ${Math.max(0, readyEnd - media.currentTime).toFixed(1)} 秒` : media.paused || media.ended ? '等待播放' : '实时翻译'} · ${settings.offset >= 0 ? '+' : ''}${settings.offset.toFixed(1)}s${note ? ` · ${note}` : ''}` : '字幕服务连接中…' : ''))
       ui.status.title = ui.status.textContent || ''
       const cue = allowed && selected === media ? visibleSubtitle(cues.values(), media.currentTime, settings.offset) : undefined
       // 同传有服务端延迟，最新译文在抵达后短暂显示；回看仍严格使用音频时间轴。
@@ -278,17 +278,16 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const media = event.composedPath().find(node => node instanceof HTMLMediaElement) as HTMLMediaElement | undefined
     if (media) { add(media); void inventory() }
   }
-  const listener = (message: any, _sender: unknown, respond: (value: unknown) => void) => {
+  const listener = (message: any, sender: { id?: string }, respond: (value: unknown) => void) => {
+    if (sender.id !== browser.runtime.id) return
     if (message?.type === 'subtitle-policy') { void updatePolicy(); return }
     if (message?.type === 'subtitle-inventory') { void inventory(); return }
     if (message?.type === 'subtitle-select') {
       const media = [...players].find(([, ui]) => ui.id === message.mediaId)?.[0]
       if (!media?.isConnected) { respond({ ok: false, error: '播放器已移除，请重新选择' }); return }
+      players.get(media)!.startError = ''
       if (message.settings) settings = subtitleSettings(message.settings)
       pick(media, String(message.sessionId))
-      if (message.prefetch) {
-        preparing = true; resumeAfterPrepare = !media.paused; media.pause()
-      }
       const tracks = Array.from(((media as any).audioTracks || []) as ArrayLike<{ enabled: boolean; label: string; language: string }>)
       const audioIndex = tracks.findIndex(track => track.enabled)
       respond({ ok: true, resourceId: sourceId, position: media.currentTime, duration: media.duration,
@@ -297,8 +296,15 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     }
     if (message?.type === 'subtitle-prefetch-start' && message.sessionId === sessionId && selected) {
       capture = 'prefetch'; preparing = true; readyEnd = selected.currentTime
+      resumeAfterPrepare = !selected.paused
       selected.pause()
-      stopCapture = () => { preparing = false; resumeAfterPrepare = false }
+      const media = selected
+      stopCapture = () => {
+        if (preparing && resumeAfterPrepare && media.isConnected && media.currentSrc === sourceUrl) {
+          void media.play().catch(() => undefined)
+        }
+        preparing = false; resumeAfterPrepare = false
+      }
       clock(); render(); respond({ ok: true }); return
     }
     if (message?.type === 'subtitle-capture-start' && message.sessionId === sessionId && selected) {
@@ -316,7 +322,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
           })
         })
         // 初始化音频工作线程期间页面可能已卸载，不能再挂接到失效内容脚本。
-        if (invalidated || id !== sessionId || ['stopped', 'failed'].includes(status)) {
+        if (invalidated || id !== sessionId || ['stopping', 'stopped', 'failed'].includes(status)) {
           await cleanup().catch(() => undefined)
           throw new Error('字幕会话已切换或已结束')
         }
@@ -328,6 +334,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       return true
     }
     if (message?.type === 'subtitle-capture-stop' && message.sessionId === sessionId) {
+      status = 'stopping'
       const cleanup = stopCapture; stopCapture = undefined
       void Promise.resolve(cleanup?.()).then(() => respond({ ok: true }), () => respond({ ok: false, error: '音频尾部未能提交给字幕服务' }))
       return true
@@ -338,9 +345,11 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     status = message.status; error = message.error || ''; capture = message.capture || ''; note = message.note || ''
     if (Number.isFinite(message.readyEnd)) readyEnd = Math.max(readyEnd, message.readyEnd)
     if (terminal) {
+      detachSelectedListeners()
+      releaseStopCapture()
       preparing = false
       resumeAfterPrepare = false
-      releaseStopCapture(); live = undefined
+      live = undefined
       clearInterval(clockTimer); clockTimer = undefined
     }
     for (const event of message.events || []) {

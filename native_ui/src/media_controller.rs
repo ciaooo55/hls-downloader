@@ -276,6 +276,7 @@ impl MediaController {
                 self.detached.set(false);
                 self.main.set_media_detached(false);
                 if let Some(pip) = self.pip.borrow().as_ref() {
+                    pip.set_fullscreen(false);
                     pip.window().set_fullscreen(false);
                     let _ = pip.hide();
                 }
@@ -400,7 +401,7 @@ impl MediaController {
         } else {
             self.audio_ids.borrow()
         };
-        if let Some(id) = ids.get(index.max(0) as usize) {
+        if let Some(id) = usize::try_from(index).ok().and_then(|i| ids.get(i)) {
             self.command(format!(
                 "{}:{id}",
                 if subtitle { "subtitle" } else { "audio" }
@@ -471,8 +472,12 @@ impl MediaController {
         if envelope.sequence != 0 && envelope.sequence <= self.sequence.get() {
             return;
         }
-        self.sequence.set(envelope.sequence);
-        if self.session.replace(*session_generation) != *session_generation {
+        if envelope.sequence != 0 {
+            self.sequence.set(envelope.sequence);
+        }
+        if self.session.replace(*session_generation) != *session_generation || !active {
+            self.pending_subtitle_reset.set(None);
+            self.pending_controls.borrow_mut().clear();
             self.layout.set(0);
             self.confirmed_host.borrow_mut().take();
             self.pending_embed.borrow_mut().take();
@@ -522,6 +527,7 @@ impl MediaController {
             self.main.set_media_fullscreen(false);
             self.main.window().set_fullscreen(false);
             if let Some(pip) = self.pip.borrow().as_ref() {
+                pip.set_fullscreen(false);
                 pip.window().set_fullscreen(false);
                 let _ = pip.hide();
             }
@@ -694,6 +700,9 @@ impl MediaController {
         // Core restart resets event numbering. The new snapshot establishes a
         // fresh stream; playback state is queried independently of task rows.
         self.sequence.set(0);
+        self.active.set(false);
+        self.controls_supported.set(false);
+        self.supported.set(false);
         self.layout.set(0);
         self.confirmed_host.borrow_mut().take();
         self.pending_embed.borrow_mut().take();
@@ -725,7 +734,7 @@ impl MediaController {
         if !self.active.get() {
             return;
         }
-        if let Some(value) = self.seek.take() {
+        if let Some(value) = self.seek.take().filter(|v| v.is_finite() && *v >= 0.0) {
             self.command(format!("seek_to:{value:.3}"));
         }
         let subtitles = self.subtitles.borrow();
@@ -759,7 +768,12 @@ impl MediaController {
         if let Some(pip) = self.pip.borrow().as_ref() {
             pip.set_state(view);
         }
-        if let Some(value) = self.volume.take() {
+        if let Some(value) = self
+            .volume
+            .take()
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(0.0, 100.0))
+        {
             self.command(format!("volume:{value:.1}"));
         }
         if let Some((seconds, ready)) = self.hover_preview.get() {

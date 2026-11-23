@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
@@ -59,8 +59,8 @@ struct MediaState {
 
 #[derive(Clone)]
 enum Mount {
-    File(PathBuf),
-    Dir(PathBuf),
+    File(PathBuf, Arc<AtomicBool>),
+    Dir(PathBuf, Arc<AtomicBool>),
     Downloading {
         dir: PathBuf,
         revoked: Arc<AtomicBool>,
@@ -75,14 +75,18 @@ enum Mount {
 }
 
 impl Mount {
-    fn revoke(&self) {
+    fn revoked(&self) -> &AtomicBool {
         match self {
-            Self::Proxy(proxy) => proxy.canceled.store(true, Ordering::Relaxed),
-            Self::Downloading { revoked, .. } | Self::Growing { revoked, .. } => {
-                revoked.store(true, Ordering::SeqCst);
-            }
-            Self::File(_) | Self::Dir(_) => {}
+            Self::Proxy(proxy) => &proxy.canceled,
+            Self::Downloading { revoked, .. }
+            | Self::Growing { revoked, .. }
+            | Self::File(_, revoked)
+            | Self::Dir(_, revoked) => revoked,
         }
+    }
+
+    fn revoke(&self) {
+        self.revoked().store(true, Ordering::SeqCst);
     }
 }
 
@@ -130,20 +134,12 @@ impl MediaServer {
                     let Some(slot) = MediaConnectionSlot::claim(&active) else {
                         continue;
                     };
-                    let Some(owner) = state.upgrade() else {
-                        break;
-                    };
-                    let mounts = owner
-                        .lock()
-                        .map(|guard| guard.mounts.clone())
-                        .unwrap_or_default();
-                    drop(owner);
                     let lifetime = Weak::clone(&state);
                     let _ = thread::Builder::new()
                         .name("media-client".into())
                         .spawn(move || {
                             let _slot = slot;
-                            let _ = handle_client(stream, &mounts, listen_port, &lifetime);
+                            let _ = handle_client(stream, listen_port, &lifetime);
                         });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -156,11 +152,11 @@ impl MediaServer {
     }
 
     pub fn mount(&self, token: &str, path: PathBuf) {
-        self.store(token, Mount::File(path));
+        self.store(token, Mount::File(path, Arc::new(AtomicBool::new(false))));
     }
 
     pub fn mount_dir(&self, token: &str, path: PathBuf) {
-        self.store(token, Mount::Dir(path));
+        self.store(token, Mount::Dir(path, Arc::new(AtomicBool::new(false))));
     }
 
     pub fn mount_downloading(&self, token: &str, path: PathBuf) {
@@ -233,8 +229,8 @@ impl MediaServer {
                     .iter()
                     .find(|(name, _)| name == token)
                     .and_then(|(_, mount)| match mount {
-                        Mount::File(path) => file_cast_name(path).map(|name| format!("/{name}")),
-                        Mount::Dir(_) => Some("/local.m3u8".into()),
+                        Mount::File(path, _) => file_cast_name(path).map(|name| format!("/{name}")),
+                        Mount::Dir(..) => Some("/local.m3u8".into()),
                         Mount::Downloading { .. } => Some("/preview.m3u8".into()),
                         Mount::Growing { .. } => None,
                         Mount::Proxy(proxy) => Some(format!("/{}", proxy.cast_name())),
@@ -272,46 +268,15 @@ impl MediaServer {
 
 pub fn random_mount_token() -> String {
     let mut bytes = [0u8; 16];
-    fill_random_bytes(&mut bytes);
+    rustls::crypto::ring::default_provider()
+        .secure_random
+        .fill(&mut bytes)
+        .expect("operating system randomness unavailable for playback token");
     let mut out = String::from("m");
     for byte in bytes {
         out.push_str(&format!("{byte:02x}"));
     }
     out
-}
-
-fn fill_random_bytes(buf: &mut [u8]) {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Security::Cryptography::{
-            BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        };
-        let status = unsafe {
-            BCryptGenRandom(
-                std::ptr::null_mut(),
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-            )
-        };
-        if status == 0 {
-            return;
-        }
-    }
-    let tick = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|item| item.as_nanos() as u64)
-        .unwrap_or(0);
-    static COUNTER: AtomicU64 = AtomicU64::new(0x9e3779b97f4a7c15);
-    let mut seed =
-        COUNTER.fetch_add(tick | 1, Ordering::Relaxed) ^ tick ^ (std::process::id() as u64);
-    for byte in buf {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        *byte = (seed >> 24) as u8;
-        seed = seed.wrapping_add(0x9e3779b97f4a7c15);
-    }
 }
 
 /// 谁能连我的本地媒体服务器。回环永远放行（界面和 presenter 自己走这条）。
@@ -374,7 +339,6 @@ fn read_request_headers(stream: &mut TcpStream) -> Result<String, String> {
 
 fn handle_client(
     mut stream: TcpStream,
-    mounts: &[(String, Mount)],
     port: u16,
     lifetime: &Weak<Mutex<MediaState>>,
 ) -> Result<(), String> {
@@ -383,17 +347,32 @@ fn handle_client(
         .map_err(|error| error.to_string())?;
     let peer = stream.peer_addr().ok().map(|addr| addr.ip());
     let request = read_request_headers(&mut stream)?;
-    let path = request
+    let mut words = request
         .lines()
         .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/");
-    let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
-    if let Some(token) = path.strip_prefix("/tvbox/") {
-        let token = token.split('/').next().unwrap_or(token);
-        let Some(_) = resolve_mount(mounts, token) else {
-            return write_status(&mut stream, 404, b"not found");
-        };
+        .unwrap_or("")
+        .split_ascii_whitespace();
+    let method = words.next().unwrap_or("");
+    if !matches!(method, "GET" | "HEAD") {
+        return write_status(&mut stream, 405, b"method not allowed", false);
+    }
+    let head = method == "HEAD";
+    let target = words.next().unwrap_or("");
+    let path = target.split('?').next().unwrap_or("");
+    let tvbox = path.starts_with("/tvbox/");
+    let rest = path
+        .strip_prefix("/tvbox/")
+        .or_else(|| path.strip_prefix("/media/"))
+        .unwrap_or("");
+    let (token, sub) = rest.split_once('/').unwrap_or((rest, ""));
+    let mount = lifetime.upgrade().and_then(|owner| {
+        let state = owner.lock().ok()?;
+        resolve_mount(&state.mounts, token).cloned()
+    });
+    let Some(mount) = mount else {
+        return write_status(&mut stream, 404, b"not found", head);
+    };
+    if tvbox {
         let advertised = advertise_host(peer, port);
         let location = format!("http://{advertised}/media/{token}");
         let body = format!(
@@ -406,15 +385,10 @@ fn handle_client(
             200,
             "application/json; charset=utf-8",
             body.as_bytes(),
+            head,
         );
     }
-    let rest = path.strip_prefix("/media/").unwrap_or("");
-    let (token, sub) = rest.split_once('/').unwrap_or((rest, ""));
-    let Some(mount) = resolve_mount(mounts, token) else {
-        write_status(&mut stream, 404, b"not found")?;
-        return Ok(());
-    };
-    let file_path = match mount {
+    let file_path = match &mount {
         Mount::Proxy(proxy) => {
             return proxy.serve(stream, &request, sub, &format!("/media/{token}"));
         }
@@ -425,7 +399,7 @@ fn handle_client(
             revoked,
         } => {
             if !sub.is_empty() {
-                return write_status(&mut stream, 404, b"not found");
+                return write_status(&mut stream, 404, b"not found", head);
             }
             return serve_growing_file(
                 &mut stream,
@@ -437,19 +411,22 @@ fn handle_client(
                 revoked,
             );
         }
-        Mount::File(path) => {
+        Mount::File(path, _) => {
             if !sub.is_empty() && file_cast_name(path).as_deref() != Some(sub) {
-                write_status(&mut stream, 404, b"not found")?;
+                write_status(&mut stream, 404, b"not found", head)?;
                 return Ok(());
             }
             path.clone()
         }
-        Mount::Dir(dir) => {
+        Mount::Dir(dir, _) => {
             let name = if sub.is_empty() { "local.m3u8" } else { sub };
-            match safe_join(dir, name) {
-                Some(path) if path.exists() => path,
+            let Ok(root) = dir.canonicalize() else {
+                return write_status(&mut stream, 404, b"not found", head);
+            };
+            match safe_join(&root, name).and_then(|path| path.canonicalize().ok()) {
+                Some(path) if path.starts_with(&root) && path.is_file() => path,
                 _ => {
-                    write_status(&mut stream, 404, b"not found")?;
+                    write_status(&mut stream, 404, b"not found", head)?;
                     return Ok(());
                 }
             }
@@ -457,7 +434,7 @@ fn handle_client(
         Mount::Downloading { dir, revoked } => {
             let name = if sub.is_empty() { "preview.m3u8" } else { sub };
             let Some(file) = safe_join(dir, name) else {
-                return write_status(&mut stream, 404, b"not found");
+                return write_status(&mut stream, 404, b"not found", head);
             };
             let playlist = matches!(
                 name,
@@ -472,11 +449,16 @@ fn handle_client(
                     && (name.ends_with(".m4s") || name.ends_with("-init.mp4")))
                 || matches!(name, "init.mp4" | "audio/init.mp4");
             if !playlist && !fragment {
-                return write_status(&mut stream, 404, b"not found");
+                return write_status(&mut stream, 404, b"not found", head);
             }
             if fragment && !crate::media::preview::is_ready(dir, name) {
                 if thumbnail_request(&request) {
-                    return write_status(&mut stream, 503, b"thumbnail segment not downloaded");
+                    return write_status(
+                        &mut stream,
+                        503,
+                        b"thumbnail segment not downloaded",
+                        head,
+                    );
                 }
                 crate::media::preview::request_priority(dir, name)?;
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
@@ -485,7 +467,7 @@ fn handle_client(
                         || revoked.load(Ordering::SeqCst)
                         || peer_disconnected(&stream)
                     {
-                        return write_status(&mut stream, 503, b"segment wait interrupted");
+                        return write_status(&mut stream, 503, b"segment wait interrupted", head);
                     }
                     let control = std::fs::read_to_string(dir.join("control")).unwrap_or_default();
                     if !dir.is_dir()
@@ -496,6 +478,7 @@ fn handle_client(
                             &mut stream,
                             503,
                             b"segment not ready; resume download and retry",
+                            head,
                         );
                     }
                     thread::sleep(std::time::Duration::from_millis(50));
@@ -509,12 +492,12 @@ fn handle_client(
                     .zip(dir.canonicalize().ok())
                     .is_some_and(|(file, root)| file.starts_with(root))
             {
-                return write_status(&mut stream, 404, b"not found");
+                return write_status(&mut stream, 404, b"not found", head);
             }
             file
         }
     };
-    serve_file(&mut stream, &request, &file_path, lifetime)
+    serve_file(&mut stream, &request, &file_path, lifetime, mount.revoked())
 }
 
 fn advertise_host(peer: Option<IpAddr>, port: u16) -> String {
@@ -549,9 +532,11 @@ fn resolve_mount<'a>(mounts: &'a [(String, Mount)], token: &str) -> Option<&'a M
 fn safe_join(dir: &Path, sub: &str) -> Option<PathBuf> {
     if sub.is_empty()
         || sub.contains(':')
-        || sub
-            .split(['/', '\\'])
-            .any(|part| part.is_empty() || part == "." || part == "..")
+        || sub.split(['/', '\\']).any(|part| {
+            part.is_empty()
+                || part.ends_with(['.', ' '])
+                || hls_client::request_validation::reserved_dos_device_name(part)
+        })
         || Path::new(sub).is_absolute()
     {
         return None;
@@ -585,32 +570,35 @@ fn serve_file(
     request: &str,
     file_path: &Path,
     lifetime: &Weak<Mutex<MediaState>>,
+    revoked: &AtomicBool,
 ) -> Result<(), String> {
     let mut file = File::open(file_path).map_err(|error| error.to_string())?;
     let total = file.metadata().map_err(|error| error.to_string())?.len();
     let content_type = content_type(file_path);
     let range = range_header(request);
-    if let Some(range) = range {
+    let head = request.starts_with("HEAD ");
+    let (header, start, length) = if let Some(range) = range {
         let Some((start, end)) = parse_range(range, total) else {
-            return write_status(stream, 416, b"range not satisfiable");
+            return write_status(stream, 416, b"range not satisfiable", head);
         };
-        let length = end.saturating_sub(start).saturating_add(1);
+        let length = end - start + 1;
         let header = format!(
             "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
         );
-        stream
-            .write_all(header.as_bytes())
-            .map_err(|error| error.to_string())?;
-        stream_bytes(stream, &mut file, start, length, lifetime)
+        (header, start, length)
     } else {
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
         );
-        stream
-            .write_all(header.as_bytes())
-            .map_err(|error| error.to_string())?;
-        stream_bytes(stream, &mut file, 0, total, lifetime)
+        (header, 0, total)
+    };
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if head {
+        return Ok(());
     }
+    stream_bytes(stream, &mut file, start, length, lifetime, revoked)
 }
 
 fn downloaded_range_end(root: &Path, start: u64, total: u64) -> Option<u64> {
@@ -652,17 +640,14 @@ fn serve_growing_file(
     lifetime: &Weak<Mutex<MediaState>>,
     revoked: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let head = request.starts_with("HEAD ");
     let range = range_header(request);
     let Some((start, end)) = range
         .map(|range| parse_range(range, total))
         .unwrap_or_else(|| total.checked_sub(1).map(|end| (0, end)))
     else {
-        return write_status(stream, 416, b"range not satisfiable");
+        return write_status(stream, 416, b"range not satisfiable", head);
     };
-    let head = request
-        .lines()
-        .next()
-        .is_some_and(|line| line.starts_with("HEAD "));
     let status = if range.is_some() { 206 } else { 200 };
     let length = end - start + 1;
     let mut cursor = start;
@@ -695,7 +680,14 @@ fn serve_growing_file(
                 return Ok(());
             }
             let count = (available.unwrap().min(end) - cursor + 1).min(1024 * 1024);
-            stream_bytes(stream, file.as_mut().unwrap(), cursor, count, lifetime)?;
+            stream_bytes(
+                stream,
+                file.as_mut().unwrap(),
+                cursor,
+                count,
+                lifetime,
+                revoked,
+            )?;
             drop(file);
             cursor += count;
             if cursor > end {
@@ -704,7 +696,7 @@ fn serve_growing_file(
         } else {
             if thumbnail_request(request) {
                 if !headers_sent {
-                    return write_status(stream, 503, b"thumbnail range not downloaded");
+                    return write_status(stream, 503, b"thumbnail range not downloaded", head);
                 }
                 return Err("thumbnail reached undownloaded bytes".into());
             }
@@ -723,6 +715,7 @@ fn serve_growing_file(
                             stream,
                             503,
                             b"range not ready; resume download and retry",
+                            head,
                         );
                     }
                     return Err("requested download range is not ready".into());
@@ -739,13 +732,14 @@ fn stream_bytes(
     start: u64,
     length: u64,
     lifetime: &Weak<Mutex<MediaState>>,
+    revoked: &AtomicBool,
 ) -> Result<(), String> {
     file.seek(SeekFrom::Start(start))
         .map_err(|error| error.to_string())?;
     let mut remaining = length;
     let mut buf = vec![0u8; STREAM_CHUNK];
     while remaining > 0 {
-        if lifetime.strong_count() == 0 {
+        if lifetime.strong_count() == 0 || revoked.load(Ordering::SeqCst) {
             return Err("media server stopped".into());
         }
         let want = buf.len().min(remaining as usize);
@@ -753,7 +747,7 @@ fn stream_bytes(
             .read(&mut buf[..want])
             .map_err(|error| error.to_string())?;
         if read == 0 {
-            break;
+            return Err("media file ended before the advertised byte range".into());
         }
         write_all_within(stream, &buf[..read], WRITE_TIMEOUT).map_err(|error| error.to_string())?;
         remaining -= read as u64;
@@ -828,8 +822,14 @@ fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     if total == 0 {
         return None;
     }
-    let spec = header.trim().split('/').next().unwrap_or(header);
-    let (start, end) = spec.split_once('-')?;
+    let (start, end) = header.trim().split_once('-')?;
+    if !start
+        .bytes()
+        .chain(end.bytes())
+        .all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
     let last = total - 1;
     let (start, end) = if start.is_empty() {
         let suffix = end.parse::<u64>().ok()?;
@@ -842,8 +842,13 @@ fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && start <= last).then_some((start, end))
 }
 
-fn write_status(stream: &mut TcpStream, status: u16, body: &[u8]) -> Result<(), String> {
-    write_response(stream, status, "text/plain; charset=utf-8", body)
+fn write_status(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &[u8],
+    head: bool,
+) -> Result<(), String> {
+    write_response(stream, status, "text/plain; charset=utf-8", body, head)
 }
 
 fn write_response(
@@ -851,11 +856,13 @@ fn write_response(
     status: u16,
     content_type: &str,
     body: &[u8],
+    head: bool,
 ) -> Result<(), String> {
     let reason = match status {
         200 => "OK",
         206 => "Partial Content",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         416 => "Range Not Satisfiable",
         _ => "",
     };
@@ -866,6 +873,9 @@ fn write_response(
     stream
         .write_all(header.as_bytes())
         .map_err(|error| error.to_string())?;
+    if head {
+        return Ok(());
+    }
     stream.write_all(body).map_err(|error| error.to_string())
 }
 
@@ -1275,6 +1285,26 @@ mod tests {
     }
 
     #[test]
+    fn path_components_reject_windows_aliases() {
+        for relative in [
+            "segments/.. /file",
+            "audio/NUL.ts",
+            "segments/COM1",
+            "audio/track.",
+        ] {
+            assert!(safe_join(Path::new("root"), relative).is_none());
+        }
+    }
+
+    #[test]
+    fn ranges_require_unsigned_decimal_bounds() {
+        assert_eq!(parse_range("+1-3", 10), None);
+        assert_eq!(parse_range("1-3/10", 10), None);
+        assert_eq!(parse_range("1-18446744073709551616", 10), None);
+        assert_eq!(parse_range("-2", 10), Some((8, 9)));
+    }
+
+    #[test]
     fn unsatisfiable_range_is_416() {
         let server = MediaServer::start().unwrap();
         let dir = std::env::temp_dir().join(format!("hls-play-416-{}", std::process::id()));
@@ -1307,6 +1337,14 @@ mod tests {
         let mut buf = Vec::new();
         playlist.read_to_end(&mut buf).unwrap();
         assert!(String::from_utf8_lossy(&buf).contains("#EXTM3U"));
+        let mut head = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        head.write_all(b"HEAD /media/dash-1/seg-0000.m4s HTTP/1.1\r\nRange: bytes=1-2\r\n\r\n")
+            .unwrap();
+        buf.clear();
+        head.read_to_end(&mut buf).unwrap();
+        assert!(buf.starts_with(b"HTTP/1.1 206"));
+        assert!(String::from_utf8_lossy(&buf).contains("Content-Length: 2\r\n"));
+        assert!(buf.ends_with(b"\r\n\r\n"));
         let mut segment = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
         segment
             .write_all(b"GET /media/dash-1/seg-0000.m4s?cache=1 HTTP/1.1\r\n\r\n")

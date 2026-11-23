@@ -193,14 +193,7 @@ pub(crate) fn mux_av_with_offset(
     }
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let mut command = Command::new(ffmpeg);
-    command.args([
-        "-y",
-        "-nostdin",
-        "-loglevel",
-        "error",
-        "-protocol_whitelist",
-        "file,crypto",
-    ]);
+    command.args(["-y", "-nostdin", "-loglevel", "error"]);
     mux_input_args(&mut command, video, audio, subtitles, audio_offset);
     for arg in mux_map_args(audio.is_some(), subtitles.len()) {
         command.arg(arg);
@@ -228,15 +221,21 @@ fn mux_input_args(
     if audio.is_some() && audio_offset < 0.0 {
         command.args(["-itsoffset", &format!("{:.9}", -audio_offset)]);
     }
-    command.arg("-i").arg(video);
+    command
+        .args(["-protocol_whitelist", "file,crypto", "-i"])
+        .arg(video);
     if let Some(audio) = audio {
         if audio_offset > 0.0 {
             command.args(["-itsoffset", &format!("{audio_offset:.9}")]);
         }
-        command.args(["-i"]).arg(audio);
+        command
+            .args(["-protocol_whitelist", "file,crypto", "-i"])
+            .arg(audio);
     }
     for subtitle in subtitles {
-        command.args(["-i"]).arg(subtitle);
+        command
+            .args(["-protocol_whitelist", "file,crypto", "-i"])
+            .arg(subtitle);
     }
 }
 
@@ -492,13 +491,17 @@ mod tests {
                 &[PathBuf::from("sub.srt")],
                 offset,
             );
-            assert_eq!(
-                command
-                    .get_args()
-                    .map(|arg| arg.to_str().unwrap())
-                    .collect::<Vec<_>>(),
-                expected
-            );
+            let expected: Vec<_> = expected
+                .into_iter()
+                .flat_map(|arg| {
+                    if arg == "-i" {
+                        vec!["-protocol_whitelist", "file,crypto", arg]
+                    } else {
+                        vec![arg]
+                    }
+                })
+                .collect();
+            assert_eq!(command.get_args().collect::<Vec<_>>(), expected);
         }
         for offset in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(

@@ -30,22 +30,36 @@ pub fn completion_sound() {
 
 static TRAY_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(windows)]
-static TRAY_ICON: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+struct TrayIcon {
+    handle: windows_sys::Win32::UI::WindowsAndMessaging::HICON,
+    owned: bool,
+}
+
+#[cfg(windows)]
+impl Drop for TrayIcon {
+    fn drop(&mut self) {
+        if self.owned {
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon(self.handle) };
+        }
+    }
+}
+
+#[cfg(windows)]
+struct TrayWindow {
+    sender: Sender<TrayAction>,
+    icon: TrayIcon,
+}
 #[cfg(windows)]
 static TASKBAR_CREATED_MESSAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(windows)]
-unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HICON {
+unsafe fn load_product_icon() -> TrayIcon {
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         LoadIconW, LoadImageW, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
     };
 
-    let cached = TRAY_ICON.load(std::sync::atomic::Ordering::Acquire);
-    if cached != 0 {
-        return cached as HICON;
-    }
     let mut candidates = Vec::<PathBuf>::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(parent) = executable.parent() {
@@ -59,28 +73,27 @@ unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HI
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/app-icon.ico"));
 
-    let icon = candidates
-        .into_iter()
-        .find_map(|path| {
-            if !path.is_file() {
-                return None;
-            }
-            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            let handle = unsafe {
-                LoadImageW(
-                    std::ptr::null_mut(),
-                    wide.as_ptr(),
-                    IMAGE_ICON,
-                    0,
-                    0,
-                    LR_LOADFROMFILE | LR_DEFAULTSIZE,
-                )
-            } as HICON;
-            (!handle.is_null()).then_some(handle)
-        })
-        .unwrap_or_else(|| unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) });
-    TRAY_ICON.store(icon as isize, std::sync::atomic::Ordering::Release);
-    icon
+    let icon = candidates.into_iter().find_map(|path| {
+        if !path.is_file() {
+            return None;
+        }
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle = unsafe {
+            LoadImageW(
+                std::ptr::null_mut(),
+                wide.as_ptr(),
+                IMAGE_ICON,
+                0,
+                0,
+                LR_LOADFROMFILE | LR_DEFAULTSIZE,
+            )
+        } as HICON;
+        (!handle.is_null()).then_some(handle)
+    });
+    TrayIcon {
+        owned: icon.is_some(),
+        handle: icon.unwrap_or_else(|| unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) }),
+    }
 }
 
 pub fn show_notification(title: &str, body: &str) {
@@ -155,14 +168,11 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassW,
-        RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-        HWND_MESSAGE, WM_APP, WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+        RegisterWindowMessageW, SetWindowLongPtrW, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+        CW_USEDEFAULT, GWLP_USERDATA, WM_APP, WNDCLASSW, WS_OVERLAPPED,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
-    const ID_SHOW: usize = 1;
-    const ID_QUIT: usize = 4;
-
     let class_name: Vec<u16> = "HLSDownloader.v7.Tray\0".encode_utf16().collect();
     let class = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
@@ -170,44 +180,40 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: null_mut(),
-        hIcon: load_product_icon(),
+        hIcon: null_mut(),
         hCursor: null_mut(),
         hbrBackground: null_mut(),
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
     };
     RegisterClassW(&class);
-    let mut hwnd = CreateWindowExW(
+    // Explorer broadcasts TaskbarCreated only to top-level windows.
+    let hwnd = CreateWindowExW(
         0,
         class_name.as_ptr(),
         class_name.as_ptr(),
         WS_OVERLAPPED,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        HWND_MESSAGE,
+        0,
+        0,
+        null_mut(),
         null_mut(),
         null_mut(),
         null_mut(),
     );
     if hwnd.is_null() {
-        hwnd = CreateWindowExW(
-            0,
-            class_name.as_ptr(),
-            class_name.as_ptr(),
-            WS_OVERLAPPED,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            0,
-            0,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut(),
-        );
+        return;
     }
-    if hwnd.is_null() {
+    let window = TrayWindow {
+        sender: tx,
+        icon: load_product_icon(),
+    };
+    windows_sys::Win32::Foundation::SetLastError(0);
+    if SetWindowLongPtrW(hwnd, GWLP_USERDATA, &window as *const TrayWindow as isize) == 0
+        && windows_sys::Win32::Foundation::GetLastError() != 0
+    {
+        DestroyWindow(hwnd);
         return;
     }
     let taskbar_created: Vec<u16> = "TaskbarCreated\0".encode_utf16().collect();
@@ -216,13 +222,6 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         std::sync::atomic::Ordering::Release,
     );
     TRAY_HWND.store(hwnd as isize, std::sync::atomic::Ordering::SeqCst);
-    let boxed = Box::new(tx);
-    windows_sys::Win32::Foundation::SetLastError(0);
-    windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
-        hwnd,
-        windows_sys::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
-        Box::into_raw(boxed) as isize,
-    );
 
     let mut data: NOTIFYICONDATAW = std::mem::zeroed();
     data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
@@ -230,11 +229,8 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     data.uID = 1;
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_TRAY;
-    data.hIcon = load_product_icon();
-    let tip: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
-    for (index, unit) in tip.iter().take(data.szTip.len()).enumerate() {
-        data.szTip[index] = *unit;
-    }
+    data.hIcon = window.icon.handle;
+    copy_utf16(&mut data.szTip, "HLS Downloader");
     Shell_NotifyIconW(NIM_ADD, &data);
 
     let mut msg = std::mem::zeroed();
@@ -243,17 +239,9 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
         DispatchMessageW(&msg);
     }
     Shell_NotifyIconW(NIM_DELETE, &data);
-    let _ = (WM_COMMAND, WM_LBUTTONUP, WM_RBUTTONUP, ID_SHOW, ID_QUIT);
     TRAY_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
-    let user_data = windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
-        hwnd,
-        windows_sys::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
-        0,
-    ) as *mut Sender<TrayAction>;
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
     DestroyWindow(hwnd);
-    if !user_data.is_null() {
-        drop(Box::from_raw(user_data));
-    }
 }
 
 #[cfg(windows)]
@@ -275,9 +263,10 @@ unsafe extern "system" fn tray_wnd_proc(
     const ID_SHOW: usize = 1;
     const ID_QUIT: usize = 4;
 
-    let sender = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Sender<TrayAction>;
+    let window = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const TrayWindow).as_ref();
     let taskbar_created = TASKBAR_CREATED_MESSAGE.load(std::sync::atomic::Ordering::Acquire);
     if taskbar_created != 0 && msg == taskbar_created {
+        let Some(window) = window else { return 0 };
         use windows_sys::Win32::UI::Shell::{
             Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW,
         };
@@ -287,7 +276,7 @@ unsafe extern "system" fn tray_wnd_proc(
         data.uID = 1;
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = WM_TRAY;
-        data.hIcon = load_product_icon();
+        data.hIcon = window.icon.handle;
         copy_utf16(&mut data.szTip, "HLS Downloader");
         Shell_NotifyIconW(NIM_ADD, &data);
         return 0;
@@ -295,7 +284,7 @@ unsafe extern "system" fn tray_wnd_proc(
     if msg == WM_TRAY {
         let event = lparam as u32;
         if event == WM_LBUTTONUP {
-            send_action(sender, TrayAction::ShowMain);
+            send_action(window, TrayAction::ShowMain);
             return 0;
         }
         if event == WM_RBUTTONUP {
@@ -323,9 +312,9 @@ unsafe extern "system" fn tray_wnd_proc(
     }
     if msg == WM_COMMAND {
         match wparam & 0xffff {
-            ID_SHOW => send_action(sender, TrayAction::ShowMain),
+            ID_SHOW => send_action(window, TrayAction::ShowMain),
             // Keep the tray available if Core cannot save its exit checkpoint.
-            ID_QUIT => send_action(sender, TrayAction::Quit),
+            ID_QUIT => send_action(window, TrayAction::Quit),
             _ => {}
         }
         return 0;
@@ -338,11 +327,10 @@ unsafe extern "system" fn tray_wnd_proc(
 }
 
 #[cfg(windows)]
-fn send_action(sender: *const Sender<TrayAction>, action: TrayAction) {
-    if sender.is_null() {
-        return;
+fn send_action(window: Option<&TrayWindow>, action: TrayAction) {
+    if let Some(window) = window {
+        let _ = window.sender.send(action);
     }
-    let _ = unsafe { &*sender }.send(action);
 }
 
 #[cfg(test)]
@@ -366,8 +354,9 @@ mod tests {
         use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, IDI_APPLICATION};
         let icon = unsafe { super::load_product_icon() };
         let fallback = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
-        assert!(!icon.is_null());
-        assert_ne!(icon, fallback);
+        assert!(!icon.handle.is_null());
+        assert!(icon.owned);
+        assert_ne!(icon.handle, fallback);
     }
 
     #[cfg(windows)]

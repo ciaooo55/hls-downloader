@@ -109,7 +109,8 @@ fn belongs_to(path: &Path, root: &Path) -> bool {
 /// Looks up one variable in a Windows environment block (`KEY=value\0...\0\0`).
 fn environment_value(block: &[u16], key: &str) -> Option<String> {
     block
-        .split(|unit| *unit == 0)
+        .split_inclusive(|unit| *unit == 0)
+        .map_while(|entry| entry.strip_suffix(&[0]))
         .take_while(|entry| !entry.is_empty())
         .filter_map(|entry| String::from_utf16(entry).ok())
         .find_map(|entry| {
@@ -211,6 +212,8 @@ mod windows {
         pid: u32,
         name: String,
         path: PathBuf,
+        // Keep the PID reserved while classifying, closing windows and stopping this process.
+        _owner: OwnedHandle,
     }
 
     fn image(handle: Handle) -> Result<PathBuf, String> {
@@ -262,11 +265,19 @@ mod windows {
             if target_name(&name) {
                 if let Some(handle) = open(entry.pid, 0)? {
                     match image(handle.0) {
-                        Ok(path) if belongs_to(&path, root) => result.push(Process {
-                            pid: entry.pid,
-                            name,
-                            path,
-                        }),
+                        Ok(path)
+                            if belongs_to(&path, root)
+                                && path
+                                    .file_name()
+                                    .is_some_and(|file| file.eq_ignore_ascii_case(&name)) =>
+                        {
+                            result.push(Process {
+                                pid: entry.pid,
+                                name,
+                                path,
+                                _owner: handle,
+                            })
+                        }
                         Ok(_) => {}
                         // Process teardown can revoke image queries before the
                         // process object becomes signaled. Wait on this handle
@@ -360,9 +371,9 @@ mod windows {
             return None;
         }
         // x64 PEB.ProcessParameters, then Environment and EnvironmentSize.
-        let parameters = read_pointer(process.0, basic[1] + 0x20)?;
-        let environment = read_pointer(process.0, parameters + 0x80)?;
-        let size = read_pointer(process.0, parameters + 0x3f0)?.min(1 << 20);
+        let parameters = read_pointer(process.0, basic[1].checked_add(0x20)?)?;
+        let environment = read_pointer(process.0, parameters.checked_add(0x80)?)?;
+        let size = read_pointer(process.0, parameters.checked_add(0x3f0)?)?.min(1 << 20);
         let mut block = vec![0u16; size / 2];
         read_memory(process.0, environment, &mut block)?;
         Some(block)
@@ -695,14 +706,14 @@ mod tests {
         assert_eq!(environment_value(&block, "HLS_V7_CORE_BIND"), None);
         let empty: Vec<u16> = "HLS_V7_PIPE=\0\0".encode_utf16().collect();
         assert_eq!(environment_value(&empty, "HLS_V7_PIPE"), None);
+        let truncated: Vec<_> = "A=1\0HLS_V7_PLAYER_CHILD=1".encode_utf16().collect();
+        assert!(!is_player_child_env(&truncated));
     }
     #[test]
     fn player_child_and_desktop_window_classification_are_accurate() {
         let player_block: Vec<u16> = "A=1\0hls_v7_player_child=1\0\0".encode_utf16().collect();
         let zero_block: Vec<u16> = "HLS_V7_PLAYER_CHILD=0\0\0".encode_utf16().collect();
-        let plain_block: Vec<u16> = "HLS_V7_PIPE=\\\\.\\pipe\\test\0\0"
-            .encode_utf16()
-            .collect();
+        let plain_block: Vec<u16> = "HLS_V7_PIPE=\\\\.\\pipe\\test\0\0".encode_utf16().collect();
         assert!(is_player_child_env(&player_block));
         assert!(!is_player_child_env(&zero_block));
         assert!(!is_player_child_env(&plain_block));
@@ -714,7 +725,10 @@ mod tests {
 
         assert!(requires_core_checkpoint("HLSDownloaderEngine.exe", false));
         assert!(!requires_core_checkpoint("HLSDownloaderEngine.exe", true));
-        assert!(!requires_core_checkpoint("HLSDownloaderPresenter.exe", false));
+        assert!(!requires_core_checkpoint(
+            "HLSDownloaderPresenter.exe",
+            false
+        ));
     }
     #[cfg(all(windows, target_pointer_width = "64"))]
     #[test]

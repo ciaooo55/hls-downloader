@@ -27,6 +27,7 @@ const DURABLE_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 const DURABLE_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 const DURABLE_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
+const MAX_RANGE_RETRY_AFTER: Duration = Duration::from_secs(300);
 const ADAPTIVE_INITIAL_CONNECTIONS: usize = 2;
 // The connection pool is used only by the Windows WinHTTP transport (and tests).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -638,7 +639,7 @@ fn request_user_agent(headers: &HashMap<String, String>) -> String {
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case("user-agent"))
         .map(|(_, value)| value.clone())
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty() && header_is_wire_safe("User-Agent", value))
         .unwrap_or_else(|| CHROME_UA.to_string())
 }
 
@@ -768,7 +769,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     let mut urls = vec![job.url.clone()];
     urls.extend(normalized_mirrors);
     let mut last = EngineError::Failed("job url missing".into());
-    let post = job.method.eq_ignore_ascii_case("POST");
+    let probe_allowed = request_method(job) == "GET";
     let mut identity: Option<(Option<u64>, String)> = None;
     if job.total > 0 || !job.etag.trim().is_empty() {
         identity = Some(((job.total > 0).then_some(job.total), job.etag.clone()));
@@ -776,12 +777,17 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     for (index, url) in urls.into_iter().enumerate() {
         let mut attempt = job.clone();
         attempt.url = url;
+        if range_validator(job).is_empty() {
+            // A newly probed validator cannot identify a prefix saved without one.
+            attempt.resume_from = 0;
+        }
         if index > 0 {
-            let replay = job_replay_json(&attempt);
+            let replay = job_replay_json(job);
             drop_cross_origin_secrets(&mut attempt.headers, &replay, &job.url, &attempt.url);
+            attempt.replay_json = replay;
         }
         let mut initial_response = None;
-        if !post
+        if probe_allowed
             && !attempt.sequential
             && (attempt.total == 0
                 || index > 0
@@ -995,7 +1001,11 @@ fn fetch_bytes_with_transport(
             check_job_control(&job)?;
             return Ok((status, Vec::new()));
         }
-        let expected_length = fetched.content_length;
+        let expected_length = if matches!(status, 200 | 206) {
+            full_entity_length(&fetched)?
+        } else {
+            fetched.content_length
+        };
         if status != 304
             && limit.is_some_and(|limit| expected_length.is_some_and(|length| length > limit))
         {
@@ -1097,7 +1107,10 @@ pub(crate) fn copy_hls_body(
         }
         fetched
     };
-    let expected = range.map(|(_, length)| length).or(fetched.content_length);
+    let expected = match range {
+        Some((_, length)) => Some(length),
+        None => full_entity_length(&fetched)?,
+    };
     let mut body = fetched
         .body
         .take(expected.map_or(u64::MAX, |length| length.saturating_add(1)));
@@ -1279,6 +1292,7 @@ fn fetch_exact_range(
             "byte range response is not identity encoded".into(),
         ));
     }
+    require_response_identity(job, &fetched)?;
     match parse_content_range(fetched.content_range.as_deref().unwrap_or("")) {
         Some((actual_start, actual_end, _)) if actual_start == start && actual_end == end => {}
         Some((actual_start, actual_end, _)) => {
@@ -1400,7 +1414,8 @@ fn download_sequential(
     job: &Job,
     initial_response: Option<FetchResult>,
 ) -> Result<(), EngineError> {
-    let resume_from = if job.resume_from > 0 && job.output.exists() {
+    let resume_from = if request_method(job) == "GET" && job.resume_from > 0 && job.output.exists()
+    {
         job.resume_from
             .min(job.output.metadata().map(|meta| meta.len()).unwrap_or(0))
     } else {
@@ -1496,6 +1511,8 @@ fn download_sequential(
         File::create(&job.output).map_err(|err| EngineError::Failed(err.to_string()))?
     };
     if resume_from > 0 {
+        file.set_len(resume_from)
+            .map_err(|err| EngineError::Failed(err.to_string()))?;
         file.seek(SeekFrom::Start(resume_from))
             .map_err(|err| EngineError::Failed(err.to_string()))?;
     }
@@ -1519,6 +1536,11 @@ fn download_sequential(
         };
         if count == 0 {
             break;
+        }
+        if expected_downloaded.is_some_and(|end| count as u64 > end.saturating_sub(downloaded)) {
+            return Err(EngineError::Failed(
+                "response body exceeds expected length".into(),
+            ));
         }
         crate::net_policy::consume(count, || check_job_control(job))?;
         file.write_all(&buffer[..count])
@@ -1557,12 +1579,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     }
     let workers = job.connections.clamp(1, 64);
     // 待办范围优先；尾部分流仍需显式启用和可靠校验器，等待真实传输验证。
-    let balanced_chunk = total.div_ceil((workers * 4) as u64).max(256 * 1024);
-    let chunk = job.chunk_bytes.max(64 * 1024).min(balanced_chunk);
+    let chunk = range_chunk_size(total, workers, job.chunk_bytes);
     let mut ranges = Vec::new();
     let mut start = 0u64;
     while start < total {
-        let end = (start + chunk - 1).min(total - 1);
+        let end = start.saturating_add(chunk - 1).min(total - 1);
         ranges.push((start, end));
         start = end + 1;
     }
@@ -1583,7 +1604,10 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     let already = covered_bytes(&loaded);
     let pending: Vec<WorkRange> = ranges
         .iter()
-        .flat_map(|(range_start, range_end)| subtract_ranges(*range_start, *range_end, &loaded))
+        .flat_map(|(range_start, range_end)| {
+            let first = loaded.partition_point(|(_, end)| end < range_start);
+            subtract_ranges(*range_start, *range_end, &loaded[first..])
+        })
         .collect();
     {
         let file = OpenOptions::new()
@@ -1593,9 +1617,9 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
             .truncate(false)
             .open(&job.output)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
+        mark_file_sparse(&file);
         file.set_len(total)
             .map_err(|err| EngineError::Failed(err.to_string()))?;
-        mark_file_sparse(&file);
     }
     if pending.is_empty() {
         if !job
@@ -1746,6 +1770,15 @@ fn active_split_minimum(job: &Job, setting: Option<&str>) -> Option<u64> {
         Some("0" | "false" | "FALSE" | "off" | "OFF")
     );
     (enabled && !range_validator(job).is_empty()).then_some(256 * 1024)
+}
+
+fn range_chunk_size(total: u64, workers: usize, requested: u64) -> u64 {
+    let balanced = total.div_ceil((workers * 4) as u64).max(256 * 1024);
+    // Limit the initial work list even when the advertised length is enormous.
+    requested
+        .max(64 * 1024)
+        .min(balanced)
+        .max(total.div_ceil(65_536))
 }
 
 #[derive(Clone, Debug)]
@@ -2408,6 +2441,13 @@ fn fetch_range(
             if retryable_http_status(fetched.status) {
                 scheduler.note_congestion();
                 if let Some(delay) = fetched.retry_after {
+                    if delay > MAX_RANGE_RETRY_AFTER {
+                        return Err(EngineErrorCode::Failed(format!(
+                            "HTTP {}: Retry-After {}s exceeds automatic retry window",
+                            fetched.status,
+                            delay.as_secs()
+                        )));
+                    }
                     scheduler.defer_requests(delay);
                 }
                 failed_attempts += 1;
@@ -2514,6 +2554,21 @@ fn fetch_range(
             let current_stop = progress.lock().unwrap_or_else(|err| err.into_inner()).stop;
             let remain = current_stop.saturating_add(1).saturating_sub(cursor) as usize;
             let take = count.min(remain);
+            if cursor + take as u64 == response_end + 1 && fetched.content_length.is_none() {
+                // Validate the entity terminator before checkpointing its final bytes.
+                match reader.read(&mut [0]) {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        return Err(EngineErrorCode::RangeUnsupported(
+                            "range body exceeds Content-Range".into(),
+                        ))
+                    }
+                    Err(error) => {
+                        check_range_control(job, stop)?;
+                        return Err(EngineErrorCode::Failed(error.to_string()));
+                    }
+                }
+            }
             if take > 0 {
                 if let Err(error) =
                     crate::net_policy::consume(take, || check_range_control(job, stop))
@@ -3167,7 +3222,9 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
                 None => return Some(Err(EngineError::Failed("redirect without Location".into()))),
             };
             if !http_fetch_url_allowed(&next) {
-                return Some(Err(EngineError::Failed("redirect is not http(s)".into())));
+                return Some(Err(EngineError::Failed(
+                    "invalid or insecure redirect".into(),
+                )));
             }
             let status = fetched.status;
             drop(fetched);
@@ -3194,13 +3251,15 @@ fn fetch_follow_restricted(
     let mut url = request_url.unwrap_or(&job.url).to_string();
     let replay = job_replay_json(job);
     let mut headers = headers_for_request(job, &job.url);
+    if http_origin(&job.url) != http_origin(&url) {
+        drop_cross_origin_secrets(&mut headers, &replay, &job.url, &url);
+    }
     let mut hop = job.clone();
     for _ in 0..16 {
         validate_download_destination(job, &url)?;
-        if origin
-            .filter(|v| !v.is_empty())
-            .or_else(|| (!job.origin_boundary.is_empty()).then_some(job.origin_boundary.as_str()))
-            .is_some_and(|origin| http_origin(&url).as_deref() != Some(origin))
+        if [origin.unwrap_or_default(), job.origin_boundary.as_str()]
+            .into_iter()
+            .any(|boundary| !boundary.is_empty() && http_origin(&url).as_deref() != Some(boundary))
         {
             return Err(EngineError::Failed("redirect left project origin".into()));
         }
@@ -3237,7 +3296,7 @@ fn fetch_follow_restricted(
                 .ok_or_else(|| EngineError::Failed("redirect without Location".into()))?;
             let next = resolve_location(&parsed, &next);
             if !http_fetch_url_allowed(&next) {
-                return Err(EngineError::Failed("redirect is not http(s)".into()));
+                return Err(EngineError::Failed("invalid or insecure redirect".into()));
             }
             let status = fetched.status;
             drop(fetched);
@@ -3429,11 +3488,26 @@ fn apply_redirect_method(
 }
 
 fn job_replay_json(job: &Job) -> String {
-    if !job.replay_json.trim().is_empty() {
+    let replay = if !job.replay_json.trim().is_empty() {
         job.replay_json.clone()
     } else {
         crate::credentials::scoped_replay_json()
+    };
+    if replay.is_empty() {
+        return replay;
     }
+    let Ok(serde_json::Value::Object(mut object)) = serde_json::from_str(&replay) else {
+        return replay;
+    };
+    if object
+        .get("_task_url")
+        .and_then(|v| v.as_str())
+        .is_none_or(str::is_empty)
+    {
+        object.insert("_task_url".into(), job.url.clone().into());
+        return serde_json::Value::Object(object).to_string();
+    }
+    replay
 }
 
 fn headers_for_request(job: &Job, url: &str) -> HashMap<String, String> {
@@ -3519,7 +3593,8 @@ fn fetch_via_curl_impersonate(
         let mut command = std::process::Command::new(exe);
         command
             // Ignore user curlrc: redirects and credential scope belong to Core.
-            .arg("--disable");
+            .arg("--disable")
+            .arg("--globoff");
         if range.is_none() {
             command.arg("--compressed");
         }
@@ -3538,7 +3613,15 @@ fn fetch_via_curl_impersonate(
             .arg("--suppress-connect-headers")
             .arg("--no-buffer")
             .arg("-o")
-            .arg("-");
+            .arg(if request_method(job) == "HEAD" {
+                if cfg!(windows) {
+                    "NUL"
+                } else {
+                    "/dev/null"
+                }
+            } else {
+                "-"
+            });
         command.arg("-A").arg(request_user_agent(headers));
         for (key, value) in headers {
             if key.eq_ignore_ascii_case("user-agent") || !header_allowed_on_request(key, value) {
@@ -3685,7 +3768,7 @@ fn fetch_via_curl_impersonate(
                 break (status, head);
             }
         };
-        let meta = parse_header_meta(&head);
+        let meta = parse_header_meta(&head)?;
         record_download_type(job, status, &head);
         body.limit = job.curl_body_limit;
         // --compressed returns decoded bytes only when range.is_none(), so the
@@ -3781,6 +3864,7 @@ fn header_forbidden_on_wire(key: &str) -> bool {
             | "trailer"
             | "keep-alive"
             | "proxy-connection"
+            | "proxy-authorization"
     )
 }
 
@@ -3797,7 +3881,7 @@ fn header_allowed_on_request(key: &str, value: &str) -> bool {
 }
 
 fn header_token_ok(value: &str) -> bool {
-    !value.is_empty() && !value.contains(['\r', '\n', '\0'])
+    !value.is_empty() && !value.chars().any(char::is_control)
 }
 
 pub use hls_client::request_validation::{
@@ -3812,8 +3896,10 @@ fn parse_http_url(raw: &str) -> Result<ParsedUrl, EngineError> {
     let lower = raw.to_ascii_lowercase();
     let (https, prefix_len) = if lower.starts_with("https://") {
         (true, "https://".len())
-    } else {
+    } else if lower.starts_with("http://") {
         (false, "http://".len())
+    } else {
+        return Err(EngineError::Failed("invalid URL scheme".into()));
     };
     let rest = raw[prefix_len..]
         .split_once('#')
@@ -3968,25 +4054,43 @@ struct HeaderMeta {
     content_encoding: bool,
 }
 
-fn parse_header_meta(head: &str) -> HeaderMeta {
+fn parse_header_meta(head: &str) -> Result<HeaderMeta, EngineError> {
     let mut meta = HeaderMeta::default();
     for line in head.lines() {
         if let Some(value) = header_value(line, "Location") {
             meta.location = Some(value.to_string());
         }
         if let Some(value) = header_value(line, "Content-Length") {
-            meta.content_length = value.parse::<u64>().ok();
+            for field in value.split(',') {
+                let length = http_decimal(field.trim())
+                    .ok_or_else(|| EngineError::Failed("invalid Content-Length".into()))?;
+                if meta
+                    .content_length
+                    .is_some_and(|previous| previous != length)
+                {
+                    return Err(EngineError::Failed("conflicting Content-Length".into()));
+                }
+                meta.content_length = Some(length);
+            }
         }
         if let Some(value) = header_value(line, "Content-Type") {
             meta.content_type = value.to_string();
         }
         if let Some(value) = header_value(line, "Content-Range") {
-            meta.content_range = Some(value.to_string());
+            if meta.content_range.replace(value.to_string()).is_some() {
+                return Err(EngineError::Failed("multiple Content-Range fields".into()));
+            }
         }
         if let Some(value) = header_value(line, "ETag") {
+            if !meta.etag.is_empty() && value != meta.etag {
+                return Err(EngineError::Failed("conflicting ETag".into()));
+            }
             meta.etag = value.to_string();
         }
         if let Some(value) = header_value(line, "Last-Modified") {
+            if !meta.last_modified.is_empty() && value != meta.last_modified {
+                return Err(EngineError::Failed("conflicting Last-Modified".into()));
+            }
             meta.last_modified = value.to_string();
         }
         if let Some(value) = header_value(line, "Retry-After") {
@@ -3999,20 +4103,30 @@ fn parse_header_meta(head: &str) -> HeaderMeta {
                 .any(|part| part.trim().eq_ignore_ascii_case("bytes"));
         }
         if let Some(value) = header_value(line, "Transfer-Encoding") {
-            meta.chunked = value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("chunked"));
+            if meta.chunked || !value.eq_ignore_ascii_case("chunked") {
+                return Err(EngineError::Failed("unsupported Transfer-Encoding".into()));
+            }
+            meta.chunked = true;
         }
         if let Some(value) = header_value(line, "Content-Encoding") {
             // `identity` and an empty value describe the unchanged entity.
-            meta.content_encoding =
+            meta.content_encoding |=
                 !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("identity");
         }
     }
-    if meta.chunked {
-        meta.content_length = None;
+    if meta.chunked && meta.content_length.is_some() {
+        return Err(EngineError::Failed(
+            "conflicting HTTP response framing".into(),
+        ));
     }
-    meta
+    Ok(meta)
+}
+
+fn http_decimal(value: &str) -> Option<u64> {
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
 }
 
 fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
@@ -4021,17 +4135,17 @@ fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
         .get(..5)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bytes"))
     {
-        text = text[5..].trim();
+        text = text[5..].strip_prefix(' ')?.trim_start();
     }
     let (range, total_text) = text.split_once('/')?;
     let (start_text, end_text) = range.split_once('-')?;
-    let start = start_text.trim().parse::<u64>().ok()?;
-    let end = end_text.trim().parse::<u64>().ok()?;
+    let start = http_decimal(start_text.trim())?;
+    let end = http_decimal(end_text.trim())?;
     let total_text = total_text.trim();
     let total = if total_text == "*" {
         None
     } else {
-        Some(total_text.parse::<u64>().ok()?)
+        Some(http_decimal(total_text)?)
     };
     if end < start {
         return None;
@@ -4098,6 +4212,27 @@ fn require_response_identity(job: &Job, response: &FetchResult) -> Result<(), En
         )));
     }
     Ok(())
+}
+
+fn full_entity_length(response: &FetchResult) -> Result<Option<u64>, EngineError> {
+    if response.content_encoding {
+        return Err(EngineError::Failed("unexpected Content-Encoding".into()));
+    }
+    if response.status == 206 {
+        let range = response
+            .content_range
+            .as_deref()
+            .and_then(parse_content_range);
+        if let Some((0, end, Some(total))) = range {
+            if end + 1 == total && response.content_length.is_none_or(|len| len == total) {
+                return Ok(Some(total));
+            }
+        }
+        return Err(EngineError::RangeUnsupported(
+            "incomplete full entity Content-Range".into(),
+        ));
+    }
+    Ok(response.content_length)
 }
 
 fn request_method(job: &Job) -> &'static str {
@@ -4175,6 +4310,9 @@ fn resolve_location(current: &ParsedUrl, location: &str) -> String {
     }
     let scheme = if current.https { "https" } else { "http" };
     let lower = location.to_ascii_lowercase();
+    if current.https && lower.starts_with("http://") {
+        return String::new();
+    }
     let target = if lower.starts_with("http://") || lower.starts_with("https://") {
         location.to_string()
     } else if has_absolute_scheme(location) {
@@ -4297,13 +4435,24 @@ fn http_get(
             .position(|window| window == b"\r\n\r\n")
         {
             let split = scan_from + offset;
-            let status = String::from_utf8_lossy(&buf[header_start..split])
+            let head = String::from_utf8_lossy(&buf[header_start..split]);
+            let mut fields = head
                 .lines()
                 .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .and_then(|code| code.parse::<u16>().ok())
-                .unwrap_or(0);
-            if (100..200).contains(&status) && status != 101 {
+                .unwrap_or_default()
+                .split_ascii_whitespace();
+            let version = fields.next();
+            let status = fields
+                .next()
+                .filter(|code| code.len() == 3)
+                .and_then(http_decimal)
+                .filter(|code| (100..600).contains(code) && *code != 101)
+                .ok_or_else(|| EngineError::Failed("invalid HTTP status".into()))?
+                as u16;
+            if !matches!(version, Some("HTTP/1.0" | "HTTP/1.1")) {
+                return Err(EngineError::Failed("invalid HTTP version".into()));
+            }
+            if status < 200 {
                 // Interim responses have no body; the final headers may already
                 // share this read. Keep one cumulative cap for the entire chain.
                 header_start = split + 4;
@@ -4332,27 +4481,21 @@ fn http_get(
     };
     let head = String::from_utf8_lossy(&buf[header_start..split]);
     let leftover = buf[split + 4..].to_vec();
-    let meta = parse_header_meta(&head);
+    let meta = parse_header_meta(&head)?;
     record_download_type(job, status, &head);
-    for value in head
-        .lines()
-        .filter_map(|line| header_value(line, "Transfer-Encoding"))
-    {
-        if value
-            .split(',')
-            .any(|coding| !coding.trim().eq_ignore_ascii_case("chunked"))
-        {
-            return Err(EngineError::Failed("unsupported Transfer-Encoding".into()));
-        }
-    }
+    let no_body = request_method(job) == "HEAD" || matches!(status, 204 | 304);
     let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
     let body = Body::Tcp {
         prefix: leftover,
         at: 0,
         stream,
-        remaining: meta.content_length,
+        remaining: if no_body {
+            Some(0)
+        } else {
+            meta.content_length
+        },
     };
-    let body = if meta.chunked && !request_method(job).eq_ignore_ascii_case("HEAD") {
+    let body = if meta.chunked && !no_body {
         Body::Chunked(ChunkedReader::new(Box::new(body)))
     } else {
         body
@@ -4391,11 +4534,10 @@ mod winhttp {
         WINHTTP_CALLBACK_FLAG_SENDREQUEST_COMPLETE, WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING,
         WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, WINHTTP_CALLBACK_STATUS_READ_COMPLETE,
         WINHTTP_CALLBACK_STATUS_REQUEST_ERROR, WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE,
-        WINHTTP_FLAG_ASYNC, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_CONTEXT_VALUE,
+        WINHTTP_DISABLE_COOKIES, WINHTTP_FLAG_ASYNC, WINHTTP_FLAG_SECURE,
+        WINHTTP_OPTION_CONTEXT_VALUE, WINHTTP_OPTION_DISABLE_FEATURE,
         WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
-        WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_QUERY_CONTENT_RANGE, WINHTTP_QUERY_ETAG,
-        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LAST_MODIFIED, WINHTTP_QUERY_LOCATION,
-        WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_QUERY_STATUS_CODE,
+        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_QUERY_STATUS_CODE,
     };
 
     // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY (stable WinHTTP ABI value).
@@ -4722,6 +4864,20 @@ mod winhttp {
                 )));
             }
             body.signal = Some(signal);
+            // Cached sessions span tasks. Only the current task may supply cookies.
+            let mut disabled = WINHTTP_DISABLE_COOKIES;
+            if WinHttpSetOption(
+                request,
+                WINHTTP_OPTION_DISABLE_FEATURE,
+                &mut disabled as *mut _ as *mut _,
+                std::mem::size_of_val(&disabled) as u32,
+            ) == 0
+            {
+                return Err(EngineError::Failed(format!(
+                    "WinHttpSetOption cookies {}",
+                    GetLastError()
+                )));
+            }
             let mut policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
             if WinHttpSetOption(
                 request,
@@ -4749,13 +4905,17 @@ mod winhttp {
                 }
                 extra.push_str(&format!("{key}: {value}\r\n"));
             }
-            if !extra.is_empty() {
-                let _ = WinHttpAddRequestHeaders(
-                    request,
-                    wide(&extra).as_ptr(),
-                    extra.encode_utf16().count() as u32,
-                    WINHTTP_ADDREQ_FLAG_ADD,
-                );
+            if WinHttpAddRequestHeaders(
+                request,
+                wide(&extra).as_ptr(),
+                extra.encode_utf16().count() as u32,
+                WINHTTP_ADDREQ_FLAG_ADD,
+            ) == 0
+            {
+                return Err(EngineError::Failed(format!(
+                    "WinHttpAddRequestHeaders {}",
+                    GetLastError()
+                )));
             }
             let request_body_ptr = if request_body.is_empty() {
                 null_mut()
@@ -4795,35 +4955,22 @@ mod winhttp {
                 let err = GetLastError();
                 return Err(EngineError::Failed(format!("WinHttpQueryHeaders {err}")));
             }
-            let content_range = query_header_string(request, WINHTTP_QUERY_CONTENT_RANGE);
-            let raw_headers =
-                query_header_string(request, WINHTTP_QUERY_RAW_HEADERS_CRLF).unwrap_or_default();
-            if !raw_headers.is_empty() {
-                super::record_download_type(job, status as u16, &raw_headers);
-            }
-            let location = query_header_string(request, WINHTTP_QUERY_LOCATION);
-            let etag = query_header_string(request, WINHTTP_QUERY_ETAG).unwrap_or_default();
-            let last_modified =
-                query_header_string(request, WINHTTP_QUERY_LAST_MODIFIED).unwrap_or_default();
-            let meta = super::parse_header_meta(&raw_headers);
-            let content_length = meta.content_length;
-            let accept_ranges =
-                query_header_string(request, WINHTTP_QUERY_ACCEPT_RANGES).is_some_and(|value| {
-                    value
-                        .split(',')
-                        .any(|part| part.trim().eq_ignore_ascii_case("bytes"))
-                }) || content_range.is_some();
+            let raw_headers = query_header_string(request, WINHTTP_QUERY_RAW_HEADERS_CRLF)
+                .ok_or_else(|| EngineError::Failed("missing WinHTTP response headers".into()))?;
+            let meta = super::parse_header_meta(&raw_headers)?;
+            super::record_download_type(job, status as u16, &raw_headers);
+            let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
             body.recycle_connect = true;
             Ok(super::FetchResult {
                 status: status as u16,
-                location,
-                content_range,
-                content_length,
+                location: meta.location,
+                content_range: meta.content_range,
+                content_length: meta.content_length,
                 content_type: meta.content_type,
                 content_encoding: meta.content_encoding,
                 retry_after: meta.retry_after,
-                etag,
-                last_modified,
+                etag: meta.etag,
+                last_modified: meta.last_modified,
                 accept_ranges,
                 body: Body::WinHttp(body),
             })
@@ -5069,6 +5216,7 @@ mod tests {
             ("missing-range", "HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\n\r\nABCD", true),
             ("wrong-range", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-4/10\r\nContent-Length: 4\r\n\r\nABCD", true),
             ("wrong-length", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Length: 5\r\n\r\nABCDE", true),
+            ("changed-etag", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nETag: \"other\"\r\nContent-Length: 4\r\n\r\nABCD", true),
             ("encoded", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n\r\nABCD", true),
             ("truncated", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Length: 4\r\n\r\nABC", false),
             ("oversized", "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nABCDE\r\n0\r\n\r\n", false),
@@ -5801,6 +5949,9 @@ mod tests {
             ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd", Some("abcd")),
             ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabc", None),
             ("HTTP/1.1 304 Not Modified\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n", Some("")),
+            ("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/10\r\nContent-Length: 4\r\n\r\nabcd", None),
+            ("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/4\r\n\r\nabcd", Some("abcd")),
+            ("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n\r\nabcd", None),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
@@ -6055,7 +6206,7 @@ mod tests {
             let (mut job, dir) = temp_job(&url, true, total, 1);
             job.resume_from = resume;
             if resume > 0 {
-                fs::write(&job.output, b"abcd").unwrap();
+                fs::write(&job.output, b"abcd-stale-bytes").unwrap();
             }
             let result = download_sequential(&job, None);
             server.join().unwrap();
@@ -6241,17 +6392,29 @@ mod tests {
 
     #[test]
     fn parse_header_meta_recognises_a_decoded_content_encoding() {
-        let plain = parse_header_meta("Content-Length: 4");
+        let plain = parse_header_meta("Content-Length: 4").unwrap();
         assert!(!plain.content_encoding);
         assert_eq!(plain.content_length, Some(4));
 
-        let encoded = parse_header_meta("Content-Length: 4\r\nContent-Encoding: gzip");
+        let encoded = parse_header_meta("Content-Length: 4\r\nContent-Encoding: gzip").unwrap();
         assert!(encoded.content_encoding);
-        assert!(parse_header_meta("Content-Encoding: br").content_encoding);
+        assert!(
+            parse_header_meta("Content-Encoding: br")
+                .unwrap()
+                .content_encoding
+        );
 
         // `identity` and an empty value describe the unchanged entity.
-        assert!(!parse_header_meta("Content-Encoding: identity").content_encoding);
-        assert!(!parse_header_meta("Content-Encoding:   ").content_encoding);
+        assert!(
+            !parse_header_meta("Content-Encoding: identity")
+                .unwrap()
+                .content_encoding
+        );
+        assert!(
+            !parse_header_meta("Content-Encoding:   ")
+                .unwrap()
+                .content_encoding
+        );
     }
 
     #[test]
@@ -6638,6 +6801,57 @@ mod tests {
         assert!(header_is_wire_safe("Referer", "https://cdn.test/page"));
         assert!(!header_is_wire_safe("X-Evil", "ok\r\nHost: evil.example"));
         assert!(!header_is_wire_safe("X:Smuggle", "ok"));
+        let headers = HashMap::from([("user-agent".into(), "bad\r\nvalue".into())]);
+        assert_eq!(request_user_agent(&headers), CHROME_UA);
+        assert!(!header_allowed_on_request(
+            "Proxy-Authorization",
+            "credentials"
+        ));
+    }
+
+    #[test]
+    fn ambiguous_response_framing_is_rejected() {
+        for headers in [
+            "Content-Length: -1",
+            "Content-Length: +1",
+            "Content-Length: 18446744073709551616",
+            "Content-Length: 1\r\nContent-Length: 2",
+            "Content-Length: 1, 2",
+            "Transfer-Encoding: chunked\r\nContent-Length: 1",
+            "Transfer-Encoding: chunked, chunked",
+            "Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked",
+            "Content-Range: bytes 0-2/3\r\nContent-Range: bytes 0-2/4",
+            "ETag: \"old\"\r\nETag: \"new\"",
+        ] {
+            assert!(parse_header_meta(headers).is_err(), "{headers}");
+        }
+        let meta = parse_header_meta("Content-Length: 4, 4\r\nContent-Length: 04").unwrap();
+        assert_eq!(meta.content_length, Some(4));
+        assert!(
+            parse_header_meta("Content-Encoding: br\r\nContent-Encoding: identity")
+                .unwrap()
+                .content_encoding
+        );
+    }
+
+    #[test]
+    fn range_plan_bounds_work_for_extreme_content_lengths() {
+        let chunk = range_chunk_size(u64::MAX, 64, 64 * 1024);
+        assert!(u64::MAX.div_ceil(chunk) <= 65_536);
+        assert_eq!(range_chunk_size(512 * 1024, 2, 64 * 1024), 64 * 1024);
+    }
+
+    #[test]
+    fn legacy_replay_keeps_the_primary_origin_across_later_hops() {
+        let mut job = post_test_job("https://source.example/file".into(), PathBuf::new());
+        job.replay_json = r#"{"cookie":"session=original"}"#.into();
+        let replay = job_replay_json(&job);
+        let mut headers = headers_for_request(&job, &job.url);
+        assert!(headers.keys().any(|key| key.eq_ignore_ascii_case("cookie")));
+        let mirror = "https://mirror.example/file";
+        drop_cross_origin_secrets(&mut headers, &replay, &job.url, mirror);
+        drop_cross_origin_secrets(&mut headers, &replay, mirror, "https://mirror.example/next");
+        assert!(!headers.keys().any(|key| key.eq_ignore_ascii_case("cookie")));
     }
 
     #[test]
@@ -6683,6 +6897,7 @@ mod tests {
             "http://cdn.test:8080/next.bin"
         );
         let signed = parse_http_url("https://cdn.test/dir/export.bin?next=/wrong/path").unwrap();
+        assert!(resolve_location(&signed, "HTTP://cdn.test/file").is_empty());
         for (location, expected) in [
             ("?token=a%2Fb&x=../", "/dir/export.bin?token=a%2Fb&x=../"),
             ("#part", "/dir/export.bin?next=/wrong/path#part"),
@@ -6719,7 +6934,7 @@ mod tests {
             let server = thread::spawn(move || {
                 let mut requests = Vec::new();
                 for response in [
-                    "HTTP/1.1 302 Found\r\nLocation: ?token=a%2Fb&b=2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 302 Found\r\nLocation: ?token=a%2Fb&b=2\r\nSet-Cookie: unscoped=one; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     "HTTP/1.1 307 Redirect\r\nLocation: ../download/./file.bin?sig=a%2Fb&x=../\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfile",
                 ] {
@@ -6808,6 +7023,7 @@ mod tests {
                 "{transport}: {last}"
             );
             assert!(!last.contains("dir=one"), "{transport}: {last}");
+            assert!(!last.contains("unscoped=one"), "{transport}: {last}");
         }
     }
 
@@ -7129,6 +7345,29 @@ mod tests {
                 "invalid metadata must never become a durable range"
             );
         }
+    }
+
+    #[test]
+    fn chunked_range_requires_a_complete_terminator_before_checkpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            reader.get_mut().write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/4\r\nTransfer-Encoding: chunked\r\n\r\n4\r\ndata").unwrap();
+        });
+        let (job, dir) = temp_job(&url, false, 4, 1);
+        assert!(run_job(&job).is_err());
+        server.join().unwrap();
+        assert!(load_completed_ranges(&job).unwrap_or_default().is_empty());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn serve_chunked(body: &'static [u8]) -> String {
@@ -7680,10 +7919,13 @@ mod tests {
             Err(EngineErrorCode::Cancel)
         ));
         assert_eq!(
-            parse_header_meta("Retry-After: 12\r\n").retry_after,
+            parse_header_meta("Retry-After: 12\r\n")
+                .unwrap()
+                .retry_after,
             Some(Duration::from_secs(12))
         );
         assert!(parse_header_meta("Retry-After: invalid\r\n")
+            .unwrap()
             .retry_after
             .is_none());
         let _ = fs::remove_dir_all(dir);
@@ -7953,7 +8195,8 @@ mod tests {
         let body: &'static [u8] = b"post-body-ok";
         let url = serve_recording_ranges(body, Arc::clone(&seen));
         let (mut job, dir) = temp_job(&url, false, body.len() as u64, 4);
-        job.method = "POST".into();
+        job.method = " Post ".into();
+        job.total = 0;
         run_job(&job).unwrap();
         assert_eq!(fs::read(&job.output).unwrap(), body);
         assert!(seen
