@@ -104,18 +104,20 @@ fn parse_file_block(block: &str, metalink3: bool) -> Option<MetalinkFile> {
             break;
         };
         let open = &after[..gt];
-        let Some(close_rel) = after.to_ascii_lowercase().find("</url>") else {
+        let inner = &after[gt + 1..];
+        let Some(close_rel) = inner.to_ascii_lowercase().find("</url>") else {
             break;
         };
-        let url = safe_url(after[gt + 1..close_rel].trim());
-        rest = &after[close_rel + 6..];
+        let url = safe_url(inner[..close_rel].trim());
+        rest = &inner[close_rel + 6..];
         let Some(url) = url else {
             continue;
         };
         let rank = if metalink3 {
-            -(attr(open, "preference")
+            attr(open, "preference")
                 .and_then(|value| value.parse::<i32>().ok())
-                .unwrap_or(0))
+                .unwrap_or(0)
+                .saturating_neg()
         } else {
             attr(open, "priority")
                 .and_then(|value| value.parse::<i32>().ok())
@@ -169,11 +171,12 @@ fn first_checksum(block: &str) -> String {
         let kind = attr(&after[..gt], "type")
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let Some(close) = after.to_ascii_lowercase().find("</hash>") else {
+        let inner = &after[gt + 1..];
+        let Some(close) = inner.to_ascii_lowercase().find("</hash>") else {
             break;
         };
-        let digest = after[gt + 1..close].trim().to_ascii_lowercase();
-        rest = &after[close + 7..];
+        let digest = inner[..close].trim().to_ascii_lowercase();
+        rest = &inner[close + 7..];
         let (algo, expected_len) = match kind.as_str() {
             "sha-256" | "sha256" => ("sha256", 64),
             "sha-1" | "sha1" => ("sha1", 40),
@@ -393,5 +396,21 @@ mod tests {
         assert!(looks_like_metalink(
             "<metalink>\n<file name=\"x\"><url>https://cdn.test/a.bin</url></file></metalink>"
         ));
+    }
+
+    #[test]
+    fn handles_malicious_closing_tag_in_attributes_and_min_preference_without_panic() {
+        let xml = r#"<metalink>
+  <file name="edge.bin">
+    <hash type="</hash>sha-256">9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08</hash>
+    <url a="</url>">https://ignored.example.test/bad.bin</url>
+    <url preference="-2147483648">https://cdn.example.test/edge.bin</url>
+    <url preference="10">https://mirror.example.test/edge.bin</url>
+  </file>
+</metalink>"#;
+        let files = parse_metalink(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].url, "https://mirror.example.test/edge.bin");
+        assert_eq!(files[0].mirrors, vec!["https://cdn.example.test/edge.bin"]);
     }
 }

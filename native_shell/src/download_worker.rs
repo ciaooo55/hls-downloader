@@ -1897,7 +1897,9 @@ impl CoreCoordinator {
             spec.headers
                 .insert("Origin".into(), settings.default_origin);
         }
-        if spec.credential_ref.is_none() && self.default_cookie_configured()? {
+        let trimmed_url = spec.url.trim_start().to_ascii_lowercase();
+        let is_http_url = trimmed_url.starts_with("http://") || trimmed_url.starts_with("https://");
+        if spec.credential_ref.is_none() && is_http_url && self.default_cookie_configured()? {
             spec.credential_ref = Some(DEFAULT_COOKIE_CREDENTIAL_REF.into());
         }
         Ok(spec)
@@ -5124,7 +5126,12 @@ fn task_torrent_files(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta = with_replay_json(&replay, || {
+    let is_http_source = {
+        let lower = hydrated.url.trim_start().to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+    };
+    let scoped_replay = if is_http_source { replay.as_str() } else { "" };
+    let meta = with_replay_json(scoped_replay, || {
         crate::torrent_engine::probe_torrent_source(
             &hydrated.url,
             &headers,
@@ -5175,7 +5182,12 @@ fn set_task_torrent_files(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta = with_replay_json(&replay, || {
+    let is_http_source = {
+        let lower = hydrated.url.trim_start().to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+    };
+    let scoped_replay = if is_http_source { replay.as_str() } else { "" };
+    let meta = with_replay_json(scoped_replay, || {
         crate::torrent_engine::probe_torrent_source(
             &hydrated.url,
             &headers,

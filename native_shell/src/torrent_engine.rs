@@ -745,9 +745,11 @@ fn transfer_torrent(
         reporter(TorrentTelemetry::default());
         let mut last = "torrent web seed download failed".to_string();
         for seed in http_seeds {
+            let same_origin = same_torrent_origin(spec_url, &seed);
+            let seed_headers = headers_for_torrent_aux_url(spec_url, &seed, headers, true);
             let job = Job {
                 url: seed,
-                headers: headers.clone(),
+                headers: seed_headers,
                 output: output.to_path_buf(),
                 connections: 8,
                 chunk_bytes: 8 * 1024 * 1024,
@@ -768,7 +770,12 @@ fn transfer_torrent(
                 range_stop: None,
                 origin_boundary: String::new(),
             };
-            last = match run_job(&job) {
+            let run_result = if same_origin {
+                run_job(&job)
+            } else {
+                crate::with_replay_json("", || run_job(&job))
+            };
+            last = match run_result {
                 Ok(()) => match verify_web_seed_pieces(output, &meta) {
                     Ok(()) => {
                         return fs::metadata(output)
@@ -830,6 +837,48 @@ impl TorrentWatch {
     }
 }
 
+fn same_torrent_origin(source_url: &str, target_url: &str) -> bool {
+    if let (Some(source_origin), Some(target_origin)) = (
+        crate::http_engine::http_origin(source_url),
+        crate::http_engine::http_origin(target_url),
+    ) {
+        return source_origin == target_origin;
+    }
+    false
+}
+
+fn strip_sensitive_headers(
+    headers: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    headers
+        .iter()
+        .filter(|(key, _)| {
+            let lower = key.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "cookie" | "authorization" | "proxy-authorization" | "referer" | "origin"
+            ) && !lower.contains("token")
+                && !lower.contains("secret")
+                && !lower.contains("password")
+                && !lower.contains("api-key")
+                && !lower.contains("apikey")
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn headers_for_torrent_aux_url(
+    source_url: &str,
+    target_url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    allow_same_origin: bool,
+) -> std::collections::HashMap<String, String> {
+    if allow_same_origin && same_torrent_origin(source_url, target_url) {
+        return headers.clone();
+    }
+    strip_sensitive_headers(headers)
+}
+
 fn fetch_exact_source_metadata(
     magnet: &mut TorrentMeta,
     sources: &[String],
@@ -837,13 +886,16 @@ fn fetch_exact_source_metadata(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
 ) -> Option<TorrentMeta> {
+    let aux_headers = strip_sensitive_headers(headers);
     for url in sources {
-        let Ok((200, body)) = crate::http_engine::fetch_bytes_limited(
-            url,
-            headers,
-            proxy,
-            MAX_UT_METADATA_BYTES as u64,
-        ) else {
+        let Ok((200, body)) = crate::with_replay_json("", || {
+            crate::http_engine::fetch_bytes_limited(
+                url,
+                &aux_headers,
+                proxy,
+                MAX_UT_METADATA_BYTES as u64,
+            )
+        }) else {
             continue;
         };
         let Ok(mut parsed) = parse_torrent_file(&body) else {
@@ -905,6 +957,7 @@ fn fetch_magnet_metadata(
         Ok(meta) => return Ok(meta),
         Err(error) => error,
     };
+    let aux_headers = strip_sensitive_headers(headers);
     let mut last = "未能取得种子元数据".to_string();
     for url in [
         format!("https://itorrents.org/torrent/{hash}.torrent"),
@@ -912,12 +965,14 @@ fn fetch_magnet_metadata(
         format!("https://btcache.me/torrent/{hash}"),
         format!("https://thetorrent.org/torrent/{hash}.torrent"),
     ] {
-        match crate::http_engine::fetch_bytes_limited(
-            &url,
-            headers,
-            proxy,
-            MAX_UT_METADATA_BYTES as u64,
-        ) {
+        match crate::with_replay_json("", || {
+            crate::http_engine::fetch_bytes_limited(
+                &url,
+                &aux_headers,
+                proxy,
+                MAX_UT_METADATA_BYTES as u64,
+            )
+        }) {
             Ok((status, body)) if status == 200 || status == 206 => {
                 if let Ok(mut parsed) = parse_torrent_file(&body) {
                     if canonical_info_hash(&parsed.info_hash).as_deref() != Some(hash.as_str()) {
@@ -1084,9 +1139,10 @@ fn announce_peers(
             percent_encode(b"-HL0001-0123456789ab"),
             meta.length
         );
-        if let Ok((_, body)) =
-            crate::http_engine::fetch_bytes_limited(&url, headers, proxy, 1024 * 1024)
-        {
+        let tracker_headers = strip_sensitive_headers(headers);
+        if let Ok((_, body)) = crate::with_replay_json("", || {
+            crate::http_engine::fetch_bytes_limited(&url, &tracker_headers, proxy, 1024 * 1024)
+        }) {
             peers.extend(parse_compact_peers(&body));
         }
     }
@@ -3668,5 +3724,94 @@ mod tests {
             server.join().unwrap();
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn aux_torrent_requests_strip_credentials_except_same_origin_web_seeds() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Cookie".into(), "session=secret".into());
+        headers.insert("Authorization".into(), "Bearer tok".into());
+        headers.insert("Proxy-Authorization".into(), "Basic abc".into());
+        headers.insert("User-Agent".into(), "HLS-Test".into());
+
+        let same_origin = headers_for_torrent_aux_url(
+            "https://private.test:8443/dl/item.torrent",
+            "https://private.test:8443/files/payload.bin",
+            &headers,
+            true,
+        );
+        assert_eq!(
+            same_origin.get("Cookie").map(String::as_str),
+            Some("session=secret")
+        );
+        assert_eq!(
+            same_origin.get("Authorization").map(String::as_str),
+            Some("Bearer tok")
+        );
+
+        let cross_origin = headers_for_torrent_aux_url(
+            "https://private.test:8443/dl/item.torrent",
+            "https://mirror.other/files/payload.bin",
+            &headers,
+            true,
+        );
+        assert!(!cross_origin.contains_key("Cookie"));
+        assert!(!cross_origin.contains_key("Authorization"));
+        assert!(!cross_origin.contains_key("Proxy-Authorization"));
+        assert_eq!(
+            cross_origin.get("User-Agent").map(String::as_str),
+            Some("HLS-Test")
+        );
+
+        let magnet_seed = headers_for_torrent_aux_url(
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+            "https://private.test:8443/files/payload.bin",
+            &headers,
+            true,
+        );
+        assert!(!magnet_seed.contains_key("Cookie"));
+
+        // Verify live HTTP tracker announce never transmits Cookie/Authorization on wire.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let _ = tx.send(req);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nd5:peers0:e"
+            );
+        });
+        let meta = TorrentMeta {
+            name: "tracker-privacy".into(),
+            magnet: false,
+            multi_file: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: vec![format!("http://{addr}/announce")],
+            hint_peers: Vec::new(),
+            piece_length: 4,
+            pieces: vec![crate::crypto_lite::sha1(b"data")],
+            length: 4,
+            files: Vec::new(),
+        };
+        let _ = announce_peers(&meta, &headers, "", false).unwrap();
+        let wire = rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .to_ascii_lowercase();
+        server.join().unwrap();
+        assert!(!wire.contains("cookie:"), "tracker leaked Cookie: {wire}");
+        assert!(
+            !wire.contains("authorization:"),
+            "tracker leaked Authorization: {wire}"
+        );
     }
 }

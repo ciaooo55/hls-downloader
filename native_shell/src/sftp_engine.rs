@@ -242,7 +242,17 @@ pub fn fingerprint_bytes(bytes: &[u8]) -> String {
     crate::crypto_lite::sha256_hex(bytes)
 }
 
-pub fn parse_keyscan_line(output: &str) -> Result<(String, String), String> {
+fn stored_tofu_fingerprint(host: &str, port: u16) -> Option<String> {
+    let key = format!("{host}:{port}");
+    let existing = fs::read_to_string(known_hosts_path()).ok()?;
+    existing.lines().find_map(|line| {
+        let (stored_host, stored_fp) = line.split_once(' ')?;
+        (stored_host == key && !stored_fp.trim().is_empty()).then(|| stored_fp.trim().to_string())
+    })
+}
+
+pub fn parse_keyscan_lines(output: &str) -> Vec<(String, String, String)> {
+    let mut entries = Vec::new();
     for line in output.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -260,21 +270,47 @@ pub fn parse_keyscan_line(output: &str) -> Result<(String, String), String> {
             if material.is_empty() {
                 continue;
             }
-            return Ok((
+            entries.push((
                 line.to_string(),
+                algorithm.to_string(),
                 crate::sftp_live::fingerprint_openssh_material(algorithm, material),
             ));
         }
     }
-    Err("ssh-keyscan returned no host key".into())
+    entries
+}
+
+#[cfg(test)]
+pub fn parse_keyscan_line(output: &str) -> Result<(String, String), String> {
+    parse_keyscan_lines(output)
+        .into_iter()
+        .next()
+        .map(|(line, _, fingerprint)| (line, fingerprint))
+        .ok_or_else(|| "ssh-keyscan returned no host key".into())
 }
 
 fn pin_remote_host(host: &str, port: u16) -> Result<PathBuf, String> {
     let output = keyscan_output(host, port)?;
-    let (openssh_line, fingerprint) = parse_keyscan_line(&output)?;
-    tofu_record(host, port, &fingerprint)?;
+    let entries = parse_keyscan_lines(&output);
+    if entries.is_empty() {
+        return Err("ssh-keyscan returned no host key".into());
+    }
+    let selected = if let Some(stored) = stored_tofu_fingerprint(host, port) {
+        entries
+            .iter()
+            .find(|(_, _, fingerprint)| *fingerprint == stored)
+            .or_else(|| entries.iter().find(|(_, algo, _)| algo == "ssh-ed25519"))
+            .unwrap_or(&entries[0])
+    } else {
+        entries
+            .iter()
+            .find(|(_, algo, _)| algo == "ssh-ed25519")
+            .unwrap_or(&entries[0])
+    };
+    let (openssh_line, _, fingerprint) = selected;
+    tofu_record(host, port, fingerprint)?;
     let ssh_path = openssh_known_hosts_path();
-    upsert_openssh_known_host(&ssh_path, &openssh_line)?;
+    upsert_openssh_known_host(&ssh_path, openssh_line)?;
     Ok(ssh_path)
 }
 
@@ -590,40 +626,17 @@ fn openssh_get(
     }
     let sftp = which("sftp").ok_or_else(|| "OpenSSH sftp not found".to_string())?;
     let local = output.display().to_string().replace('\\', "/");
-    // This path has no `SftpSession`, so the sidecar state is the only record of
-    // what the partial file on disk actually is.  Resuming on the file's bare
-    // size -- which is what this used to do -- appends to whatever happens to
-    // share the output path: a leftover from a different resource, or a prefix
-    // from before the remote file changed.  The result is a silent mix of two
-    // different entities reported as a completed download.
-    let state = load_state(&state_path(output));
-    let current = if output.exists() {
-        fs::metadata(output).map(|meta| meta.len()).unwrap_or(0)
-    } else {
-        0
-    };
-    let resume_from = if current > 0
-        && state.version == STATE_VERSION
-        && state.resource_key == target.resource_key()
-        && state.offset == current
-        && state.total > current
-    {
-        current
-    } else {
-        0
-    };
-    if resume_from == 0 && output.exists() {
+    // OpenSSH `sftp -b -` cannot verify the remote file's exact `mtime` or
+    // size before deciding whether to run `get -a`, and `ls -l` only reports
+    // human-formatted timestamps after the batch finishes. Appending to a
+    // partial file without verified remote identity risks silently splicing
+    // bytes from two different revisions, so this fallback always fetches a
+    // clean copy and drops stale resume metadata.
+    let _ = fs::remove_file(state_path(output));
+    if output.exists() {
         let _ = fs::remove_file(output);
     }
-    // `ls -l` rides along as the first batch entry, so the listing costs no extra
-    // connection: it is the only authority this path has over the remote entity.
-    let batch = format!(
-        "ls -l \"{}\"\n{} \"{}\" \"{}\"\n",
-        target.path.replace('"', ""),
-        if resume_from > 0 { "get -a" } else { "get" },
-        target.path.replace('"', ""),
-        local.replace('"', "")
-    );
+    let batch = openssh_batch_script(&target.path, &local);
     let status = Command::new(sftp)
         .args([
             "-P",
@@ -672,10 +685,21 @@ fn openssh_get(
     // enforces `stat`; this one reports its own length, which is exactly why it
     // needs the same check before it claims the download fit.
     match parse_ls_size(&String::from_utf8_lossy(&status.stdout), &target.path) {
-        Some(remote) if remote == written => Ok(remote),
+        Some(remote) if remote == written => {
+            let _ = fs::remove_file(state_path(output));
+            Ok(remote)
+        }
         Some(remote) => Err(format!("文件长度不匹配，期望 {remote}，实际 {written}")),
         None => Err("OpenSSH sftp 未返回远程文件大小，无法校验下载结果".to_string()),
     }
+}
+
+fn openssh_batch_script(remote_path: &str, local_path: &str) -> String {
+    let remote = remote_path.replace('"', "");
+    let local = local_path.replace('"', "");
+    // `ls -l` rides along as the first batch entry, so the listing costs no extra
+    // connection: it is the only authority this path has over the remote entity.
+    format!("ls -l \"{remote}\"\nget \"{remote}\" \"{local}\"\n")
 }
 
 /// Parse the remote size out of one `ls -l` line from the OpenSSH sftp client.
@@ -1113,5 +1137,43 @@ mod tests {
         fs::create_dir_all(first.join("ssh-keyscan")).unwrap();
         assert_eq!(resolve_in(&[first, second], "ssh-keyscan"), None);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keyscan_matches_existing_pinned_algorithm_across_reordered_keys() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join(format!("hls-sftp-multikey-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        std::env::set_var("HLS_V7_DATA_DIR", &dir);
+        let rsa_line = "nas.local ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQFixtureRsaKey";
+        let ed_line = "nas.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureEdKey";
+        let rsa_fp = parse_keyscan_line(rsa_line).unwrap().1;
+        // Pre-pin the RSA fingerprint (e.g. from native libssh2/russh session).
+        tofu_record("nas.local", 22, &rsa_fp).unwrap();
+        // ssh-keyscan returns ed25519 first and rsa second: must match pinned rsa key.
+        std::env::set_var("HLS_V7_SFTP_KEYSCAN", format!("{ed_line}\n{rsa_line}\n"));
+        let ssh_path = pin_remote_host("nas.local", 22).unwrap();
+        let stored = fs::read_to_string(ssh_path).unwrap();
+        assert!(
+            stored.contains("ssh-rsa"),
+            "expected pinned rsa line in {stored}"
+        );
+        // When neither returned key matches the pinned fingerprint, fail closed.
+        std::env::set_var(
+            "HLS_V7_SFTP_KEYSCAN",
+            "nas.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMismatchedKey\n",
+        );
+        assert!(pin_remote_host("nas.local", 22).is_err());
+        std::env::remove_var("HLS_V7_SFTP_KEYSCAN");
+        std::env::remove_var("HLS_V7_DATA_DIR");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn openssh_fallback_batch_never_appends_without_verified_mtime() {
+        let script = openssh_batch_script("/pub/a.bin", "/tmp/a.bin");
+        assert!(script.contains("ls -l \"/pub/a.bin\""));
+        assert!(script.contains("\nget \"/pub/a.bin\" \"/tmp/a.bin\"\n"));
+        assert!(!script.contains("get -a"));
     }
 }

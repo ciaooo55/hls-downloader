@@ -49,18 +49,28 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
     if command.is_empty() {
         return Ok(());
     }
-    if command.len() > 2048 || !command.contains("{file}") {
-        return Err("扫描命令必须包含 {file}".into());
+    if command.len() > 2048 {
+        return Err("扫描命令过长".into());
     }
     if command.chars().any(|ch| ch.is_control()) || command.contains("..") || command.contains('%')
     {
         return Err("扫描命令含有无效字符".into());
     }
-    let token = first_command_token(command);
-    if token.is_empty() {
+    let argv = split_command(command)?;
+    let Some((program, args)) = argv.split_first() else {
+        return Err("扫描命令无效".into());
+    };
+    if program.is_empty() {
         return Err("扫描命令无效".into());
     }
-    let name = Path::new(&token)
+    if program.contains("{file}") || program.contains('{') || program.contains('}') {
+        return Err("扫描程序路径不能包含占位符".into());
+    }
+    if !args.iter().any(|arg| arg.contains("{file}")) {
+        return Err("扫描命令必须包含 {file}".into());
+    }
+    let normalized = program.trim_end_matches(['.', ' ']);
+    let name = Path::new(normalized)
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("")
@@ -68,9 +78,10 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
     // 扫描命令按 Windows 语义解析：`\`、`/` 与盘符 `:` 都是路径分隔符。只靠宿主 `Path`
     // 时，非 Windows 平台会把 `C:\Windows\System32\mshta.exe` 整体当成文件名而漏判。
     // 两种解析任一命中黑名单即拒绝，Windows 上的判断不会放宽。
-    let windows_name = token
+    let windows_name = normalized
         .rsplit(['\\', '/', ':'])
         .next()
+        .map(|leaf| leaf.trim_end_matches(['.', ' ']))
         .map(|leaf| match leaf.rsplit_once('.') {
             Some((stem, _)) if !stem.is_empty() => stem,
             _ => leaf,
@@ -118,24 +129,23 @@ pub(crate) fn validate_custom_command(command: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn first_command_token(command: &str) -> String {
-    let command = command.trim();
-    if let Some(rest) = command.strip_prefix('"') {
-        return rest.split('"').next().unwrap_or("").to_string();
-    }
-    command.split_whitespace().next().unwrap_or("").to_string()
-}
-
 fn resolve_command(path: &Path, template: &str) -> (String, Vec<String>) {
     let custom = template.trim();
     if !custom.is_empty() {
         if validate_custom_command(custom).is_err() {
             return ("custom".into(), Vec::new());
         }
-        let rendered = split_command(custom)
-            .into_iter()
-            .map(|arg| arg.replace("{file}", &path.to_string_lossy()))
-            .collect::<Vec<_>>();
+        let Ok(argv) = split_command(custom) else {
+            return ("custom".into(), Vec::new());
+        };
+        let file_path = path.to_string_lossy();
+        let mut rendered = Vec::with_capacity(argv.len());
+        if let Some((program, args)) = argv.split_first() {
+            rendered.push(program.clone());
+            for arg in args {
+                rendered.push(arg.replace("{file}", &file_path));
+            }
+        }
         return ("custom".into(), rendered);
     }
     if let Some(defender) = discover_defender() {
@@ -185,25 +195,36 @@ fn discover_defender() -> Option<Vec<String>> {
         })
 }
 
-fn split_command(line: &str) -> Vec<String> {
+fn split_command(line: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
+    let mut has_token = false;
     for ch in line.chars() {
         match ch {
-            '"' => quoted = !quoted,
+            '"' => {
+                quoted = !quoted;
+                has_token = true;
+            }
             c if c.is_whitespace() && !quoted => {
-                if !current.is_empty() {
+                if has_token {
                     out.push(std::mem::take(&mut current));
+                    has_token = false;
                 }
             }
-            c => current.push(c),
+            c => {
+                current.push(c);
+                has_token = true;
+            }
         }
     }
-    if !current.is_empty() {
+    if quoted {
+        return Err("扫描命令引号未闭合".into());
+    }
+    if has_token {
         out.push(current);
     }
-    out
+    Ok(out)
 }
 
 fn run_command(engine: &str, argv: &[String]) -> ScanResult {
@@ -390,7 +411,7 @@ mod tests {
     #[test]
     fn splits_quoted_argv() {
         assert_eq!(
-            split_command(r#"C:\scan.exe -f "C:\a bin.dat""#),
+            split_command(r#"C:\scan.exe -f "C:\a bin.dat""#).unwrap(),
             vec!["C:\\scan.exe", "-f", "C:\\a bin.dat"]
         );
         let path = std::env::temp_dir().join("hls av scan.bin");
@@ -412,6 +433,41 @@ mod tests {
             assert_eq!(rejected.state, "error");
             assert!(rejected.detail.contains("拒绝执行"));
         }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_quote_splitting_unbalanced_quotes_and_program_placeholder() {
+        for bad in [
+            r#"c"m"d.exe /c {file}"#,
+            r#""c"md.exe /c {file}"#,
+            r#"C:\Windows\System32\p"o"wershell.exe {file}"#,
+            r#"cmd.exe. /c {file}"#,
+            r#""C:\scan.exe {file}"#,
+            r#"{file}"#,
+            r#""{file}" --scan"#,
+            r#"C:\tools\{file}.exe --scan {file}"#,
+            r#""" {file}"#,
+            r#"C:\scan.exe "{file}""#,
+        ] {
+            if bad == r#"C:\scan.exe "{file}""# {
+                assert!(
+                    validate_custom_command(bad).is_ok(),
+                    "valid quoted arg: {bad}"
+                );
+                continue;
+            }
+            assert!(
+                validate_custom_command(bad).is_err(),
+                "expected rejection for custom scanner command: {bad}"
+            );
+        }
+        let path = std::env::temp_dir().join("hls-av-argv0-guard.bin");
+        std::fs::write(&path, b"ok").unwrap();
+        let (_, argv) = resolve_command(&path, r#"c"m"d.exe /c {file}"#);
+        assert!(argv.is_empty());
+        let (_, argv) = resolve_command(&path, r#"{file}"#);
+        assert!(argv.is_empty());
         let _ = std::fs::remove_file(path);
     }
 
