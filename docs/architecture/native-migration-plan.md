@@ -28,7 +28,7 @@
 | 动态分段算法、完整原生悬浮窗、全部调度细节 | 尚未完整还原，部分重建代码与反编译结果冲突 | 使用项目自身可验证的实现，不据此声称等同 IDM |
 | 重建 C/C# 实现 | 属于恢复或重建产物 | 只有与原始证据及项目回归相符的部分才能采用 |
 
-依据见现有 [IDM 核查记录](A:/Ubuntu/测试/hls-downloader/docs/validation/idm-native-handoff.md)。参考目录保持只读，不把 IDM 私有协议、DLL 或重建程序引入产品运行依赖。
+依据见现有 [IDM 核查记录](docs/validation/idm-native-handoff.md)。参考目录保持只读，不把 IDM 私有协议、DLL 或重建程序引入产品运行依赖。
 
 ### 3. 当前基线
 
@@ -45,7 +45,7 @@
 | 候选包内 FFmpeg / libmpv | 解压后约 157.50 / 114.21 MiB |
 | 功能验收表 | 33 项，23 项已有 verified 记录、10 项 partial |
 
-完整包体积依据见 [组件体积报告](A:/Ubuntu/测试/hls-downloader/artifacts/v7-productization/candidate/PACKAGE-SIZE-REPORT.json)。该包早于当前部分源码修改，实施前必须重建同一源码状态的比较基线。
+完整包体积依据见 [组件体积报告](artifacts/v7-productization/candidate/PACKAGE-SIZE-REPORT.json)。该包早于当前部分源码修改，实施前必须重建同一源码状态的比较基线。
 
 ### 4. 不可退化的合同
 
@@ -590,7 +590,7 @@ Host 收敛为四项工作：
 
 ### 3. 验收状态与发布边界
 
-以现有 [功能验收表](A:/Ubuntu/测试/hls-downloader/config/release/feature-parity.json) 为基础逐项更新：
+以现有 [功能验收表](config/release/feature-parity.json) 为基础逐项更新：
 
 - 原生化后更新入口、命令、事件、证据及适用源码身份。
 - 历史 verified 记录保留来源，但不能自动继承为新候选通过。

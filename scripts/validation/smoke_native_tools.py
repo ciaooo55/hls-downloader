@@ -212,7 +212,7 @@ def main():
                             if report["caption_api_checks"]:
                                 offset = len(caption_trace.read_text(encoding="utf-8"))
                                 request("store_settings", values=dict(theme_mode="dark" if dark else "light"))
-                            colors = {20: int(dark), 35: 0x2a2622 if dark else 0xfefdfc, 36: 0xf6f5f4 if dark else 0x2a170f}
+                            colors = {20: int(dark), 35: 0x221916 if dark else 0xffffff, 36: 0xf9f4f1 if dark else 0x2a170f}
                             expected = [f"native caption dark={str(dark).lower()} attribute={attribute} value={value:#010x} hresult=0x00000000" for attribute, value in colors.items()]
                             timeout = time.monotonic()+15
                             while time.monotonic() < timeout:

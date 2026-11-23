@@ -19,7 +19,7 @@ import psutil
 
 from msi_checkpoint_fixture import BLOCK, PAYLOAD_SIZE, RangeHandler, Server
 from smoke_v7_native_host import responses
-from smoke_v7_presenter import native_message, visible_window
+from smoke_v7_presenter import native_message, process_windows, visible_window
 
 
 class Pipe:
@@ -106,6 +106,56 @@ def wait(predicate, description, timeout=60):
     raise TimeoutError(description)
 
 
+def is_workbench_title(title: str) -> bool:
+    return title == "HLS Downloader" or title.startswith("HLS Downloader ")
+
+
+def visible_workbench_window(pid: int) -> bool:
+    virtual_left = ctypes.windll.user32.GetSystemMetrics(76)
+    virtual_top = ctypes.windll.user32.GetSystemMetrics(77)
+    virtual_right = virtual_left + ctypes.windll.user32.GetSystemMetrics(78)
+    virtual_bottom = virtual_top + ctypes.windll.user32.GetSystemMetrics(79)
+    return any(
+        is_workbench_title(window_title)
+        and visible
+        and rect[2] > virtual_left
+        and rect[0] < virtual_right
+        and rect[3] > virtual_top
+        and rect[1] < virtual_bottom
+        for window_title, visible, rect in process_windows(pid)
+    )
+
+
+def find_workbench_hwnd(root):
+    pids = {
+        process["pid"]
+        for process in runtime_processes(root)
+        if process["name"] == "HLSDownloaderPresenter.exe"
+    }
+    if not pids:
+        return 0
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    found = []
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @enum_proc
+    def callback(hwnd, _lparam):
+        owner_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+        if owner_pid.value not in pids or not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, len(buffer))
+        if is_workbench_title(buffer.value):
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(callback, 0)
+    return found[0] if found else 0
+
+
 def workbench_window(root):
     from pywinauto import Desktop
 
@@ -114,7 +164,8 @@ def workbench_window(root):
         window
         for process in runtime_processes(root)
         if process["name"] == "HLSDownloaderPresenter.exe"
-        for window in desktop.windows(process=process["pid"], title="HLS Downloader", visible_only=True)
+        for window in desktop.windows(process=process["pid"], visible_only=True)
+        if is_workbench_title(window.window_text())
     ]
     if len(windows) > 1:
         raise RuntimeError("Multiple native workbench windows belong to this runtime")
@@ -223,10 +274,8 @@ def run(args):
         check("workbench-single-instance", code == 0, {"second_launcher_exit": code})
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-        user32.FindWindowW.restype = wintypes.HWND
         user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-        hwnd = user32.FindWindowW(None, "HLS Downloader")
+        hwnd = find_workbench_hwnd(root)
         if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE，走真实关窗隐藏路径。
             raise ctypes.WinError(ctypes.get_last_error())
         wait(lambda: not workbench_state(root)["showing"], "Workbench did not hide to tray", 10)
@@ -239,7 +288,7 @@ def run(args):
         host.stdin.close()
         host.wait(timeout=5)
         host = None
-        hwnd = user32.FindWindowW(None, "HLS Downloader")
+        hwnd = find_workbench_hwnd(root)
         if not hwnd or not user32.PostMessageW(hwnd, 0x0010, 0, 0):
             raise ctypes.WinError(ctypes.get_last_error())
         wait(lambda: not workbench_state(root)["showing"], "Workbench did not hide again", 10)
@@ -336,7 +385,7 @@ def run(args):
         check("test-task-and-file-cleaned", not remaining["tasks"] and not output.exists(), remaining)
         processes = runtime_processes(root)
         check("one-core-one-visible-workbench-in-presenter", sum(p["name"] == "HLSDownloaderEngine.exe" for p in processes) == 1
-              and sum(p["name"] == "HLSDownloaderPresenter.exe" and visible_window(p["pid"], "HLS Downloader") for p in processes) == 1
+              and sum(p["name"] == "HLSDownloaderPresenter.exe" and visible_workbench_window(p["pid"]) for p in processes) == 1
               and sum(p["name"] == "HLSDownloaderPresenter.exe" for p in processes) == 1, processes)
         check("portable-ui-state-files", (root / "data/presenter.lock").is_file() and (root / "data/ui/window-geometry.properties").is_file(), str(root / "data/ui"))
         result["passed"] = True

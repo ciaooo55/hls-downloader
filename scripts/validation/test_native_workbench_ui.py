@@ -25,6 +25,7 @@ class NativeWorkbenchUiTests(unittest.TestCase):
         ]
         self.window.rectangle.return_value = SimpleNamespace(left=10, top=20, right=810, bottom=620)
         self.window.is_visible.return_value = True
+        self.window.window_text.return_value = "HLS Downloader 10.1.0"
         self.modules = patch.dict(sys.modules, {"pywinauto": SimpleNamespace(Desktop=self.desktop)})
         self.processes = patch.object(portable, "runtime_processes", return_value=[
             {"pid": 1, "name": "HLSDownloaderEngine.exe"},
@@ -42,8 +43,22 @@ class NativeWorkbenchUiTests(unittest.TestCase):
         self.assertEqual(state["bounds"], [10, 20, 810, 620])
         self.desktop.assert_called_once_with(backend="uia")
         self.desktop.return_value.windows.assert_called_once_with(
-            process=2, title="HLS Downloader", visible_only=True)
+            process=2, visible_only=True)
         portable.runtime_processes.assert_called_once_with(self.root)
+
+    def test_accepts_unversioned_workbench_title(self):
+        self.window.window_text.return_value = "HLS Downloader"
+        state = portable.workbench_state(self.root)
+        self.assertTrue(state["showing"])
+        self.assertTrue(state["connected"])
+
+    def test_ignores_non_workbench_presenter_windows(self):
+        confirm = MagicMock()
+        confirm.window_text.return_value = "确认下载"
+        self.desktop.return_value.windows.return_value = [confirm, self.window]
+        state = portable.workbench_state(self.root)
+        self.assertTrue(state["showing"])
+        self.assertTrue(state["connected"])
 
     def test_missing_window_is_not_reported_as_connected(self):
         self.desktop.return_value.windows.return_value = []
@@ -56,7 +71,9 @@ class NativeWorkbenchUiTests(unittest.TestCase):
         self.assertFalse(portable.workbench_state(self.root)["connected"])
 
     def test_ambiguous_windows_fail_closed(self):
-        self.desktop.return_value.windows.return_value = [self.window, MagicMock()]
+        second = MagicMock()
+        second.window_text.return_value = "HLS Downloader 10.1.0"
+        self.desktop.return_value.windows.return_value = [self.window, second]
         with self.assertRaisesRegex(RuntimeError, "Multiple native workbench"):
             portable.workbench_state(self.root)
 

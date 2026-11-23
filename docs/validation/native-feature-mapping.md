@@ -1,6 +1,8 @@
 # 原生迁移功能映射
 
-源清单：`config/release/feature-parity.json` 的 33 项。正式版 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6) 已发布，受测源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`；当前成品范围、组件身份及限制见 [当前验证表](current-evidence.json) 的 `formal_release`。之后的源码修复单独记录，不能据此声称已发布安装包包含新改动。
+> **当前版本状态**：最新已发布正式版为 [10.0.0](../releases/v10.0.0.md)，当前源码目标为 [10.1.0（发布草案）](../releases/v10.1.0.md)（`config/release/feature-parity.json` 中 `release_ready=false`，尚未完成正式打包验收）。下文 7.0.6 说明及逐项表均为 7.0.x 迁移阶段的历史记录，不代表 10.1.0 源码的同源成品验收结论。
+
+源清单：`config/release/feature-parity.json` 的 33 项规范功能记录（`architecture.single_core` 至 `http.active_tail_split`）；下表共 35 行，在 33 项规范清单基础上额外追加了 2 项传输专项追踪（`http.coordinated_range_stop`、`http.ipv6_download`）。历史正式版 [v7.0.6](https://github.com/ciaooo55/hls-downloader/releases/tag/v7.0.6) 的受测源码为 `1c1dc06b7dc63e9c728ae75e5dcff9772781cd7d`；当前成品范围、组件身份及限制以对应版本的发布附件和 [当前验证表](current-evidence.json) 为准。之后的源码修复单独记录，不能据此声称已发布安装包包含新改动。
 
 以下逐项表保留迁移过程中的阶段记录；其中“待验收”描述记录当时的状态，当前结论以顶部正式发布记录、发布附件 `FEATURE-PARITY.json` 和 `RELEASE-EVIDENCE.json` 为准。真实投屏/TVBox、付费云字幕质量仍按用户决定排除；Firefox 交付待签名包，软件缩放测试不代表物理多显示器切换验收。
 
