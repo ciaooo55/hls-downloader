@@ -148,9 +148,9 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     renditionUrls: renditionUrls.slice(0, 24),
     audioTracks,
     // The tail of a live window is what the player is currently appending.
-    // Bounding this also keeps session storage small on long event playlists.
+    // Bounding both URLs and hashes keeps session storage small on long playlists.
     playbackUrls: playbackUrls.slice(-24),
-    playbackUrlHashes: [...new Set(playbackUrls.map(url => resourceId(resourceFingerprint({ kind: 'hls', url }))))],
+    playbackUrlHashes: [...new Set(playbackUrls.map(url => resourceId(resourceFingerprint({ kind: 'hls', url }))))].slice(-512),
     duration: completeDuration && duration > 0 ? duration : undefined,
     isLive,
     lowLatencyLive,

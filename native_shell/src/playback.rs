@@ -61,19 +61,27 @@ struct MediaState {
 enum Mount {
     File(PathBuf),
     Dir(PathBuf),
-    Downloading(PathBuf),
+    Downloading {
+        dir: PathBuf,
+        revoked: Arc<AtomicBool>,
+    },
     Growing {
         root: PathBuf,
         file: PathBuf,
         total: u64,
+        revoked: Arc<AtomicBool>,
     },
     Proxy(Arc<crate::media_proxy::MediaProxy>),
 }
 
 impl Mount {
     fn revoke(&self) {
-        if let Self::Proxy(proxy) = self {
-            proxy.canceled.store(true, Ordering::Relaxed);
+        match self {
+            Self::Proxy(proxy) => proxy.canceled.store(true, Ordering::Relaxed),
+            Self::Downloading { revoked, .. } | Self::Growing { revoked, .. } => {
+                revoked.store(true, Ordering::SeqCst);
+            }
+            Self::File(_) | Self::Dir(_) => {}
         }
     }
 }
@@ -156,11 +164,25 @@ impl MediaServer {
     }
 
     pub fn mount_downloading(&self, token: &str, path: PathBuf) {
-        self.store(token, Mount::Downloading(path));
+        self.store(
+            token,
+            Mount::Downloading {
+                dir: path,
+                revoked: Arc::new(AtomicBool::new(false)),
+            },
+        );
     }
 
     pub fn mount_growing(&self, token: &str, root: PathBuf, file: PathBuf, total: u64) {
-        self.store(token, Mount::Growing { root, file, total });
+        self.store(
+            token,
+            Mount::Growing {
+                root,
+                file,
+                total,
+                revoked: Arc::new(AtomicBool::new(false)),
+            },
+        );
     }
 
     pub(crate) fn mount_proxy(
@@ -213,7 +235,7 @@ impl MediaServer {
                     .and_then(|(_, mount)| match mount {
                         Mount::File(path) => file_cast_name(path).map(|name| format!("/{name}")),
                         Mount::Dir(_) => Some("/local.m3u8".into()),
-                        Mount::Downloading(_) => Some("/preview.m3u8".into()),
+                        Mount::Downloading { .. } => Some("/preview.m3u8".into()),
                         Mount::Growing { .. } => None,
                         Mount::Proxy(proxy) => Some(format!("/{}", proxy.cast_name())),
                     })
@@ -396,11 +418,24 @@ fn handle_client(
         Mount::Proxy(proxy) => {
             return proxy.serve(stream, &request, sub, &format!("/media/{token}"));
         }
-        Mount::Growing { root, file, total } => {
+        Mount::Growing {
+            root,
+            file,
+            total,
+            revoked,
+        } => {
             if !sub.is_empty() {
                 return write_status(&mut stream, 404, b"not found");
             }
-            return serve_growing_file(&mut stream, &request, root, file, *total, lifetime);
+            return serve_growing_file(
+                &mut stream,
+                &request,
+                root,
+                file,
+                *total,
+                lifetime,
+                revoked,
+            );
         }
         Mount::File(path) => {
             if !sub.is_empty() && file_cast_name(path).as_deref() != Some(sub) {
@@ -419,7 +454,7 @@ fn handle_client(
                 }
             }
         }
-        Mount::Downloading(dir) => {
+        Mount::Downloading { dir, revoked } => {
             let name = if sub.is_empty() { "preview.m3u8" } else { sub };
             let Some(file) = safe_join(dir, name) else {
                 return write_status(&mut stream, 404, b"not found");
@@ -434,7 +469,7 @@ fn handle_client(
             let fragment = name.starts_with("segments/")
                 || name.starts_with("audio/segments/")
                 || ((name.starts_with("seg-") || name.starts_with("audio/seg-"))
-                    && name.ends_with(".m4s"))
+                    && (name.ends_with(".m4s") || name.ends_with("-init.mp4")))
                 || matches!(name, "init.mp4" | "audio/init.mp4");
             if !playlist && !fragment {
                 return write_status(&mut stream, 404, b"not found");
@@ -446,9 +481,14 @@ fn handle_client(
                 crate::media::preview::request_priority(dir, name)?;
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
                 while !crate::media::preview::is_ready(dir, name) {
-                    let control = std::fs::read_to_string(dir.join("control")).unwrap_or_default();
                     if lifetime.strong_count() == 0
-                        || !dir.is_dir()
+                        || revoked.load(Ordering::SeqCst)
+                        || peer_disconnected(&stream)
+                    {
+                        return write_status(&mut stream, 503, b"segment wait interrupted");
+                    }
+                    let control = std::fs::read_to_string(dir.join("control")).unwrap_or_default();
+                    if !dir.is_dir()
                         || control.trim() != "run"
                         || std::time::Instant::now() >= deadline
                     {
@@ -583,6 +623,26 @@ fn downloaded_range_end(root: &Path, start: u64, total: u64) -> Option<u64> {
     })
 }
 
+fn peer_disconnected(stream: &TcpStream) -> bool {
+    let mut probe = [0u8; 1];
+    let _ = stream.set_nonblocking(true);
+    let closed = match stream.peek(&mut probe) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+            ) =>
+        {
+            false
+        }
+        Err(_) => true,
+    };
+    let _ = stream.set_nonblocking(false);
+    closed
+}
+
 fn serve_growing_file(
     stream: &mut TcpStream,
     request: &str,
@@ -590,6 +650,7 @@ fn serve_growing_file(
     path: &Path,
     total: u64,
     lifetime: &Weak<Mutex<MediaState>>,
+    revoked: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     let range = range_header(request);
     let Some((start, end)) = range
@@ -606,13 +667,20 @@ fn serve_growing_file(
     let length = end - start + 1;
     let mut cursor = start;
     let mut headers_sent = false;
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
     loop {
-        if lifetime.strong_count() == 0 {
+        if lifetime.strong_count() == 0 || revoked.load(Ordering::SeqCst) {
             return Err("media server stopped".into());
         }
         let available = downloaded_range_end(root, cursor, total);
         if head || available.is_some() {
+            // Open only for the ready slice (and before sending 200/206 headers)
+            // so Windows never holds a file handle across wait loops and missing
+            // files never emit misleading 200/206 headers followed by 0-byte EOF.
+            let mut file = if !head {
+                Some(File::open(path).map_err(|error| error.to_string())?)
+            } else {
+                None
+            };
             if !headers_sent {
                 let content_range = if range.is_some() {
                     format!("Content-Range: bytes {start}-{end}/{total}\r\n")
@@ -627,7 +695,8 @@ fn serve_growing_file(
                 return Ok(());
             }
             let count = (available.unwrap().min(end) - cursor + 1).min(1024 * 1024);
-            stream_bytes(stream, &mut file, cursor, count, lifetime)?;
+            stream_bytes(stream, file.as_mut().unwrap(), cursor, count, lifetime)?;
+            drop(file);
             cursor += count;
             if cursor > end {
                 return Ok(());
@@ -644,6 +713,8 @@ fn serve_growing_file(
             while downloaded_range_end(root, cursor, total).is_none() {
                 let control = std::fs::read_to_string(root.join("control")).unwrap_or_default();
                 if lifetime.strong_count() == 0
+                    || revoked.load(Ordering::SeqCst)
+                    || peer_disconnected(stream)
                     || control.trim() != "run"
                     || std::time::Instant::now() >= deadline
                 {
@@ -1271,6 +1342,94 @@ mod tests {
         assert!(first.starts_with('m'));
         assert!(!first.starts_with("task-"));
         assert_eq!(first.len(), 33);
+    }
+
+    #[test]
+    fn downloading_mount_allows_audio_preview_and_multi_period_init_and_unblocks_on_unmount() {
+        let server = MediaServer::start_local().unwrap();
+        let dir = std::env::temp_dir().join(format!("hls-play-downloading-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        fs_create(&dir.join("audio"));
+        std::fs::write(dir.join("control"), "run").unwrap();
+        std::fs::write(
+            dir.join("audio/preview-audio.m3u8"),
+            "#EXTM3U\n#EXT-X-ENDLIST\n",
+        )
+        .unwrap();
+        let init_seg = dir.join("seg-0002-init.mp4");
+        std::fs::write(&init_seg, b"ftypmoov").unwrap();
+        crate::media::preview::mark_ready(&dir, &init_seg).unwrap();
+        server.mount_downloading("dl-1", dir.clone());
+
+        let mut audio_pl = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        audio_pl
+            .write_all(b"GET /media/dl-1/audio/preview-audio.m3u8 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut buf = Vec::new();
+        audio_pl.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 200"));
+
+        let mut init_req = TcpStream::connect(("127.0.0.1", server.bound_port())).unwrap();
+        init_req
+            .write_all(b"GET /media/dl-1/seg-0002-init.mp4 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        buf.clear();
+        init_req.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 200"));
+        assert!(buf.ends_with(b"ftypmoov"));
+
+        // Request an unready segment and verify unmount interrupts the 45s wait immediately.
+        let port = server.bound_port();
+        let started = std::time::Instant::now();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .write_all(b"GET /media/dl-1/segments/000099.ts HTTP/1.1\r\n\r\n")
+                .unwrap();
+            let mut out = Vec::new();
+            let _ = stream.read_to_end(&mut out);
+            String::from_utf8_lossy(&out).into_owned()
+        });
+        thread::sleep(std::time::Duration::from_millis(120));
+        assert!(server.unmount("dl-1"));
+        let response = client.join().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "unmount must abort downloading wait promptly: {:?}",
+            started.elapsed()
+        );
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+
+        // Growing mount must also abort wait promptly on unmount without holding the file handle.
+        let growing_file = dir.join("growing.bin");
+        std::fs::write(&growing_file, b"").unwrap();
+        server.mount_growing("grow-1", dir.clone(), growing_file.clone(), 4096);
+        let started = std::time::Instant::now();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .write_all(b"GET /media/grow-1 HTTP/1.1\r\nRange: bytes=0-63\r\n\r\n")
+                .unwrap();
+            let mut out = Vec::new();
+            let _ = stream.read_to_end(&mut out);
+            String::from_utf8_lossy(&out).into_owned()
+        });
+        thread::sleep(std::time::Duration::from_millis(120));
+        assert!(server.unmount("grow-1"));
+        let response = client.join().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "unmount must abort growing wait promptly: {:?}",
+            started.elapsed()
+        );
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn fs_create(path: &Path) {

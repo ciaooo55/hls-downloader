@@ -744,7 +744,7 @@ pub fn download_hls_with(
             if has_external_audio {
                 let audio_entries = buffered_entries(&[], &audio_prepared, &HashSet::new(), false);
                 write_text_atomic(
-                    &audio_dir.join("preview-video.m3u8"),
+                    &audio_dir.join("preview-audio.m3u8"),
                     &timeline_playlist(audio_target_duration, &audio_entries, true),
                 )?;
             }
@@ -1236,7 +1236,7 @@ fn write_buffered_preview(
         return Ok(());
     }
     let master = if external_audio {
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/preview-video.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\npreview-video.m3u8\n"
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"Audio\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/preview-audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"audio\"\npreview-video.m3u8\n"
     } else {
         "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=1\npreview-video.m3u8\n"
     };
@@ -2160,7 +2160,17 @@ fn live_subtitle_key(track: &Rendition) -> String {
     } else {
         track.uri.as_deref().unwrap_or("sub")
     };
-    safe_label(raw, "sub")
+    let base = safe_label(raw, "sub");
+    let stable = track
+        .uri
+        .as_deref()
+        .map(stable_media_url)
+        .unwrap_or_default();
+    if stable.is_empty() {
+        return base;
+    }
+    let digest = crate::crypto_lite::sha256_hex(stable.as_bytes());
+    format!("{base}-{}", &digest[..8])
 }
 
 fn safe_label(raw: &str, fallback: &str) -> String {
@@ -2212,16 +2222,45 @@ fn capture_live_subtitle_track(
         Ok(parsed) if !parsed.is_master => parsed,
         _ => return Ok(()),
     };
+    let mut keys = HashMap::new();
     for segment in playlist.segments {
-        if !track.seen.insert(segment.uri.clone()) {
+        if segment.gap {
             continue;
         }
+        let identity = segment_identity(&segment);
+        if !track.seen.insert(identity.clone()) {
+            continue;
+        }
+        let key = match segment
+            .key
+            .as_ref()
+            .map(|key| load_key(key, headers, proxy, &mut keys))
+            .transpose()
+        {
+            Ok(key) => key,
+            Err(_) => {
+                track.seen.remove(&identity);
+                continue;
+            }
+        };
         let path = cache.join(format!("{:08}.vtt", track.count));
-        if download_one(&segment.uri, headers, proxy, &path, control).is_ok() && file_len(&path) > 0
+        if download_segment(
+            &segment,
+            headers,
+            proxy,
+            &path,
+            control,
+            key.as_ref(),
+            segment.key.as_ref(),
+            segment.media_sequence,
+            true,
+        )
+        .is_ok()
+            && file_len(&path) > 0
         {
             track.count += 1;
         } else {
-            track.seen.remove(&segment.uri);
+            track.seen.remove(&identity);
             let _ = fs::remove_file(path);
         }
     }
@@ -2578,28 +2617,6 @@ fn volatile_query_name(name: &str, short_sig: bool) -> bool {
     )
 }
 
-fn download_one(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    output: &Path,
-    control: &Path,
-) -> Result<PathBuf, String> {
-    download_one_with_range(url, headers, proxy, output, control, None)
-}
-
-fn download_one_with_range(
-    url: &str,
-    headers: &HashMap<String, String>,
-    proxy: &str,
-    output: &Path,
-    control: &Path,
-    byterange: Option<(u64, u64)>,
-) -> Result<PathBuf, String> {
-    save_segment(url, headers, proxy, output, control, byterange, None, true)
-        .map_err(|error| error.to_string())
-}
-
 /// Downloads one segment into a temporary file and publishes it at `output`.
 ///
 /// With `sync` the payload is flushed to stable storage before the rename
@@ -2893,6 +2910,9 @@ fn extension(uri: &str) -> &str {
     Path::new(uri.split(['?', '#']).next().unwrap_or(uri))
         .extension()
         .and_then(|ext| ext.to_str())
+        .filter(|ext| {
+            !ext.is_empty() && ext.len() <= 12 && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
         .unwrap_or("bin")
 }
 
@@ -3543,7 +3563,7 @@ mod tests {
             "audio/segments/000000.ts"
         ));
         assert!(!root.join("audio/segments/000004.ts").exists());
-        let playlist = fs::read_to_string(root.join("audio/preview-video.m3u8")).unwrap();
+        let playlist = fs::read_to_string(root.join("audio/preview-audio.m3u8")).unwrap();
         assert!(playlist.contains("000004.ts") && playlist.contains("#EXT-X-ENDLIST"));
         phase.store(1, Ordering::SeqCst);
         fs::write(&control, "run").unwrap();
@@ -3598,7 +3618,7 @@ mod tests {
         assert!(!video.contains("000002.ts") && !video.contains("#EXT-X-ENDLIST"));
         assert!(fs::read_to_string(root.join("preview.m3u8"))
             .unwrap()
-            .contains("audio/preview-video.m3u8"));
+            .contains("audio/preview-audio.m3u8"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -4812,5 +4832,149 @@ mod tests {
             blocking_reload_url("https://cdn.test/live.m3u8?token=keep", &previous),
             "https://cdn.test/live.m3u8?token=keep&_HLS_msn=11"
         );
+    }
+
+    #[test]
+    fn extension_sanitizes_invalid_or_ads_suffixes_to_bin() {
+        assert_eq!(extension("https://cdn.test/seg-1.ts?sig=1"), "ts");
+        assert_eq!(extension("https://cdn.test/seg-1.m4s#frag"), "m4s");
+        assert_eq!(extension("https://cdn.test/img.jpg:large"), "bin");
+        assert_eq!(extension("https://cdn.test/seg.ts;v=1"), "bin");
+        assert_eq!(extension("https://cdn.test/seg.mp4%20"), "bin");
+        assert_eq!(
+            extension("https://cdn.test/seg.verylongextensionname"),
+            "bin"
+        );
+    }
+
+    #[test]
+    fn live_subtitle_key_disambiguates_same_language_tracks_and_capture_skips_gap_with_byterange() {
+        let track_a = Rendition {
+            kind: "SUBTITLES".into(),
+            group_id: "subs".into(),
+            name: "English CC".into(),
+            language: "en".into(),
+            uri: Some("https://cdn.test/subs/en-cc.m3u8?token=a".into()),
+            default: true,
+        };
+        let track_b = Rendition {
+            kind: "SUBTITLES".into(),
+            group_id: "subs".into(),
+            name: "English Forced".into(),
+            language: "en".into(),
+            uri: Some("https://cdn.test/subs/en-forced.m3u8?token=b".into()),
+            default: false,
+        };
+        assert_ne!(live_subtitle_key(&track_a), live_subtitle_key(&track_b));
+        // Rotating auth query must keep the same stable key.
+        let track_a_rotated = Rendition {
+            uri: Some("https://cdn.test/subs/en-cc.m3u8?token=fresh".into()),
+            ..track_a.clone()
+        };
+        assert_eq!(
+            live_subtitle_key(&track_a),
+            live_subtitle_key(&track_a_rotated)
+        );
+
+        let payload = concat!(
+            "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nFirst\n\n",
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nSecond\n"
+        );
+        let split = payload.find("WEBVTT\n\n00:00:01").unwrap();
+        let playlist_body = format!(
+            "#EXTM3U\n#EXT-X-VERSION:4\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n\
+             #EXT-X-GAP\n#EXTINF:1.0,\ngap.vtt\n\
+             #EXTINF:1.0,\n#EXT-X-BYTERANGE:{split}@0\nbundle.vtt\n\
+             #EXTINF:1.0,\n#EXT-X-BYTERANGE:{}@{split}\nbundle.vtt\n",
+            payload.len() - split
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let playlist_bytes = playlist_body.into_bytes();
+        let bundle_bytes = payload.as_bytes().to_vec();
+        let handle = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for _ in 0..3 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                if path == "/sub.m3u8" {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        playlist_bytes.len()
+                    );
+                    let _ = stream.write_all(&playlist_bytes);
+                } else if path == "/bundle.vtt" {
+                    let range = req.lines().find_map(|line| {
+                        let (k, v) = line.split_once(':')?;
+                        k.trim()
+                            .eq_ignore_ascii_case("range")
+                            .then(|| v.trim().strip_prefix("bytes="))
+                            .flatten()
+                    });
+                    if let Some((start, end)) = range.and_then(|r| {
+                        let (a, b) = r.split_once('-')?;
+                        Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                    }) {
+                        let slice = &bundle_bytes[start..=end.min(bundle_bytes.len() - 1)];
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            start + slice.len() - 1,
+                            bundle_bytes.len(),
+                            slice.len()
+                        );
+                        let _ = stream.write_all(slice);
+                    } else {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            bundle_bytes.len()
+                        );
+                        let _ = stream.write_all(&bundle_bytes);
+                    }
+                }
+            }
+        });
+        let base = format!("http://{addr}");
+        let root = std::env::temp_dir().join(format!("hls-live-sub-gap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut session = LiveSubSession::load(
+            &root,
+            &[Rendition {
+                kind: "SUBTITLES".into(),
+                group_id: "s".into(),
+                name: "English".into(),
+                language: "en".into(),
+                uri: Some(format!("{base}/sub.m3u8")),
+                default: true,
+            }],
+        );
+        session.capture(&HashMap::new(), "", &root, &control);
+        let _ = handle.join();
+        assert_eq!(
+            session.tracks[0].count, 2,
+            "must capture both byteranges and skip gap"
+        );
+        let published = session.publish(&root);
+        assert_eq!(published.len(), 1);
+        let merged = fs::read_to_string(&published[0]).unwrap();
+        assert!(
+            merged.contains("First") && merged.contains("Second"),
+            "{merged}"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

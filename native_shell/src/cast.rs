@@ -1534,13 +1534,208 @@ fn ssdp_search(timeout: Duration) -> Result<Vec<String>, String> {
     Ok(locations)
 }
 
+const MAX_CAST_DESCRIPTION_BYTES: usize = 1024 * 1024;
+const MAX_CAST_SOAP_RESPONSE_BYTES: usize = 256 * 1024;
+
 fn describe_device(location: &str) -> Option<CastDeviceInfo> {
-    if !is_lan_url(location) {
-        return None;
+    let (body, final_url) = http_get_lan(location, MAX_CAST_DESCRIPTION_BYTES).ok()?;
+    parse_device_description(&String::from_utf8_lossy(&body), &final_url)
+}
+
+fn parse_http_status_code(header_bytes: &[u8]) -> Result<u16, String> {
+    let header_text = String::from_utf8_lossy(header_bytes);
+    let status_line = header_text
+        .lines()
+        .next()
+        .ok_or_else(|| "投屏设备响应缺少状态行".to_string())?;
+    let mut parts = status_line.split_whitespace();
+    let version = parts.next().unwrap_or("");
+    if !version.starts_with("HTTP/") {
+        return Err("投屏设备响应格式无效".into());
     }
-    let (_, body) =
-        crate::http_engine::fetch_bytes_limited(location, &HashMap::new(), "", 1024 * 1024).ok()?;
-    parse_device_description(&String::from_utf8_lossy(&body), location)
+    parts
+        .next()
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| "投屏设备 HTTP 状态码无效".to_string())
+}
+
+fn decode_chunked_bounded(input: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut rest = input;
+    loop {
+        let Some(crlf) = rest.windows(2).position(|pair| pair == b"\r\n") else {
+            return Err("投屏设备分块响应不完整".into());
+        };
+        let size_line =
+            std::str::from_utf8(&rest[..crlf]).map_err(|_| "投屏设备分块长度无效".to_string())?;
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let size =
+            usize::from_str_radix(size_hex, 16).map_err(|_| "投屏设备分块长度无效".to_string())?;
+        rest = &rest[crlf + 2..];
+        if size == 0 {
+            return Ok(out);
+        }
+        if out.len().saturating_add(size) > max_bytes {
+            return Err("投屏设备响应超出大小限制".into());
+        }
+        if rest.len() < size + 2 || &rest[size..size + 2] != b"\r\n" {
+            return Err("投屏设备分块响应截断".into());
+        }
+        out.extend_from_slice(&rest[..size]);
+        rest = &rest[size + 2..];
+    }
+}
+
+fn lan_http_expected_len(raw: &[u8], max_body_bytes: usize) -> Result<Option<usize>, String> {
+    let Some((header_end, headers)) = tvbox_http_headers(raw)? else {
+        return Ok(None);
+    };
+    let body_start = header_end + 4;
+    if tvbox_http_transfer_is_chunked(headers)? {
+        let Some(body_len) = tvbox_http_chunked_complete_len(&raw[body_start..])? else {
+            return Ok(None);
+        };
+        return body_start
+            .checked_add(body_len)
+            .map(Some)
+            .ok_or_else(|| "投屏设备响应过大".to_string());
+    }
+    let content_length = headers.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("content-length")
+            .then_some(value.trim())
+    });
+    let Some(content_length) = content_length else {
+        return Ok(None);
+    };
+    let content_length = content_length
+        .parse::<usize>()
+        .map_err(|_| "投屏设备返回了无效 Content-Length".to_string())?;
+    if content_length > max_body_bytes {
+        return Err("投屏设备响应过大".into());
+    }
+    body_start
+        .checked_add(content_length)
+        .map(Some)
+        .ok_or_else(|| "投屏设备响应过大".to_string())
+}
+
+fn read_lan_http_response(
+    stream: &mut TcpStream,
+    timeout: Duration,
+    max_body_bytes: usize,
+) -> Result<(u16, String, Vec<u8>), String> {
+    let read_limit = max_body_bytes.saturating_add(16 * 1024);
+    let deadline = Instant::now() + timeout;
+    let mut raw = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("读取投屏设备响应超时".into());
+        }
+        stream.set_read_timeout(Some(remaining)).ok();
+        let remaining_cap = read_limit + 1 - raw.len();
+        let read_len = chunk.len().min(remaining_cap);
+        match stream.read(&mut chunk[..read_len]) {
+            Ok(0) => break,
+            Ok(read) => {
+                raw.extend_from_slice(&chunk[..read]);
+                if let Some(expected_len) = lan_http_expected_len(&raw, max_body_bytes)? {
+                    if expected_len > read_limit {
+                        return Err("投屏设备响应过大".into());
+                    }
+                    if raw.len() >= expected_len {
+                        raw.truncate(expected_len);
+                        break;
+                    }
+                }
+                if raw.len() > read_limit {
+                    return Err("投屏设备响应过大".into());
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err("读取投屏设备响应超时".into());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let Some((header_end, header_text)) = tvbox_http_headers(&raw)? else {
+        return Err("投屏设备响应头不完整".into());
+    };
+    if let Some(expected_len) = lan_http_expected_len(&raw, max_body_bytes)? {
+        if raw.len() < expected_len {
+            return Err("投屏设备响应被截断".into());
+        }
+    }
+    let status = parse_http_status_code(&raw[..header_end])?;
+    let body_bytes = &raw[header_end + 4..];
+    let body = if tvbox_http_transfer_is_chunked(header_text)? {
+        decode_chunked_bounded(body_bytes, max_body_bytes)?
+    } else {
+        if body_bytes.len() > max_body_bytes {
+            return Err("投屏设备响应过大".into());
+        }
+        body_bytes.to_vec()
+    };
+    Ok((status, header_text.to_string(), body))
+}
+
+fn http_get_lan(url: &str, max_bytes: usize) -> Result<(Vec<u8>, String), String> {
+    let mut current = url.to_string();
+    for hop in 0..=2 {
+        let (host, port, path) = split_http_url(&current)?;
+        if !is_lan_host(&host) {
+            return Err("投屏设备描述地址必须是局域网".into());
+        }
+        let addr: SocketAddr = format!("{host}:{port}")
+            .parse()
+            .map_err(|error| format!("cast address: {error}"))?;
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(4))
+            .map_err(|error| error.to_string())?;
+        stream.set_write_timeout(Some(Duration::from_secs(4))).ok();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|error| error.to_string())?;
+        let (status, header_text, body) =
+            read_lan_http_response(&mut stream, Duration::from_secs(6), max_bytes)?;
+        if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            if hop >= 2 {
+                return Err("投屏设备描述重定向次数过多".into());
+            }
+            let location = header_text
+                .lines()
+                .skip(1)
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("location")
+                        .then(|| value.trim().to_string())
+                })
+                .ok_or_else(|| "投屏设备重定向缺少 Location".to_string())?;
+            let next = resolve_url(&current, &location);
+            if !is_lan_url(&next) {
+                return Err("投屏设备描述拒绝重定向到非局域网地址".into());
+            }
+            current = next;
+            continue;
+        }
+        if !(200..=299).contains(&status) {
+            return Err(format!("投屏设备描述返回 HTTP {status}"));
+        }
+        return Ok((body, current));
+    }
+    Err("投屏设备描述重定向次数过多".into())
 }
 
 fn av_transport_action(
@@ -1593,6 +1788,7 @@ fn http_post_lan(url: &str, soap_action: &str, body: &str) -> Result<String, Str
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(4))
         .map_err(|error| error.to_string())?;
     stream.set_read_timeout(Some(Duration::from_secs(6))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(4))).ok();
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPACTION: {soap_action}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -1600,11 +1796,15 @@ fn http_post_lan(url: &str, soap_action: &str, body: &str) -> Result<String, Str
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|error| error.to_string())?;
-    Ok(response)
+    let (status, _, body) = read_lan_http_response(
+        &mut stream,
+        Duration::from_secs(6),
+        MAX_CAST_SOAP_RESPONSE_BYTES,
+    )?;
+    if !(200..=299).contains(&status) {
+        return Err(format!("投屏设备返回 HTTP {status}"));
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
@@ -1624,7 +1824,10 @@ fn split_http_url(url: &str) -> Result<(String, u16, String), String> {
         return Err("投屏控制地址无效".into());
     }
     let (host, port) = if let Some((host, port)) = authority.split_once(':') {
-        (host.to_string(), port.parse::<u16>().unwrap_or(80))
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| "投屏控制端口无效".to_string())?;
+        (host.to_string(), port)
     } else {
         (authority.to_string(), 80)
     };
@@ -3617,6 +3820,93 @@ mod tests {
             device.is_none(),
             "非 TVBox 端口且没有标记的服务不能被当成接收端"
         );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn describe_device_refuses_non_lan_redirect_and_follows_lan_redirect() {
+        let bad_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let bad_addr = bad_listener.local_addr().unwrap();
+        let bad_worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = bad_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        assert!(
+            describe_device(&format!("http://{bad_addr}/desc.xml")).is_none(),
+            "302 redirect to non-LAN/metadata IP must be rejected"
+        );
+        bad_worker.join().unwrap();
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let target_worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = target_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let xml = "<root><device><friendlyName>Living Room</friendlyName><serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><controlURL>/ctrl</controlURL></service></serviceList></device></root>";
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{xml}",
+                    xml.len()
+                );
+            }
+        });
+        let redir_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redir_addr = redir_listener.local_addr().unwrap();
+        let redir_worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = redir_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: http://{target_addr}/real.xml\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        let info = describe_device(&format!("http://{redir_addr}/desc.xml")).unwrap();
+        assert_eq!(info.label, "Living Room");
+        assert_eq!(
+            info.control_url,
+            format!("http://{target_addr}/ctrl"),
+            "relative controlURL must resolve against the post-redirect description URL"
+        );
+        redir_worker.join().unwrap();
+        target_worker.join().unwrap();
+    }
+
+    #[test]
+    fn http_post_lan_rejects_non_2xx_and_oversized_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfail"
+                );
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(header.as_bytes());
+                let payload = vec![b'A'; MAX_CAST_SOAP_RESPONSE_BYTES + 128];
+                let _ = stream.write_all(&payload);
+            }
+        });
+        let url = format!("http://{addr}/control");
+        let err_500 = http_post_lan(&url, "\"urn:test#Play\"", "<s/>").unwrap_err();
+        assert!(err_500.contains("500"), "{err_500}");
+        let err_big = http_post_lan(&url, "\"urn:test#Play\"", "<s/>").unwrap_err();
+        assert!(err_big.contains("过大"), "{err_big}");
         worker.join().unwrap();
     }
 }

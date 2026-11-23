@@ -58,7 +58,13 @@ export component ResourceToolsWindow inherits Window {
         }
         if root.mode == "crawl": HorizontalLayout {
             spacing: 8px;
-            HotComboBox { model: root.projects; current-index: root.project-index; height: Tokens.control-height; enabled: !root.busy; selected(value) => { root.select-project(self.current-index); } }
+            HotComboBox {
+                model: root.projects; height: Tokens.control-height; enabled: !root.busy;
+                property <int> bound: root.project-index;
+                current-index: root.project-index;
+                changed bound => { self.current-index = root.project-index; }
+                selected(value) => { root.select-project(self.current-index); }
+            }
             HotButton { label: "新项目"; icon: "new"; enabled: !root.busy; clicked => { root.action("new_project"); } }
             HotButton { label: "刷新"; icon: "refresh"; enabled: !root.busy; clicked => { root.action("list"); } }
         }

@@ -180,10 +180,15 @@ export default defineContentScript({
       const target = link.target || '_self'
       const filename = link.getAttribute('download')
       event.preventDefault()
-      const fallback = async () => {
-        // 本次交接未发生；让原链接恢复一次，并防止响应/onCreated 再次接管。
+      const fallback = async (preserveLocal = false) => {
+        // 本次交接未发生；若需浏览器带 Cookie 完成再导入，不设 altBypass，让 downloads.onCreated 走本地导入。
         await browser.runtime.sendMessage({
-          type: 'click-intent', href, pageUrl, altBypass: true, opensNewTab: linkOpensNewTab(target),
+          type: 'click-intent',
+          href,
+          pageUrl,
+          altBypass: !preserveLocal,
+          opensNewTab: linkOpensNewTab(target),
+          ...(preserveLocal ? { downloadAttribute: filename !== null, filename: filename || '' } : {}),
         }).catch(() => undefined)
         const original = document.createElement('a')
         original.href = href
@@ -200,7 +205,9 @@ export default defineContentScript({
         type: 'intercept-download-link', href, pageUrl, filename,
         downloadAttribute: filename !== null,
       }).then(response => {
-        if (!desktopAcceptedHandoff(response) && response?.browserFallback === true) return fallback()
+        if (!desktopAcceptedHandoff(response) && response?.browserFallback === true) {
+          return fallback(response?.preserveLocal === true)
+        }
       }).catch(() => {
         // 发送后连接中断不能证明桌面没收到；自动导航可能造成第二份下载。
         console.warn('HLS Downloader 无法确认链接交接，请检查主程序后重试')

@@ -18,7 +18,7 @@ pub struct DashManifest {
     before_start_window_periods: HashSet<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct DashPeriod {
     id: Option<String>,
     start: Option<f64>,
@@ -73,7 +73,9 @@ pub struct Representation {
     pub whole_file: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ByteRange {
     pub start: u64,
     pub length: u64,
@@ -820,6 +822,247 @@ struct LiveDashTrack {
     init: Option<(String, Option<ByteRange>)>,
     bytes: u64,
     first_presentation_start: Option<f64>,
+    resumed_gap: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedLiveTrack {
+    files: Vec<String>,
+    durations: Vec<f64>,
+    seen: Vec<(String, Option<ByteRange>)>,
+    init: Option<(String, Option<ByteRange>)>,
+    bytes: u64,
+    first_presentation_start: Option<f64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedChoice {
+    id: String,
+    bandwidth: u64,
+    height: u32,
+    mime: String,
+    lang: String,
+    codecs: String,
+    content_type: String,
+    label: String,
+    period: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedSubtitleTrack {
+    id: String,
+    mime: String,
+    lang: String,
+    codecs: String,
+    content_type: String,
+    label: String,
+    init: Option<String>,
+    init_range: Option<ByteRange>,
+    media: Vec<String>,
+    media_ranges: Vec<Option<ByteRange>>,
+    media_durations: Vec<f64>,
+    period: usize,
+}
+
+impl From<&Representation> for SavedSubtitleTrack {
+    fn from(rep: &Representation) -> Self {
+        Self {
+            id: rep.id.clone(),
+            mime: rep.mime.clone(),
+            lang: rep.lang.clone(),
+            codecs: rep.codecs.clone(),
+            content_type: rep.content_type.clone(),
+            label: rep.label.clone(),
+            init: rep.init.clone(),
+            init_range: rep.init_range,
+            media: rep.media.clone(),
+            media_ranges: rep.media_ranges.clone(),
+            media_durations: rep.media_durations.clone(),
+            period: rep.period,
+        }
+    }
+}
+
+impl From<SavedSubtitleTrack> for Representation {
+    fn from(saved: SavedSubtitleTrack) -> Self {
+        Self {
+            id: saved.id,
+            mime: saved.mime,
+            lang: saved.lang,
+            codecs: saved.codecs,
+            content_type: saved.content_type,
+            label: saved.label,
+            init: saved.init,
+            init_range: saved.init_range,
+            media: saved.media,
+            media_ranges: saved.media_ranges,
+            media_durations: saved.media_durations,
+            period: saved.period,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LiveDashState {
+    version: u32,
+    active: Option<DashPeriod>,
+    first_period: Option<DashPeriod>,
+    cursors: Vec<LiveTrackCursor>,
+    primary_choice: Option<SavedChoice>,
+    audio_choice: Option<SavedChoice>,
+    primary: SavedLiveTrack,
+    audio: SavedLiveTrack,
+    #[serde(default)]
+    subtitles: Vec<SavedSubtitleTrack>,
+}
+
+impl LiveDashTrack {
+    fn to_saved(&self) -> SavedLiveTrack {
+        SavedLiveTrack {
+            files: self
+                .files
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+                .collect(),
+            durations: self.durations.clone(),
+            seen: self.seen.iter().cloned().collect(),
+            init: self.init.clone(),
+            bytes: self.bytes,
+            first_presentation_start: self.first_presentation_start,
+        }
+    }
+
+    fn from_saved(saved: SavedLiveTrack, dir: &Path) -> Option<Self> {
+        let mut files = Vec::with_capacity(saved.files.len());
+        let mut bytes = 0u64;
+        for name in &saved.files {
+            if name.contains(['/', '\\']) || name.is_empty() {
+                return None;
+            }
+            let path = dir.join(name);
+            let meta = fs::metadata(&path).ok()?;
+            if !meta.is_file() || meta.len() == 0 {
+                return None;
+            }
+            bytes = bytes.saturating_add(meta.len());
+            files.push(path);
+        }
+        let resumed_gap = !files.is_empty();
+        Some(Self {
+            files,
+            durations: saved.durations,
+            seen: saved.seen.into_iter().collect(),
+            init: saved.init,
+            bytes,
+            first_presentation_start: saved.first_presentation_start,
+            resumed_gap,
+        })
+    }
+}
+
+impl From<&Representation> for SavedChoice {
+    fn from(rep: &Representation) -> Self {
+        Self {
+            id: rep.id.clone(),
+            bandwidth: rep.bandwidth,
+            height: rep.height,
+            mime: rep.mime.clone(),
+            lang: rep.lang.clone(),
+            codecs: rep.codecs.clone(),
+            content_type: rep.content_type.clone(),
+            label: rep.label.clone(),
+            period: rep.period,
+        }
+    }
+}
+
+impl From<SavedChoice> for Representation {
+    fn from(saved: SavedChoice) -> Self {
+        Self {
+            id: saved.id,
+            bandwidth: saved.bandwidth,
+            height: saved.height,
+            mime: saved.mime,
+            lang: saved.lang,
+            codecs: saved.codecs,
+            content_type: saved.content_type,
+            label: saved.label,
+            period: saved.period,
+            ..Default::default()
+        }
+    }
+}
+
+const LIVE_DASH_STATE_VERSION: u32 = 1;
+
+fn live_dash_state_path(task_dir: &Path) -> PathBuf {
+    task_dir.join("live_dash_state.json")
+}
+
+fn save_live_dash_state(
+    task_dir: &Path,
+    active: &Option<DashPeriod>,
+    first_period: &Option<DashPeriod>,
+    cursors: &[LiveTrackCursor],
+    choices: &Option<(Representation, Option<Representation>)>,
+    primary: &LiveDashTrack,
+    audio: &LiveDashTrack,
+    subtitles: &[Representation],
+) -> Result<(), String> {
+    let state = LiveDashState {
+        version: LIVE_DASH_STATE_VERSION,
+        active: active.clone(),
+        first_period: first_period.clone(),
+        cursors: cursors.to_vec(),
+        primary_choice: choices.as_ref().map(|(v, _)| SavedChoice::from(v)),
+        audio_choice: choices
+            .as_ref()
+            .and_then(|(_, a)| a.as_ref().map(SavedChoice::from)),
+        primary: primary.to_saved(),
+        audio: audio.to_saved(),
+        subtitles: subtitles.iter().map(SavedSubtitleTrack::from).collect(),
+    };
+    let json = serde_json::to_string(&state).map_err(|error| error.to_string())?;
+    let path = live_dash_state_path(task_dir);
+    let tmp = task_dir.join(".live_dash_state.json.tmp");
+    fs::write(&tmp, json.as_bytes()).map_err(|error| error.to_string())?;
+    crate::atomic_replace::replace_file(&tmp, &path).map_err(|error| error.to_string())
+}
+
+#[allow(clippy::type_complexity)]
+fn load_live_dash_state(
+    task_dir: &Path,
+    audio_dir: &Path,
+) -> Option<(
+    Option<DashPeriod>,
+    Option<DashPeriod>,
+    Vec<LiveTrackCursor>,
+    Option<(Representation, Option<Representation>)>,
+    LiveDashTrack,
+    LiveDashTrack,
+    Vec<Representation>,
+)> {
+    let text = fs::read_to_string(live_dash_state_path(task_dir)).ok()?;
+    let state: LiveDashState = serde_json::from_str(&text).ok()?;
+    if state.version != LIVE_DASH_STATE_VERSION {
+        return None;
+    }
+    let primary = LiveDashTrack::from_saved(state.primary, task_dir)?;
+    let audio = LiveDashTrack::from_saved(state.audio, audio_dir)?;
+    let choices = state
+        .primary_choice
+        .map(|primary_choice| (primary_choice.into(), state.audio_choice.map(Into::into)));
+    let subtitles = state.subtitles.into_iter().map(Into::into).collect();
+    Some((
+        state.active,
+        state.first_period,
+        state.cursors,
+        choices,
+        primary,
+        audio,
+        subtitles,
+    ))
 }
 
 impl LiveDashTrack {
@@ -873,7 +1116,7 @@ impl LiveDashTrack {
         let mut index = self.files.len();
         let mut push =
             |url: &str, range, name: String, duration: Option<f64>| -> Result<(), String> {
-                if read_control(control) != "run" {
+                if matches!(read_control(control).as_str(), "pause" | "cancel") {
                     return Err(control_stop_error(control));
                 }
                 let path = resume_or_fetch(
@@ -910,6 +1153,9 @@ impl LiveDashTrack {
 
         if change_init {
             if let Some((url, range)) = &init {
+                if read_control(control) == "finish" {
+                    return Ok(());
+                }
                 let (name, duration) = if initial {
                     ("init.mp4".into(), None)
                 } else {
@@ -920,8 +1166,14 @@ impl LiveDashTrack {
             }
             self.init = init;
         }
-        let mut boundary = next_period && !change_init;
+        let mut boundary = (next_period || self.resumed_gap) && !change_init;
+        self.resumed_gap = false;
         for (media_index, url) in track.media.iter().enumerate().skip(first_media) {
+            match read_control(control).as_str() {
+                "run" => {}
+                "finish" => break,
+                _ => return Err(control_stop_error(control)),
+            }
             let range = track.media_ranges[media_index];
             if !self.seen.insert((url.clone(), range)) {
                 continue;
@@ -1029,7 +1281,7 @@ fn continuing_live_track<'a>(
     Ok(part)
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct LiveTrackCursor {
     period: DashPeriod,
     id: String,
@@ -1081,18 +1333,42 @@ fn download_live_dash(
     preferred_audio: &str,
     vod: &mut DashCheckpoint,
 ) -> Result<PathBuf, String> {
-    let mut active = None;
-    let mut cursors = Vec::new();
-    let mut primary = LiveDashTrack::default();
-    let mut audio = LiveDashTrack::default();
-    let mut choices: Option<(Representation, Option<Representation>)> = None;
-    let mut first_period = None;
-    let mut subtitles = Vec::new();
     let audio_dir = task_dir.join("audio");
+    let (
+        mut active,
+        mut first_period,
+        mut cursors,
+        mut choices,
+        mut primary,
+        mut audio,
+        mut subtitles,
+    ) = load_live_dash_state(task_dir, &audio_dir).unwrap_or_else(|| {
+        (
+            None,
+            None,
+            Vec::new(),
+            None,
+            LiveDashTrack::default(),
+            LiveDashTrack::default(),
+            Vec::new(),
+        )
+    });
+    if !cursors.is_empty() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs_f64();
+        if let Ok(anchored) = parse_mpd_for_recording(&xml, url, now, 32 * 1024 * 1024, &cursors) {
+            manifest = anchored;
+        }
+    }
 
     loop {
         let start = live_period_begin(&manifest.periods, active.as_ref())?;
         for (index, period) in manifest.periods.iter().enumerate().skip(start) {
+            if read_control(control) == "finish" {
+                break;
+            }
             if manifest.expired_periods.contains(&index)
                 || manifest.before_start_window_periods.contains(&index)
             {
@@ -1148,6 +1424,7 @@ fn download_live_dash(
             }
             let next_period = active.is_some() && !same_period;
             let kind = if is_video(&track) { "video" } else { "audio" };
+            let mut appended_any = false;
             if primary.has_new_media(&track, next_period) {
                 primary.append(
                     &track,
@@ -1163,6 +1440,7 @@ fn download_live_dash(
                     &audio,
                 )?;
                 remember_live_cursor(&mut cursors, period, &track);
+                appended_any = true;
             }
             if let Some(item) = &secondary {
                 if audio.has_new_media(item, next_period) {
@@ -1184,6 +1462,7 @@ fn download_live_dash(
                         &primary,
                     )?;
                     remember_live_cursor(&mut cursors, period, item);
+                    appended_any = true;
                 }
             }
             if !same_period {
@@ -1196,11 +1475,12 @@ fn download_live_dash(
                 choices = Some((track, secondary));
             }
             active = Some(period.clone());
+            let is_first_period =
+                period.same_as(first_period.get_or_insert_with(|| period.clone()));
+            let mut subtitles_changed = false;
             // Sidecars currently keep their original timeline. Do not append
             // later Periods' cues without rebasing their timestamps.
-            if download_subtitles
-                && period.same_as(first_period.get_or_insert_with(|| period.clone()))
-            {
+            if download_subtitles && is_first_period {
                 let tracks: Vec<_> = manifest
                     .representations
                     .iter()
@@ -1209,22 +1489,53 @@ fn download_live_dash(
                     .collect();
                 for mut item in select_subtitles(&tracks) {
                     if expand_segment_base(&mut item, headers, proxy, control).is_ok() {
-                        merge_sub_track(&mut subtitles, &item);
+                        subtitles_changed |= merge_sub_track(&mut subtitles, &item);
                     }
                 }
-                save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
+                if subtitles_changed {
+                    save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
+                }
+            }
+            if appended_any || subtitles_changed {
+                let _ = save_live_dash_state(
+                    task_dir,
+                    &active,
+                    &first_period,
+                    &cursors,
+                    &choices,
+                    &primary,
+                    &audio,
+                    &subtitles,
+                );
             }
         }
-        if !manifest.dynamic {
+        if !manifest.dynamic || read_control(control) == "finish" {
             break;
         }
         let wait = minimum_update_period(&xml).unwrap_or(3.0).clamp(0.4, 8.0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(wait);
+        let mut finish_requested = false;
         loop {
             match read_control(control).as_str() {
                 "run" => {}
-                "pause" => return Err("paused".into()),
+                "pause" => {
+                    let _ = save_live_dash_state(
+                        task_dir,
+                        &active,
+                        &first_period,
+                        &cursors,
+                        &choices,
+                        &primary,
+                        &audio,
+                        &subtitles,
+                    );
+                    return Err("paused".into());
+                }
                 "cancel" => return Err("canceled".into()),
+                "finish" => {
+                    finish_requested = true;
+                    break;
+                }
                 _ => break,
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -1233,10 +1544,17 @@ fn download_live_dash(
             }
             std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
         }
-        if read_control(control) != "run" {
-            return Err(control_stop_error(control));
+        if finish_requested {
+            break;
         }
-        let body = refresh_live_manifest(url, headers, proxy, control)?;
+        match read_control(control).as_str() {
+            "run" => {}
+            "finish" => break,
+            _ => return Err(control_stop_error(control)),
+        }
+        let Some(body) = refresh_live_manifest(url, headers, proxy, control)? else {
+            break;
+        };
         xml = String::from_utf8_lossy(&body).into_owned();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1285,15 +1603,17 @@ fn refresh_live_manifest(
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
-) -> Result<Vec<u8>, String> {
+) -> Result<Option<Vec<u8>>, String> {
     for attempt in 0..4 {
-        if read_control(control) != "run" {
-            return Err(control_stop_error(control));
+        match read_control(control).as_str() {
+            "run" => {}
+            "finish" => return Ok(None),
+            _ => return Err(control_stop_error(control)),
         }
         let (status, body) = fetch_bytes_limited(url, headers, proxy, super::MAX_MANIFEST_BYTES)
             .map_err(|error| error.to_string())?;
         if status == 200 || status == 206 {
-            return Ok(body);
+            return Ok(Some(body));
         }
         if !matches!(status, 408 | 429 | 500..=599) || attempt == 3 {
             return Err(format!(
@@ -1303,8 +1623,10 @@ fn refresh_live_manifest(
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250 << attempt);
         while std::time::Instant::now() < deadline {
-            if read_control(control) != "run" {
-                return Err(control_stop_error(control));
+            match read_control(control).as_str() {
+                "run" => {}
+                "finish" => return Ok(None),
+                _ => return Err(control_stop_error(control)),
             }
             std::thread::sleep(
                 deadline
@@ -1694,13 +2016,15 @@ fn finish_dash(
     Ok(published)
 }
 
-fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) {
+fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) -> bool {
     if let Some(existing) = tracks.iter_mut().find(|item| {
         item.id == incoming.id && item.lang == incoming.lang && item.mime == incoming.mime
     }) {
-        if existing.init.is_none() {
+        let mut changed = false;
+        if existing.init.is_none() && incoming.init.is_some() {
             existing.init = incoming.init.clone();
             existing.init_range = incoming.init_range;
+            changed = true;
         }
         for (index, media) in incoming.media.iter().enumerate() {
             let range = incoming.media_ranges[index];
@@ -1716,11 +2040,13 @@ fn merge_sub_track(tracks: &mut Vec<Representation>, incoming: &Representation) 
                 existing
                     .media_durations
                     .push(incoming.media_durations.get(index).copied().unwrap_or(1.0));
+                changed = true;
             }
         }
-        return;
+        return changed;
     }
     tracks.push(incoming.clone());
+    true
 }
 
 fn download_one(
@@ -2324,8 +2650,9 @@ fn download_dash_subtitle_track(
             vod,
         )?);
     }
+    let mut media_count = 0usize;
     for (index, media) in track.media.iter().enumerate() {
-        if read_control(control) != "run" {
+        if matches!(read_control(control).as_str(), "pause" | "cancel") {
             break;
         }
         files.push(resume_or_fetch(
@@ -2343,8 +2670,9 @@ fn download_dash_subtitle_track(
             true,
             vod,
         )?);
+        media_count += 1;
     }
-    if files.is_empty() {
+    if files.is_empty() || media_count == 0 {
         return Err("empty subtitle track".into());
     }
     let mime = track.mime.to_ascii_lowercase();
@@ -2370,8 +2698,11 @@ fn download_dash_subtitle_track(
         crate::media::merge::concat_files(&files, &joined)?;
         let ffmpeg =
             crate::media::merge::locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
-        let status = Command::new(ffmpeg)
+        let converted = work.join("converted.vtt");
+        let mut command = Command::new(ffmpeg);
+        command
             .args([
+                "-nostdin",
                 "-y",
                 "-hide_banner",
                 "-loglevel",
@@ -2380,13 +2711,20 @@ fn download_dash_subtitle_track(
                 "file,crypto",
                 "-i",
             ])
-            .arg(&joined)
-            .arg(&vtt_path)
-            .status()
-            .map_err(|error| error.to_string())?;
-        if !status.success() || !vtt_path.is_file() {
-            return Err("ffmpeg could not convert fMP4 DASH subtitles".into());
+            .arg(&joined);
+        crate::media::merge::run_ffmpeg_to_output(
+            &mut command,
+            &converted,
+            &work.join("subtitle.ffmpeg.log"),
+            control,
+        )?;
+        let merged = fs::read_to_string(&converted).map_err(|error| error.to_string())?;
+        if !has_cues(&merged) {
+            let _ = fs::remove_file(&converted);
+            return Err("ffmpeg produced empty DASH subtitles".into());
         }
+        crate::atomic_replace::replace_file(&converted, &vtt_path)
+            .map_err(|error| error.to_string())?;
     } else {
         return Err(format!("unsupported DASH subtitle format {mime} {codecs}"));
     }
@@ -5567,7 +5905,7 @@ mod tests {
             let (url, server) = dash_status_server(statuses);
             let result = refresh_live_manifest(&url, &HashMap::new(), "", &control);
             if success {
-                assert_eq!(result.unwrap(), b"ok");
+                assert_eq!(result.unwrap().as_deref(), Some(&b"ok"[..]));
             } else {
                 assert!(result.unwrap_err().contains(&format!("HTTP {last}")));
             }
@@ -5577,6 +5915,11 @@ mod tests {
         assert_eq!(
             refresh_live_manifest("http://127.0.0.1:1", &HashMap::new(), "", &control).unwrap_err(),
             "paused"
+        );
+        fs::write(&control, "finish").unwrap();
+        assert_eq!(
+            refresh_live_manifest("http://127.0.0.1:1", &HashMap::new(), "", &control).unwrap(),
+            None
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -5837,5 +6180,72 @@ mod tests {
             select_audio(&parsed.representations, "ja").unwrap().id,
             "ja"
         );
+    }
+
+    #[test]
+    fn live_dash_state_persists_resumes_and_merge_sub_track_dedups_changes() {
+        let dir = std::env::temp_dir().join(format!("hls-live-dash-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let audio_dir = dir.join("audio");
+        fs::create_dir_all(&audio_dir).unwrap();
+        let init = dir.join("init.mp4");
+        let seg1 = dir.join("seg-0001.m4s");
+        fs::write(&init, b"init-bytes").unwrap();
+        fs::write(&seg1, b"seg1-bytes").unwrap();
+        let mut primary = LiveDashTrack::default();
+        primary.files.push(init);
+        primary.files.push(seg1);
+        primary.durations.push(4.0);
+        primary
+            .seen
+            .insert(("https://cdn.test/seg-1.m4s".into(), None));
+        primary.init = Some(("https://cdn.test/init.mp4".into(), None));
+        primary.bytes = 20;
+        let audio = LiveDashTrack::default();
+        let active = Some(DashPeriod {
+            id: Some("p0".into()),
+            start: Some(0.0),
+        });
+        let choice = Representation {
+            id: "v0".into(),
+            mime: "video/mp4".into(),
+            codecs: "avc1".into(),
+            ..Default::default()
+        };
+        let mut subs = Vec::new();
+        let sub = Representation {
+            id: "s0".into(),
+            mime: "text/vtt".into(),
+            lang: "en".into(),
+            media: vec!["https://cdn.test/sub-0.vtt".into()],
+            media_ranges: vec![None],
+            media_durations: vec![4.0],
+            ..Default::default()
+        };
+        assert!(merge_sub_track(&mut subs, &sub));
+        assert!(
+            !merge_sub_track(&mut subs, &sub),
+            "re-merging identical live subtitle segments must report unchanged"
+        );
+        save_live_dash_state(
+            &dir,
+            &active,
+            &active,
+            &[],
+            &Some((choice, None)),
+            &primary,
+            &audio,
+            &subs,
+        )
+        .unwrap();
+        let (loaded_active, _, _, loaded_choices, loaded_primary, _, loaded_subs) =
+            load_live_dash_state(&dir, &audio_dir).expect("saved live DASH state must reload");
+        assert_eq!(loaded_active, active);
+        assert_eq!(loaded_primary.files.len(), 2);
+        assert!(loaded_primary.resumed_gap);
+        assert_eq!(loaded_choices.unwrap().0.id, "v0");
+        assert_eq!(loaded_subs.len(), 1);
+        assert_eq!(loaded_subs[0].media, vec!["https://cdn.test/sub-0.vtt"]);
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -117,7 +117,24 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     }
     const start = button('翻译字幕', () => {
       if (selected === media && !['stopped', 'failed'].includes(status)) {
-        void send({ type: 'subtitle-stop', sessionId }).catch(() => undefined)
+        const targetSessionId = sessionId
+        const resetLocalStop = () => {
+          if (invalidated || sessionId !== targetSessionId) return
+          status = 'stopped'
+          error = ''
+          preparing = false
+          resumeAfterPrepare = false
+          releaseStopCapture()
+          live = undefined
+          clearInterval(clockTimer)
+          clockTimer = undefined
+          render()
+        }
+        void send({ type: 'subtitle-stop', sessionId: targetSessionId }).then(response => {
+          if (!response?.ok) resetLocalStop()
+        }).catch(() => {
+          resetLocalStop()
+        })
       } else {
         start.disabled = true; error = ''
         void send({ type: 'subtitle-start', mediaId: id }).then(response => {
@@ -316,10 +333,13 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       return true
     }
     if (message?.type !== 'subtitle-state' || message.sessionId !== sessionId) return
-    if (message.epoch !== epoch) return
+    const terminal = ['failed', 'stopped'].includes(message.status)
+    if (message.epoch !== epoch && !terminal) return
     status = message.status; error = message.error || ''; capture = message.capture || ''; note = message.note || ''
     if (Number.isFinite(message.readyEnd)) readyEnd = Math.max(readyEnd, message.readyEnd)
-    if (['failed', 'stopped'].includes(status)) {
+    if (terminal) {
+      preparing = false
+      resumeAfterPrepare = false
       releaseStopCapture(); live = undefined
       clearInterval(clockTimer); clockTimer = undefined
     }

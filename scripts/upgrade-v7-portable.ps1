@@ -132,8 +132,6 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
         Move-Item -LiteralPath $backup -Destination $target
         $backupMoved = $true
         Copy-Preserved $current $target
-        Remove-Item -LiteralPath $current -Recurse -Force
-        Write-Host "v7 portable rollback completed: $target"
     } catch {
         if ($backupMoved -and (Test-Path -LiteralPath $target)) {
             Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction SilentlyContinue
@@ -143,6 +141,12 @@ if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
         }
         throw
     }
+    try {
+        Remove-Item -LiteralPath $current -Recurse -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "v7 portable rollback succeeded, but cleanup of previous directory '$current' failed: $($_.Exception.Message). You may delete it manually."
+    }
+    Write-Host "v7 portable rollback completed: $target"
     exit 0
 }
 
@@ -160,12 +164,26 @@ $backup = "$target.v7-backup"
 if (Test-Path -LiteralPath $backup) { throw "v7 upgrade backup already exists; finalize or rollback first: $backup" }
 Stop-V7Processes $target
 Move-Item -LiteralPath $target -Destination $backup
+$sourceMoved = $false
 try {
     Move-Item -LiteralPath $source -Destination $target
+    $sourceMoved = $true
     Copy-Preserved $backup $target
     Write-Host "v7 portable upgrade completed: $target"
 } catch {
-    if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $source -Force -ErrorAction SilentlyContinue }
-    if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue }
+    $originalError = $_.Exception.Message
+    if ($sourceMoved -and (Test-Path -LiteralPath $target)) {
+        $failedDest = if (-not (Test-Path -LiteralPath $source)) { $source } else { "$target.v7-upgrade-failed-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())" }
+        try {
+            Move-Item -LiteralPath $target -Destination $failedDest -Force -ErrorAction Stop
+        } catch {
+            # Leave $target untouched; do NOT move $backup inside $target below.
+        }
+    }
+    if ((Test-Path -LiteralPath $backup) -and -not (Test-Path -LiteralPath $target)) {
+        Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue
+    } elseif (Test-Path -LiteralPath $target) {
+        throw "v7 portable upgrade failed ($originalError) and could not relocate partial target '$target'; intact backup remains at '$backup'."
+    }
     throw
 }

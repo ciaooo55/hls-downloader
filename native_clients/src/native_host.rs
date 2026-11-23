@@ -789,7 +789,7 @@ impl NativeHostSession {
         if !method.is_empty() && !method.eq_ignore_ascii_case("GET") {
             return Err("此媒体使用非 GET 请求，请先下载后投屏".into());
         }
-        let credential_ref = self.persist_browser_context(payload)?;
+        let owned_credential_ref = self.persist_browser_context(payload)?;
         let mime_type = match field(payload, "mime_type") {
             mime if !mime.is_empty() => mime,
             _ => match field(payload, "resource_kind").as_str() {
@@ -811,12 +811,14 @@ impl NativeHostSession {
             status: "pending".into(),
             message: "等待在桌面下载器中选择接收设备".into(),
             location: String::new(),
-            credential_ref,
+            credential_ref: owned_credential_ref.clone(),
             created_at_ms: unix_time_ms(),
         };
-        let events = self.core.handle(CoreCommand::RequestMediaPush {
+        let result = self.core.handle(CoreCommand::RequestMediaPush {
             request: request.clone(),
-        })?;
+        });
+        let events =
+            self.rollback_browser_credential_on_error(result, owned_credential_ref.as_deref())?;
         let outcome = events
             .into_iter()
             .find_map(|event| match event.event {
@@ -998,6 +1000,9 @@ fn public_handoff(handoff: &Handoff, task: Option<&TaskSnapshot>) -> Value {
         "presentation_queued": matches!(handoff.presentation.as_str(), "queued" | "presenting" | "fallback"),
         "presentable": true,
     });
+    if !handoff.request_id.is_empty() {
+        value["client_request_id"] = json!(handoff.request_id);
+    }
     if let Some(suppression) = &handoff.suppression {
         value["suppression"] = suppression.clone();
     }
@@ -1049,24 +1054,94 @@ pub fn run() -> i32 {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        if session.is_none() {
-            session = NativeHostSession::open_default()
-                .map_err(|error| eprintln!("v7 Core still unavailable: {error}"))
-                .ok();
-        }
-        let response = match session.as_mut() {
-            Some(session) => match session.dispatch(&message) {
-                Ok(value) => value,
-                Err(error) => json!({"ok": false, "error": error}),
-            },
-            None => core_unreachable_response(),
-        };
+        let response = dispatch_session_message(
+            &mut session,
+            &message,
+            NativeHostSession::open_default,
+            |active, msg| active.dispatch(msg),
+        );
         let response = attach_request_id(response, request_id);
         if let Err(error) = write_response(&mut output, &response) {
             eprintln!("native messaging write failed: {error}");
             return 1;
         }
     }
+}
+
+fn is_pipe_transport_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    error.starts_with("Core pipe ")
+        || error.starts_with("Core TCP ")
+        || error.starts_with("Core IPC ")
+        || lower.contains("broken pipe")
+        || lower.contains("pipe has been ended")
+        || lower.contains("os error 109")
+        || lower.contains("os error 232")
+        || lower.contains("os error 233")
+        || lower.contains("unexpected eof")
+        || lower.contains("failed to fill whole buffer")
+}
+
+fn is_safe_to_retry_after_transport_error(message: &Value) -> bool {
+    // Only strictly read-only / idempotent operations may auto-retry after a
+    // transport drop. Multi-RPC mutating ops (`download`, `media_push`,
+    // `accept_handoff`, `reject_handoff`, etc.) can fail on a follow-up write
+    // after step 1 already committed, so they must fail closed and drop the
+    // dead session instead of replaying.
+    matches!(
+        message.get("op").and_then(Value::as_str).unwrap_or(""),
+        "ping"
+            | "version"
+            | "status"
+            | "list_tasks"
+            | "handoff_status"
+            | "list_handoffs"
+            | "get_takeover_settings"
+            | "media_push_status"
+            | "workbench_status"
+    )
+}
+
+fn dispatch_session_message<S>(
+    session: &mut Option<S>,
+    message: &Value,
+    mut open: impl FnMut() -> Result<S, String>,
+    mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
+) -> Value {
+    for attempt in 0..2 {
+        if session.is_none() {
+            match open() {
+                Ok(connected) => *session = Some(connected),
+                Err(error) => {
+                    eprintln!("v7 Core still unavailable: {error}");
+                    return core_unreachable_response();
+                }
+            }
+        }
+        let active = session.as_mut().unwrap();
+        match dispatch(active, message) {
+            Ok(value) => {
+                let transport_failed = value
+                    .get("transport_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || value.get("code").and_then(Value::as_str) == Some("core_unreachable");
+                if transport_failed {
+                    *session = None;
+                }
+                return value;
+            }
+            Err(error) if is_pipe_transport_error(&error) => {
+                *session = None;
+                if attempt == 0 && is_safe_to_retry_after_transport_error(message) {
+                    continue;
+                }
+                return core_unreachable_response();
+            }
+            Err(error) => return json!({"ok": false, "error": error}),
+        }
+    }
+    core_unreachable_response()
 }
 
 fn core_unreachable_response() -> Value {
@@ -2387,5 +2462,86 @@ mod tests {
         assert_eq!(decoded["ok"], false);
         assert_eq!(decoded["error"], "Native Messaging 响应过大");
         assert_eq!(decoded["__request_id"], "req-oversized-42");
+    }
+
+    #[test]
+    fn broken_pipe_drops_session_and_reconnects_on_retry_or_next_request() {
+        let mut session = Some(1u32);
+        let mut opened = 1u32;
+        // Read-only op auto-retries once on Core IPC close / broken pipe.
+        let response = dispatch_session_message(
+            &mut session,
+            &json!({"op": "handoff_status"}),
+            || {
+                opened += 1;
+                Ok(opened)
+            },
+            |active, _| {
+                if *active == 1 {
+                    Err("Core IPC closed".into())
+                } else {
+                    Ok(json!({"ok": true, "session": *active}))
+                }
+            },
+        );
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["session"], 2);
+        assert_eq!(session, Some(2));
+
+        // Mutating ops must NOT auto-replay even on pipe write failure (multi-RPC
+        // operations may have already committed an earlier step).
+        let mut dispatches = 0usize;
+        let write_fail = dispatch_session_message(
+            &mut session,
+            &json!({"op": "media_push"}),
+            || {
+                opened += 1;
+                Ok(opened)
+            },
+            |_, _| {
+                dispatches += 1;
+                Err("Core pipe write: broken pipe".into())
+            },
+        );
+        assert_eq!(dispatches, 1);
+        assert_eq!(write_fail["code"], "core_unreachable");
+        assert_eq!(session, None);
+
+        // Next request reconnects cleanly.
+        let recovered = dispatch_session_message(
+            &mut session,
+            &json!({"op": "ping"}),
+            || {
+                opened += 1;
+                Ok(opened)
+            },
+            |active, _| Ok(json!({"ok": true, "session": *active})),
+        );
+        assert_eq!(recovered["ok"], true);
+        assert_eq!(recovered["session"], 3);
+        assert_eq!(session, Some(3));
+    }
+
+    #[test]
+    fn transport_error_response_clears_cached_session() {
+        let mut session = Some(1u32);
+        let response = dispatch_session_message(
+            &mut session,
+            &json!({"op": "offer"}),
+            || Ok(2u32),
+            |_, _| Ok(json!({"ok": false, "transport_error": true, "error": "pipe closed"})),
+        );
+        assert_eq!(response["transport_error"], true);
+        assert_eq!(session, None);
+
+        let mut session = Some(1u32);
+        let response = dispatch_session_message(
+            &mut session,
+            &json!({"op": "workbench_status"}),
+            || Ok(2u32),
+            |_, _| Ok(json!({"ok": false, "code": "core_unreachable", "error": "eof"})),
+        );
+        assert_eq!(response["code"], "core_unreachable");
+        assert_eq!(session, None);
     }
 }

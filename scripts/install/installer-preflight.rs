@@ -1,4 +1,4 @@
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -74,12 +74,25 @@ fn target_name(name: &str) -> bool {
             | "hls-native-engine.exe"
     ) || name == "hlsdownloadernativehost.exe"
 }
+const CORE_PIPE_ENV: &str = "HLS_V7_PIPE";
+const PLAYER_CHILD_ENV: &str = "HLS_V7_PLAYER_CHILD";
+
 fn client_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     matches!(
         name.as_str(),
         "hlsdownloader.exe" | "hlsdownloaderpresenter.exe" | "hlsdownloadercli.exe"
     ) || name == "hlsdownloadernativehost.exe"
+}
+fn is_desktop_window_client(name: &str) -> bool {
+    name.eq_ignore_ascii_case("HLSDownloader.exe")
+        || name.eq_ignore_ascii_case("HLSDownloaderPresenter.exe")
+}
+fn is_player_child_env(block: &[u16]) -> bool {
+    environment_value(block, PLAYER_CHILD_ENV).as_deref() == Some("1")
+}
+fn requires_core_checkpoint(name: &str, player_child: bool) -> bool {
+    target_name(name) && !client_name(name) && !player_child
 }
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -326,10 +339,9 @@ mod windows {
                 .fold(0, |value, unit| value << 16 | usize::from(*unit)),
         )
     }
-    /// The pipe a running Core was started with (`HLS_V7_PIPE`), read from its
-    /// own environment. `None` means the default pipe or an unreadable process.
+    /// Reads the raw UTF-16 environment block of a running x64 process from its PEB.
     #[cfg(target_pointer_width = "64")]
-    fn core_pipe(pid: u32) -> Option<String> {
+    fn process_env_block(pid: u32) -> Option<Vec<u16>> {
         const VM_READ: u32 = 0x0010;
         const QUERY_INFORMATION: u32 = 0x0400;
         let process = open(pid, VM_READ | QUERY_INFORMATION).ok()??;
@@ -353,11 +365,23 @@ mod windows {
         let size = read_pointer(process.0, parameters + 0x3f0)?.min(1 << 20);
         let mut block = vec![0u16; size / 2];
         read_memory(process.0, environment, &mut block)?;
-        environment_value(&block, "HLS_V7_PIPE")
+        Some(block)
     }
     #[cfg(not(target_pointer_width = "64"))]
-    fn core_pipe(_pid: u32) -> Option<String> {
+    fn process_env_block(_pid: u32) -> Option<Vec<u16>> {
         None
+    }
+    pub(super) fn process_env(pid: u32, key: &str) -> Option<String> {
+        let block = process_env_block(pid)?;
+        environment_value(&block, key)
+    }
+    /// The pipe a running Core was started with (`HLS_V7_PIPE`), read from its
+    /// own environment. `None` means the default pipe or an unreadable process.
+    fn core_pipe(pid: u32) -> Option<String> {
+        process_env(pid, CORE_PIPE_ENV)
+    }
+    fn is_player_child(pid: u32) -> bool {
+        process_env_block(pid).is_some_and(|block| is_player_child_env(&block))
     }
     fn checkpoint_pipe(process: &Process) -> Result<Option<(OwnedHandle, File)>, String> {
         let Some(owner) = open(process.pid, 0)? else {
@@ -552,7 +576,7 @@ mod windows {
         }
         let desktops: Vec<_> = initial
             .iter()
-            .filter(|p| p.name.eq_ignore_ascii_case("HLSDownloader.exe"))
+            .filter(|p| is_desktop_window_client(&p.name))
             .map(|p| p.pid)
             .collect();
         if !desktops.is_empty() {
@@ -568,15 +592,24 @@ mod windows {
             terminate(process, root)?;
         }
         // Never force-stop a resident Core: its command must save the checkpoint.
-        let endpoints = processes(root)?
-            .iter()
-            .filter(|process| !client_name(&process.name))
-            .map(checkpoint_pipe)
-            .collect::<Result<Vec<_>, _>>()?;
+        // Skip isolated `--player-process` children (`HLS_V7_PLAYER_CHILD=1`) which
+        // never open a Core pipe and exit when their parent Core shuts down.
+        let mut endpoints = Vec::new();
+        for process in processes(root)? {
+            let player_child = !client_name(&process.name) && is_player_child(process.pid);
+            if player_child {
+                let _ = writeln!(log, "helper stage=skip-player-child pid={}", process.pid);
+                continue;
+            }
+            if requires_core_checkpoint(&process.name, false) {
+                endpoints.push(checkpoint_pipe(&process)?);
+            }
+        }
         for (owner, pipe) in endpoints.into_iter().flatten() {
             checkpoint(pipe, owner, log)?;
         }
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let wait_started = Instant::now();
+        let deadline = wait_started + Duration::from_secs(12);
         let mut last_error = String::new();
         while Instant::now() < deadline {
             let remaining = match processes(root) {
@@ -601,6 +634,15 @@ mod windows {
                     Err(error) => last_error = error,
                 }
             } else {
+                // Only terminate orphaned `--player-process` children after a grace window;
+                // never force-terminate a resident Core.
+                if wait_started.elapsed() >= Duration::from_secs(1) {
+                    for process in &remaining {
+                        if !client_name(&process.name) && is_player_child(process.pid) {
+                            let _ = terminate(process, root);
+                        }
+                    }
+                }
                 last_error = format!(
                     "仍有安装目录所属进程: {:?}",
                     remaining.iter().map(|p| p.pid).collect::<Vec<_>>()
@@ -653,5 +695,31 @@ mod tests {
         assert_eq!(environment_value(&block, "HLS_V7_CORE_BIND"), None);
         let empty: Vec<u16> = "HLS_V7_PIPE=\0\0".encode_utf16().collect();
         assert_eq!(environment_value(&empty, "HLS_V7_PIPE"), None);
+    }
+    #[test]
+    fn player_child_and_desktop_window_classification_are_accurate() {
+        let player_block: Vec<u16> = "A=1\0hls_v7_player_child=1\0\0".encode_utf16().collect();
+        let zero_block: Vec<u16> = "HLS_V7_PLAYER_CHILD=0\0\0".encode_utf16().collect();
+        let plain_block: Vec<u16> = "HLS_V7_PIPE=\\\\.\\pipe\\test\0\0"
+            .encode_utf16()
+            .collect();
+        assert!(is_player_child_env(&player_block));
+        assert!(!is_player_child_env(&zero_block));
+        assert!(!is_player_child_env(&plain_block));
+
+        assert!(is_desktop_window_client("HLSDownloader.exe"));
+        assert!(is_desktop_window_client("hlsdownloaderpresenter.exe"));
+        assert!(!is_desktop_window_client("HLSDownloaderEngine.exe"));
+        assert!(!is_desktop_window_client("HLSDownloaderNativeHost.exe"));
+
+        assert!(requires_core_checkpoint("HLSDownloaderEngine.exe", false));
+        assert!(!requires_core_checkpoint("HLSDownloaderEngine.exe", true));
+        assert!(!requires_core_checkpoint("HLSDownloaderPresenter.exe", false));
+    }
+    #[cfg(all(windows, target_pointer_width = "64"))]
+    #[test]
+    fn current_process_env_lookup_reads_systemroot_from_peb() {
+        assert!(windows::process_env(std::process::id(), "systemroot")
+            .is_some_and(|value| !value.is_empty()));
     }
 }

@@ -95,7 +95,7 @@ export default defineContentScript({
     // player (which otherwise leaves the overlay in “正在识别” forever).
     const earlyResourceEvents: Array<{ url: string; mimeType?: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl?: string; responseIdentity?: Record<string, string> }> = []
     const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download'; sourcePageUrl?: string }> = []
-    const earlyRuntimeMessages: any[] = []
+    const earlyRuntimeMessages: Array<{ message: any; sendResponse?: (value?: unknown) => void }> = []
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
       if (contentReady) return
@@ -133,12 +133,14 @@ export default defineContentScript({
         requestActivation()
       }
     }
-    const earlyRuntimeListener = (message: any) => {
-      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel', 'download-error'].includes(String(message?.type || ''))) return
-      if (message.type === 'captured-resource' && !message.resource?.url) return
-      earlyRuntimeMessages.push(message)
+    const earlyRuntimeListener = (message: any, _sender?: unknown, sendResponse?: (value?: unknown) => void) => {
+      const kind = String(message?.type || '')
+      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel', 'download-error', 'rescan-media'].includes(kind)) return
+      if (kind === 'captured-resource' && !message.resource?.url) return
+      earlyRuntimeMessages.push({ message, sendResponse: kind === 'rescan-media' ? sendResponse : undefined })
       if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
       requestActivation()
+      if (kind === 'rescan-media') return true
     }
     const srcdocPartitionContextListener = (message: any, _sender: any, sendResponse?: (response?: unknown) => void) => {
       if (message?.type !== 'srcdoc-partition-context') return
@@ -1487,7 +1489,7 @@ export default defineContentScript({
     const resourceObserver = new PerformanceObserver(list => list.getEntries().forEach(entry => add(entry.name)))
     resourceObserver.observe({ type: 'resource', buffered: true })
     ctx.onInvalidated(() => resourceObserver.disconnect())
-    const handleRuntimeMessage = (message: any) => {
+    const handleRuntimeMessage = (message: any, _sender?: unknown, sendResponse?: (value?: unknown) => void) => {
       if (message?.type === 'download-error') {
         selectionMode = true
         selectionResourceIds = null
@@ -1561,9 +1563,13 @@ export default defineContentScript({
       if (message?.type === 'rescan-media') {
         // A popup-initiated rescan must collect fresh page evidence without
         // forcing the larger in-page panel open. Replay early MAIN-world MSE
-        // observations, re-read current media elements, then persist/render.
+        // observations, re-read current media elements (including shadow roots), then persist/render.
         window.dispatchEvent(new Event('__hls_downloader_replay__'))
-        document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
+        const scannedMedia = new Set<HTMLMediaElement>([
+          ...document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio'),
+          ...currentVideos(),
+        ])
+        scannedMedia.forEach(media => {
           mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['manual_rescan'], mediaOwner(media), 0.98))
         })
         document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
@@ -1573,14 +1579,18 @@ export default defineContentScript({
         performance.getEntriesByType('resource').forEach(entry => add(entry.name))
         syncPlayingVideos()
         scheduleRender()
-        return Promise.all([...pendingResourceWrites]).then(() => ({ ok: true }))
+        void Promise.all([...pendingResourceWrites]).then(
+          () => sendResponse?.({ ok: true }),
+          () => sendResponse?.({ ok: false }),
+        )
+        return true
       }
     }
     browser.runtime.onMessage.addListener(handleRuntimeMessage)
     ctx.onInvalidated(() => browser.runtime.onMessage.removeListener(handleRuntimeMessage))
     contentReady = true
     browser.runtime.onMessage.removeListener(earlyRuntimeListener)
-    earlyRuntimeMessages.splice(0).forEach(handleRuntimeMessage)
+    earlyRuntimeMessages.splice(0).forEach(entry => handleRuntimeMessage(entry.message, undefined, entry.sendResponse))
     let currentPageUrl = pageKey(location.href)
     function loadPageResources(pageUrl: string, scope?: 'tab') {
       void runtimeMessage({ type: 'list', pageUrl, ...(scope ? { scope } : {}) }).then((stored: MediaResource[]) => {

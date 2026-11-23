@@ -25,9 +25,28 @@ pub fn default_v7_database_path() -> PathBuf {
 }
 
 pub fn default_v7_download_dir() -> PathBuf {
-    if let Some(root) = env_override("HLS_V7_DOWNLOAD_DIR") {
+    default_v7_download_dir_with(
+        env_override("HLS_V7_DOWNLOAD_DIR"),
+        portable_v7_root(),
+        system_downloads_folder,
+    )
+}
+
+fn default_v7_download_dir_with(
+    env_dir: Option<PathBuf>,
+    portable_root: Option<PathBuf>,
+    system_downloads: impl FnOnce() -> PathBuf,
+) -> PathBuf {
+    if let Some(root) = env_dir {
         return root;
     }
+    if let Some(root) = portable_root {
+        return root.join("downloads");
+    }
+    system_downloads()
+}
+
+fn system_downloads_folder() -> PathBuf {
     #[cfg(windows)]
     if let Some(path) = windows_downloads_folder() {
         return path;
@@ -96,6 +115,27 @@ mod tests {
         assert_eq!(
             super::nonempty_path(Some(OsString::from(r"C:\downloads"))),
             Some(PathBuf::from(r"C:\downloads"))
+        );
+    }
+
+    #[test]
+    fn portable_mode_uses_portable_downloads_unless_overridden_by_env() {
+        let system = || PathBuf::from(r"C:\Users\demo\Downloads");
+        assert_eq!(
+            super::default_v7_download_dir_with(
+                Some(PathBuf::from(r"E:\custom")),
+                Some(PathBuf::from(r"D:\Portable")),
+                system,
+            ),
+            PathBuf::from(r"E:\custom")
+        );
+        assert_eq!(
+            super::default_v7_download_dir_with(None, Some(PathBuf::from(r"D:\Portable")), system),
+            PathBuf::from(r"D:\Portable\downloads")
+        );
+        assert_eq!(
+            super::default_v7_download_dir_with(None, None, system),
+            PathBuf::from(r"C:\Users\demo\Downloads")
         );
     }
 }

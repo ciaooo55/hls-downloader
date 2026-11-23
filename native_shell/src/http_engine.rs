@@ -724,14 +724,18 @@ fn probe_resource_response(job: &Job) -> Result<(ResourceProbe, FetchResult), En
     if fetched.status != 200 && fetched.status != 206 {
         return Err(EngineError::Failed(format!("HTTP {}", fetched.status)));
     }
-    let total = fetched
-        .content_range
-        .as_deref()
-        .and_then(parse_content_range)
-        .and_then(|(_, _, total)| total)
-        .or(fetched.content_length);
-    let accept_ranges = fetched.status == 206
-        && (fetched.accept_ranges || fetched.content_range.is_some() || total.is_some());
+    let total = if fetched.content_encoding {
+        None
+    } else if fetched.status == 206 {
+        fetched
+            .content_range
+            .as_deref()
+            .and_then(parse_content_range)
+            .and_then(|(_, _, total)| total)
+    } else {
+        fetched.content_length
+    };
+    let accept_ranges = fetched.status == 206 && total.is_some() && !fetched.content_encoding;
     Ok((
         ResourceProbe {
             total,
@@ -814,7 +818,10 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                     }
                     // A 200 already owns the complete entity. Do not consume a
                     // one-use URL again merely because its server ignores Range.
-                    if response.status == 200 && attempt.resume_from == 0 {
+                    if response.status == 200
+                        && attempt.resume_from == 0
+                        && !response.content_encoding
+                    {
                         initial_response = Some(response);
                     }
                 }
@@ -1407,6 +1414,16 @@ fn download_sequential(
     }
     if fetched.status != 200 && fetched.status != 206 {
         return Err(EngineError::Failed(format!("HTTP {}", fetched.status)));
+    }
+    if fetched.content_encoding {
+        if resume_from > 0 || fetched.status == 206 {
+            return Err(EngineError::RangeUnsupported(
+                "server returned Content-Encoding on byte range".into(),
+            ));
+        }
+        return Err(EngineError::Failed(
+            "server returned unexpected Content-Encoding".into(),
+        ));
     }
     if fetched.status == 206 {
         require_content_range_start(fetched.content_range.as_deref(), resume_from)?;
@@ -2358,6 +2375,11 @@ fn fetch_range(
                 continue;
             }
         };
+        if fetched.content_encoding && (fetched.status == 200 || fetched.status == 206) {
+            return Err(EngineErrorCode::RangeUnsupported(
+                "server returned Content-Encoding on byte range".into(),
+            ));
+        }
         if fetched.status == 200 {
             // 服务器忽略 Range 返回整包。只有当这次下载本来没有任何已保留片段、
             // 且响应身份与任务一致（或无身份可校验）时，才能断定"这只是不支持 Range 的服务器"，
@@ -3478,8 +3500,11 @@ fn fetch_via_curl_impersonate(
         let mut command = std::process::Command::new(exe);
         command
             // Ignore user curlrc: redirects and credential scope belong to Core.
-            .arg("--disable")
-            .arg("--compressed")
+            .arg("--disable");
+        if range.is_none() {
+            command.arg("--compressed");
+        }
+        command
             .arg("--impersonate")
             .arg("chrome146")
             .arg("-sS")
@@ -3503,7 +3528,12 @@ fn fetch_via_curl_impersonate(
             command.arg("-H").arg(format!("{key}: {value}"));
         }
         if let Some(range) = range {
+            command.arg("-H").arg("Accept-Encoding: identity");
             command.arg("-H").arg(format!("Range: {range}"));
+            let validator = range_validator(job);
+            if !validator.is_empty() {
+                command.arg("-H").arg(format!("If-Range: {validator}"));
+            }
         }
         command.args(curl_request_args(job, headers));
         match proxy_route(&job.proxy) {
@@ -3639,9 +3669,11 @@ fn fetch_via_curl_impersonate(
         let meta = parse_header_meta(&head);
         record_download_type(job, status, &head);
         body.limit = job.curl_body_limit;
-        // --compressed returns decoded bytes, so the wire length cannot be
-        // applied to them. A Content-Range still bounds a requested entity.
-        let content_length = if meta.content_encoding {
+        // --compressed returns decoded bytes only when range.is_none(), so the
+        // wire Content-Length cannot be applied to decoded streams. For range
+        // requests we omit --compressed and keep the raw wire length + flag.
+        let curl_decoded = range.is_none() && meta.content_encoding;
+        let content_length = if curl_decoded {
             None
         } else {
             meta.content_length
@@ -3667,7 +3699,7 @@ fn fetch_via_curl_impersonate(
             content_range: meta.content_range,
             content_length,
             content_type: meta.content_type,
-            content_encoding: false,
+            content_encoding: range.is_some() && meta.content_encoding,
             retry_after: meta.retry_after,
             etag: meta.etag,
             last_modified: meta.last_modified,
@@ -8654,8 +8686,13 @@ mod tests {
             job.curl_body_limit = Some(8);
             let worker_job = job.clone();
             let (done_tx, done_rx) = mpsc::channel();
+            let worker_range = if case.starts_with("gzip-") {
+                None
+            } else {
+                Some("bytes=0-7")
+            };
             let worker = thread::spawn(move || {
-                let result = fetch_via_curl_impersonate(&worker_job, Some("bytes=0-7"))
+                let result = fetch_via_curl_impersonate(&worker_job, worker_range)
                     .unwrap()
                     .and_then(|mut fetched| {
                         let mut bytes = Vec::new();
@@ -9265,5 +9302,33 @@ mod tests {
         assert_eq!(fs::read(&job.output).unwrap(), b"keep");
         fs::remove_dir_all(dir).unwrap();
         let _ = fs::remove_dir_all(case);
+    }
+
+    #[test]
+    fn probe_206_unknown_total_falls_back_to_sequential_instead_of_one_byte_total() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/*\r\nContent-Length: 1\r\nConnection: close\r\n\r\nX"
+                );
+            }
+        });
+        let (job, dir) = temp_job(&format!("http://{addr}/stream.bin"), false, 0, 4);
+        let (probe, _fetched) = probe_resource_response(&job).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            probe.total, None,
+            "206 with Content-Range bytes 0-0/* must not treat 1-byte Content-Length as total size"
+        );
+        assert!(
+            !probe.accept_ranges,
+            "206 with unknown total length must disable parallel range splitting"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

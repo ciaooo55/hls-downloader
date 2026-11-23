@@ -580,8 +580,8 @@ impl PersistentCore {
             }
         }
         if let Some(last) = events.last() {
-            // The store wrote this sequence as the checkpoint.
-            self.reserved_sequence = last.sequence;
+            // The store checkpoint is strictly monotonic; never regress reserved_sequence.
+            self.reserved_sequence = self.reserved_sequence.max(last.sequence);
         }
         self.notify_committed(events);
     }
@@ -1724,10 +1724,9 @@ mod tests {
         core.persisted_progress.get_mut("task-1").unwrap().at = aged;
         core.handle(active_progress(300)).unwrap();
         assert_eq!(stored_bytes(&core), 300);
-        assert_eq!(
-            core.store().latest_sequence().unwrap(),
-            core.latest_sequence()
-        );
+        // The event checkpoint is monotonic so persisting progress never
+        // regresses a previously reserved volatile sequence window.
+        assert!(core.store().latest_sequence().unwrap() >= core.latest_sequence());
         // A stage change inside the interval is written too.
         let merging = CoreCommand::UpdateProgress {
             task_id: "task-1".into(),

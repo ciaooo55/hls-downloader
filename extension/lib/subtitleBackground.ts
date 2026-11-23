@@ -246,7 +246,18 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
     if (session.capture === 'prefetch' || !session.clock.playing && !finalFlush) return { ok: true }
     const clock = session.clock
     const at = Number(message.capturedAt)
-    if (!Number.isFinite(at) || !finalFlush && (Math.abs(Date.now() - at) > 1500 || Math.abs(at - clock.at) > 1500)) throw new Error('字幕音频或播放器时钟已过期，请重新开始')
+    if (!Number.isFinite(at) || (!finalFlush && Math.abs(Date.now() - at) > 1500)) {
+      throw new Error('字幕音频或播放器时钟已过期，请重新开始')
+    }
+    if (!finalFlush && Math.abs(at - clock.at) > 1500) {
+      // MV3 worker wake-up or background-tab timer throttling can briefly lag clock.at
+      // behind offscreen PCM chunks (heartbeat persists every 5s). Skip transient gaps
+      // until the next subtitle-clock tick; only fail on sustained clock loss (>12s).
+      if (Math.abs(at - clock.at) > 12_000) {
+        throw new Error('字幕音频或播放器时钟已过期，请重新开始')
+      }
+      return { ok: true }
+    }
     const position = finalFlush
       ? Math.max(0, clock.position - .25 * clock.rate)
       : Math.max(0, clock.position + (at - clock.at) / 1000 * clock.rate - .25 * clock.rate)
@@ -331,6 +342,7 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
         const next: Clock = { position: Number(message.position), rate: Number(message.rate), playing: message.playing === true,
           epoch: Number(message.epoch), at: Date.now() }
         if (!Number.isFinite(next.position) || !Number.isFinite(next.rate) || next.rate <= 0 || !Number.isSafeInteger(next.epoch)) return { ok: false }
+        if (next.epoch < live.epoch) return { ok: true }
         live.clock = next
         if (!live.started) return { ok: true }
         if (live.epoch !== next.epoch) {

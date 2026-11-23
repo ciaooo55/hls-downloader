@@ -72,6 +72,12 @@ const GET_BROWSER_CACHE_VALIDATORS = new Set([
 const CROSS_ORIGIN_REDIRECT_CONTEXT_HEADERS = new Set(['referer', 'origin', 'user-agent'])
 const ADAPTIVE_MANIFEST_PATH = /\.(?:m3u8?|mpd)$/i
 const VOLATILE_MEDIA_QUERY = /^(?:token|auth|authorization|signature|sig|expires?|expiry|policy|key-pair-id|hdnea|hmac|jwt|session|sessionid|access[_-]?key|x-amz-.+)$/i
+const LL_HLS_RELOAD_QUERY = new Set(['_hls_msn', '_hls_part', '_hls_skip'])
+
+function canonicalLlHlsUrl(url: string): string {
+  const clean = url.split('#', 1)[0]
+  return removeRawQueryParameters(clean, LL_HLS_RELOAD_QUERY)
+}
 
 export interface DownloadLike {
   url: string
@@ -326,6 +332,17 @@ export class RequestChainStore {
     successfulOnly = false,
     match: 'media' | 'exact' = 'media',
   ): RequestChain | undefined {
+    const resolved = this.resolve(download, now, preferredTabId, successfulOnly, match)
+    return resolved.kind === 'found' ? resolved.chain : undefined
+  }
+
+  resolve(
+    download: DownloadLike,
+    now = Date.now(),
+    preferredTabId?: number,
+    successfulOnly = false,
+    match: 'media' | 'exact' = 'media',
+  ): { kind: 'found', chain: RequestChain } | { kind: 'ambiguous' } | { kind: 'none' } {
     this.cleanup(now)
     const identity = responseIdentity(name => download.responseIdentity?.[name])
     const identityEntries = Object.entries(identity)
@@ -334,7 +351,14 @@ export class RequestChainStore {
     // Media panels can refresh signed URLs; a browser DownloadItem must keep
     // the exact request it owns. Its final URL also disambiguates shared
     // gateways that redirect successive downloads to different files.
-    const key = match === 'exact' ? (url: string) => url.split('#', 1)[0] : mediaRequestKey
+    // For responseIdentity lookups without an explicit DownloadItem/requestId,
+    // strip LL-HLS reload params (_hls_msn/_hls_part/_hls_skip) so canonical
+    // HLS URLs still match their live reload chain.
+    const key = match === 'exact'
+      ? (hasResponseIdentity && !download.requestId && !download.finalUrl
+        ? canonicalLlHlsUrl
+        : (url: string) => url.split('#', 1)[0])
+      : mediaRequestKey
     const candidates = (match === 'exact' && download.finalUrl
       ? [download.finalUrl]
       : [download.url, download.finalUrl])
@@ -357,8 +381,8 @@ export class RequestChainStore {
     }
     // 相同地址不代表相同登录身份；缺少来源证据时不能选另一标签页的最新请求。
     const first = matches[0]
-    if (!first) return undefined
-    if (matches.some(chain => chain.tabId !== first.tabId || chain.frameId !== first.frameId)) return undefined
+    if (!first) return { kind: 'none' }
+    if (matches.some(chain => chain.tabId !== first.tabId || chain.frameId !== first.frameId)) return { kind: 'ambiguous' }
     // Identical URL/metadata cannot identify two concurrent authenticated
     // responses. Keep the body unresolved instead of borrowing newer headers.
     if (hasResponseIdentity && !download.requestId && matches.length > 1) {
@@ -366,14 +390,41 @@ export class RequestChainStore {
         chain.method, chain.requestBody, Object.entries(chain.requestHeaders).sort(([left], [right]) => left.localeCompare(right)),
       ])
       const identity = requestIdentity(first)
-      if (matches.some(chain => requestIdentity(chain) !== identity)) return undefined
+      if (matches.some(chain => requestIdentity(chain) !== identity)) return { kind: 'ambiguous' }
     }
-    return matches.length === 1 ? first : matches.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    const chain = matches.length === 1 ? first : matches.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    return { kind: 'found', chain }
   }
 
-  contextsForPage(tabId: number, pageUrl: string, now = Date.now(), limit = 32, frameId?: number): RequestChain[] {
+  contextsForPage(
+    tabId: number,
+    pageUrl: string,
+    now = Date.now(),
+    limit = 32,
+    frameId?: number,
+    chainPageUrl?: string,
+  ): RequestChain[] {
     this.cleanup(now)
     const page = normalized(pageUrl)
+    const pageOrigin = httpOrigin(pageUrl)
+    const framePage = chainPageUrl ? normalized(chainPageUrl) : ''
+    const frameOrigin = chainPageUrl ? httpOrigin(chainPageUrl) : ''
+    const matchesTarget = (candidateUrl: string, target: string, targetOrigin: string): boolean => {
+      if (!target) return false
+      const norm = normalized(candidateUrl)
+      if (!norm) return false
+      if (norm === target) return true
+      // Chromium webRequest provides origin-only `initiator` (no path) and
+      // `strict-origin-when-cross-origin` sends origin-only `Referer: https://host/`.
+      const origin = httpOrigin(candidateUrl)
+      if (!origin || origin !== targetOrigin) return false
+      try {
+        const parsed = new URL(candidateUrl)
+        return (parsed.pathname === '' || parsed.pathname === '/') && !parsed.search
+      } catch {
+        return false
+      }
+    }
     const supportedTypes = new Set(['xmlhttprequest', 'media', 'other'])
     const selected = new Map<string, RequestChain>()
     const candidates = [...this.chains.values()]
@@ -381,9 +432,14 @@ export class RequestChainStore {
       .filter(chain => frameId === undefined || frameId < 0 || chain.frameId === frameId)
       .filter(chain => isMediaResponseStatus(chain.statusCode) || (chain.statusCode === 0 && !chain.failedAt))
       .filter(chain => {
-        if (!page) return true
-        return normalized(chain.pageUrl) === page
-          || normalized(chain.requestHeaders.referer || '') === page
+        if (!page && !framePage) return true
+        const referer = chain.requestHeaders.referer || ''
+        return matchesTarget(chain.pageUrl, page, pageOrigin)
+          || matchesTarget(referer, page, pageOrigin)
+          || (Boolean(framePage) && (
+            matchesTarget(chain.pageUrl, framePage, frameOrigin)
+            || matchesTarget(referer, framePage, frameOrigin)
+          ))
       })
       // A pending retry must not replace a confirmed track/key identity. Its
       // captured headers remain a fallback for URLs with no response yet.

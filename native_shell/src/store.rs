@@ -477,7 +477,7 @@ impl CoreStore {
                 transaction
                     .execute(
                         "INSERT INTO event_checkpoints(checkpoint_id, sequence) VALUES (1, ?1)\
-                     ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = excluded.sequence",
+                     ON CONFLICT(checkpoint_id) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)",
                         params![sequence as i64],
                     )
                     .map_err(|error| format!("persist Core event checkpoint: {error}"))?;
@@ -1740,5 +1740,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.setting_string("site_rules", "").unwrap(), "[\"b\"]");
+    }
+
+    #[test]
+    fn event_checkpoint_never_regresses_below_reserved_sequence() {
+        let mut store = CoreStore::in_memory().unwrap();
+        store.reserve_event_sequence(500).unwrap();
+        let envelope = EventEnvelope {
+            sequence: 12,
+            event: CoreEvent::Toast {
+                level: "info".into(),
+                message: "hello".into(),
+            },
+        };
+        store
+            .apply_events_spec_and_settings(&[envelope], None, None, None)
+            .unwrap();
+        let checkpoint: i64 = store
+            .connection
+            .query_row(
+                "SELECT sequence FROM event_checkpoints WHERE checkpoint_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            checkpoint, 500,
+            "persisting an earlier sequence must not overwrite a higher reserved checkpoint"
+        );
     }
 }

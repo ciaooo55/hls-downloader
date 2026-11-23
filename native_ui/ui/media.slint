@@ -130,7 +130,12 @@ export component MediaSurface inherits Rectangle {
                     HotComboBox {
                         a11y-label: "播放速度";
                         model: ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "2×", "4×"];
+                        property <float> bound: root.state.speed;
                         current-index: root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
+                        changed bound => {
+                            self.current-index = root.state.speed == 0.25 ? 0 : root.state.speed == 0.5 ? 1 : root.state.speed == 0.75 ? 2 : root.state.speed == 1 ? 3 : root.state.speed == 1.25 ? 4 : root.state.speed == 1.5 ? 5 : root.state.speed == 2 ? 6 : root.state.speed == 4 ? 7 : -1;
+                            self.current-value = "" + root.state.speed + "×";
+                        }
                         current-value: "" + root.state.speed + "×";
                         min-width: 82px; preferred-width: 82px; height: Tokens.control-height; horizontal-stretch: 0;
                         selected(value) => { root.action("speed:" + (self.current-index == 0 ? "0.25" : self.current-index == 1 ? "0.5" : self.current-index == 2 ? "0.75" : self.current-index == 3 ? "1" : self.current-index == 4 ? "1.25" : self.current-index == 5 ? "1.5" : self.current-index == 6 ? "2" : "4")); }
@@ -141,9 +146,21 @@ export component MediaSurface inherits Rectangle {
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     Text { text: "音轨"; color: Tokens.muted; vertical-alignment: center; }
-                    HotComboBox { model: root.state.audio; a11y-label: "音轨"; min-width: 136px; height: Tokens.control-height; current-index: root.state.audio-index; enabled: root.state.audio.length > 0; selected(value) => { root.audio(self.current-index); } }
+                    HotComboBox {
+                        model: root.state.audio; a11y-label: "音轨"; min-width: 136px; height: Tokens.control-height; enabled: root.state.audio.length > 0;
+                        property <int> bound: root.state.audio-index;
+                        current-index: root.state.audio-index;
+                        changed bound => { self.current-index = root.state.audio-index; }
+                        selected(value) => { root.audio(self.current-index); }
+                    }
                     Text { text: "字幕"; color: Tokens.muted; vertical-alignment: center; }
-                    HotComboBox { model: root.state.subtitles; a11y-label: "字幕"; min-width: 104px; height: Tokens.control-height; current-index: root.state.subtitle-index; selected(value) => { root.subtitle(self.current-index); } }
+                    HotComboBox {
+                        model: root.state.subtitles; a11y-label: "字幕"; min-width: 104px; height: Tokens.control-height;
+                        property <int> bound: root.state.subtitle-index;
+                        current-index: root.state.subtitle-index;
+                        changed bound => { self.current-index = root.state.subtitle-index; }
+                        selected(value) => { root.subtitle(self.current-index); }
+                    }
                     WorkbenchButton { label: root.state.translating ? "停止翻译" : "字幕翻译"; icon: "subtitle"; outlined: true; icon-only: true; clicked => { root.action("translate"); } }
                     Text { text: root.notice; color: Tokens.warn; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; Tooltip { text: @markdown("\{root.notice}"); } }
                 }

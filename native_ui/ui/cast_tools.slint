@@ -69,7 +69,13 @@ export component CastWindow inherits Window {
                     if root.locked-source: Text { text: root.source-label; color: Tokens.ink; wrap: word-wrap; }
                     if !root.locked-source: VerticalLayout {
                         spacing: Tokens.control-gap;
-                        HotComboBox { height: Tokens.control-height; model: ["媒体链接", "本机文件"]; current-index: root.source-kind == "file" ? 1 : 0; enabled: !root.busy; selected(value) => { root.source-kind = self.current-index == 1 ? "file" : "url"; } }
+                        HotComboBox {
+                            height: Tokens.control-height; model: ["媒体链接", "本机文件"]; enabled: !root.busy;
+                            property <string> bound: root.source-kind;
+                            current-index: root.source-kind == "file" ? 1 : 0;
+                            changed bound => { self.current-index = root.source-kind == "file" ? 1 : 0; }
+                            selected(value) => { root.source-kind = self.current-index == 1 ? "file" : "url"; }
+                        }
                         if root.source-kind == "url": LineEdit { height: Tokens.control-height; text <=> root.url; placeholder-text: "https://…"; enabled: !root.busy; accessible-label: "投送媒体链接"; }
                         if root.source-kind == "file": HorizontalLayout {
                             spacing: Tokens.control-gap;
@@ -80,7 +86,13 @@ export component CastWindow inherits Window {
                     }
                     HorizontalLayout {
                         spacing: 8px;
-                        HotComboBox { height: Tokens.control-height; model: ["DLNA / Chromecast", "TVBox"]; current-index: root.mode == "tvbox" ? 1 : 0; enabled: !root.busy && !root.discovering && !root.browser-request; selected(value) => { root.mode = self.current-index == 1 ? "tvbox" : "cast"; root.action("mode"); } }
+                        HotComboBox {
+                            height: Tokens.control-height; model: ["DLNA / Chromecast", "TVBox"]; enabled: !root.busy && !root.discovering && !root.browser-request;
+                            property <string> bound: root.mode;
+                            current-index: root.mode == "tvbox" ? 1 : 0;
+                            changed bound => { self.current-index = root.mode == "tvbox" ? 1 : 0; }
+                            selected(value) => { root.mode = self.current-index == 1 ? "tvbox" : "cast"; root.action("mode"); }
+                        }
                         HotButton { label: root.discovering ? "正在搜索…" : "搜索设备"; icon: "search"; min-width: 116px; enabled: !root.busy && !root.discovering; clicked => { root.action("scan"); } }
                     }
                     // 设备是单选列表：用选择态（浅蓝底 + 勾），不再用与“发送”主按钮相同的实心主色按钮。

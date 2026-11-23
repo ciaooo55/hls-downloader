@@ -215,8 +215,20 @@ impl SubtitleService {
             if sessions.contains_key(id) {
                 return Err("字幕会话已存在".into());
             }
-            if sessions.len() >= 4 {
+            let active_count = sessions
+                .values()
+                .filter(|s| {
+                    s.state
+                        .lock()
+                        .map(|s| !matches!(s.status, "stopping" | "stopped" | "failed"))
+                        .unwrap_or(false)
+                })
+                .count();
+            if active_count >= 4 {
                 return Err("最多同时翻译四个网页，请先停止其他会话".into());
+            }
+            if sessions.len() >= 12 {
+                return Err("字幕会话正在收尾过多，请稍后重试".into());
             }
             let source = string(request, "source");
             let target = string(request, "target");
@@ -318,12 +330,17 @@ impl SubtitleService {
         if session.owner != owner {
             return Err("字幕会话不属于当前插件".into());
         }
-        session
-            .state
-            .lock()
-            .map_err(|_| "字幕状态不可用")?
-            .last_seen = Instant::now();
-        match string(request, "action") {
+        let action = string(request, "action");
+        {
+            let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+            state.last_seen = Instant::now();
+            if matches!(action, "prepare_audio" | "commit" | "audio" | "reset")
+                && matches!(state.status, "stopping" | "stopped" | "failed")
+            {
+                return Err("字幕会话已停止，请重新开始".into());
+            }
+        }
+        match action {
             "prepare_audio" => {
                 let source = session.audio_source.clone();
                 let player_generation = session.player_generation;
@@ -1628,5 +1645,67 @@ mod tests {
                 assert_eq!(received[0]["id"], received[1]["id"]);
             }).await.expect("subtitle transport test timed out");
         });
+    }
+
+    #[test]
+    fn stopping_sessions_do_not_exhaust_four_session_cap() {
+        let service = SubtitleService::default();
+        let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        {
+            let mut sessions = service.sessions.lock().unwrap();
+            for i in 0..4 {
+                let (tx, _rx) = mpsc::channel(1);
+                sessions.insert(
+                    format!("stopping-{i}"),
+                    Session {
+                        owner: "owner".into(),
+                        input: tx,
+                        stop: Arc::new(Notify::new()),
+                        state: Arc::new(Mutex::new(State {
+                            status: "stopping",
+                            error: String::new(),
+                            epoch: 0,
+                            sequence: 0,
+                            events: VecDeque::new(),
+                            last_seen: Instant::now(),
+                        })),
+                        audio_source: None,
+                        player_generation: None,
+                        decode_active: Arc::new(AtomicBool::new(false)),
+                    },
+                );
+            }
+        }
+        // Attempting to start a 5th session must get past the 4-session cap (and fail
+        // on missing credentials, NOT on "最多同时翻译四个网页").
+        let err = service
+            .dispatch(
+                &core,
+                &json!({
+                    "action": "start",
+                    "session_id": "fresh-session",
+                    "owner": "owner",
+                    "source": "auto",
+                    "target": "zh",
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            !err.contains("最多同时翻译四个网页"),
+            "stopping sessions must not block new sessions: {err}"
+        );
+        // Resetting a stopping session must be rejected rather than resurrecting it.
+        let reset_err = service
+            .dispatch(
+                &core,
+                &json!({
+                    "action": "reset",
+                    "session_id": "stopping-0",
+                    "owner": "owner",
+                    "epoch": 2,
+                }),
+            )
+            .unwrap_err();
+        assert!(reset_err.contains("已停止"), "{reset_err}");
     }
 }
