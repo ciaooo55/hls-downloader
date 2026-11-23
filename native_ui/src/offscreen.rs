@@ -40,10 +40,7 @@ impl OffscreenPlatform {
 
     pub fn from_env() -> Option<Self> {
         let output = PathBuf::from(std::env::var_os("HLS_V7_RENDER_PNG")?);
-        let size = std::env::var("HLS_V7_RENDER_SIZE").ok().and_then(|value| {
-            let (width, height) = value.split_once('x')?;
-            Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
-        });
+        let size = env_render_size();
         let scale = std::env::var("HLS_V7_RENDER_SCALE")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -55,6 +52,12 @@ impl OffscreenPlatform {
             size,
             scale,
         })
+    }
+
+    pub fn sync_workbench_viewport(window: &crate::WorkbenchWindow) {
+        if let Some((width, height)) = env_render_size() {
+            apply_workbench_viewport(window, width, height);
+        }
     }
 
     fn path_for(&self, index: usize) -> PathBuf {
@@ -150,6 +153,21 @@ impl Platform for OffscreenPlatform {
                 .map_err(slint::PlatformError::Other)?;
         }
         Ok(())
+    }
+}
+
+fn env_render_size() -> Option<(f32, f32)> {
+    std::env::var("HLS_V7_RENDER_SIZE").ok().and_then(|value| {
+        let (width, height) = value.split_once('x')?;
+        Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
+    })
+}
+
+pub fn apply_workbench_viewport(window: &crate::WorkbenchWindow, width: f32, height: f32) {
+    if width >= 1.0 && height >= 1.0 {
+        window.set_viewport_width(width);
+        window.set_viewport_height(height);
+        window.invoke_viewport_resized(width);
     }
 }
 
@@ -258,13 +276,7 @@ mod tests {
 
     #[test]
     fn workbench_dialog_inherits_changes_to_reduced_motion() {
-        slint::platform::set_platform(Box::new(OffscreenPlatform {
-            windows: RefCell::new(Vec::new()),
-            output: PathBuf::new(),
-            size: None,
-            scale: 1.0,
-        }))
-        .unwrap();
+        OffscreenPlatform::init_test();
         let workbench = WorkbenchWindow::new().unwrap();
         let dialog = SettingsWindow::new().unwrap();
         for reduce_motion in [true, false] {
@@ -272,5 +284,25 @@ mod tests {
             native_window::inherit_appearance(&dialog, &workbench);
             assert_eq!(dialog.global::<Tokens>().get_reduce_motion(), reduce_motion);
         }
+    }
+
+    #[test]
+    fn offscreen_resize_updates_workbench_viewport_breakpoints() {
+        OffscreenPlatform::init_test();
+        let workbench = WorkbenchWindow::new().unwrap();
+        apply_workbench_viewport(&workbench, 960.0, 540.0);
+        assert_eq!(workbench.get_viewport_width(), 960.0);
+        assert_eq!(workbench.get_viewport_height(), 540.0);
+        assert!(workbench.get_compact_sidebar());
+
+        workbench.show().unwrap();
+        workbench.window().dispatch_event(WindowEvent::Resized {
+            size: LogicalSize::new(1280.0, 720.0),
+        });
+        slint::platform::update_timers_and_animations();
+        assert_eq!(workbench.get_viewport_width(), 1280.0);
+        assert_eq!(workbench.get_viewport_height(), 720.0);
+        assert!(!workbench.get_compact_sidebar());
+        workbench.hide().unwrap();
     }
 }

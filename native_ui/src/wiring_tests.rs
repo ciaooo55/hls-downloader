@@ -594,6 +594,116 @@ fn fullscreen_media_blocks_task_shortcuts_and_routes_escape() {
 }
 
 #[test]
+fn search_focus_blocks_task_shortcuts_and_escape_exits_search() {
+    use crate::WorkbenchWindow;
+    use slint::{
+        platform::{Key, WindowEvent},
+        ComponentHandle, SharedString,
+    };
+    use std::{cell::RefCell, rc::Rc};
+
+    crate::offscreen::OffscreenPlatform::init_test();
+    let ui = WorkbenchWindow::new().unwrap();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let query_edits = Rc::new(RefCell::new(Vec::new()));
+    ui.on_action({
+        let actions = actions.clone();
+        move |action| actions.borrow_mut().push(action.to_string())
+    });
+    ui.on_key_command({
+        let keys = keys.clone();
+        move |key, _, _| keys.borrow_mut().push(key.to_string())
+    });
+    ui.on_query_edited({
+        let query_edits = query_edits.clone();
+        move |query| query_edits.borrow_mut().push(query.to_string())
+    });
+    ui.set_selected_count(1);
+    ui.show().unwrap();
+    let press = |text: SharedString| {
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    // Focus search box via Ctrl+F.
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    press("f".into());
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+    ui.set_query("demo".into());
+
+    // While search has focus, task shortcuts must not fire.
+    for key in [
+        SharedString::from(" "),
+        Key::Return.into(),
+        Key::Delete.into(),
+        Key::UpArrow.into(),
+        Key::DownArrow.into(),
+    ] {
+        press(key);
+    }
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    for key in ["a", "c", "v"] {
+        press(key.into());
+    }
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+    assert!(
+        actions.borrow().is_empty(),
+        "search focus leaked task actions: {:?}",
+        actions.borrow()
+    );
+    assert!(
+        keys.borrow().is_empty(),
+        "search focus leaked key commands: {:?}",
+        keys.borrow()
+    );
+
+    // Escape clears query, emits query-edited(""), and returns focus to keyboard.
+    press(Key::Escape.into());
+    assert_eq!(ui.get_query().as_str(), "");
+    assert_eq!(query_edits.borrow().last().map(String::as_str), Some(""));
+    assert!(keys.borrow().is_empty());
+
+    // Now focus is back on keyboard: task shortcuts work again.
+    press(Key::DownArrow.into());
+    press(" ".into());
+    assert_eq!(*keys.borrow(), ["down", "toggle_pause"]);
+    ui.hide().unwrap();
+}
+
+#[test]
+fn task_editor_advanced_panel_can_collapse_even_with_values() {
+    use crate::TaskEditorWindow;
+
+    crate::offscreen::OffscreenPlatform::init_test();
+    let editor = TaskEditorWindow::new().unwrap();
+    assert!(!editor.get_has_advanced_values());
+    assert!(!editor.get_advanced_expanded());
+
+    editor.set_proxy("http://127.0.0.1:7890".into());
+    assert!(editor.get_has_advanced_values());
+    // Setting an advanced field must not lock advanced-expanded open.
+    assert!(!editor.get_advanced_expanded());
+    editor.set_advanced_expanded(true);
+    assert!(editor.get_advanced_expanded());
+    // Clearing all advanced fields must not snap the panel shut.
+    editor.set_proxy("".into());
+    assert!(!editor.get_has_advanced_values());
+    assert!(editor.get_advanced_expanded());
+    editor.set_advanced_expanded(false);
+    assert!(!editor.get_advanced_expanded());
+}
+
+#[test]
 fn hot_combo_box_one_way_index_bindings_keep_changed_sync() {
     let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
     for entry in std::fs::read_dir(&ui_dir).unwrap() {

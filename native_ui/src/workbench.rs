@@ -403,6 +403,12 @@ impl Workbench {
             }
         });
         let weak = Rc::downgrade(self);
+        self.window.on_inspector_opened(move || {
+            if let Some(this) = weak.upgrade() {
+                this.render_inspector();
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.window.on_place_row(move |id, target| {
             if let Some(this) = weak.upgrade() {
                 let state = this.state.borrow();
@@ -846,6 +852,9 @@ impl Workbench {
     }
 
     fn render_inspector(&self) {
+        if !self.window.get_inspector_open() {
+            return;
+        }
         let state = self.state.borrow();
         let focused = state
             .anchor
@@ -887,8 +896,13 @@ impl Workbench {
             )
             .into(),
         );
+        let connection_header = crate::format_connection_summary(task)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
         self.window
-            .set_inspector_connections(crate::format_connection_summary(task).into());
+            .set_inspector_connections(connection_header.into());
         self.window.set_inspector_diagnostic(
             [
                 task.error_message.clone().unwrap_or_default(),
@@ -1515,7 +1529,10 @@ impl Workbench {
                                 }
                                 CoreEvent::Error { message, .. } => {
                                     editor.set_result_tone("error".into());
-                                    editor.set_result(message.clone().into())
+                                    editor.set_result(message.clone().into());
+                                    if editor.window().is_visible() {
+                                        editor.set_advanced_expanded(true);
+                                    }
                                 }
                                 _ => {}
                             }
@@ -1639,6 +1656,9 @@ impl Workbench {
                         editor.set_busy(false);
                         editor.set_result_tone("error".into());
                         editor.set_result(message.clone().into());
+                        if editor.window().is_visible() {
+                            editor.set_advanced_expanded(true);
+                        }
                     }
                 }
                 if request_id.is_some() && request_id == self.settings_save_id.get() {
@@ -1689,6 +1709,8 @@ impl Workbench {
             editor.set_download_dir(download_dir.clone().into());
             editor.set_legal_accepted(*legal_accepted);
         }
+        let has_advanced = editor.get_has_advanced_values();
+        editor.set_advanced_expanded(has_advanced);
         self.editor_id.set(self.id());
         self.editor_variants.borrow_mut().clear();
         let weak = Rc::downgrade(self);
@@ -1763,8 +1785,11 @@ impl Workbench {
                 let spec = match result {
                     Ok(spec) => spec,
                     Err(error) => {
+                        if error.advanced {
+                            editor.set_advanced_expanded(true);
+                        }
                         editor.set_result_tone("warning".into());
-                        editor.set_result(error.into());
+                        editor.set_result(error.message.into());
                         return;
                     }
                 };
@@ -2407,10 +2432,22 @@ fn task_action_allowed(task: &TaskSnapshot, action: &str) -> bool {
     }
 }
 
-fn editor_spec(editor: &TaskEditorWindow, variants: &[StreamVariant]) -> Result<TaskSpec, String> {
+#[derive(Debug, PartialEq, Eq)]
+struct EditorValidationError {
+    message: String,
+    advanced: bool,
+}
+
+fn editor_spec(
+    editor: &TaskEditorWindow,
+    variants: &[StreamVariant],
+) -> Result<TaskSpec, EditorValidationError> {
     let url = editor.get_url().trim().to_owned();
     if url.is_empty() {
-        return Err("请输入下载地址".into());
+        return Err(EditorValidationError {
+            message: "请输入下载地址".into(),
+            advanced: false,
+        });
     }
     let kind = match editor.get_kind().as_str() {
         "HLS" => ResourceKind::Hls,
@@ -2428,10 +2465,16 @@ fn editor_spec(editor: &TaskEditorWindow, variants: &[StreamVariant]) -> Result<
         .filter(|line| !line.trim().is_empty())
     {
         let Some((name, value)) = line.split_once(':') else {
-            return Err("请求头应为 Name: Value".into());
+            return Err(EditorValidationError {
+                message: "请求头应为 Name: Value".into(),
+                advanced: true,
+            });
         };
         if name.trim().is_empty() {
-            return Err("请求头名称不能为空".into());
+            return Err(EditorValidationError {
+                message: "请求头名称不能为空".into(),
+                advanced: true,
+            });
         }
         headers.insert(name.trim().to_owned(), value.trim().to_owned());
     }
@@ -2747,6 +2790,94 @@ mod file_selection_tests {
         assert!(!task_action_allowed(&task, "play"));
         assert!(task_action_allowed(&task, "cast"));
         assert!(task_action_allowed(&task, "push_tvbox"));
+    }
+
+    #[test]
+    fn editor_spec_marks_header_validation_failures_as_advanced() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let editor = TaskEditorWindow::new().unwrap();
+        let missing_url = editor_spec(&editor, &[]).unwrap_err();
+        assert!(!missing_url.advanced);
+
+        editor.set_url("https://cdn.example.test/video.mp4".into());
+        editor.set_headers("MalformedHeaderWithoutColon".into());
+        let bad_header = editor_spec(&editor, &[]).unwrap_err();
+        assert!(bad_header.advanced);
+    }
+
+    #[test]
+    fn inspector_skips_rebuilds_while_closed_and_shows_single_line_connections_when_opened() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let task = TaskSnapshot {
+            task_id: "insp-1".into(),
+            filename: "movie.mp4".into(),
+            status: "downloading".into(),
+            active_workers: 4,
+            completed_ranges: 1,
+            total_ranges: 4,
+            total_bytes: Some(4 * 1024 * 1024),
+            connection_hint: "动态分段传输中".into(),
+            connection_parts: vec![
+                hls_client::ConnectionPart {
+                    start: 0,
+                    end: 1024 * 1024 - 1,
+                    done: 1024 * 1024,
+                    state: "done".into(),
+                },
+                hls_client::ConnectionPart {
+                    start: 1024 * 1024,
+                    end: 2 * 1024 * 1024 - 1,
+                    done: 512 * 1024,
+                    state: "active".into(),
+                },
+            ],
+            speed_history: vec![100_000, 200_000, 300_000],
+            ..Default::default()
+        };
+        let workbench = Workbench::new(vec![task], 1, true, true).unwrap();
+        workbench.state.borrow_mut().select("insp-1", false, false);
+        workbench.render_selection();
+        // While closed, heavy inspector VecModels must not be rebuilt.
+        assert!(!workbench.window.get_inspector_open());
+        assert_eq!(workbench.window.get_inspector_segments().row_count(), 0);
+        assert_eq!(
+            workbench.window.get_inspector_speed_history().row_count(),
+            0
+        );
+
+        // Opening the inspector via Alt+I immediately renders fresh data with a single-line summary.
+        workbench.window.show().unwrap();
+        workbench
+            .window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Alt.into(),
+            });
+        workbench
+            .window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "i".into() });
+        workbench
+            .window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "i".into() });
+        workbench
+            .window
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                text: slint::platform::Key::Alt.into(),
+            });
+        assert!(workbench.window.get_inspector_open());
+        assert_eq!(workbench.window.get_inspector_title().as_str(), "movie.mp4");
+        assert_eq!(workbench.window.get_inspector_segments().row_count(), 2);
+        assert_eq!(
+            workbench.window.get_inspector_speed_history().row_count(),
+            3
+        );
+        let connections = workbench.window.get_inspector_connections();
+        assert!(!connections.contains('\n'));
+        assert!(connections.contains("4 个活动连接"));
+        workbench.window.hide().unwrap();
     }
 }
 

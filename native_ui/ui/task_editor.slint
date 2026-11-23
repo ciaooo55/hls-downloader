@@ -38,8 +38,8 @@ export component TaskEditorWindow inherits Window {
     in property <string> result-tone: "warning";
     in-out property <bool> busy: false;
     in-out property <bool> advanced-expanded: false;
-    private property <bool> has-advanced-values: root.method != "GET" || root.concurrency != 0 || root.speed-limit != 0 || root.headers != "" || root.cookie != "" || root.proxy != "" || root.body-path != "" || root.checksum != "" || root.mirrors != "" || root.start-at != "" || root.stop-at != "" || (root.queue-id != "" && root.queue-id != "default");
-    private property <bool> show-advanced: root.advanced-expanded || root.has-advanced-values;
+    out property <bool> has-advanced-values: root.method != "GET" || root.concurrency != 0 || root.speed-limit != 0 || root.headers != "" || root.cookie != "" || root.proxy != "" || root.body-path != "" || root.checksum != "" || root.mirrors != "" || root.start-at != "" || root.stop-at != "" || (root.queue-id != "" && root.queue-id != "default");
+    private property <bool> show-advanced: root.advanced-expanded;
     callback action(string);
     VerticalLayout {
         spacing: 0px;
@@ -84,7 +84,7 @@ export component TaskEditorWindow inherits Window {
                         HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "音轨"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.audio; accessible-label: "音轨标识"; placeholder-text: "语言或音轨标识，留空自动选择"; } }
                     }
                 }
-                // 高级选项折叠卡片：默认收起保持界面轻盈；若已填写任意高级字段则自动保持展开。
+                // 高级选项折叠卡片：新建默认收起，已有高级参数时由 Rust 初始展开，用户可随时自由收起或展开。
                 Panel {
                     VerticalLayout {
                         padding: 0px; spacing: 0px;
@@ -104,7 +104,7 @@ export component TaskEditorWindow inherits Window {
                                 mouse-cursor: pointer;
                                 accessible-role: button;
                                 accessible-label: root.show-advanced ? "收起高级选项" : "展开高级选项";
-                                clicked => { root.advanced-expanded = !root.show-advanced; }
+                                clicked => { root.advanced-expanded = !root.advanced-expanded; }
                             }
                         }
                         if root.show-advanced: Rectangle { height: 1px; background: Tokens.hairline; }

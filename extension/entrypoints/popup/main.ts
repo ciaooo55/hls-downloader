@@ -398,6 +398,7 @@ async function main() {
   let settingsBusy: HTMLButtonElement | undefined
   const sending: Record<string, SendState> = {}
   const pushing: Record<string, PushState> = {}
+  let batchRunning = false
   // 同一资源的不同清晰度分别发送，状态必须对应实际链接。
   const actionKey = (item: MediaResource, action = 'download') => JSON.stringify([item.id, downloadSelectionKey(item), action])
   const manualCopy = new Set<string>()
@@ -487,17 +488,20 @@ async function main() {
       }
       const batchTargets = filtered
         .map(resolveSelectedVariant)
-        .filter(candidate => {
-          const state = sending[actionKey(candidate)]
-          return !state || !SEND_LOCKED.has(state)
-        })
+        .filter(candidate => sendClickAction(sending[actionKey(candidate)]) === 'send')
       const batchCount = Math.min(batchTargets.length, 20)
-      batchBtn.disabled = batchCount === 0
-      batchBtn.replaceChildren(icon('download'), el('span', '', batchCount > 0 ? `批量下载 (${batchCount})` : '已全部发送'))
+      batchBtn.disabled = batchRunning || batchCount === 0
+      const batchLabel = batchRunning
+        ? '批量发送中…'
+        : filtered.length === 0
+          ? '批量下载 (0)'
+          : batchCount > 0
+            ? `批量下载 (${batchCount})`
+            : '已全部发送'
+      batchBtn.replaceChildren(icon(batchRunning ? 'scan' : 'download'), el('span', '', batchLabel))
       batchBtn.onclick = () => {
-        for (const target of batchTargets.slice(0, 20)) {
-          void send(target)
-        }
+        if (batchRunning || batchCount === 0) return
+        void sendBatch(batchTargets.slice(0, 20))
       }
     }
     list.replaceChildren()
@@ -834,7 +838,7 @@ async function main() {
     }
   }
 
-  const confirmDownload = async (item: MediaResource, handoffId: string) => {
+  const confirmDownload = async (item: MediaResource, handoffId: string, options?: { preserveError?: boolean }): Promise<string | null> => {
     const key = actionKey(item)
     sending[key] = 'confirming'
     renderList()
@@ -844,19 +848,21 @@ async function main() {
     } catch (reason) {
       // Core 已持久化该交接：读不到状态时只能“核对中”，不能退回可重发的“重试”。
       sending[key] = 'checking'
-      setError(reason instanceof Error ? reason.message : '无法读取下载确认状态')
+      const message = reason instanceof Error ? reason.message : '无法读取下载确认状态'
+      if (!options?.preserveError) setError(message)
       renderList()
-      return
+      return message
     }
     // 取消后保留浏览器原下载（由后台按交接结果处理），按钮允许重新发送。
     sending[key] = accepted ? 'queued' : 'canceled'
     renderList()
+    return null
   }
 
-  const send = async (item: MediaResource) => {
+  const send = async (item: MediaResource, options?: { preserveError?: boolean }): Promise<string | null> => {
     const key = actionKey(item)
-    if (sending[key] && SEND_LOCKED.has(sending[key])) return
-    setError('')
+    if (sending[key] && SEND_LOCKED.has(sending[key])) return null
+    if (!options?.preserveError) setError('')
     sending[key] = 'sending'
     renderList()
     let delivered = false
@@ -870,22 +876,56 @@ async function main() {
       if (!response?.ok && response?.ownership_uncertain) {
         // 回执丢失：后台已保存原请求编号，再点只按原编号回查，不会重复创建。
         sending[key] = 'checking'
-        setError(response.error || '暂时无法确认交接状态')
+        const message = response.error || '暂时无法确认交接状态'
+        if (!options?.preserveError) setError(message)
         renderList()
-        return
+        return message
       }
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
       const handoff = response.handoff || {}
       const state = sendStateFromHandoff({ status: handoff.status, presentation: handoff.presentation, taskStatus: handoff.task_status })
-      if (state === 'confirming') await confirmDownload(item, String(handoff.id || ''))
-      else {
-        sending[key] = state
-        renderList()
-      }
+      if (state === 'confirming') return await confirmDownload(item, String(handoff.id || ''), options)
+      sending[key] = state
+      renderList()
+      return null
     } catch (reason) {
       // 超时说明后台可能已按原请求编号登记了交接：只能“核对”，再点按原编号回查，不会新建任务。
       sending[key] = delivered ? 'retry' : 'checking'
-      setError(reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25')
+      const message = reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25'
+      if (!options?.preserveError) setError(message)
+      renderList()
+      return message
+    }
+  }
+
+  const sendBatch = async (targets: MediaResource[]) => {
+    if (batchRunning || !targets.length) return
+    batchRunning = true
+    setError('')
+    renderList()
+    const errors: string[] = []
+    let sentCount = 0
+    try {
+      for (const target of targets) {
+        if (sendClickAction(sending[actionKey(target)]) !== 'send') continue
+        const error = await send(target, { preserveError: true })
+        if (error) {
+          errors.push(error)
+          setError(errors.length === 1 ? error : `已有 ${errors.length} 项发送失败：${errors[0]}`)
+        } else {
+          sentCount += 1
+        }
+      }
+      if (errors.length > 0) {
+        const summary = sentCount > 0
+          ? `已发送 ${sentCount} 项，${errors.length} 项失败：${errors[0]}`
+          : errors.length === 1
+            ? errors[0]
+            : `${errors.length} 项失败：${errors[0]}`
+        setError(summary)
+      }
+    } finally {
+      batchRunning = false
       renderList()
     }
   }

@@ -163,9 +163,9 @@ h1 { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
 
 .resource-toolbar { display: grid; gap: 6px; padding: 0 4px 8px 12px; }
 .resource-filter-row { display: flex; align-items: center; gap: 5px; }
-.resource-search { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: 11.5px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; transition: border-color .14s ease, box-shadow .14s ease; }
+.resource-search { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--control-border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: 11.5px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; transition: border-color .14s ease, box-shadow .14s ease; }
 .resource-search::placeholder { color: var(--faint); }
-.resource-search:hover { border-color: var(--control-border); }
+.resource-search:hover { border-color: var(--primary); }
 .resource-search:focus { border-color: var(--primary); outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent); }
 .resource-toolbar .hlsd-button.batch-download-btn { flex: none; height: 28px; padding: 0 9px; font-size: 11px; border-radius: var(--radius); }
 .resource-chips { display: flex; flex-wrap: wrap; gap: 4px; }
