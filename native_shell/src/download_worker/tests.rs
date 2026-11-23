@@ -4501,6 +4501,8 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             download_dir: "../escape".into(),
             allow_duplicate: false,
             trusted_ui: false,
+            start_paused: false,
+            queue_id: String::new(),
         })
         .is_err());
     let events = coordinator
@@ -4510,6 +4512,8 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             download_dir: String::new(),
             allow_duplicate: false,
             trusted_ui: false,
+            start_paused: false,
+            queue_id: String::new(),
         })
         .unwrap();
     assert!(events
@@ -4552,6 +4556,8 @@ fn only_explicit_desktop_copy_bypasses_handoff_deduplication() {
                 download_dir: String::new(),
                 allow_duplicate: true,
                 trusted_ui,
+                start_paused: false,
+                queue_id: String::new(),
             })
             .unwrap();
         let copy = events.iter().find_map(|event| match &event.event {
@@ -4606,6 +4612,8 @@ fn coordinator_accept_handoff_carries_local_source_into_task_spec() {
             download_dir: String::new(),
             allow_duplicate: false,
             trusted_ui: false,
+            start_paused: false,
+            queue_id: String::new(),
         })
         .unwrap();
     let task_id = events
@@ -7006,6 +7014,8 @@ fn audit_accept_handoff(
         download_dir,
         trusted_ui,
         allow_duplicate: false,
+        start_paused: false,
+        queue_id: String::new(),
     })
 }
 

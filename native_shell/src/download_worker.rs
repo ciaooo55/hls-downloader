@@ -958,6 +958,8 @@ impl CoreCoordinator {
             download_dir,
             trusted_ui,
             allow_duplicate,
+            start_paused: _,
+            queue_id: _,
         } = command
         {
             return self.accept_handoff_command(

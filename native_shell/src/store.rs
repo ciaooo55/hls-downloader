@@ -423,6 +423,7 @@ impl CoreStore {
                     | CoreEvent::HandoffResolved { .. }
                     | CoreEvent::UiShow { .. }
                     | CoreEvent::UiReady { .. }
+                    | CoreEvent::Shutdown
                     | CoreEvent::Error { .. }
                     | CoreEvent::ProbeResult { .. }
                     | CoreEvent::TorrentProbeResult { .. }

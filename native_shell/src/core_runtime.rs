@@ -1770,6 +1770,8 @@ mod tests {
             download_dir: String::new(),
             allow_duplicate: false,
             trusted_ui: false,
+            start_paused: false,
+            queue_id: String::new(),
         });
         assert!(matches!(accepted[0].event, CoreEvent::TaskCreated { .. }));
         match &accepted[1].event {

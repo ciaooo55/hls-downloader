@@ -732,6 +732,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         download_dir: download_dir.clone(),
                                         allow_duplicate: copy,
                                         trusted_ui: true,
+                                        start_paused: false,
+                                        queue_id: String::new(),
                                     })
                                     .and_then(core_feedback::command_result)?;
                                 if remember {

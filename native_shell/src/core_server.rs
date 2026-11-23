@@ -1415,6 +1415,8 @@ mod tests {
                 download_dir: String::new(),
                 allow_duplicate: false,
                 trusted_ui: true,
+                start_paused: false,
+                queue_id: String::new(),
             })
             .unwrap();
         let receipt = retry.request(&admission("late")).unwrap();
@@ -1508,6 +1510,8 @@ mod tests {
             download_dir: String::new(),
             allow_duplicate: false,
             trusted_ui: true,
+            start_paused: false,
+            queue_id: String::new(),
         })
         .unwrap();
         let rows = host.load_handoffs().unwrap();
