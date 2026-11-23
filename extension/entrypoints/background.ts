@@ -544,7 +544,16 @@ async function pollTrackedHandoffs(): Promise<void> {
     const handoff = response.handoff
     const status = String(handoff?.status || 'pending')
     updateTrackedHandoff(next, handoff || {})
-    if (handoffTerminalStatus(status)) await rememberHandoffSuppression(handoff?.suppression)
+    if (handoffTerminalStatus(status)) {
+      await rememberHandoffSuppression(handoff?.suppression)
+      const clientRequestId = String(handoff?.client_request_id || '')
+      if (clientRequestId) {
+        await directOfferStore.update(
+          DIRECT_OFFERS_STORAGE_KEY,
+          current => current.filter(item => item.clientRequestId !== clientRequestId),
+        ).catch(() => undefined)
+      }
+    }
   } catch {
     next.checkedAt = Date.now()
     next.failures += 1
@@ -826,28 +835,38 @@ async function cookieRecordsFor(url: string, pageUrl = '', tabId = -1, frameId =
     getPartitionKey?: (details: { tabId: number, frameId: number }) => Promise<{ partitionKey: PartitionKey }>
   }
   const fallbackSite = cookiePartitionSite(pageUrl)
+  const effectiveFrameId = Number.isInteger(frameId) && frameId >= 0 ? frameId : 0
   let partitionKey: PartitionKey | undefined
   if (tabId >= 0 && cookieApi.getPartitionKey) {
     try {
-      partitionKey = (await cookieApi.getPartitionKey({ tabId, frameId })).partitionKey
+      partitionKey = (await cookieApi.getPartitionKey({ tabId, frameId: effectiveFrameId })).partitionKey
     } catch (error) {
-      if (frameId === 0 || !isSrcdocCookieHostPermissionError(error)) throw error
-      partitionKey = await srcdocPartitionKeyForFrame(
-        tabId,
-        frameId,
-        details => cookieApi.getPartitionKey!(details),
-      )
+      if (effectiveFrameId > 0 && isSrcdocCookieHostPermissionError(error)) {
+        partitionKey = await srcdocPartitionKeyForFrame(
+          tabId,
+          effectiveFrameId,
+          details => cookieApi.getPartitionKey!(details),
+        )
+      } else if (isCookieHostPermissionError(error) || /No frame with id/i.test(errorText(error))) {
+        partitionKey = fallbackSite ? { topLevelSite: fallbackSite } : undefined
+      } else {
+        throw error
+      }
     }
   } else if (fallbackSite) {
     partitionKey = { topLevelSite: fallbackSite }
   }
   const target = new URL(cookieUrl)
   const queries: Array<{ url?: string, domain?: string }> = [{ url: cookieUrl }]
+  const isIpLiteral = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(target.hostname) || target.hostname.includes(':')
   if (allPaths) {
     // 清单未播放到的分片/密钥也需要自己的 Path Cookie；只导出目标主机适用的记录。
-    const labels = target.hostname.split('.')
-    for (let i = 0; i === 0 || (i < labels.length - 1 && !/^\d+$/.test(labels[i])); i += 1) {
-      queries.push({ domain: labels.slice(i).join('.') })
+    queries.push({ domain: target.hostname })
+    if (!isIpLiteral) {
+      const labels = target.hostname.split('.')
+      for (let i = 1; i < labels.length - 1; i += 1) {
+        queries.push({ domain: labels.slice(i).join('.') })
+      }
     }
   }
   const collected = new Map<string, ReplayCookie>()
@@ -877,6 +896,51 @@ async function cookieRecordsFor(url: string, pageUrl = '', tabId = -1, frameId =
 
 async function cookiesFor(url: string, pageUrl = '', tabId = -1, frameId = 0): Promise<string> {
   return cookieHeaderForUrl(await cookieRecordsFor(url, pageUrl, tabId, frameId), url)
+}
+
+async function tabHasCookiesForUrl(url: string, pageUrl = '', tabId = -1, frameId = 0): Promise<boolean> {
+  const cookieUrl = cookieLookupUrl(url)
+  if (!cookieUrl) return false
+  try {
+    const stores = tabId >= 0 ? await browser.cookies.getAllCookieStores() : []
+    const storeId = stores.find(store => store.tabIds.includes(tabId))?.id
+    if (tabId >= 0 && !storeId) return true
+    const base = { url: cookieUrl, ...(storeId ? { storeId } : {}) }
+    const unpartitioned = await browser.cookies.getAll(base)
+    if (unpartitioned.some(cookie => !cookie.partitionKey?.topLevelSite && cookieMatchesUrl({
+      name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path,
+      hostOnly: cookie.hostOnly, secure: cookie.secure,
+      ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+    }, cookieUrl))) {
+      return true
+    }
+    type PartitionKey = { topLevelSite?: string, hasCrossSiteAncestor?: boolean }
+    const cookieApi = browser.cookies as typeof browser.cookies & {
+      getPartitionKey?: (details: { tabId: number, frameId: number }) => Promise<{ partitionKey: PartitionKey }>
+    }
+    const fallbackSite = cookiePartitionSite(pageUrl)
+    const effectiveFrameId = Number.isInteger(frameId) && frameId >= 0 ? frameId : 0
+    let partitionKey: PartitionKey | undefined
+    if (tabId >= 0 && cookieApi.getPartitionKey) {
+      try {
+        partitionKey = (await cookieApi.getPartitionKey({ tabId, frameId: effectiveFrameId })).partitionKey
+      } catch {
+        partitionKey = fallbackSite ? { topLevelSite: fallbackSite } : undefined
+      }
+    } else if (fallbackSite) {
+      partitionKey = { topLevelSite: fallbackSite }
+    }
+    if (!partitionKey?.topLevelSite) return false
+    const partitioned = await browser.cookies.getAll({ ...base, partitionKey })
+    return partitioned.some(cookie => cookieMatchesUrl({
+      name: cookie.name, value: cookie.value, domain: cookie.domain, path: cookie.path,
+      hostOnly: cookie.hostOnly, secure: cookie.secure,
+      ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+      partitionKey: cookie.partitionKey,
+    }, cookieUrl))
+  } catch {
+    return true
+  }
 }
 
 function nativeErrorCode(error: unknown): string {
@@ -1069,7 +1133,21 @@ async function resourceRequest(
     : explicitChain || findChain()
   // 点击前接管尚未发出 GET；同 URL 的旧 POST 不能成为这次链接点击的请求体。
   if (resource.method && chain?.method.toUpperCase() !== resource.method.toUpperCase()) chain = undefined
-  if (!chain && (!options.allowUnverified || Object.keys(resource.responseIdentity || {}).length) && resource.kind !== 'magnet') {
+  const alreadyObserved = Boolean(
+    (resource.statusCode !== undefined && resource.statusCode >= 200 && resource.statusCode < 400)
+    || resource.evidence?.includes('response_headers')
+    || resource.inspected === true
+  )
+  const hasResponseIdentity = Object.keys(resource.responseIdentity || {}).length > 0
+  const isAmbiguousIdentity = () => hasResponseIdentity && (
+    resource.replayContext?.request_id === ''
+    || requestChains.resolve({
+      url: resource.url, referrer: pageUrl, frameId: resource.frameId,
+      requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity,
+    }, Date.now(), resource.tabId !== undefined && resource.tabId >= 0 ? resource.tabId : undefined, requireSuccessfulRequest).kind === 'ambiguous'
+  )
+  const mustVerifyIdentity = hasResponseIdentity && (!alreadyObserved || isAmbiguousIdentity())
+  if (!chain && (!options.allowUnverified || mustVerifyIdentity) && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
     // controller or stale signed gateway without a successful response chain
     // is how HTML pages became download tasks. Close the short observation
@@ -1078,7 +1156,7 @@ async function resourceRequest(
       await new Promise(resolve => setTimeout(resolve, 75))
       chain = findChain()
     }
-    if (!chain && Object.keys(resource.responseIdentity || {}).length) {
+    if (!chain && hasResponseIdentity && (!alreadyObserved || isAmbiguousIdentity())) {
       throw new Error('无法唯一关联该媒体响应与浏览器请求；请继续播放后重试')
     }
     const successfulResponse = resource.statusCode !== undefined
@@ -1164,7 +1242,7 @@ async function resourcePayload(
     // 普通文件只重放自身请求；其他媒体/CDN 的身份只供 HLS/DASH 分片使用。
     const contexts = resource.kind === 'hls' || resource.kind === 'dash'
       ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl,
-        Date.now(), 32, chain?.frameId ?? resource.frameId)
+        Date.now(), 32, chain?.frameId ?? resource.frameId, chain?.pageUrl)
       : []
     // 最后应用所选媒体；其他音轨/密钥保留精确身份，目录默认使用最新请求。
     for (const context of contexts.filter(context => context.requestId !== chain?.requestId).reverse()) {
@@ -1243,6 +1321,12 @@ async function requestDownload(
     const status = await native({ op: 'handoff_status', handoff_id: previous.handoff.id })
     if (!status?.ok) throw new Error(status?.error || '无法读取下载确认状态')
     if (status.handoff?.status === 'pending') return previous
+    if (previous.client_request_id) {
+      await directOfferStore.update(
+        DIRECT_OFFERS_STORAGE_KEY,
+        current => current.filter(item => item.clientRequestId !== previous.client_request_id),
+      ).catch(() => undefined)
+    }
     if (activeDownloadOffers.get(key) === active) activeDownloadOffers.delete(key)
     else return requestDownload(resource, chain, options)
   }
@@ -1256,7 +1340,7 @@ async function requestDownload(
       created = true
       return [...current, { key: digest, tabId: resource.tabId, clientRequestId: `download:${crypto.randomUUID()}` }]
     })
-    const requestId = records.find(item => item.key === digest)!.clientRequestId
+    let requestId = records.find(item => item.key === digest)!.clientRequestId
     let response: any
     if (created) {
       if (!options.desktopReady && !await desktopReadyForNewHandoff()) {
@@ -1274,7 +1358,25 @@ async function requestDownload(
         response = await native({ op: 'handoff_status', client_request_id: requestId }, 2_500)
       } catch {}
       if (!response?.ok) return uncertainOffer(requestId)
-      if (!response.handoff?.id) {
+      if (response.handoff?.id && handoffTerminalStatus(String(response.handoff.status || ''))) {
+        // Stale terminal record survived SW sleep/timeout; purge and start a fresh offer.
+        const staleId = requestId
+        const nextId = `download:${crypto.randomUUID()}`
+        requestId = nextId
+        await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => [
+          ...current.filter(item => item.clientRequestId !== staleId && item.key !== digest),
+          { key: digest, tabId: resource.tabId, clientRequestId: nextId },
+        ])
+        if (!options.desktopReady && !await desktopReadyForNewHandoff()) {
+          return { ok: false, client_request_id: requestId, error: '主程序未连接，保留浏览器下载' }
+        }
+        try {
+          response = await offer(resource, chain, options, requestId)
+        } catch (error) {
+          await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => current.filter(item => item.clientRequestId !== requestId))
+          throw error
+        }
+      } else if (!response.handoff?.id) {
         // A read cannot exclude a delayed original offer. Only Core's atomic
         // admission can safely recover the same ID after journal-before-send.
         response = await offer(resource, chain, options, requestId, true)
@@ -1813,10 +1915,19 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
         if (!requestId) return undefined
         knownOffer = true
         try { response = await native({ op: 'handoff_status', client_request_id: requestId }, 2_500) } catch {}
-        if (!response?.ok || !response.handoff?.id) response = uncertainOffer(requestId)
+        if (!response?.ok || !response.handoff?.id) {
+          response = uncertainOffer(requestId)
+        } else if (handoffTerminalStatus(String(response.handoff.status || ''))) {
+          await directOfferStore.update(
+            DIRECT_OFFERS_STORAGE_KEY,
+            current => current.filter(item => item.clientRequestId !== requestId && item.key !== digest),
+          ).catch(() => undefined)
+          return undefined
+        }
       }
       if (response.ownership_uncertain) await reportDownloadError(chain.tabId, response.error)
-      return desktopAcceptedHandoff(response) || response.ownership_uncertain ? { cancel: true } : undefined
+      return (desktopAcceptedHandoff(response) && !handoffTerminalStatus(String(response.handoff?.status || '')))
+        || response.ownership_uncertain ? { cancel: true } : undefined
     } catch (error) {
       // A journal read failure is not evidence that an ordinary page belongs
       // to Core. Only hold an identified download or an existing offer.
@@ -2317,26 +2428,35 @@ export default defineBackground(() => {
       const tabId = sender.tab?.id
       void (async () => {
         const config = await settings()
+        const topPageUrl = validDownloadIdentity(tabId)
+          ? await topLevelPageUrl(tabId, pageUrl)
+          : pageUrl
         if (!validDownloadIdentity(tabId) || config.minimumBytes > 0
           || !isDirectDownloadLink(href, pageUrl, Boolean(message.downloadAttribute))
-          || !shouldTakeover({ url: href, sourcePageUrl: pageUrl, ...config, explicitClick: true })
-          || isHandoffSuppressed(config.suppressions, pageUrl, 'file')) {
+          || !shouldTakeover({ url: href, sourcePageUrl: topPageUrl, ...config, explicitClick: true })
+          || isHandoffSuppressed(config.suppressions, topPageUrl, 'file')) {
           return { ok: false, browserFallback: true }
+        }
+        // Match Firefox's cookie safety guard: if site cookies are not authorized
+        // for export yet the tab cookie store holds cookies for this URL, let
+        // Chrome complete the authenticated download and hand off locally.
+        if (!cookiePermissionAllows(href, topPageUrl, config.authorizedCookieHosts)
+          && await tabHasCookiesForUrl(href, topPageUrl, tabId, sender.frameId ?? 0)) {
+          return { ok: false, browserFallback: true, preserveLocal: true }
         }
         await clickIntentStore.consume({ url: href, referrer: pageUrl, tabId })
         const resource: MediaResource = {
-          id: resourceId(href), url: href, kind: 'file', pageUrl, tabId,
+          id: resourceId(href), url: href, kind: 'file', pageUrl: topPageUrl, tabId,
           frameId: sender.frameId ?? 0, filename: String(message.filename || ''),
           method: 'GET', seenAt: Date.now(), evidence: ['trusted_download_link'], confidence: 0.99,
-          replayContext: { method: 'GET', page_url: pageUrl },
+          replayContext: { method: 'GET', page_url: topPageUrl },
         }
         try {
           const response = await requestDownload(resource, undefined, { allowUnverified: true })
           if (response?.ownership_uncertain) await reportDownloadError(tabId, response.error)
           return { ...response, browserFallback: !desktopAcceptedHandoff(response) && !response?.ownership_uncertain }
         } catch (error) {
-          // offer 发送后失联可能已持久接收，不能自动重新导航产生第二份下载。
-          await reportDownloadError(tabId, '无法确认下载交接，请检查主程序后重试')
+          await reportDownloadError(tabId, error)
           return { ok: false, browserFallback: false, error: errorText(error) }
         }
       })().then(sendResponse, error => sendResponse({ ok: false, browserFallback: true, error: errorText(error) }))
@@ -2380,20 +2500,31 @@ export default defineBackground(() => {
     }
     if (message?.type === 'resource') {
       const observedIdentity = responseIdentity(name => message.resource.responseIdentity?.[name])
-      const observedChain = Object.keys(observedIdentity).length ? requestChains.find({
-        url: message.resource.url, referrer: sender.url, frameId: sender.frameId,
-        responseIdentity: observedIdentity,
-      }, Date.now(), sender.tab?.id, true) : undefined
+      const hasIdentity = Object.keys(observedIdentity).length > 0
+      const resolved = hasIdentity
+        ? requestChains.resolve({
+          url: message.resource.url, referrer: sender.url, frameId: sender.frameId,
+          responseIdentity: observedIdentity,
+        }, Date.now(), sender.tab?.id, true)
+        : { kind: 'none' as const }
+      const { requestHeaders: _untrustedHeaders, ...restResource } = message.resource
       const resource = {
-        ...message.resource,
+        ...restResource,
         // Observations belong to the sending frame, never a payload-selected one.
         pageUrl: sender.url || sender.tab?.url || '',
         tabId: sender.tab?.id ?? -1,
         frameId: sender.frameId ?? -1,
         responseIdentity: observedIdentity,
-        ...(Object.keys(observedIdentity).length ? {
-          requestHeaders: observedChain?.requestHeaders || {}, statusCode: observedChain?.statusCode, method: observedChain?.method,
-          replayContext: { ...(message.resource.replayContext || {}), request_id: observedChain?.requestId || '' },
+        ...(resolved.kind === 'found' ? {
+          requestHeaders: resolved.chain.requestHeaders,
+          statusCode: resolved.chain.statusCode,
+          method: resolved.chain.method,
+          replayContext: { ...(message.resource.replayContext || {}), request_id: resolved.chain.requestId },
+        } : resolved.kind === 'ambiguous' ? {
+          requestHeaders: {},
+          statusCode: undefined,
+          method: undefined,
+          replayContext: { ...(message.resource.replayContext || {}), request_id: '' },
         } : {}),
       }
       void saveResource(resource, sender.tab?.id ?? -1)

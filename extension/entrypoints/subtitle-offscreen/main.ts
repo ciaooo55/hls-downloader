@@ -53,6 +53,7 @@ browser.runtime.onMessage.addListener((message, _sender, respond) => {
           void Promise.resolve(cleanup?.()).then(done, done)
         }
       }).catch(() => {
+        if (current !== sessionId) return
         const cleanup = stop; stop = undefined; clearInterval(heartbeat)
         const done = () => { if (current === sessionId) { generation++; current = '' } }
         void Promise.resolve(cleanup?.()).then(done, done)

@@ -664,17 +664,38 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
     }
     const newer = (resource.seenAt || 0) >= (previous.seenAt || 0) ? resource : previous
     const older = newer === resource ? previous : resource
+    const explicitCredentialClear = newer.replayContext?.request_id === ''
+    const mergedHeaders = explicitCredentialClear
+      ? (newer.requestHeaders ?? {})
+      : (Object.keys(newer.requestHeaders || {}).length
+        ? newer.requestHeaders
+        : (Object.keys(older.requestHeaders || {}).length ? older.requestHeaders : newer.requestHeaders))
+    const mergedReplayContext = {
+      ...(older.replayContext || {}),
+      ...(newer.replayContext || {}),
+      ...(explicitCredentialClear
+        ? { request_id: '' }
+        : (newer.replayContext?.request_id || !older.replayContext?.request_id
+          ? {}
+          : { request_id: older.replayContext.request_id })),
+    }
+    const mergedHashes = (older.playbackUrlHashes || newer.playbackUrlHashes)
+      ? [...new Set([...(older.playbackUrlHashes || []), ...(newer.playbackUrlHashes || [])])].slice(-512)
+      : undefined
     byKey.set(key, {
       ...older,
       ...newer,
+      ...(mergedHeaders !== undefined ? { requestHeaders: mergedHeaders } : {}),
+      statusCode: newer.statusCode ?? older.statusCode,
+      method: newer.method || older.method,
       evidence: [...new Set([...(older.evidence || []), ...(newer.evidence || [])])].slice(-16),
       owner: newer.owner || older.owner,
       confidence: Math.max(boundedConfidence(older.confidence), boundedConfidence(newer.confidence)),
-      replayContext: { ...(older.replayContext || {}), ...(newer.replayContext || {}) },
+      replayContext: mergedReplayContext,
       variants: newer.variants?.length ? newer.variants : older.variants,
       renditionUrls: [...new Set([...(newer.renditionUrls || []), ...(older.renditionUrls || [])])].slice(-24),
       playbackUrls: [...new Set([...(newer.playbackUrls || []), ...(older.playbackUrls || [])])].slice(-48),
-      playbackUrlHashes: newer.playbackUrlHashes ?? older.playbackUrlHashes,
+      playbackUrlHashes: mergedHashes,
       playbackPatterns: [...new Set([...(newer.playbackPatterns || []), ...(older.playbackPatterns || [])])].slice(-48),
       seenAt: Math.max(previous.seenAt || 0, resource.seenAt || 0),
     })
@@ -702,7 +723,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       ? `${resourceFingerprint(child)}:frame:${frameKey(child)}`
       : resourceFingerprint(child)) || []
     for (const parentIndex of parents) {
-      parentPlaybackHashes.set(parentIndex, [...new Set([...(parentPlaybackHashes.get(parentIndex) || []), ...(child.playbackUrlHashes || [])])])
+      parentPlaybackHashes.set(parentIndex, [...new Set([
+        ...(parentPlaybackHashes.get(parentIndex) || []),
+        ...(child.playbackUrlHashes || []),
+      ])].slice(-512))
       refreshedParents.set(parentIndex, Math.max(
         refreshedParents.get(parentIndex) || 0,
         child.seenAt || 0,
@@ -727,7 +751,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       ...(item.playbackPatterns || []),
       ...(parentPlaybackPatterns.get(index) || []),
     ])].slice(-48)
-    const playbackUrlHashes = [...new Set([...(item.playbackUrlHashes || []), ...(parentPlaybackHashes.get(index) || [])])]
+    const playbackUrlHashes = [...new Set([
+      ...(item.playbackUrlHashes || []),
+      ...(parentPlaybackHashes.get(index) || []),
+    ])].slice(-512)
     return seenAt === item.seenAt
       && playbackUrls.length === (item.playbackUrls || []).length
       && playbackPatterns.length === (item.playbackPatterns || []).length
