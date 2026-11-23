@@ -87,6 +87,8 @@ mod progress_relay;
 #[cfg(feature = "full-core")]
 mod progress_writer;
 #[cfg(feature = "full-core")]
+mod proxy_tunnel;
+#[cfg(feature = "full-core")]
 mod range_cache;
 #[cfg(feature = "full-core")]
 mod recognize;

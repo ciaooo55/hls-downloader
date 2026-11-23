@@ -70,13 +70,13 @@ impl IdleHandlePool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProxyRoute<'a> {
+pub(crate) enum ProxyRoute<'a> {
     Direct,
     System,
     Manual(&'a str),
 }
 
-fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
+pub(crate) fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
     let proxy = proxy.trim();
     if proxy.is_empty() || proxy == crate::net_policy::DIRECT_PROXY_SENTINEL {
         ProxyRoute::Direct

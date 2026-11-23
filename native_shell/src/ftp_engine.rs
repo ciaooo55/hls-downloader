@@ -6,6 +6,7 @@
 //! that for the rest of the transfer, so segmented helpers go active directly.
 //! FTPS active mode uses the same client-side data TLS as passive mode.
 
+use crate::proxy_tunnel::Proxy;
 use std::cell::Cell;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -274,6 +275,7 @@ fn ftp_wire_ok(value: &str) -> bool {
 
 #[derive(Debug)]
 struct FtpControl<'a> {
+    proxy: Option<&'a Proxy>,
     path: &'a Path,
     reason: Cell<crate::http_engine::Control>,
     checked: Cell<Instant>,
@@ -319,14 +321,28 @@ pub fn download_ftp_with(
     resume: bool,
     connections: usize,
 ) -> Result<u64, String> {
+    download_ftp_routed(url, output, control, resume, connections, "")
+}
+
+pub(crate) fn download_ftp_routed(
+    url: &str,
+    output: &Path,
+    control: &Path,
+    resume: bool,
+    connections: usize,
+    route: &str,
+) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
-    let control = FtpControl {
+    let mut control = FtpControl {
+        proxy: None,
         path: control,
         reason: Cell::new(crate::http_engine::Control::Run),
         checked: Cell::new(Instant::now()),
     };
     control.poll()?;
-    // 被动模式被拒/不可达时切到主动模式；同一任务的后续连接（含分段辅助连接）直接沿用。
+    let proxy = Proxy::resolve(route, url, || control.check())?;
+    control.proxy = proxy.as_ref();
+    // 直连遇到被动模式被拒/不可达时切到主动模式，后续连接沿用。
     let active = std::sync::atomic::AtomicBool::new(false);
     let result = match transfer_ftp(
         &target,
@@ -350,8 +366,11 @@ pub fn download_ftp_with(
 fn open_session<'a>(target: &FtpTarget, control: &'a FtpControl<'a>) -> Result<Conn<'a>, String> {
     let implicit = target.tls && target.port == 990;
     control.check()?;
-    let raw = TcpStream::connect((target.host.as_str(), target.port))
-        .map_err(|error| error.to_string())?;
+    let raw = match control.proxy {
+        Some(proxy) => proxy.connect_blocking(&target.host, target.port, || control.check())?,
+        None => TcpStream::connect((target.host.as_str(), target.port))
+            .map_err(|error| error.to_string())?,
+    };
     let raw = FtpSocket::new(raw, control)?;
     let mut ctrl = if implicit {
         wrap_tls(raw, &target.host)?
@@ -460,14 +479,18 @@ fn passive_refused(reply: &str) -> bool {
 /// unreachable. `active` is shared by every connection of one transfer.
 fn open_data<'a>(
     ctrl: &mut Conn<'a>,
+    host: &str,
     control: &'a FtpControl<'a>,
     active: &std::sync::atomic::AtomicBool,
 ) -> Result<DataChannel<'a>, String> {
     use std::sync::atomic::Ordering;
     if !active.load(Ordering::SeqCst) {
-        match open_passive_data(ctrl, control) {
+        match open_passive_data(ctrl, host, control) {
             Ok(socket) => return Ok(DataChannel::Passive(socket)),
             Err(PassiveError::Fatal(error)) => return Err(error),
+            Err(PassiveError::Refused(reason)) if control.proxy.is_some() => {
+                return Err(format!("FTP 代理传输需要被动模式：{reason}"));
+            }
             Err(PassiveError::Refused(reason)) => {
                 active.store(true, Ordering::SeqCst);
                 return open_active_data(ctrl, control)
@@ -482,13 +505,19 @@ fn open_data<'a>(
 /// fallback for an unsupported EPSV) and connects to the control peer.
 fn open_passive_data<'a>(
     ctrl: &mut Conn<'a>,
+    host: &str,
     control: &'a FtpControl<'a>,
 ) -> Result<FtpSocket<'a>, PassiveError> {
     let peer = ctrl.peer_addr()?;
     let epsv = command(ctrl, "EPSV")?;
     // Only an unsupported command on IPv4 authorizes PASV. A malformed
     // success or a transient/permission error must not start another path.
-    let data_port = if peer.is_ipv4() && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
+    let pasv_allowed = if control.proxy.is_some() {
+        host.parse::<std::net::Ipv6Addr>().is_err()
+    } else {
+        peer.is_ipv4()
+    };
+    let data_port = if pasv_allowed && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
         let pasv = command(ctrl, "PASV")?;
         if passive_refused(&pasv) {
             return Err(PassiveError::Refused(format!(
@@ -511,8 +540,11 @@ fn open_passive_data<'a>(
     // Both passive modes use the control peer, never a server-advertised host.
     let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
     control.check()?;
-    let data_raw = TcpStream::connect_timeout(&data_addr, DATA_CONNECT_TIMEOUT)
-        .map_err(|error| PassiveError::Refused(format!("passive connect failed: {error}")))?;
+    let data_raw = match control.proxy {
+        Some(proxy) => proxy.connect_blocking(host, data_port, || control.check())?,
+        None => TcpStream::connect_timeout(&data_addr, DATA_CONNECT_TIMEOUT)
+            .map_err(|error| PassiveError::Refused(format!("passive connect failed: {error}")))?,
+    };
     control.check()?;
     Ok(FtpSocket::new(data_raw, control)?)
 }
@@ -635,7 +667,7 @@ fn transfer_ftp(
     if resume_from >= size {
         resume_from = 0;
     }
-    let data_channel = open_data(&mut ctrl, control, active)?;
+    let data_channel = open_data(&mut ctrl, &target.host, control, active)?;
     // REST 必须紧挨 RETR；中间发送 EPSV/PASV 会让部分服务器取消续传偏移。
     if resume_from > 0 {
         let reply = command(&mut ctrl, &format!("REST {resume_from}"))?;
@@ -983,7 +1015,7 @@ fn fetch_segment<'a>(
     use std::sync::atomic::Ordering;
     let mut cursor = start;
     let result = (|| -> Result<(), SegmentError> {
-        let data_channel = open_data(ctrl, control, shared.active)?;
+        let data_channel = open_data(ctrl, &target.host, control, shared.active)?;
         // REST 必须紧挨 RETR；被拒绝即视为服务器不支持分段。
         let reply = command(ctrl, &format!("REST {start}"))?;
         if reply_code(&reply) != Some(350) {
@@ -1206,6 +1238,7 @@ fn transfer_segmented<'a>(
     crate::http_engine::write_progress(&shared.progress, already, size, 0.0, "downloading");
     let throttle = crate::net_policy::current_throttle_context();
     let control_path = control.path;
+    let proxy = control.proxy;
     let started_this_run = std::cell::Cell::new(false);
     let primary = std::thread::scope(|scope| {
         let mut spawned = false;
@@ -1222,6 +1255,7 @@ fn transfer_segmented<'a>(
                 scope.spawn(move || {
                     crate::net_policy::with_throttle_context(throttle, || {
                         let helper_control = FtpControl {
+                            proxy,
                             path: control_path,
                             reason: Cell::new(crate::http_engine::Control::Run),
                             checked: Cell::new(Instant::now()),
@@ -2581,6 +2615,44 @@ mod tests {
     }
 
     const SEGMENT_TEST_BYTES: usize = 5 * 1024 * 1024 + 4321;
+
+    #[test]
+    fn authenticated_proxy_routes_every_segment_and_refuses_active_mode() {
+        use crate::proxy_tunnel::tests::TestProxy;
+        for (scheme, passive_refused) in [("http", false), ("socks5h", false), ("http", true)] {
+            let body = segment_body(SEGMENT_TEST_BYTES);
+            let server = spawn_segment_server(
+                body.clone(),
+                SegmentServerOptions {
+                    advertise_rest: true,
+                    rest_ok: true,
+                    max_connections: 4,
+                    chunk_delay_ms: 1,
+                    passive_refused,
+                },
+            );
+            let proxy = TestProxy::start(scheme);
+            let (root, output, control) = segment_root("proxy");
+            let port = server.address.port();
+            let url = format!("ftp://origin.invalid:{port}/big.bin");
+            let result = download_ftp_routed(&url, &output, &control, true, 3, &proxy.url);
+            let ports = proxy.ports.lock().unwrap();
+            if passive_refused {
+                assert!(result.unwrap_err().contains("被动模式"));
+                assert!(server.commands("PORT").is_empty() && server.commands("EPRT").is_empty());
+                assert_eq!(ports.as_slice(), &[port]);
+            } else {
+                assert_eq!(result.unwrap(), body.len() as u64);
+                assert_eq!(std::fs::read(&output).unwrap(), *body);
+                assert!(ports.iter().filter(|p| **p == port).count() > 1);
+                assert_eq!(
+                    ports.iter().filter(|p| **p != port).count(),
+                    server.commands("EPSV").len()
+                );
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     /// Parses `|1|127.0.0.1|4242|` (EPRT argument) in tests.
     fn parse_test_eprt(spec: &str) -> std::net::SocketAddr {

@@ -2678,13 +2678,6 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
         .ok_or_else(|| format!("unknown task {task_id}"))?;
     let spec = apply_site_rules_to_spec(&core, spec)?;
     let (spec, replay_json) = hydrate_replay_headers(&core, spec)?;
-    if matches!(
-        spec.resource_kind,
-        crate::ResourceKind::Ftp | crate::ResourceKind::Sftp
-    ) && crate::url_credentials::proxy_password_key(&spec.proxy).is_some()
-    {
-        return Err("原生 FTP/SFTP 传输尚不支持认证代理".into());
-    }
     let throttle = task_throttle_context(&core, task_id, &spec)?;
     crate::net_policy::configure_throttle_context(&throttle);
     crate::net_policy::with_throttle_context(Some(throttle), || {
@@ -2831,9 +2824,17 @@ fn run_task_with_throttle(
             // 任务连接数沿用 HTTP 的设置；服务器支持 REST STREAM 时分段并行，否则单连接。
             let connections =
                 (spec.concurrency.max(1) as usize).min(crate::ftp_engine::MAX_FTP_CONNECTIONS);
+            let proxy = spec.proxy.clone();
             let _ = poll_media_progress(&core, task_id, &progress, false, move || {
-                crate::ftp_engine::download_ftp_with(&url, &output, &control, true, connections)
-                    .map(|_| output.clone())
+                crate::ftp_engine::download_ftp_routed(
+                    &url,
+                    &output,
+                    &control,
+                    true,
+                    connections,
+                    &proxy,
+                )
+                .map(|_| output.clone())
             })?;
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
         }
@@ -2848,8 +2849,10 @@ fn run_task_with_throttle(
             let output = paths.output.clone();
             let control = paths.control.clone();
             let progress = paths.output.with_extension("progress.json");
+            let proxy = spec.proxy.clone();
             let _ = poll_media_progress(&core, task_id, &progress, false, move || {
-                crate::sftp_engine::download_sftp(&url, &output, &control).map(|_| output.clone())
+                crate::sftp_engine::download_sftp_routed(&url, &output, &control, &proxy)
+                    .map(|_| output.clone())
             })?;
             complete_payload(&core, task_id, &paths, &paths.output, &spec)
         }

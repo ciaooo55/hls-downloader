@@ -141,7 +141,11 @@ impl SftpSession for LiveSession {
     }
 }
 
-pub(crate) fn open_live_session(target: &SftpTarget) -> Result<LiveSession, String> {
+pub(crate) fn open_live_session(
+    target: &SftpTarget,
+    proxy: Option<&crate::proxy_tunnel::Proxy>,
+    control: &std::path::Path,
+) -> Result<LiveSession, String> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -153,7 +157,7 @@ pub(crate) fn open_live_session(target: &SftpTarget) -> Result<LiveSession, Stri
         port: target.port,
         error: tofu_error.clone(),
     };
-    let opened = rt.block_on(connect_and_open(target, handler));
+    let opened = rt.block_on(connect_and_open(target, handler, proxy, control));
     if let Some(message) = tofu_error.lock().ok().and_then(|slot| slot.clone()) {
         return Err(message);
     }
@@ -168,22 +172,35 @@ pub(crate) fn open_live_session(target: &SftpTarget) -> Result<LiveSession, Stri
 async fn connect_and_open(
     target: &SftpTarget,
     handler: TofuHandler,
+    proxy: Option<&crate::proxy_tunnel::Proxy>,
+    control: &std::path::Path,
 ) -> Result<(RusshSftp, Handle<TofuHandler>), String> {
     let config = russh::client::Config {
         inactivity_timeout: Some(Duration::from_secs(90)),
         ..Default::default()
     };
-    let mut session = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        client::connect(
-            Arc::new(config),
-            (target.host.as_str(), target.port),
-            handler,
-        ),
-    )
-    .await
-    .map_err(|_| "SFTP 连接超时".to_string())?
-    .map_err(map_ssh_error)?;
+    let config = Arc::new(config);
+    let mut session = if let Some(proxy) = proxy {
+        let check = || crate::sftp_engine::check_sftp_control(control);
+        let stream = proxy.connect(&target.host, target.port, check).await?;
+        crate::proxy_tunnel::controlled(
+            async {
+                client::connect_stream(config, stream, handler)
+                    .await
+                    .map_err(map_ssh_error)
+            },
+            check,
+        )
+        .await?
+    } else {
+        tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            client::connect(config, (target.host.as_str(), target.port), handler),
+        )
+        .await
+        .map_err(|_| "SFTP 连接超时".to_string())?
+        .map_err(map_ssh_error)?
+    };
 
     if !target.password.is_empty() {
         let result = session

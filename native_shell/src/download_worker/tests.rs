@@ -424,6 +424,58 @@ fn duplicate_identity_requires_same_safe_request_shape() {
 }
 
 #[test]
+fn native_transfers_use_vaulted_proxy_auth_and_do_not_retry_direct() {
+    for (scheme, kind) in [("ftp", ResourceKind::Ftp), ("sftp", ResourceKind::Sftp)] {
+        let root = lifecycle_test_root(&format!("proxy-rejected-{scheme}"));
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut core = PersistentCore::in_memory().unwrap();
+        let spec = TaskSpec {
+            url: format!("{scheme}://u@{}/file.bin", target.local_addr().unwrap()),
+            filename: "file.bin".into(),
+            proxy: format!("http://user:pass@{address}"),
+            download_dir: root.to_string_lossy().into_owned(),
+            resource_kind: kind,
+            ..Default::default()
+        };
+        core.handle(CoreCommand::CreateTask { spec }).unwrap();
+        assert_eq!(
+            core.task_spec("task-1").unwrap().proxy,
+            format!("http://user@{address}")
+        );
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(&s);
+            let mut lines = Vec::new();
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                lines.push(line);
+            }
+            assert!(lines
+                .iter()
+                .any(|line| line == "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n"));
+            s.write_all(b"HTTP/1.1 407 Proxy authentication required\r\n\r\n")
+                .unwrap();
+        });
+        let err = run_task_with_progress(Arc::new(Mutex::new(core)), "task-1").unwrap_err();
+        assert!(err.contains("407") && !err.contains("pass"), "{err}");
+        server.join().unwrap();
+        assert_eq!(
+            target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn password_bearing_ftp_duplicates_reuse_tasks_and_refresh_credentials() {
     for (scheme, kind) in [("ftp", ResourceKind::Ftp), ("sftp", ResourceKind::Sftp)] {
         for status in ["paused", "failed"] {
