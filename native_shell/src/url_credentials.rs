@@ -31,7 +31,7 @@ fn url_password_key(authority: &str) -> String {
                     "" => 1080,
                     suffix => suffix.strip_prefix(':')?.parse::<u16>().ok()?,
                 };
-                Some((scheme, host, port, proxy_username(user)?))
+                Some((scheme, host, port, decode_proxy_userinfo(user)?))
             }
             _ => None,
         }
@@ -42,7 +42,7 @@ fn url_password_key(authority: &str) -> String {
     }
 }
 
-fn proxy_username(user: &str) -> Option<String> {
+pub(crate) fn decode_proxy_userinfo(user: &str) -> Option<String> {
     let mut bytes = user.bytes();
     let mut decoded = Vec::with_capacity(user.len());
     while let Some(byte) = bytes.next() {

@@ -584,6 +584,7 @@ impl NativeHostSession {
                 expected_size: (offer.size > 0).then_some(offer.size),
                 etag: field(payload, "etag"),
                 last_modified: field(payload, "last_modified"),
+                preferred_variant_id: offer.preferred_variant_id,
                 preferred_bandwidth: payload
                     .get("preferred_bandwidth")
                     .and_then(Value::as_u64)
@@ -1283,6 +1284,13 @@ fn parse_offer(
         filename: field(payload, "filename"),
         title: field(payload, "title"),
         mime_type: field(payload, "mime_type"),
+        preferred_variant_id: payload
+            .get("preferred_variant_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.chars().any(char::is_control) && id.chars().nth(2048).is_none())
+            .unwrap_or_default()
+            .to_owned(),
         preferred_bandwidth: payload
             .get("preferred_bandwidth")
             .and_then(Value::as_u64)
@@ -1756,6 +1764,20 @@ mod tests {
     }
 
     #[test]
+    fn invalid_or_oversized_variant_hints_fall_back_to_automatic_selection() {
+        for (hint, expected) in [
+            (json!("a\u{0}b"), String::new()),
+            (json!("界".repeat(2049)), String::new()),
+            (json!("界".repeat(2048)), "界".repeat(2048)),
+            (json!(42), String::new()),
+        ] {
+            let resource = json!({"url":"https://cdn.test/manifest", "preferred_variant_id": hint});
+            let offer = parse_offer(resource.as_object().unwrap(), false).unwrap();
+            assert_eq!(offer.preferred_variant_id, expected);
+        }
+    }
+
+    #[test]
     fn browser_download_limits_are_unset_unless_explicitly_supplied() {
         for (limits, expected_workers, expected_speed) in [
             (json!({}), 0, 0),
@@ -1794,7 +1816,7 @@ mod tests {
                 let mut session = NativeHostSession::in_memory().unwrap();
                 let response = session.dispatch(&json!({
                     "op": operation,
-                    "resource": {"url": "https://cdn.test/media", "filename": "media.mp4", "resource_kind": kind, "size": 336, "preferred_bandwidth": 2_500_000, "preferred_height": 720}
+                    "resource": {"url": "https://cdn.test/media", "filename": "media.mp4", "resource_kind": kind, "size": 336, "preferred_bandwidth": 2_500_000, "preferred_height": 720, "preferred_variant_id": "  v2  "}
                 })).unwrap();
                 if operation == "offer" {
                     assert!(session.core.local().tasks().is_empty());
@@ -1806,6 +1828,7 @@ mod tests {
                 assert_eq!(specs.len(), 1);
                 assert_eq!(specs[0].1.preferred_bandwidth, 2_500_000);
                 assert_eq!(specs[0].1.preferred_height, 720);
+                assert_eq!(specs[0].1.preferred_variant_id, "v2");
                 assert_eq!(
                     specs[0].1.expected_size, expected_size,
                     "{kind} {operation}"

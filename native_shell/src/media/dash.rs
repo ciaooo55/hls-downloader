@@ -59,6 +59,7 @@ pub struct Representation {
     pub content_type: String,
     pub label: String,
     pub base_url: String,
+    media_template: Option<String>,
     pub init: Option<String>,
     pub init_range: Option<ByteRange>,
     pub index_range: Option<ByteRange>,
@@ -607,6 +608,9 @@ fn parse_mpd_for_recording(
         if let Some(url) = &init {
             consume_url_budget(url, &mut url_budget)?;
         }
+        if let Some(template) = media_template {
+            consume_url_budget(template, &mut url_budget)?;
+        }
         representations.push(Representation {
             id,
             bandwidth,
@@ -616,6 +620,7 @@ fn parse_mpd_for_recording(
             codecs: inherited("codecs"),
             content_type: inherited("contentType"),
             label: inherited("label"),
+            media_template: media_template.map(str::to_owned),
             base_url,
             init: init.filter(|url| !url.is_empty()),
             init_range,
@@ -700,15 +705,44 @@ pub fn audio_choices(manifest: &DashManifest) -> Vec<crate::StreamVariant> {
     choices
 }
 
-fn select_video(
-    representations: &[Representation],
+fn exact_video<'a>(
+    videos: impl Iterator<Item = &'a Representation> + Clone,
+    id: &str,
+) -> Option<&'a Representation> {
+    if id.is_empty() {
+        return None;
+    }
+    if let Some(rep) = videos.clone().find(|r| r.id == id) {
+        return Some(rep);
+    }
+    if crate::http_engine::request_origin(id).is_empty() {
+        return None;
+    }
+    let mut matches = videos.filter(|r| {
+        r.base_url == id
+            || r.init.as_deref() == Some(id)
+            || r.media_template
+                .as_ref()
+                .is_some_and(|template| resolve(&r.base_url, template) == id)
+            || r.media.iter().any(|url| url == id)
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+fn select_video<'a>(
+    representations: &'a [Representation],
     preferred_bandwidth: u64,
     preferred_height: u32,
-) -> Option<&Representation> {
+    preferred_variant_id: &str,
+) -> Option<&'a Representation> {
     let videos: Vec<_> = representations
         .iter()
         .filter(|item| is_video(item))
         .collect();
+    if let Some(rep) = exact_video(videos.iter().copied(), preferred_variant_id) {
+        return Some(rep);
+    }
     if preferred_bandwidth > 0 {
         videos.into_iter().min_by_key(|item| {
             (
@@ -737,6 +771,7 @@ pub fn download_dash_selected(
     control: &Path,
     preferred_bandwidth: u64,
     preferred_height: u32,
+    preferred_variant_id: &str,
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
@@ -750,6 +785,7 @@ pub fn download_dash_selected(
             control,
             preferred_bandwidth,
             preferred_height,
+            preferred_variant_id,
             download_subtitles,
             preferred_audio,
         )
@@ -781,6 +817,7 @@ fn download_dash_scoped(
     control: &Path,
     preferred_bandwidth: u64,
     preferred_height: u32,
+    preferred_variant_id: &str,
     download_subtitles: bool,
     preferred_audio: &str,
 ) -> Result<PathBuf, String> {
@@ -798,6 +835,7 @@ fn download_dash_scoped(
             control,
             preferred_bandwidth,
             preferred_height,
+            preferred_variant_id,
             download_subtitles,
             preferred_audio,
             &mut vod,
@@ -811,18 +849,32 @@ fn download_dash_scoped(
         .filter(|item| item.period == 0)
         .cloned()
         .collect();
-    let video = select_video(&first_period, preferred_bandwidth, preferred_height)
-        .cloned()
-        .map(|track| expand_periods(&manifest, track, headers, proxy, control))
-        .transpose()?;
+    let video = select_video(
+        &first_period,
+        preferred_bandwidth,
+        preferred_height,
+        preferred_variant_id,
+    )
+    .cloned()
+    .map(|track| {
+        expand_periods(
+            &manifest,
+            track,
+            preferred_variant_id,
+            headers,
+            proxy,
+            control,
+        )
+    })
+    .transpose()?;
     let audio = select_audio(&first_period, preferred_audio)
         .cloned()
-        .map(|track| expand_periods(&manifest, track, headers, proxy, control))
+        .map(|track| expand_periods(&manifest, track, "", headers, proxy, control))
         .transpose()?;
     let subtitles = if download_subtitles {
         select_subtitles(&first_period)
             .into_iter()
-            .filter_map(|track| expand_periods(&manifest, track, headers, proxy, control).ok())
+            .filter_map(|track| expand_periods(&manifest, track, "", headers, proxy, control).ok())
             .filter(|track| track.init_markers.is_empty())
             .collect()
     } else {
@@ -1314,6 +1366,7 @@ fn continuing_live_track<'a>(
     index: usize,
     selected: &Representation,
     same_period: bool,
+    preferred_variant_id: &str,
 ) -> Result<&'a Representation, String> {
     let part = if same_period {
         representations.iter().find(|item| {
@@ -1322,7 +1375,7 @@ fn continuing_live_track<'a>(
                 && track_kind(item) == track_kind(selected)
         })
     } else {
-        match_period_track(representations, index, selected)
+        match_period_track(representations, index, selected, preferred_variant_id)
     }
     .ok_or("直播 DASH 的新清单缺少选定音视频轨道")?;
     if !part.mime.eq_ignore_ascii_case(&selected.mime)
@@ -1384,6 +1437,7 @@ fn download_live_dash(
     control: &Path,
     preferred_bandwidth: u64,
     preferred_height: u32,
+    preferred_variant_id: &str,
     download_subtitles: bool,
     preferred_audio: &str,
     vod: &mut DashCheckpoint,
@@ -1446,12 +1500,23 @@ fn download_live_dash(
                 }
             }
             let (mut track, mut secondary) = if let Some((track, secondary)) = &choices {
-                let track =
-                    continuing_live_track(&manifest.representations, index, track, same_period)?;
+                let track = continuing_live_track(
+                    &manifest.representations,
+                    index,
+                    track,
+                    same_period,
+                    preferred_variant_id,
+                )?;
                 let secondary = secondary
                     .as_ref()
                     .map(|item| {
-                        continuing_live_track(&manifest.representations, index, item, same_period)
+                        continuing_live_track(
+                            &manifest.representations,
+                            index,
+                            item,
+                            same_period,
+                            "",
+                        )
                     })
                     .transpose()?;
                 (track.clone(), secondary.cloned())
@@ -1462,7 +1527,12 @@ fn download_live_dash(
                     .filter(|item| item.period == index)
                     .cloned()
                     .collect();
-                let video = select_video(&candidates, preferred_bandwidth, preferred_height);
+                let video = select_video(
+                    &candidates,
+                    preferred_bandwidth,
+                    preferred_height,
+                    preferred_variant_id,
+                );
                 let music = select_audio(&candidates, preferred_audio);
                 let Some(track) = video.or(music) else {
                     continue;
@@ -1710,7 +1780,16 @@ fn match_period_track<'a>(
     representations: &'a [Representation],
     period: usize,
     chosen: &Representation,
+    preferred_variant_id: &str,
 ) -> Option<&'a Representation> {
+    if is_video(chosen) {
+        let videos = representations
+            .iter()
+            .filter(|r| r.period == period && is_video(r));
+        if let Some(rep) = exact_video(videos, preferred_variant_id) {
+            return Some(rep);
+        }
+    }
     let kind = track_kind(chosen);
     let chosen_codec = codec_family(&chosen.codecs);
     representations
@@ -1738,17 +1817,23 @@ fn match_period_track<'a>(
 fn period_parts(
     manifest: &DashManifest,
     chosen: &Representation,
+    preferred_variant_id: &str,
 ) -> Result<Vec<Representation>, String> {
     let mut parts = vec![chosen.clone()];
     for period in 1..manifest.period_count {
-        let part =
-            match_period_track(&manifest.representations, period, chosen).ok_or_else(|| {
-                format!(
-                    "多 Period DASH 第 {} 个 Period 缺少与所选轨道（{}）匹配的轨道",
-                    period + 1,
-                    chosen.id
-                )
-            })?;
+        let part = match_period_track(
+            &manifest.representations,
+            period,
+            chosen,
+            preferred_variant_id,
+        )
+        .ok_or_else(|| {
+            format!(
+                "多 Period DASH 第 {} 个 Period 缺少与所选轨道（{}）匹配的轨道",
+                period + 1,
+                chosen.id
+            )
+        })?;
         parts.push(part.clone());
     }
     Ok(parts)
@@ -1823,6 +1908,7 @@ fn concat_period_parts(parts: Vec<Representation>) -> Result<Representation, Str
 fn expand_periods(
     manifest: &DashManifest,
     chosen: Representation,
+    preferred_variant_id: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
     control: &Path,
@@ -1832,7 +1918,7 @@ fn expand_periods(
         expand_segment_base(&mut track, headers, proxy, control)?;
         return Ok(track);
     }
-    let mut parts = period_parts(manifest, &chosen)?;
+    let mut parts = period_parts(manifest, &chosen, preferred_variant_id)?;
     for part in &mut parts {
         expand_segment_base(part, headers, proxy, control)?;
     }
@@ -1913,40 +1999,34 @@ fn download_dash_primary(
         })
         .unwrap_or_default();
     let kind = if video { "video" } else { "audio" };
-    for (index, path) in planned.iter().enumerate() {
-        let rel = relative_posix(task_dir, path);
-        let identity = dash_file_identity(
-            kind,
-            &(index + offset).to_string(),
-            &track.id,
-            &track.media[index],
-            track.media_ranges[index],
-            &track.mime,
-        );
-        let size = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-        if !vod.can_reuse(&rel, &identity, size) {
-            super::preview::reset_ready(task_dir, path)?;
-        } else {
-            super::preview::mark_ready(task_dir, path)?;
-        }
-    }
-    if let Some(audio) = audio {
-        for (index, path) in audio_planned.iter().enumerate() {
+    let mut missing = HashMap::new();
+    let mut invalidated = false;
+    for (rep, paths, kind, offset) in std::iter::once((track, &planned, kind, offset))
+        .chain(audio.map(|rep| (rep, &audio_planned, "audio", 0)))
+    {
+        for (index, path) in paths.iter().enumerate() {
             let identity = dash_file_identity(
-                "audio",
-                &index.to_string(),
-                &audio.id,
-                &audio.media[index],
-                audio.media_ranges[index],
-                &audio.mime,
+                kind,
+                &(index + offset).to_string(),
+                &rep.id,
+                &rep.media[index],
+                rep.media_ranges[index],
+                &rep.mime,
             );
-            let size = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
-            if vod.can_reuse(&relative_posix(task_dir, path), &identity, size) {
+            let slot = relative_posix(task_dir, path);
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            if vod.can_reuse(&slot, &identity, size) {
                 super::preview::mark_ready(task_dir, path)?;
             } else {
+                invalidated |= vod.records.remove(&slot).is_some();
                 super::preview::reset_ready(task_dir, path)?;
+                missing.insert(path.clone(), identity);
             }
         }
+    }
+    // Persist all invalidations before the first replacement is published.
+    if invalidated {
+        vod.save(task_dir)?;
     }
     let all: Vec<_> = files.iter().chain(planned.iter()).cloned().collect();
     let mut preview = write_dash_preview_track(
@@ -1977,67 +2057,75 @@ fn download_dash_primary(
         .collect();
     let mut pending: std::collections::VecDeque<_> =
         super::preview::segment_order(&durations, &audio_durations).into();
-    while !pending.is_empty() {
-        if read_control(control) != "run" {
-            return Err(control_stop_error(control));
-        }
-        if let Some(priority) = super::preview::priority_file(task_dir) {
-            if let Some(position) = pending.iter().position(|(is_audio, index)| {
-                (if *is_audio {
-                    &audio_planned[*index]
+    std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(0);
+        let writer = scope.spawn(move || commit_vod_segments(receiver, task_dir, vod));
+        let transfer = (|| -> Result<(), String> {
+            while !pending.is_empty() {
+                if read_control(control) != "run" {
+                    return Err(control_stop_error(control));
+                }
+                if let Some(priority) = super::preview::priority_file(task_dir) {
+                    if let Some(position) = pending.iter().position(|(is_audio, index)| {
+                        (if *is_audio {
+                            &audio_planned[*index]
+                        } else {
+                            &planned[*index]
+                        }) == &priority
+                    }) {
+                        pending.rotate_left(position);
+                    }
+                }
+                let (is_audio, index) = pending.pop_front().unwrap();
+                let (rep, path, landed) = if is_audio {
+                    (audio.unwrap(), &audio_planned[index], &mut audio_files)
                 } else {
-                    &planned[*index]
-                }) == &priority
-            }) {
-                pending.rotate_left(position);
+                    (track, &planned[index], &mut files)
+                };
+                if let Some(identity) = missing.remove(path) {
+                    let init = rep.init_markers.contains(&index);
+                    super::hls::save_segment(
+                        &rep.media[index],
+                        headers,
+                        proxy,
+                        path,
+                        control,
+                        rep.media_ranges[index].map(|range| (range.start, range.length)),
+                        None,
+                        init,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let size = path.metadata().map_err(|e| e.to_string())?.len();
+                    sender
+                        .send(LandedSegment {
+                            path: path.clone(),
+                            identity,
+                            size,
+                            init,
+                        })
+                        .map_err(|_| "DASH segment checkpoint worker stopped".to_owned())?;
+                    super::preview::mark_ready(task_dir, path)?;
+                }
+                landed.push(path.clone());
+                report_dash_tracks_progress(task_dir, &files, &audio_files, total, false);
+                let first_video_ready =
+                    super::preview::is_ready(task_dir, &relative_posix(task_dir, &planned[0]));
+                let first_audio_ready = audio.is_none()
+                    || audio_planned.first().is_some_and(|path| {
+                        super::preview::is_ready(task_dir, &relative_posix(task_dir, path))
+                    });
+                if preview && first_video_ready && first_audio_ready {
+                    write_dash_preview_master(task_dir, audio.is_some())?;
+                }
             }
-        }
-        let (is_audio, index) = pending.pop_front().unwrap();
-        if is_audio {
-            let audio = audio.unwrap();
-            audio_files.push(resume_or_fetch(
-                &audio.media[index],
-                audio.media_ranges[index],
-                headers,
-                proxy,
-                &audio_planned[index],
-                control,
-                task_dir,
-                "audio",
-                &index.to_string(),
-                &audio.id,
-                &audio.mime,
-                true,
-                vod,
-            )?);
-        } else {
-            files.push(resume_or_fetch(
-                &track.media[index],
-                track.media_ranges[index],
-                headers,
-                proxy,
-                &planned[index],
-                control,
-                task_dir,
-                kind,
-                &(index + offset).to_string(),
-                &track.id,
-                &track.mime,
-                true,
-                vod,
-            )?);
-        }
-        report_dash_tracks_progress(task_dir, &files, &audio_files, total, false);
-        let first_video_ready =
-            super::preview::is_ready(task_dir, &relative_posix(task_dir, &planned[0]));
-        let first_audio_ready = audio.is_none()
-            || audio_planned.first().is_some_and(|path| {
-                super::preview::is_ready(task_dir, &relative_posix(task_dir, path))
-            });
-        if preview && first_video_ready && first_audio_ready {
-            write_dash_preview_master(task_dir, audio.is_some())?;
-        }
-    }
+            Ok(())
+        })();
+        drop(sender);
+        writer
+            .join()
+            .map_err(|_| "DASH segment checkpoint worker panicked")??;
+        transfer
+    })?;
     // 下载优先级不改变最终拼接顺序。
     let merged_audio = if audio.is_some() {
         write_dash_playlist(&audio_dir, &all_audio)?;
@@ -2152,6 +2240,11 @@ fn download_one(
             .map_err(|error| error.to_string())?;
     } else {
         run_job(&job).map_err(|error| error.to_string())?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(output)
+            .and_then(|file| file.sync_data())
+            .map_err(|error| error.to_string())?;
     }
     Ok(output.to_path_buf())
 }
@@ -2183,6 +2276,59 @@ pub(crate) fn dash_file_identity(
         payload["range"] = serde_json::json!([range.start, range.length]);
     }
     crate::crypto_lite::sha256_hex(payload.to_string().as_bytes())
+}
+
+#[derive(Default)]
+struct LandedSegment {
+    path: PathBuf,
+    identity: String,
+    size: u64,
+    init: bool,
+}
+
+// A stalled network read cannot postpone the oldest landed segment's deadline.
+// Closing the sender drains the final batch on completion, pause, cancel or error.
+fn commit_vod_segments(
+    receiver: std::sync::mpsc::Receiver<LandedSegment>,
+    task_dir: &Path,
+    vod: &mut DashCheckpoint,
+) -> Result<(), String> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let mut pending = super::hls::SegmentBatch::default();
+    loop {
+        let next = match pending.remaining() {
+            Some(timeout) => receiver.recv_timeout(timeout),
+            None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
+        let closed = matches!(next, Err(RecvTimeoutError::Disconnected));
+        let batch = match next {
+            Ok(segment) => {
+                let size = segment.size;
+                let init = segment.init;
+                match pending.push(segment, size) {
+                    Some(batch) => batch,
+                    None if init => pending.take(),
+                    None => continue,
+                }
+            }
+            Err(_) => pending.take(),
+        };
+        if !batch.is_empty() {
+            let paths = batch.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
+            super::hls::sync_segment_files(&paths)?;
+            for segment in batch {
+                vod.remember(
+                    &relative_posix(task_dir, &segment.path),
+                    &segment.identity,
+                    segment.size,
+                );
+            }
+            vod.save(task_dir)?;
+        }
+        if closed {
+            return Ok(());
+        }
+    }
 }
 
 struct DashCheckpoint {
@@ -2259,7 +2405,12 @@ impl DashCheckpoint {
         super::hls::write_text_atomic(
             &task_dir.join("dash_vod_segments.json"),
             &payload.to_string(),
-        )
+        )?;
+        #[cfg(unix)]
+        fs::File::open(task_dir)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
@@ -3768,11 +3919,11 @@ mod tests {
         // Whole-file tracks embed their own moov; stitching periods of them is refused.
         let two = r#"<MPD type="static"><Period duration="PT1S"><Representation id="v" mimeType="video/mp4"><BaseURL>a.mp4</BaseURL><SegmentBase/></Representation></Period><Period duration="PT1S"><Representation id="v" mimeType="video/mp4"><BaseURL>b.mp4</BaseURL><SegmentBase/></Representation></Period></MPD>"#;
         let parsed = parse_mpd(two, "https://cdn.test/m.mpd").unwrap();
-        assert!(
-            concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
-                .unwrap_err()
-                .contains("SegmentBase")
-        );
+        assert!(concat_period_parts(
+            period_parts(&parsed, &parsed.representations[0], "").unwrap()
+        )
+        .unwrap_err()
+        .contains("SegmentBase"));
     }
 
     #[test]
@@ -3824,8 +3975,9 @@ mod tests {
         let (base, server) = serve_dash_files(files, 5);
         let xml = r#"<MPD type="static"><Period duration="PT2S"><BaseURL>p1/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentTemplate duration="2" initialization="init.mp4" media="$Number$.m4s"/></Representation></Period><Period duration="PT2S"><BaseURL>p2/</BaseURL><Representation id="v" mimeType="video/mp4"><SegmentList duration="1"><Initialization sourceURL="init.mp4"/><SegmentURL media="1.m4s"/><SegmentURL media="2.m4s"/></SegmentList></Representation></Period></MPD>"#;
         let parsed = parse_mpd(xml, &format!("{base}/manifest.mpd")).unwrap();
-        let track = concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
-            .unwrap();
+        let track =
+            concat_period_parts(period_parts(&parsed, &parsed.representations[0], "").unwrap())
+                .unwrap();
         let root = std::env::temp_dir().join(format!("hls-dash-periods-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -3987,6 +4139,7 @@ mod tests {
                 &control,
                 0,
                 0,
+                "",
                 false,
                 "",
             )
@@ -4057,6 +4210,7 @@ mod tests {
                 &control,
                 0,
                 0,
+                "",
                 false,
                 "",
             )
@@ -4275,6 +4429,95 @@ mod tests {
     }
 
     #[test]
+    fn dash_batch_thresholds_commit_before_a_failed_final_batch() {
+        for (count, bytes) in [(32, 1), (1, 64 * 1024 * 1024)] {
+            let root =
+                std::env::temp_dir().join(format!("dash-batch-{}-{count}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let mut vod = DashCheckpoint::load(&root);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            for index in 0..count + 2 {
+                let path = root.join(index.to_string());
+                let size = if index < count { bytes } else { 1 };
+                if index <= count {
+                    fs::File::create(&path).unwrap().set_len(size).unwrap();
+                }
+                sender
+                    .send(LandedSegment {
+                        path,
+                        identity: "v".into(),
+                        size,
+                        init: false,
+                    })
+                    .unwrap();
+            }
+            drop(sender);
+            assert!(commit_vod_segments(receiver, &root, &mut vod).is_err());
+            assert_eq!(vod.records.len(), count);
+            let restored = DashCheckpoint::load(&root);
+            assert_eq!(restored.records, vod.records);
+            for index in 0..count {
+                assert!(restored.can_reuse(&index.to_string(), "v", bytes));
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn idle_dash_batch_attempts_sync_while_the_sender_is_open() {
+        use std::sync::mpsc;
+        let (sender, receiver) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        let root = std::env::temp_dir().join(format!("dash-idle-batch-{}", std::process::id()));
+        let mut vod = DashCheckpoint::load(&root);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                finished
+                    .send(commit_vod_segments(receiver, &root, &mut vod))
+                    .unwrap()
+            });
+            sender
+                .send(LandedSegment {
+                    path: root.join("missing"),
+                    identity: "not-durable".into(),
+                    size: 1,
+                    init: false,
+                })
+                .unwrap();
+            // The missing file makes the timer-triggered sync observable without polling the disk.
+            let attempted = result.recv_timeout(std::time::Duration::from_secs(10));
+            drop(sender);
+            assert!(attempted.unwrap().is_err());
+        });
+        assert!(vod.records.is_empty());
+    }
+
+    #[test]
+    fn dash_exact_variant_selects_equal_quality_by_id_or_distinguishing_url() {
+        let period = r#"<Period duration="PT1S"><AdaptationSet mimeType="video/mp4"><SegmentTemplate duration="1" media="seg-$Number$.m4s"/><Representation id="a" height="1080" bandwidth="5000000"><BaseURL>a/</BaseURL></Representation><Representation id="b" height="1080" bandwidth="5000000"><BaseURL>b/</BaseURL></Representation></AdaptationSet></Period>"#;
+        let manifest = parse_mpd(
+            &format!("<MPD>{period}{period}</MPD>"),
+            "https://cdn.test/m.mpd",
+        )
+        .unwrap();
+        let first = &manifest.representations[..2];
+        for id in [
+            "b",
+            "https://cdn.test/b/",
+            "https://cdn.test/b/seg-$Number$.m4s",
+            "https://cdn.test/b/seg-1.m4s",
+        ] {
+            let selected = select_video(first, 5_000_000, 1080, id).unwrap();
+            assert_eq!(selected.id, "b");
+            assert!(period_parts(&manifest, selected, id)
+                .unwrap()
+                .iter()
+                .all(|rep| rep.id == "b"));
+        }
+        assert_eq!(select_video(first, 5_000_000, 1080, "B").unwrap().id, "a");
+    }
+
+    #[test]
     fn failed_range_replacement_cannot_reuse_an_old_checkpoint_after_restart() {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -4309,32 +4552,35 @@ mod tests {
         });
         let root = std::env::temp_dir().join(format!("dash-ranges-restart-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
-        let dest = root.join("seg-0001.m4s");
+        let dest = root.join("seg-0000.m4s");
         let control = root.join("control");
         fs::write(&control, "run").unwrap();
         let fetch = |start| {
-            resume_or_fetch(
-                &url,
-                Some(ByteRange { start, length: 4 }),
+            let track = Representation {
+                id: "v".into(),
+                mime: "video/mp4".into(),
+                media: vec![url.clone()],
+                media_ranges: vec![Some(ByteRange { start, length: 4 })],
+                ..Default::default()
+            };
+            download_dash_primary(
+                &track,
+                true,
+                &root,
                 &HashMap::new(),
                 "",
-                &dest,
                 &control,
-                &root,
-                "video",
-                "1",
-                "v",
-                "video/mp4",
-                true,
                 &mut DashCheckpoint::load(&root),
+                None,
+                1,
             )
         };
         fetch(0).unwrap();
         assert!(fetch(4).is_err());
-        assert_eq!(fs::read(&dest).unwrap(), b"BBBB");
+        assert_eq!(fs::read(&dest).unwrap(), b"AAAA");
         let old_identity = dash_file_identity(
             "video",
-            "1",
+            "0",
             "v",
             &url,
             Some(ByteRange {
@@ -4343,8 +4589,8 @@ mod tests {
             }),
             "video/mp4",
         );
-        assert!(!DashCheckpoint::load(&root).can_reuse("seg-0001.m4s", &old_identity, 4));
-        assert!(!super::super::preview::is_ready(&root, "seg-0001.m4s"));
+        assert!(!DashCheckpoint::load(&root).can_reuse("seg-0000.m4s", &old_identity, 4));
+        assert!(!super::super::preview::is_ready(&root, "seg-0000.m4s"));
         fetch(0).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"AAAA");
         server.join().unwrap();
@@ -4497,13 +4743,14 @@ mod tests {
             ("Authorization".into(), "Bearer real".into()),
         ]);
         let url = format!("{base}/manifest.mpd");
-        let output =
-            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, false, "audio")
-                .unwrap();
+        let output = download_dash_selected(
+            &url, &headers, "", &task, &control, 0, 0, "", false, "audio",
+        )
+        .unwrap();
         // A restart rechecks indices but reuses persisted media. A malformed
         // optional subtitle index must not fail an otherwise complete AV task.
         assert_eq!(
-            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, true, "audio")
+            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, "", true, "audio")
                 .unwrap(),
             output
         );
@@ -4761,6 +5008,7 @@ mod tests {
             &control,
             0,
             0,
+            "",
             false,
             "",
         )
@@ -4775,6 +5023,10 @@ mod tests {
             fs::read(root.join("audio/seg-0000.m4s")).unwrap(),
             b"fragment bytes"
         );
+        let durable = DashCheckpoint::load(&root);
+        assert!(durable.records.contains_key("seg-0001.m4s"));
+        assert!(durable.records.contains_key("audio/seg-0000.m4s"));
+        assert!(!durable.records.contains_key("audio/seg-0001.m4s"));
         assert!(!root.join("audio/seg-0002.m4s").exists());
         let requests = requests.lock().unwrap();
         let video = requests.iter().position(|path| path == "/v0.m4s").unwrap();
@@ -4888,7 +5140,7 @@ mod tests {
             vec![1.0, 1.0, 0.5]
         );
         // The empty second Period cannot continue the track: fail with a clear error.
-        assert!(period_parts(&parsed, &parsed.representations[0])
+        assert!(period_parts(&parsed, &parsed.representations[0], "")
             .unwrap_err()
             .contains("第 2 个 Period"));
     }
@@ -4898,13 +5150,15 @@ mod tests {
         let xml = r#"<MPD><Period><AdaptationSet mimeType="video/mp4"><Representation id="high" height="720" bandwidth="500000"/><Representation id="low" height="360" bandwidth="500000"/></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/manifest.mpd").unwrap();
         assert_eq!(
-            select_video(&parsed.representations, 500000, 360)
+            select_video(&parsed.representations, 500000, 360, "")
                 .unwrap()
                 .id,
             "low"
         );
         assert_eq!(
-            select_video(&parsed.representations, 0, 720).unwrap().id,
+            select_video(&parsed.representations, 0, 720, "")
+                .unwrap()
+                .id,
             "high"
         );
     }
@@ -4994,7 +5248,7 @@ mod tests {
             );
             let parsed = parse_mpd(&xml, "https://cdn.test/manifest.mpd").unwrap();
             let stitched =
-                period_parts(&parsed, &parsed.representations[0]).and_then(concat_period_parts);
+                period_parts(&parsed, &parsed.representations[0], "").and_then(concat_period_parts);
             if codec == "hvc1" {
                 assert!(stitched.unwrap_err().contains("编码"));
                 let mut options = parsed.clone();
@@ -5003,7 +5257,7 @@ mod tests {
                 compatible.bandwidth = 2;
                 compatible.media = vec!["https://cdn.test/compatible.m4s".into()];
                 options.representations.push(compatible);
-                let selected = period_parts(&options, &options.representations[0]).unwrap();
+                let selected = period_parts(&options, &options.representations[0], "").unwrap();
                 assert_eq!(
                     concat_period_parts(selected).unwrap().media.last().unwrap(),
                     "https://cdn.test/compatible.m4s"
@@ -5051,8 +5305,8 @@ mod tests {
             .filter(|item| item.period == 0)
             .cloned()
             .collect();
-        let video = select_video(&first, 3_000_000, 720).unwrap();
-        let video = concat_period_parts(period_parts(&parsed, video).unwrap()).unwrap();
+        let video = select_video(&first, 3_000_000, 720, "").unwrap();
+        let video = concat_period_parts(period_parts(&parsed, video, "").unwrap()).unwrap();
         assert_eq!(
             video.media,
             [
@@ -5078,14 +5332,14 @@ mod tests {
         assert_eq!(video.media_ranges.len(), video.media.len());
         // Audio follows the chosen language rather than document order.
         let audio = select_audio(&first, "ja").unwrap();
-        let ja_parts = period_parts(&parsed, audio).unwrap();
+        let ja_parts = period_parts(&parsed, audio, "").unwrap();
         assert_eq!(ja_parts[1].id, "ad-ja");
         assert_eq!(
             ja_parts[2].id, "en",
             "only remaining audio continues the track"
         );
         let audio = select_audio(&first, "en").unwrap();
-        let audio = concat_period_parts(period_parts(&parsed, audio).unwrap()).unwrap();
+        let audio = concat_period_parts(period_parts(&parsed, audio, "").unwrap()).unwrap();
         assert_eq!(
             audio.media,
             [
@@ -5110,7 +5364,7 @@ mod tests {
             .collect();
         assert_eq!(counts, [(0, 2), (1, 2), (2, 2)]);
         let stitched =
-            concat_period_parts(period_parts(&parsed, &parsed.representations[0]).unwrap())
+            concat_period_parts(period_parts(&parsed, &parsed.representations[0], "").unwrap())
                 .unwrap();
         assert!(stitched.init_markers.is_empty());
         assert_eq!(stitched.period_markers, vec![2, 4]);
@@ -5418,6 +5672,7 @@ mod tests {
             &control,
             0,
             0,
+            "",
             false,
             "",
             &mut DashCheckpoint::load(&root),
@@ -5829,6 +6084,7 @@ mod tests {
                 &control,
                 0,
                 0,
+                "",
                 false,
                 "",
                 &mut DashCheckpoint::load(&root),
@@ -5890,6 +6146,7 @@ mod tests {
             &control,
             0,
             0,
+            "",
             false,
             "",
             &mut DashCheckpoint::load(&root),
@@ -5937,6 +6194,7 @@ mod tests {
                 &control,
                 0,
                 0,
+                "",
                 false,
                 "",
                 &mut DashCheckpoint::load(&root),
@@ -6059,6 +6317,7 @@ mod tests {
             &control,
             0,
             0,
+            "",
             false,
             "",
             &mut DashCheckpoint::load(&root),
@@ -6097,6 +6356,7 @@ mod tests {
             &control,
             0,
             0,
+            "",
             false,
             "",
             &mut DashCheckpoint::load(&root),
@@ -6210,7 +6470,10 @@ mod tests {
                 "https://cdn.test/en-1.vtt".to_string()
             ]
         );
-        assert_eq!(select_video(&parsed.representations, 0, 0).unwrap().id, "v");
+        assert_eq!(
+            select_video(&parsed.representations, 0, 0, "").unwrap().id,
+            "v"
+        );
         assert_eq!(select_audio(&parsed.representations, "").unwrap().id, "a");
         assert_eq!(representation_choices(&parsed).len(), 1);
     }
@@ -6230,6 +6493,7 @@ mod tests {
                 content_type: "text".into(),
                 label: "English".into(),
                 base_url: String::new(),
+                media_template: None,
                 init: None,
                 init_range: None,
                 index_range: None,
@@ -6255,6 +6519,7 @@ mod tests {
                 content_type: "text".into(),
                 label: "English".into(),
                 base_url: String::new(),
+                media_template: None,
                 init: None,
                 init_range: None,
                 index_range: None,
@@ -6282,7 +6547,7 @@ mod tests {
     fn audio_only_dash_is_selectable() {
         let xml = r#"<MPD type="static"><Period><AdaptationSet mimeType="audio/mp4"><Representation id="a" bandwidth="192000"><SegmentURL media="a.m4s"/></Representation></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/audio.mpd").unwrap();
-        assert!(select_video(&parsed.representations, 0, 0).is_none());
+        assert!(select_video(&parsed.representations, 0, 0, "").is_none());
         assert_eq!(select_audio(&parsed.representations, "").unwrap().id, "a");
         let xml = r#"<MPD type="static"><Period><AdaptationSet mimeType="audio/mp4"><Representation id="en" bandwidth="128000" lang="en"><SegmentURL media="en.m4s"/></Representation><Representation id="ja" bandwidth="192000" lang="ja"><SegmentURL media="ja.m4s"/></Representation></AdaptationSet></Period></MPD>"#;
         let parsed = parse_mpd(xml, "https://cdn.test/audio.mpd").unwrap();

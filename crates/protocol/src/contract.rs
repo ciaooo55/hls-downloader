@@ -86,6 +86,8 @@ pub struct ResourceOffer {
     pub preferred_bandwidth: u64,
     #[serde(default)]
     pub preferred_height: u32,
+    #[serde(default)]
+    pub preferred_variant_id: String,
 }
 
 impl Default for ResourceOffer {
@@ -108,6 +110,7 @@ impl Default for ResourceOffer {
             size: 0,
             preferred_bandwidth: 0,
             preferred_height: 0,
+            preferred_variant_id: String::new(),
         }
     }
 }
@@ -383,6 +386,8 @@ pub struct TaskSpec {
     #[serde(default)]
     pub preferred_height: u32,
     #[serde(default)]
+    pub preferred_variant_id: String,
+    #[serde(default)]
     pub preferred_audio: String,
     #[serde(default)]
     pub allow_duplicate: bool,
@@ -443,6 +448,7 @@ impl Default for TaskSpec {
             harvest: false,
             preferred_bandwidth: 0,
             preferred_height: 0,
+            preferred_variant_id: String::new(),
             preferred_audio: String::new(),
             allow_duplicate: false,
             preserve_existing_output: false,
@@ -1057,10 +1063,20 @@ mod tests {
             size: 42,
             preferred_bandwidth: 2_500_000,
             preferred_height: 720,
+            preferred_variant_id: "v2".into(),
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
         let restored: ResourceOffer = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(restored, offer);
+    }
+
+    #[test]
+    fn old_offer_and_task_json_default_to_automatic_variant_selection() {
+        let legacy = serde_json::json!({"url": "https://cdn.test/master", "resource_kind": "hls"});
+        let offer: ResourceOffer = serde_json::from_value(legacy.clone()).unwrap();
+        let spec: TaskSpec = serde_json::from_value(legacy).unwrap();
+        assert!(offer.preferred_variant_id.is_empty());
+        assert!(spec.preferred_variant_id.is_empty());
     }
 
     #[test]

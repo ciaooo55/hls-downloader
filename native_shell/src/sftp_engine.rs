@@ -618,11 +618,25 @@ fn download_with_session(
     Ok(written)
 }
 
+#[cfg(test)]
 pub fn download_sftp(url: &str, output: &Path, control: &Path) -> Result<u64, String> {
+    download_sftp_routed(url, output, control, "")
+}
+
+pub(crate) fn download_sftp_routed(
+    url: &str,
+    output: &Path,
+    control: &Path,
+    route: &str,
+) -> Result<u64, String> {
     check_sftp_control(control)?;
     let target = parse_sftp_url(url)?;
+    let proxy = crate::proxy_tunnel::Proxy::resolve(route, url, || check_sftp_control(control))?;
     #[cfg(test)]
-    if let Ok(root) = std::env::var("HLS_V7_SFTP_FIXTURE") {
+    if let Some(root) = std::env::var("HLS_V7_SFTP_FIXTURE")
+        .ok()
+        .filter(|_| proxy.is_none())
+    {
         let session = FixtureSession {
             root: PathBuf::from(root),
         };
@@ -631,9 +645,10 @@ pub fn download_sftp(url: &str, output: &Path, control: &Path) -> Result<u64, St
             return download_with_session(&target, output, control, &session);
         }
     }
-    match crate::sftp_live::open_live_session(&target) {
+    match crate::sftp_live::open_live_session(&target, proxy.as_ref(), control) {
         Ok(session) => return download_with_session(&target, output, control, &session),
-        Err(error) if target.password.is_empty() && openssh_fallback_ok(&error) => {}
+        Err(error)
+            if proxy.is_none() && target.password.is_empty() && openssh_fallback_ok(&error) => {}
         Err(error) => return Err(error),
     }
     let known_hosts = pin_remote_host(&target.host, target.port)?;
@@ -644,7 +659,7 @@ fn openssh_fallback_ok(error: &str) -> bool {
     error.contains("登录失败") || error.contains("连接超时") || error.contains("拒绝连接")
 }
 
-fn check_sftp_control(control: &Path) -> Result<(), String> {
+pub(crate) fn check_sftp_control(control: &Path) -> Result<(), String> {
     match read_control(control).as_str() {
         "cancel" => Err("canceled".into()),
         "pause" => Err("paused".into()),
@@ -1155,6 +1170,37 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_proxies_carry_live_ssh_and_sftp() {
+        let _guard = env_lock();
+        let root = std::env::temp_dir().join(format!("hls-sftp-proxy-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("source.bin"), b"tunneled").unwrap();
+        let previous = std::env::var_os("HLS_V7_DATA_DIR");
+        std::env::set_var("HLS_V7_DATA_DIR", root.join("data"));
+        let server = sftp_loopback::start(root.clone(), "lee", "secret").unwrap();
+        for scheme in ["http", "socks5h"] {
+            let proxy = crate::proxy_tunnel::tests::TestProxy::start(scheme);
+            let url = format!(
+                "sftp://lee:secret@origin.invalid:{}/source.bin",
+                server.port
+            );
+            let output = root.join(scheme);
+            let size =
+                download_sftp_routed(&url, &output, &root.join("control"), &proxy.url).unwrap();
+            assert_eq!(size, 8);
+            assert_eq!(fs::read(output).unwrap(), b"tunneled");
+            assert_eq!(proxy.ports.lock().unwrap().as_slice(), &[server.port]);
+        }
+        drop(server);
+        if let Some(value) = previous {
+            std::env::set_var("HLS_V7_DATA_DIR", value);
+        } else {
+            std::env::remove_var("HLS_V7_DATA_DIR");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn live_password_stat_seek_and_tofu() {
         let _guard = env_lock();
         let root = std::env::temp_dir().join(format!("hls-sftp-live-{}", std::process::id()));
@@ -1174,7 +1220,9 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(), payload);
 
         fs::write(&dest, &payload[..25]).unwrap();
-        let session = crate::sftp_live::open_live_session(&parse_sftp_url(&url).unwrap()).unwrap();
+        let session =
+            crate::sftp_live::open_live_session(&parse_sftp_url(&url).unwrap(), None, &control)
+                .unwrap();
         let stat = session.stat("/pub/a.bin").unwrap();
         save_state(
             &state_path(&dest),
