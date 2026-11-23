@@ -43,6 +43,7 @@ pub struct Workbench {
     editor_id: Cell<u64>,
     editor_variants: RefCell<Vec<StreamVariant>>,
     details: RefCell<Option<(String, DetailsWindow)>>,
+    details_full_log: Cell<bool>,
     settings: RefCell<Option<SettingsEditor>>,
     settings_response: RefCell<Option<CorePipeResponse>>,
     show_settings: Cell<bool>,
@@ -265,6 +266,7 @@ impl Workbench {
             editor_id: Cell::new(0),
             editor_variants: RefCell::new(Vec::new()),
             details: RefCell::new(None),
+            details_full_log: Cell::new(false),
             settings: RefCell::new(None),
             settings_response: RefCell::new(None),
             show_settings: Cell::new(false),
@@ -876,33 +878,7 @@ impl Workbench {
 
     fn render_status(&self) {
         let state = self.state.borrow();
-        let mut counts = HashMap::<String, i32>::new();
-        for task in state.tasks.values() {
-            *counts.entry("all".into()).or_default() += 1;
-            let status = match task.status.as_str() {
-                "downloading" | "processing" | "merging" | "probing" => "running",
-                "completed" | "done" => "completed",
-                "canceled" | "failed" => "failed",
-                status => status,
-            };
-            *counts.entry(status.into()).or_default() += 1;
-            *counts
-                .entry(format!(
-                    "category:{}",
-                    hls_client::download_category(&task.filename, &task.url, task.resource_kind)
-                ))
-                .or_default() += 1;
-            *counts
-                .entry(format!(
-                    "queue:{}",
-                    if task.queue_id.is_empty() {
-                        "default"
-                    } else {
-                        &task.queue_id
-                    }
-                ))
-                .or_default() += 1;
-        }
+        let counts = state.nav_counts();
         let nav = |id: &str, label: &str, icon: &str, group: &str, heading: &str| NavigationRow {
             id: id.into(),
             label: label.into(),
@@ -1262,7 +1238,22 @@ impl Workbench {
             }
             "取消完成动作" => self.send(CoreCommand::CancelPowerAction),
             action if action.starts_with("focus_task:") => {
-                self.state.borrow_mut().select(&action[11..], false, false);
+                let target_id = &action[11..];
+                let needs_reset = {
+                    let state = self.state.borrow();
+                    state.tasks.contains_key(target_id) && !state.is_visible(target_id)
+                };
+                if needs_reset {
+                    {
+                        let mut state = self.state.borrow_mut();
+                        state.filter = "all".into();
+                        state.query.clear();
+                        state.rebuild();
+                    }
+                    self.window.set_query("".into());
+                    self.render();
+                }
+                self.state.borrow_mut().select(target_id, false, false);
                 self.render_selection();
                 let _ = self.show();
                 self.open_details();
@@ -1389,6 +1380,7 @@ impl Workbench {
                                     editor.set_result(label.clone().into());
                                     editor.set_kind(kind_label(*resource_kind).into());
                                     *self.editor_variants.borrow_mut() = variants.clone();
+                                    editor.set_variant_index(0);
                                     editor.set_variants(ModelRc::new(VecModel::from(
                                         variants
                                             .iter()
@@ -1427,6 +1419,9 @@ impl Workbench {
                         {
                             editor.set_cookie("".into());
                             editor.set_headers("".into());
+                            if editor.get_mode().as_str() == "curl" {
+                                editor.set_url("".into());
+                            }
                             let _ = editor.hide();
                         }
                     }
@@ -1453,6 +1448,7 @@ impl Workbench {
                     if let CoreEvent::TaskLog { task_id, lines } = event.event {
                         if let Some((id, window)) = self.details.borrow().as_ref() {
                             if *id == task_id {
+                                self.details_full_log.set(true);
                                 window.set_logs(lines.join("\n").into());
                             }
                         }
@@ -1588,6 +1584,17 @@ impl Workbench {
                 this.editor_action(action.as_str());
             }
         });
+        let editor_weak = editor.as_weak();
+        editor.window().on_close_requested(move || {
+            if let Some(editor) = editor_weak.upgrade() {
+                editor.set_cookie("".into());
+                editor.set_headers("".into());
+                if editor.get_mode().as_str() == "curl" {
+                    editor.set_url("".into());
+                }
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
         let _ = editor.show();
         native_window::prepare_dialog(
             &editor,
@@ -1634,6 +1641,9 @@ impl Workbench {
                 let _ = editor.hide();
                 editor.set_cookie("".into());
                 editor.set_headers("".into());
+                if editor.get_mode().as_str() == "curl" {
+                    editor.set_url("".into());
+                }
             }
             "probe" | "create" => {
                 let result = editor_spec(editor, &self.editor_variants.borrow());
@@ -1741,12 +1751,17 @@ impl Workbench {
                         let _ = window.hide();
                         window.set_cookie("".into());
                     }
-                    "refresh_url" => this.send(CoreCommand::RefreshTaskRequest {
-                        task_id: id.clone(),
-                        url: window.get_url().into(),
-                        cookie: window.get_cookie().into(),
-                        auto_resume: true,
-                    }),
+                    "refresh_url" => {
+                        let url: String = window.get_url().into();
+                        let cookie: String = window.get_cookie().into();
+                        window.set_cookie("".into());
+                        this.send(CoreCommand::RefreshTaskRequest {
+                            task_id: id.clone(),
+                            url,
+                            cookie,
+                            auto_resume: true,
+                        });
+                    }
                     "speed" => this.send(CoreCommand::TaskAction {
                         task_id: id.clone(),
                         action: format!("speed:{}", window.get_speed_limit()),
@@ -1768,6 +1783,14 @@ impl Workbench {
                 }
             }
         });
+        let details_weak = window.as_weak();
+        window.window().on_close_requested(move || {
+            if let Some(window) = details_weak.upgrade() {
+                window.set_cookie("".into());
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+        self.details_full_log.set(false);
         *self.details.borrow_mut() = Some((id.clone(), window));
         if let Some((_, window)) = self.details.borrow().as_ref() {
             if let Some(task) = self.state.borrow().tasks.get(&id) {
@@ -1844,8 +1867,11 @@ impl Workbench {
                 .map(|value| value as f32 / maximum)
                 .collect::<Vec<_>>(),
         )));
-        if !task.log_tail.is_empty() {
-            window.set_logs(task.log_tail.join("\n").into());
+        if !self.details_full_log.get() && !task.log_tail.is_empty() {
+            let next = task.log_tail.join("\n");
+            if window.get_logs().as_str() != next {
+                window.set_logs(next.into());
+            }
         }
     }
 

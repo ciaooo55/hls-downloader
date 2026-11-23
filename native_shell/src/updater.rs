@@ -35,10 +35,24 @@ pub fn last_update() -> Option<UpdateInfo> {
     last_info().lock().ok().and_then(|slot| slot.clone())
 }
 
+const DEFAULT_RELEASES_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases/latest";
+
+fn download_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn sanitize_release_html_url(raw: Option<&str>) -> String {
+    let candidate = raw.unwrap_or("").trim();
+    if is_repo_https_url(candidate) {
+        candidate.to_string()
+    } else {
+        DEFAULT_RELEASES_URL.to_string()
+    }
+}
+
 pub fn is_newer_version(remote: &str, current: &str) -> bool {
-    let remote = parse_version(remote);
-    let current = parse_version(current);
-    remote > current
+    parse_version(remote) > parse_version(current)
 }
 
 pub fn parse_github_release(json: &str, current: &str) -> Result<UpdateInfo, String> {
@@ -54,11 +68,8 @@ pub fn parse_github_release(json: &str, current: &str) -> Result<UpdateInfo, Str
     if latest.is_empty() {
         return Err("GitHub 最新版本信息中缺少版本号".into());
     }
-    let html_url = value
-        .get("html_url")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("https://github.com/ciaooo55/hls-downloader/releases/latest")
-        .to_string();
+    let html_url =
+        sanitize_release_html_url(value.get("html_url").and_then(serde_json::Value::as_str));
     let notes = value
         .get("body")
         .and_then(serde_json::Value::as_str)
@@ -187,14 +198,21 @@ pub fn download_installer_with_proxy(info: &UpdateInfo, proxy: &str) -> Result<P
     {
         return Err("自动升级只接受 Windows x64 MSI 安装包".into());
     }
+    let _download_guard = download_lock()
+        .lock()
+        .map_err(|_| "更新下载锁已损坏".to_string())?;
     let version_dir = update_root().join(sanitize_version(&info.latest));
     std::fs::create_dir_all(&version_dir).map_err(|error| format!("创建更新目录失败: {error}"))?;
     let path = version_dir.join(&name);
     if installer_matches(&path, info.installer_size, &info.expected_sha256)? {
         return Ok(path);
     }
-    let _ = std::fs::remove_file(&path);
-    let part = version_dir.join(format!("{name}.part"));
+    static NEXT_PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let part = version_dir.join(format!(
+        "{name}.{}.{}.part",
+        std::process::id(),
+        NEXT_PART.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_file(&part);
     let control = version_dir.join("download.control");
     let progress = version_dir.join("download-progress.json");
@@ -223,6 +241,7 @@ pub fn download_installer_with_proxy(info: &UpdateInfo, proxy: &str) -> Result<P
         replay_json: String::new(),
         curl_body_limit: None,
         range_stop: None,
+        installer_download: true,
         origin_boundary: String::new(),
     };
     if let Err(error) = crate::http_engine::run_job(&job) {
@@ -233,7 +252,10 @@ pub fn download_installer_with_proxy(info: &UpdateInfo, proxy: &str) -> Result<P
         let _ = std::fs::remove_file(&part);
         return Err("安装包大小或 SHA-256 校验失败，未启动升级".into());
     }
-    std::fs::rename(&part, &path).map_err(|error| format!("发布更新安装包失败: {error}"))?;
+    if let Err(error) = crate::atomic_replace::replace_file(&part, &path) {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("发布更新安装包失败: {error}"));
+    }
     mark_downloaded_from_internet(&path);
     Ok(path)
 }
@@ -270,32 +292,107 @@ fn mark_downloaded_from_internet(path: &Path) {
     }
 }
 
-pub(crate) fn installer_url_allowed(url: &str) -> bool {
+fn parse_strict_https_url(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_start_matches('\u{feff}');
-    if !crate::http_engine::http_fetch_url_allowed(url) {
-        return false;
+    if !crate::http_engine::http_fetch_url_allowed(url) || url.contains('\\') {
+        return None;
     }
-    let lower = url.to_ascii_lowercase();
-    lower.starts_with("https://github.com/ciaooo55/hls-downloader/")
-        || lower.starts_with("https://objects.githubusercontent.com/")
-        || lower.starts_with("https://github-releases.githubusercontent.com/")
-        || lower.starts_with("https://release-assets.githubusercontent.com/")
+    let rest = url.strip_prefix("https://").or_else(|| {
+        url.get(..8)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("https://"))
+            .map(|_| &url[8..])
+    })?;
+    let (authority, path_and_query) = rest.split_once('/')?;
+    if authority.is_empty() || authority.contains('@') || authority.contains(['?', '#']) {
+        return None;
+    }
+    let host = authority
+        .split_once(':')
+        .map_or(
+            authority,
+            |(host, port)| {
+                if port == "443" {
+                    host
+                } else {
+                    ""
+                }
+            },
+        )
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    let path = path_and_query.split(['?', '#']).next().unwrap_or("");
+    for segment in path.split('/') {
+        if segment == "." || segment == ".." {
+            return None;
+        }
+        let lower_seg = segment.to_ascii_lowercase();
+        if lower_seg.contains("%2e") || lower_seg.contains("%2f") || lower_seg.contains("%5c") {
+            return None;
+        }
+    }
+    Some((host, format!("/{path}")))
+}
+
+fn is_repo_https_url(url: &str) -> bool {
+    let Some((host, path)) = parse_strict_https_url(url) else {
+        return false;
+    };
+    host == "github.com"
+        && path
+            .to_ascii_lowercase()
+            .starts_with("/ciaooo55/hls-downloader/")
+}
+
+pub(crate) fn installer_url_allowed(url: &str) -> bool {
+    let Some((host, path)) = parse_strict_https_url(url) else {
+        return false;
+    };
+    match host.as_str() {
+        "github.com" => path
+            .to_ascii_lowercase()
+            .starts_with("/ciaooo55/hls-downloader/"),
+        "objects.githubusercontent.com"
+        | "github-releases.githubusercontent.com"
+        | "release-assets.githubusercontent.com" => path.len() > 1,
+        _ => false,
+    }
+}
+
+fn is_windows_reserved_stem(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim();
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM0"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT0"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 pub(crate) fn sanitize_installer_name(name: &str, latest: &str) -> String {
-    let fallback = format!(
-        "HLSDownloader-{}-Windows-x64.msi",
-        latest
-            .chars()
-            .map(
-                |ch| if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {
-                    ch
-                } else {
-                    '_'
-                }
-            )
-            .collect::<String>()
-    );
+    let fallback = format!("HLSDownloader-{}-Windows-x64.msi", sanitize_version(latest));
     let base = name
         .trim()
         .rsplit(['/', '\\'])
@@ -312,29 +409,106 @@ pub(crate) fn sanitize_installer_name(name: &str, latest: &str) -> String {
             }
         })
         .collect();
-    let lower = cleaned.to_ascii_lowercase();
+    let trimmed = cleaned.trim_matches('.');
+    if trimmed.is_empty() || is_windows_reserved_stem(trimmed) {
+        return fallback;
+    }
+    let lower = trimmed.to_ascii_lowercase();
     if lower.ends_with(".msi") {
-        cleaned
-    } else if cleaned.is_empty() {
-        fallback
+        trimmed.to_string()
     } else {
-        format!("{cleaned}.msi")
+        format!("{trimmed}.msi")
     }
 }
 
-fn parse_version(value: &str) -> Vec<u32> {
-    value
-        .trim()
-        .trim_start_matches('v')
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ParsedVersion {
+    core: Vec<u32>,
+    /// 0 = pre-release (-alpha/-beta/-rc/-dev), 1 = stable or post-release (-rN).
+    stability: u8,
+    /// Post-release revision (-rN) or pre-release numeric components.
+    pre_label: String,
+    extra: Vec<u32>,
+}
+
+fn parse_version(value: &str) -> ParsedVersion {
+    let trimmed = value.trim().trim_start_matches(['v', 'V']);
+    let without_build = trimmed.split('+').next().unwrap_or(trimmed);
+    let (core_part, suffix_part) = without_build
+        .split_once('-')
+        .map_or((without_build, ""), |(core, suffix)| (core, suffix));
+    let mut core: Vec<u32> = core_part
         .split(|ch: char| !ch.is_ascii_digit())
         .filter(|part| !part.is_empty())
         .filter_map(|part| part.parse().ok())
-        .collect()
+        .collect();
+    while core.len() > 1 && core.last() == Some(&0) {
+        core.pop();
+    }
+    if suffix_part.is_empty() {
+        return ParsedVersion {
+            core,
+            stability: 1,
+            extra: Vec::new(),
+            pre_label: String::new(),
+        };
+    }
+    let lower_suffix = suffix_part.to_ascii_lowercase();
+    // `-r<N>` is this project's post-release revision convention (e.g. 7.0.3-r4 > 7.0.3-r3 > 7.0.3).
+    if let Some(rev) = lower_suffix.strip_prefix('r') {
+        if !rev.is_empty() && rev.bytes().all(|byte| byte.is_ascii_digit()) {
+            if let Ok(num) = rev.parse::<u32>() {
+                return ParsedVersion {
+                    core,
+                    stability: 1,
+                    extra: vec![num],
+                    pre_label: String::new(),
+                };
+            }
+        }
+    }
+    let extra: Vec<u32> = lower_suffix
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    let label: String = lower_suffix
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    ParsedVersion {
+        core,
+        stability: 0,
+        extra,
+        pre_label: label,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_policy_handles_signed_cdn_urls_and_release_order() {
+        assert!(installer_url_allowed(
+            "https://release-assets.githubusercontent.com/a?signature=x"
+        ));
+        for url in [
+            "http://release-assets.githubusercontent.com/a",
+            "https://github.com:444/ciaooo55/hls-downloader/a",
+            "https://github.com/ciaooo55/hls-downloader/%2e%2e/a",
+            "https://github.com@cdn.test/a",
+        ] {
+            assert!(!installer_url_allowed(url));
+        }
+        assert_eq!(
+            sanitize_installer_name("NUL.msi", ".."),
+            "HLSDownloader-unknown-Windows-x64.msi"
+        );
+        assert!(is_newer_version("1.0-rc.1", "1.0-beta.9"));
+        assert!(is_newer_version("1.0", "1.0-rc.99"));
+        assert!(is_newer_version("1.0-r1", "1.0"));
+    }
 
     #[test]
     fn compares_dotted_versions() {

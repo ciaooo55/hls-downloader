@@ -16,6 +16,7 @@ import {
 } from '../lib/pausedHandoffFollowups'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, isHandoffSuppressed, normalizeHandoffSuppressions } from '../lib/handoffSuppression'
 import { createRecurringAlarm, filenameDeterminationEvent, requestHeaderExtraInfo } from '../lib/browserCapabilities'
+import { isSafeInspectionTarget } from '../lib/manifestInspection'
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import { isMediaResponseStatus } from '../lib/manifestSniff'
@@ -1012,16 +1013,27 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
   try {
     const sourcePageUrl = await topLevelPageUrl(tabId, resource.pageUrl || '')
     if (!isCurrentPage()) return
+    if (!isSafeInspectionTarget(normalized.url, sourcePageUrl)) return
     const probeResource = {
       ...normalized,
       signal: AbortSignal.any([pageController.signal, inspectionController.signal]),
       requestContextForUrl: async (url: string) => {
         if (!isCurrentPage()) throw new Error('媒体来源页面已变化')
+        const parsedTarget = new URL(url)
+        if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') {
+          throw new Error('仅允许检查 HTTP(S) 清单')
+        }
         const chain = requestChains.find({ url, referrer: resource.pageUrl, frameId: resource.frameId,
           ...(url === normalized.url ? { requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity } : {}),
         }, Date.now(), tabId, true, 'exact')
         if (chain && chain.method.toUpperCase() !== 'GET') throw new Error('不能重放非 GET 清单请求')
-        const sameOrigin = new URL(url).origin === new URL(normalized.url).origin
+        const sameOrigin = parsedTarget.origin === new URL(normalized.url).origin
+        // Refuse background probes from public pages into loopback/LAN endpoints
+        // unconditionally (even for opaque/observed chains) while preserving
+        // normal public multi-CDN HLS/DASH renditions and local dev pages.
+        if (!isSafeInspectionTarget(url, sourcePageUrl)) {
+          throw new Error('拒绝向内网或本机地址发起清单检查')
+        }
         const requestHeaders = chain?.requestHeaders || (sameOrigin ? normalized.requestHeaders : undefined)
         // Captured empty Referer/Origin is authoritative. Only unobserved
         // requests use the source frame as a fallback, never another CDN's token.
@@ -1031,8 +1043,10 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
         const inspectionHeaders: Record<string, string> = {}
         if (identity.referer) inspectionHeaders.referer = identity.referer
         if (identity.origin) inspectionHeaders.origin = identity.origin
-        const cookie = await cookiesFor(url, sourcePageUrl, tabId, resource.frameId ?? 0)
-        if (cookie) inspectionHeaders.cookie = cookie
+        if (chain || sameOrigin || url === normalized.url) {
+          const cookie = await cookiesFor(url, sourcePageUrl, tabId, resource.frameId ?? 0)
+          if (cookie) inspectionHeaders.cookie = cookie
+        }
         if (!isCurrentPage()) throw new Error('媒体来源页面已变化')
         return { requestHeaders, inspectionHeaders }
       },
@@ -1239,10 +1253,41 @@ async function resourcePayload(
         url_contexts: { ...(requestContexts[origin]?.url_contexts as Record<string, unknown> || {}), [requestUrl.split('#', 1)[0]]: context },
       }
     }
-    // 普通文件只重放自身请求；其他媒体/CDN 的身份只供 HLS/DASH 分片使用。
+    // 普通文件只重放自身请求；HLS/DASH 仅保留与该媒体清单或已知分片/音轨/密钥同源的请求上下文，
+    // 避免采集同标签页里无关第三方接口（如 SSO/社交小部件）的全路径 Cookie。
+    const relatedMediaOrigins = new Set<string>()
+    const rememberOrigin = (candidate?: string) => {
+      if (!candidate) return
+      try {
+        const parsed = new URL(candidate)
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+          relatedMediaOrigins.add(parsed.origin)
+        }
+      } catch {}
+    }
+    rememberOrigin(resource.url)
+    for (const variant of resource.variants || []) rememberOrigin(variant.url)
+    for (const track of resource.audioTracks || []) rememberOrigin(track.url)
+    for (const candidate of resource.renditionUrls || []) rememberOrigin(candidate)
+    for (const candidate of resource.playbackUrls || []) rememberOrigin(candidate)
+    for (const candidate of resource.playbackPatterns || []) rememberOrigin(candidate)
     const contexts = resource.kind === 'hls' || resource.kind === 'dash'
       ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl,
         Date.now(), 32, chain?.frameId ?? resource.frameId, chain?.pageUrl)
+        .filter(context => {
+          try {
+            const origin = new URL(context.finalUrl).origin
+            if (relatedMediaOrigins.has(origin)) return true
+          } catch {
+            return false
+          }
+          const mime = (context.responseHeaders?.['content-type'] || '').toLowerCase()
+          const path = context.finalUrl.split(/[?#]/, 1)[0].toLowerCase()
+          return context.type === 'media'
+            || mime.startsWith('video/') || mime.startsWith('audio/')
+            || mime.includes('mpegurl') || mime.includes('dash+xml') || mime.includes('mp2t')
+            || /\.(?:m3u8?|mpd|ts|m4s|m4a|m4v|mp4|webm|cmfv|cmfa|key|vtt|srt|ttml)$/.test(path)
+        })
       : []
     // 最后应用所选媒体；其他音轨/密钥保留精确身份，目录默认使用最新请求。
     for (const context of contexts.filter(context => context.requestId !== chain?.requestId).reverse()) {
@@ -2530,7 +2575,9 @@ export default defineBackground(() => {
       void saveResource(resource, sender.tab?.id ?? -1)
         .then(() => sendResponse({ ok: true }))
         .catch(error => sendResponse({ ok: false, error: errorText(error) }))
-      void inspectAdaptive(resource, sender.tab?.id ?? -1)
+      if (resolved.kind !== 'ambiguous' && isSafeInspectionTarget(resource.url, resource.pageUrl)) {
+        void inspectAdaptive(resource, sender.tab?.id ?? -1)
+      }
       return true
     }
     if (message?.type === 'download-now') {

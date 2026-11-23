@@ -19,6 +19,7 @@ pub struct CoreRuntime {
     pending_handoffs: BTreeMap<String, ResourceOffer>,
     media_push_requests: BTreeMap<String, MediaPushRequest>,
     events: VecDeque<Arc<EventEnvelope>>,
+    command_events: Option<Vec<EventEnvelope>>,
     next_task: u64,
     next_handoff: u64,
     sequence: u64,
@@ -72,7 +73,7 @@ impl CoreRuntime {
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Vec<EventEnvelope> {
-        let before = self.sequence;
+        self.command_events = Some(Vec::new());
         match command {
             CoreCommand::Ping => {
                 self.publish(CoreEvent::Ready {
@@ -225,7 +226,7 @@ impl CoreRuntime {
             | CoreCommand::PresentHandoff { .. } => {}
             CoreCommand::ClearCompleted => self.clear_completed(),
         }
-        self.events_after(before, 4096)
+        self.command_events.take().expect("command batch active")
     }
 
     pub fn snapshot(&self, task_id: &str) -> Option<&TaskSnapshot> {
@@ -366,7 +367,8 @@ impl CoreRuntime {
                 + 1;
             if bytes + size > hls_protocol::V7_PAGE_PAYLOAD_BUDGET {
                 if batch.events.is_empty() {
-                    return Err("单个事件超过 IPC 帧大小限制".into());
+                    batch.resync_required = true;
+                    return Ok(batch);
                 }
                 break;
             }
@@ -652,8 +654,12 @@ impl CoreRuntime {
 
     fn apply_queue_order(&mut self, ordered: &[String]) {
         for (position, id) in ordered.iter().enumerate() {
+            let next_index = (position as i64) + 1;
             if let Some(snapshot) = self.tasks.get_mut(id).map(Arc::make_mut) {
-                snapshot.queue_index = (position as i64) + 1;
+                if snapshot.queue_index == next_index {
+                    continue;
+                }
+                snapshot.queue_index = next_index;
                 let updated = snapshot.clone();
                 self.publish(CoreEvent::TaskUpdated { snapshot: updated });
             }
@@ -1016,10 +1022,14 @@ impl CoreRuntime {
 
     fn publish(&mut self, event: CoreEvent) {
         self.sequence += 1;
-        self.events.push_back(Arc::new(EventEnvelope {
+        let envelope = EventEnvelope {
             sequence: self.sequence,
             event,
-        }));
+        };
+        if let Some(batch) = &mut self.command_events {
+            batch.push(envelope.clone());
+        }
+        self.events.push_back(Arc::new(envelope));
         while self.events.len() > 4096 {
             self.events.pop_front();
         }
@@ -1103,6 +1113,37 @@ fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bulk_queue_assignment_returns_all_changes_after_history_rolls_over() {
+        let ids: Vec<_> = (0..4097).map(|i| format!("task-{i}")).collect();
+        let snapshots = ids.iter().map(|id| TaskSnapshot {
+            task_id: id.clone(),
+            ..Default::default()
+        });
+        let mut runtime = CoreRuntime::from_state(snapshots, [], 0);
+        let updates = runtime.handle(CoreCommand::AssignQueue {
+            task_ids: ids,
+            queue_id: "batch".into(),
+        });
+        assert_eq!(updates.len(), 4097);
+        assert_eq!(updates[0].sequence, 1);
+        assert_eq!(updates.last().unwrap().sequence, 4097);
+        assert!(runtime.event_batch_after(0).unwrap().resync_required);
+    }
+
+    #[test]
+    fn oversized_first_event_requests_resync() {
+        let mut runtime = CoreRuntime::new();
+        runtime.emit(CoreEvent::Toast {
+            level: "info".into(),
+            message: "x".repeat(hls_protocol::V7_PAGE_PAYLOAD_BUDGET),
+        });
+        let batch = runtime.event_batch_after(0).unwrap();
+        assert!(batch.resync_required);
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.latest_sequence, 1);
+    }
+
     #[test]
     fn unnamed_tasks_have_provisional_names_without_pinning_the_output_filename() {
         for (url, expected) in [

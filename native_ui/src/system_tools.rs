@@ -409,24 +409,32 @@ impl SystemTools {
                 title,
                 delay_seconds,
             } => {
-                self.decisions
-                    .borrow_mut()
-                    .retain(|d| !matches!(d, Decision::Power { .. }));
-                let action = match action.as_str() {
-                    "shutdown" => "关机",
-                    "sleep" => "睡眠",
-                    "hibernate" => "休眠",
-                    "exit" => "退出程序",
-                    _ => action,
-                };
-                let power = Decision::Power {
-                    title: format!("{title}\n完成后动作：{action}"),
-                    seconds: *delay_seconds,
-                };
-                if self.decision_request.get().is_some() {
-                    self.decisions.borrow_mut().push_back(power);
-                } else {
-                    self.decisions.borrow_mut().push_front(power);
+                let in_flight = self.decision_request.get().is_some();
+                {
+                    let mut decisions = self.decisions.borrow_mut();
+                    let preserve_head = if in_flight {
+                        decisions.pop_front()
+                    } else {
+                        None
+                    };
+                    decisions.retain(|d| !matches!(d, Decision::Power { .. }));
+                    let action = match action.as_str() {
+                        "shutdown" => "关机",
+                        "sleep" => "睡眠",
+                        "hibernate" => "休眠",
+                        "exit" => "退出程序",
+                        _ => action,
+                    };
+                    let power = Decision::Power {
+                        title: format!("{title}\n完成后动作：{action}"),
+                        seconds: *delay_seconds,
+                    };
+                    if let Some(head) = preserve_head {
+                        decisions.push_front(head);
+                        decisions.push_back(power);
+                    } else {
+                        decisions.push_front(power);
+                    }
                 }
                 self.show_decision();
             }

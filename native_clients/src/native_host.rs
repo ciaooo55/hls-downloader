@@ -597,11 +597,17 @@ impl NativeHostSession {
             },
             owned_credential_ref,
         )?;
-        let events = self.core.handle(CoreCommand::TaskAction {
-            task_id: snapshot.task_id.clone(),
-            action: "start".into(),
-        })?;
-        ensure_task_started(&events, &snapshot.task_id)?;
+        if snapshot
+            .available_actions
+            .iter()
+            .any(|action| action == "start")
+        {
+            let events = self.core.handle(CoreCommand::TaskAction {
+                task_id: snapshot.task_id.clone(),
+                action: "start".into(),
+            })?;
+            ensure_task_started(&events, &snapshot.task_id)?;
+        }
         Ok(json!({"ok": true, "task": snapshot, "activated": true}))
     }
 
@@ -614,26 +620,38 @@ impl NativeHostSession {
             .core
             .handle(CoreCommand::CreateTask { spec })
             .and_then(|events| {
-                events
-                    .into_iter()
-                    .find_map(|event| match event.event {
-                        CoreEvent::TaskCreated { snapshot } => Some(snapshot),
-                        _ => None,
-                    })
-                    .ok_or_else(|| "Rust Core 未返回新建任务快照".to_string())
-            });
-        match result {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) => {
-                if let Some(credential_ref) = owned_credential_ref {
-                    if let Err(rollback_error) = self.core.delete_credential(&credential_ref) {
-                        return Err(format!(
-                            "{error}; browser replay credential rollback failed: {rollback_error}"
-                        ));
+                let mut reused = None;
+                let mut duplicate_error = None;
+                for event in events {
+                    match event.event {
+                        CoreEvent::TaskCreated { snapshot } => return Ok((snapshot, true)),
+                        CoreEvent::TaskUpdated { snapshot } if reused.is_none() => {
+                            reused = Some(snapshot);
+                        }
+                        CoreEvent::DuplicateOffered { message, .. }
+                            if duplicate_error.is_none() =>
+                        {
+                            duplicate_error = Some(message);
+                        }
+                        _ => {}
                     }
                 }
-                Err(error)
+                if let Some(snapshot) = reused {
+                    return Ok((snapshot, false));
+                }
+                Err(duplicate_error.unwrap_or_else(|| "Rust Core 未返回新建任务快照".to_string()))
+            });
+        match result {
+            Ok((snapshot, created)) => {
+                if !created {
+                    if let Some(reference) = owned_credential_ref {
+                        self.core.delete_credential(&reference)?;
+                    }
+                }
+                Ok(snapshot)
             }
+            Err(error) => self
+                .rollback_browser_credential_on_error(Err(error), owned_credential_ref.as_deref()),
         }
     }
 

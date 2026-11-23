@@ -154,7 +154,7 @@ export default defineContentScript({
         reportSiteManifests(url, text, pageUrl)
         return
       }
-      const kind = detectManifestKind(text.slice(0, 256))
+      const kind = detectManifestKind(text.slice(0, 16 * 1024))
       if (!kind) return
       if (observation) observation.observed = true
       await reportManifest(url, kind, text, pageUrl, identity)
@@ -168,7 +168,7 @@ export default defineContentScript({
       else if (body instanceof Blob) blob = body
       const size = bytes?.byteLength ?? blob?.size ?? 0
       if (!size || size > SITE_RESPONSE_LIMIT) return
-      const prefix = bytes ? new TextDecoder().decode(bytes.subarray(0, 256)) : await blob!.slice(0, 256).text()
+      const prefix = bytes ? new TextDecoder().decode(bytes.subarray(0, 16 * 1024)) : await blob!.slice(0, 16 * 1024).text()
       const kind = detectManifestKind(prefix)
       if (!kind || pageUrl !== sourcePageUrl()) return
       const text = bytes ? new TextDecoder().decode(bytes) : await blob!.text()

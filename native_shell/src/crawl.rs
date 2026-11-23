@@ -172,16 +172,21 @@ pub(crate) fn dispatch(
             return Err("抓站过滤条件无效或超限".into());
         }
         let prepared = coordinator.metadata_spec(&spec.entry_url)?;
-        let root = if spec.output_dir.is_empty() {
+        let settings = coordinator.settings()?;
+        let default_download_dir = if settings.download_dir.trim().is_empty() {
             prepared.download_dir.clone()
+        } else {
+            settings.download_dir.clone()
+        };
+        let root = if spec.output_dir.is_empty() {
+            default_download_dir
         } else {
             crate::output_path::constrain_untrusted_download_dir(
                 &spec.output_dir,
-                &prepared.download_dir,
+                &default_download_dir,
             )?
         };
-        if !coordinator
-            .settings()?
+        if !settings
             .queue_profiles
             .iter()
             .any(|q| q.id == spec.queue_id)
@@ -634,9 +639,10 @@ fn sync_resource(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(
                     .map_err(|e| e.to_string())?;
                 std::fs::create_dir_all(target.parent().ok_or("目标路径无效")?)
                     .map_err(|e| e.to_string())?;
-                if source != target {
-                    crate::atomic_replace::replace_file(source, &target)
-                        .map_err(|e| e.to_string())?;
+                if source != target && crate::atomic_replace::replace_file(source, &target).is_err()
+                {
+                    crate::output_path::stage_copy_and_replace(source, &target)?;
+                    let _ = std::fs::remove_file(source);
                 }
                 finish_sync(coordinator, id, url)?;
             } else if matches!(task.status.as_str(), "failed" | "cancelled" | "canceled") {
@@ -893,17 +899,21 @@ fn css_spans(text: &str) -> Vec<RawReference> {
         let start = cursor + pos + 7;
         let tail = text[start..].trim_start();
         if let Some(quote) = tail.chars().next().filter(|c| matches!(c, '\'' | '"')) {
-            let start = text.len() - tail.len() + 1;
-            if let Some(end) = text[start..].find(quote).map(|n| start + n) {
+            let value_start = text.len() - tail.len() + 1;
+            if let Some(end) = text[value_start..].find(quote).map(|n| value_start + n) {
                 spans.push(RawReference {
-                    start,
+                    start: value_start,
                     end,
                     navigation: false,
                     base: false,
                 });
+                cursor = end + 1;
+            } else {
+                cursor = value_start;
             }
+        } else {
+            cursor = start;
         }
-        cursor = start;
         if cursor >= text.len() || spans.len() >= MAX_RESOURCES {
             break;
         }
@@ -919,7 +929,16 @@ fn css_spans(text: &str) -> Vec<RawReference> {
         cursor = end;
     }
     spans.retain(|s| !comments.iter().any(|&(a, b)| a <= s.start && s.start < b));
-    spans
+    spans.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
+    let mut non_overlapping: Vec<RawReference> = Vec::with_capacity(spans.len());
+    let mut last_end = 0usize;
+    for span in spans {
+        if span.start >= last_end {
+            last_end = span.end;
+            non_overlapping.push(span);
+        }
+    }
+    non_overlapping
 }
 fn references(text: &str, base: &str, kind: &str) -> Vec<Reference> {
     let mut spans = Vec::new();
@@ -1103,18 +1122,29 @@ fn rewrite_offline(coordinator: &CoreCoordinator, id: &str) -> Result<(), String
             .filter(|s| !s.is_empty())
             .unwrap_or(&resource.url);
         let mut refs = references(&text, base, &resource.kind);
-        refs.sort_by_key(|r| r.start);
+        refs.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
         let has_base = refs.iter().any(|r| r.kind == "base");
         let mut changed = false;
+        let mut last_start = usize::MAX;
         for reference in refs.into_iter().rev() {
+            if reference.start > reference.end
+                || reference.end > last_start
+                || reference.end > text.len()
+                || !text.is_char_boundary(reference.start)
+                || !text.is_char_boundary(reference.end)
+            {
+                continue;
+            }
             if reference.kind == "base" {
                 text.replace_range(reference.start..reference.end, "./");
+                last_start = reference.start;
                 changed = true;
             } else if let Some(local) = saved.get(&reference.url) {
                 text.replace_range(
                     reference.start..reference.end,
                     &format!("{local}{}", reference.fragment),
                 );
+                last_start = reference.start;
                 changed = true;
             } else if has_base {
                 // Removing <base> must not turn an unsaved remote reference into
@@ -1124,6 +1154,7 @@ fn rewrite_offline(coordinator: &CoreCoordinator, id: &str) -> Result<(), String
                     .replace('"', "&quot;")
                     .replace('\'', "&#39;");
                 text.replace_range(reference.start..reference.end, &absolute);
+                last_start = reference.start;
                 changed = true;
             }
         }
@@ -1141,6 +1172,16 @@ fn rewrite_offline(coordinator: &CoreCoordinator, id: &str) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn css_import_with_url_text_produces_disjoint_replacements() {
+        let css = r#"@import "dir/url(inner).css"; body { background: url(bg.png) }"#;
+        let spans: Vec<_> = css_spans(css)
+            .into_iter()
+            .map(|s| &css[s.start..s.end])
+            .collect();
+        assert_eq!(spans, ["dir/url(inner).css", "bg.png"]);
+    }
 
     #[test]
     fn canonical_removes_loops_without_decoding_path_separators() {

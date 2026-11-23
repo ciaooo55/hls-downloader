@@ -688,15 +688,17 @@ impl PersistentCore {
             volatile_tasks: BTreeSet::new(),
         })
     }
+    pub fn flush_for_shutdown(&mut self) -> Result<(), String> {
+        if let Some(mut writer) = self.progress_writer.take() {
+            writer.shutdown();
+        }
+        self.flush_volatile_progress()
+    }
 }
 
 impl Drop for PersistentCore {
     fn drop(&mut self) {
-        // 先让写线程写完排队行并退出（避免与下面的同步冲刷争用写锁），再冲刷内存中的最新快照。
-        if let Some(mut writer) = self.progress_writer.take() {
-            writer.shutdown();
-        }
-        if let Err(error) = self.flush_volatile_progress() {
+        if let Err(error) = self.flush_for_shutdown() {
             crate::record_runtime_log("progress_flush_failed", serde_json::json!({"error": error}));
         }
     }

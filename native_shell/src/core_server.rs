@@ -101,7 +101,7 @@ impl CoreServer {
         #[cfg(windows)]
         {
             let stop = self.stop_handle();
-            let handler = self.handler();
+            let handler = self.transport_handler();
             let stop_on_startup_failure = self.stop_handle();
             let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
             let worker = thread::spawn(move || {
@@ -125,10 +125,12 @@ impl CoreServer {
         }
         if !crate::tcp_loopback_enabled() {
             let stop = self.stop_handle();
+            let notify = Arc::clone(&self.notify);
             let worker = thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     thread::sleep(Duration::from_millis(50));
                 }
+                stop_event_waiters(&notify, &stop);
                 Ok(())
             });
             return Ok((default_core_bind()?, worker));
@@ -146,11 +148,38 @@ impl CoreServer {
 
     pub fn serve(&self, listener: TcpListener) -> thread::JoinHandle<Result<(), String>> {
         let stop = Arc::clone(&self.stop);
-        let handler = self.handler();
-        thread::spawn(move || serve_tcp_listener(listener, stop, handler))
+        let handler = self.transport_handler();
+        let notify = Arc::clone(&self.notify);
+        thread::spawn(move || {
+            let result = serve_tcp_listener(listener, Arc::clone(&stop), handler);
+            stop_event_waiters(&notify, &stop);
+            result
+        })
     }
 
     pub fn handler(&self) -> Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> {
+        let handler = self.transport_handler();
+        let stop = self.stop_handle();
+        let notify = Arc::clone(&self.notify);
+        Arc::new(move |request| {
+            let shutdown = matches!(
+                request,
+                CorePipeRequest::Command {
+                    command: CoreCommand::Shutdown,
+                    ..
+                }
+            );
+            let response = handler(request);
+            if shutdown && matches!(response, CorePipeResponse::Events { .. }) {
+                stop_event_waiters(&notify, &stop);
+            }
+            response
+        })
+    }
+
+    pub fn transport_handler(
+        &self,
+    ) -> Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> {
         let coordinator = self.coordinator.clone();
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
@@ -207,6 +236,20 @@ fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
         serde_json::json!(crate::LEGAL_TERMS_VERSION),
     )?;
     Ok(())
+}
+
+fn queue_reply_fits(events: &[crate::EventEnvelope]) -> bool {
+    let mut remaining = hls_protocol::V7_PAGE_PAYLOAD_BUDGET;
+    for event in events {
+        let Ok(bytes) = serde_json::to_vec(event) else {
+            return false;
+        };
+        let Some(next) = remaining.checked_sub(bytes.len() + 1) else {
+            return false;
+        };
+        remaining = next;
+    }
+    true
 }
 
 fn dispatch(
@@ -358,11 +401,27 @@ fn dispatch(
                     events: Vec::new(),
                 };
             }
+            let bulk_queue = matches!(
+                &command,
+                CoreCommand::AssignQueue { .. }
+                    | CoreCommand::ReorderQueue { .. }
+                    | CoreCommand::PlaceQueue { .. }
+                    | CoreCommand::ClearCompleted
+            );
             let should_shutdown = matches!(&command, CoreCommand::Shutdown);
             match coordinator.dispatch(command) {
                 Ok(events) => {
                     if should_shutdown {
-                        stop_event_waiters(notify, stop);
+                        if let Err(message) = coordinator
+                            .lock()
+                            .and_then(|mut core| core.flush_for_shutdown())
+                        {
+                            return CorePipeResponse::Error {
+                                request_id: Some(request_id),
+                                code: "shutdown_flush_failed".into(),
+                                message,
+                            };
+                        }
                     }
                     if events
                         .iter()
@@ -375,6 +434,13 @@ fn dispatch(
                             stop_event_waiters(&notify, &stop);
                         });
                     }
+                    // Subscribers receive every committed update through event batches or a snapshot.
+                    // A bulk acknowledgement must still fit the protocol frame.
+                    let events = if bulk_queue && !queue_reply_fits(&events) {
+                        Vec::new()
+                    } else {
+                        events
+                    };
                     CorePipeResponse::Events { request_id, events }
                 }
                 Err(error) => CorePipeResponse::Error {

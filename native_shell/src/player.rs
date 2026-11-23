@@ -72,6 +72,8 @@ impl Drop for PlayerChild {
 }
 
 struct MpvSession {
+    #[cfg(windows)]
+    module: windows_sys::Win32::Foundation::HMODULE,
     handle: *mut c_void,
     command_string: unsafe extern "C" fn(*mut c_void, *const c_char) -> i32,
     terminate: unsafe extern "C" fn(*mut c_void),
@@ -107,6 +109,20 @@ impl Drop for MpvSession {
             unsafe { (self.terminate)(self.handle) };
             self.handle = std::ptr::null_mut();
         }
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::Foundation::FreeLibrary(self.module);
+        }
+    }
+}
+
+pub(crate) fn sanitize_title(title: &str) -> String {
+    let cleaned: String = title.chars().filter(|ch| !ch.is_control()).collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "视频".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -118,15 +134,10 @@ impl Player {
         }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.ensure_backend(&mut inner)?;
-        let title: String = title.chars().filter(|ch| !ch.is_control()).collect();
-        let title = if title.trim().is_empty() {
-            "视频"
-        } else {
-            title.trim()
-        };
+        let title = sanitize_title(title);
         self.command_locked(
             &mut inner,
-            &format!("set force-media-title {}", quote_mpv(title)?),
+            &format!("set force-media-title {}", quote_mpv(&title)?),
         )?;
         self.command_locked(&mut inner, "set pause no")?;
         self.command_locked(&mut inner, &format!("loadfile {} replace", quote_mpv(url)?))?;
@@ -135,6 +146,9 @@ impl Player {
     }
 
     pub fn finish_download(&self, path: &str, title: &str) -> Result<(), String> {
+        let title = sanitize_title(title);
+        let quoted_title = quote_mpv(&title)?;
+        let quoted_path = quote_mpv(path)?;
         if null_backend_enabled() {
             *self.last_url.lock().map_err(|_| "player lock")? = path.into();
             return Ok(());
@@ -188,10 +202,7 @@ impl Player {
             }
         }
         *self.last_url.lock().map_err(|_| "player lock")? = path.to_string();
-        self.command_locked(
-            &mut inner,
-            &format!("set force-media-title {}", quote_mpv(title)?),
-        )?;
+        self.command_locked(&mut inner, &format!("set force-media-title {quoted_title}"))?;
         let mut options = format!(
             "start={:.3},pause={},speed={:.3}",
             metadata.position_seconds,
@@ -200,7 +211,11 @@ impl Player {
             } else {
                 "no"
             },
-            metadata.speed.unwrap_or(1.0)
+            metadata
+                .speed
+                .filter(|value| value.is_finite())
+                .unwrap_or(1.0)
+                .clamp(0.25, 4.0)
         );
         for (name, track) in [("aid", audio), ("sid", subtitle)] {
             if let Some(track) = track.filter(|track| {
@@ -212,11 +227,7 @@ impl Player {
         }
         self.command_locked(
             &mut inner,
-            &format!(
-                "loadfile {} replace -1 {}",
-                quote_mpv(path)?,
-                quote_mpv(&options)?
-            ),
+            &format!("loadfile {quoted_path} replace -1 {}", quote_mpv(&options)?),
         )
     }
 
@@ -229,6 +240,9 @@ impl Player {
     }
 
     pub fn set_speed(&self, speed: f64) -> Result<(), String> {
+        if !speed.is_finite() {
+            return Err("倍速无效".into());
+        }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.command_locked(
             &mut inner,
@@ -257,6 +271,9 @@ impl Player {
     }
 
     pub fn adjust_volume(&self, delta: f64) -> Result<(), String> {
+        if !delta.is_finite() {
+            return Err("音量无效".into());
+        }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.command_locked(&mut inner, &format!("add volume {:.0}", delta))
     }
@@ -303,6 +320,9 @@ impl Player {
     }
 
     pub fn seek_relative(&self, seconds: f64) -> Result<(), String> {
+        if !seconds.is_finite() {
+            return Err("播放时间无效".into());
+        }
         let mut inner = self.inner.lock().map_err(|_| "player lock")?;
         self.command_locked(&mut inner, &format!("seek {:.3} relative+exact", seconds))
     }
@@ -789,16 +809,19 @@ pub fn run_player_process() -> i32 {
     #[cfg(windows)]
     unsafe {
         // mpv 的窗口线程由其内部创建，仅设置当前线程不会改变它的 DPI 默认值。
-        // 必须在创建任何窗口前设置进程默认值，否则嵌入画面会被再次缩小。
+        // 若系统兼容性设置或清单已锁定进程 DPI 模式，SetProcessDpiAwarenessContext
+        // 返回 ERROR_ACCESS_DENIED，此时降级记录日志并继续，避免阻断播放。
         use windows_sys::Win32::UI::HiDpi::{
-            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         };
-        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0
+            && SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE) == 0
+        {
             eprintln!(
-                "player DPI initialization failed: {}",
+                "player DPI initialization skipped: {}",
                 std::io::Error::last_os_error()
             );
-            return 1;
         }
     }
     let player = Player::default();
@@ -1029,7 +1052,11 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
     {
         use std::os::windows::ffi::OsStrExt;
         use std::path::PathBuf;
-        use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+        use windows_sys::Win32::Foundation::FreeLibrary;
+        use windows_sys::Win32::System::LibraryLoader::{
+            GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        };
         let mut last =
             "未找到 libmpv。请将 libmpv-2.dll 放到 HLSDownloader.exe 同目录。".to_string();
         let names = ["libmpv-2.dll", "mpv-2.dll", "libmpv-1.dll"];
@@ -1042,24 +1069,34 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
             }
         }
         if let Ok(explicit) = std::env::var("HLS_V7_LIBMPV") {
-            candidates.insert(0, PathBuf::from(explicit));
+            let explicit_path = PathBuf::from(explicit);
+            if explicit_path.is_absolute() {
+                candidates.insert(0, explicit_path);
+            }
         }
+        #[cfg(debug_assertions)]
         if let Ok(cwd) = std::env::current_dir() {
             for name in names {
                 candidates.push(cwd.join(name));
                 candidates.push(cwd.join("native_ui").join(name));
             }
         }
-        for name in names {
-            candidates.push(PathBuf::from(name));
-        }
         for path in candidates {
+            if !path.is_absolute() || !path.is_file() {
+                continue;
+            }
             let wide: Vec<u16> = path
                 .as_os_str()
                 .encode_wide()
                 .chain(std::iter::once(0))
                 .collect();
-            let module = unsafe { LoadLibraryW(wide.as_ptr()) };
+            let module = unsafe {
+                LoadLibraryExW(
+                    wide.as_ptr(),
+                    std::ptr::null_mut(),
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+                )
+            };
             if module.is_null() {
                 last = format!("{} 无法加载", path.display());
                 continue;
@@ -1090,6 +1127,7 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                     wait_event,
                 )
                 else {
+                    FreeLibrary(module);
                     last = format!("{} 缺少 mpv 符号", path.display());
                     continue;
                 };
@@ -1112,6 +1150,7 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 });
                 let handle = create();
                 if handle.is_null() {
+                    FreeLibrary(module);
                     last = "mpv_create returned null".into();
                     continue;
                 }
@@ -1173,16 +1212,19 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                         let code = set_option(handle, option.as_ptr(), value.as_ptr());
                         if code < 0 {
                             terminate(handle);
+                            FreeLibrary(module);
                             return Err(format!("播放器选项 {name} 设置失败: {code}"));
                         }
                     }
                 }
                 if initialize(handle) < 0 {
                     terminate(handle);
+                    FreeLibrary(module);
                     last = "mpv_initialize failed".into();
                     continue;
                 }
                 return Ok(MpvSession {
+                    module,
                     handle,
                     command_string,
                     terminate,

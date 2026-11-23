@@ -158,6 +158,8 @@ pub struct Job {
     pub origin_boundary: String,
     /// 同一次范围下载的停止信号，仅在内存中传给底层传输。
     #[serde(skip)]
+    pub(crate) installer_download: bool,
+    #[serde(skip)]
     pub(crate) range_stop: Option<Arc<AtomicBool>>,
 }
 
@@ -774,6 +776,10 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     for (index, url) in urls.into_iter().enumerate() {
         let mut attempt = job.clone();
         attempt.url = url;
+        if index > 0 {
+            let replay = job_replay_json(&attempt);
+            drop_cross_origin_secrets(&mut attempt.headers, &replay, &job.url, &attempt.url);
+        }
         let mut initial_response = None;
         if !post
             && !attempt.sequential
@@ -975,6 +981,7 @@ fn fetch_bytes_with_transport(
         replay_json: String::new(),
         curl_body_limit: limit,
         range_stop: None,
+        installer_download: false,
         origin_boundary: String::new(),
     };
     let result = (|| {
@@ -1210,6 +1217,7 @@ fn fetch_bytes_range_with_transport(
             replay_json: String::new(),
             curl_body_limit: Some(length),
             range_stop: None,
+            installer_download: false,
             origin_boundary: String::new(),
         };
         let fetched = fetch_exact_range(&job, start, end, browser_first)?;
@@ -3055,6 +3063,7 @@ pub(crate) fn with_media_response<R>(
         replay_json: replay.into(),
         curl_body_limit: None,
         range_stop: None,
+        installer_download: false,
         origin_boundary: spec.origin_boundary.clone(),
     };
     apply_browser_profile(&mut job.headers);
@@ -3104,6 +3113,15 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
     fetch(job, range)
 }
 
+fn validate_download_destination(job: &Job, url: &str) -> Result<(), EngineError> {
+    if job.installer_download && !crate::updater::installer_url_allowed(url) {
+        return Err(EngineError::Failed(
+            "Installer redirect outside trusted GitHub release hosts".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResult, EngineError>> {
     curl_exe_for(&job.url)?;
     let replay = job_replay_json(job);
@@ -3112,6 +3130,9 @@ fn fetch_curl_follow(job: &Job, range: Option<&str>) -> Option<Result<FetchResul
     let mut hop = job.clone();
     apply_browser_profile(&mut headers);
     for _ in 0..16 {
+        if let Err(error) = validate_download_destination(job, &url) {
+            return Some(Err(error));
+        }
         if !job.origin_boundary.is_empty()
             && http_origin(&url).as_deref() != Some(job.origin_boundary.as_str())
         {
@@ -3175,6 +3196,7 @@ fn fetch_follow_restricted(
     let mut headers = headers_for_request(job, &job.url);
     let mut hop = job.clone();
     for _ in 0..16 {
+        validate_download_destination(job, &url)?;
         if origin
             .filter(|v| !v.is_empty())
             .or_else(|| (!job.origin_boundary.is_empty()).then_some(job.origin_boundary.as_str()))
@@ -3313,6 +3335,7 @@ pub(crate) fn read_metadata(
             replay_json: String::new(),
             curl_body_limit: Some(limit),
             range_stop: None,
+            installer_download: false,
             origin_boundary: spec.origin_boundary.clone(),
         };
         apply_browser_profile(&mut job.headers);
@@ -3446,11 +3469,7 @@ fn drop_cross_origin_secrets(
         }
         return;
     }
-    headers.retain(|key, _| {
-        !key.eq_ignore_ascii_case("cookie")
-            && !key.eq_ignore_ascii_case("authorization")
-            && !key.eq_ignore_ascii_case("proxy-authorization")
-    });
+    headers.retain(|key, _| !crate::download_worker::sensitive_header_name(key));
     if replay.trim().is_empty() || to_origin.is_empty() {
         return;
     }
@@ -3720,11 +3739,31 @@ struct ParsedUrl {
     path: String,
 }
 
+fn is_wire_header_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
 fn header_is_wire_safe(key: &str, value: &str) -> bool {
     !key.is_empty()
-        && !key.contains(['\r', '\n', ':'])
-        && !value.contains('\r')
-        && !value.contains('\n')
+        && key.bytes().all(is_wire_header_tchar)
+        && !value.chars().any(|ch| ch.is_control() && ch != '\t')
 }
 
 fn header_forbidden_on_wire(key: &str) -> bool {
@@ -4864,7 +4903,26 @@ mod tests {
             replay_json: String::new(),
             curl_body_limit: None,
             range_stop: None,
+            installer_download: false,
             origin_boundary: String::new(),
+        }
+    }
+
+    #[test]
+    fn installer_transfer_rejects_untrusted_destination_before_opening_connection() {
+        let mut job = post_test_job(
+            "https://github.com/ciaooo55/hls-downloader/asset".into(),
+            PathBuf::new(),
+        );
+        job.installer_download = true;
+        for next in [
+            "http://github.com/ciaooo55/hls-downloader/asset",
+            "https://cdn.invalid/asset",
+        ] {
+            let result = fetch_follow_restricted(&job, None, None, Some(next));
+            assert!(
+                matches!(result, Err(EngineError::Failed(error)) if error.contains("Installer redirect"))
+            );
         }
     }
 
@@ -5537,6 +5595,7 @@ mod tests {
                 replay_json: String::new(),
                 curl_body_limit: None,
                 range_stop: None,
+                installer_download: false,
                 origin_boundary: String::new(),
             },
             dir,
@@ -7510,6 +7569,7 @@ mod tests {
             replay_json: String::new(),
             curl_body_limit: None,
             range_stop: None,
+            installer_download: false,
             origin_boundary: String::new(),
         };
         assert_eq!(request_method(&job), "GET");

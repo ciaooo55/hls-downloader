@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_LINK_FILE_BYTES: u64 = 256 * 1024;
+const MAX_TORRENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_LINK_URLS: usize = 100;
 const MAX_TEXT_URLS: usize = 1_000;
 
@@ -42,16 +43,19 @@ pub(crate) fn local_source_path(source: &str) -> Option<PathBuf> {
 
 pub fn urls_from_path(path: &Path) -> Result<Vec<String>, String> {
     let meta = fs::metadata(path).map_err(|error| error.to_string())?;
-    if meta.len() == 0 || meta.len() > MAX_LINK_FILE_BYTES {
-        return Err("link file is empty or too large".into());
-    }
     let ext = path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     if ext == "torrent" {
+        if meta.len() == 0 || meta.len() > MAX_TORRENT_FILE_BYTES {
+            return Err("torrent file is empty or too large".into());
+        }
         return Ok(vec![path.to_string_lossy().into_owned()]);
+    }
+    if meta.len() == 0 || meta.len() > MAX_LINK_FILE_BYTES {
+        return Err("link file is empty or too large".into());
     }
     let mut data = Vec::new();
     fs::File::open(path)

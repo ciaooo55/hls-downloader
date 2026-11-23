@@ -86,7 +86,14 @@ export component QueueWindow inherits Window {
                         VerticalLayout { spacing: 6px; FieldLabel { label: "停止 HH:mm"; } LineEdit { text <=> root.stop-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
                     }
                     VerticalLayout { spacing: 6px; FieldLabel { label: "生效星期（周一为 1，以逗号分隔）"; } LineEdit { text <=> root.active-days; height: Tokens.control-height; } }
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列全部完成后"; } HotComboBox { model: ["无操作", "关机", "睡眠", "休眠"]; current-value <=> root.completion-action; height: Tokens.control-height; } }
+                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列全部完成后"; } HotComboBox {
+                        model: ["无操作", "关机", "睡眠", "休眠"];
+                        property <string> bound: root.completion-action;
+                        current-index: root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0;
+                        changed bound => { self.current-index = root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0; }
+                        selected(value) => { root.completion-action = value; }
+                        height: Tokens.control-height;
+                    } }
                     Text { text: "仅在队列中的任务全部成功后触发，执行前可取消。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
                 }
             }

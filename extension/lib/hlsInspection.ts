@@ -46,8 +46,9 @@ export async function inspectHlsResource(
   const info = parseHlsManifest(manifestText, response.url || resource.url)
   if (!info.duration && !info.variants.length && info.isLive === undefined) return null
 
-  const videoCodec = /(?:avc|avc3|hev|hvc|vp8|vp9|av01|theora)/i
-  const videoVariants = info.variants.filter(item => !item.codecs || videoCodec.test(item.codecs))
+  const videoCodec = /(?:avc|avc3|hev|hvc|vp8|vp9|vp08|vp09|av01|dvh1|dvhe|dva1|dvav|mp4v|vvc1|vvi1|theora)/i
+  const videoVariants = info.variants.filter(item =>
+    !item.codecs || Boolean(item.width || item.height) || videoCodec.test(item.codecs))
   const selectableVariants = videoVariants.length ? videoVariants : info.variants
   const variants = [...selectableVariants]
     .sort((left, right) => (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0))

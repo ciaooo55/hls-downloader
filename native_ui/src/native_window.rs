@@ -324,7 +324,20 @@ pub fn restore_geometry(window: &Window) {
 }
 
 pub fn save_geometry(window: &Window) {
+    #[cfg(windows)]
+    if let Some(handle) = hwnd(window) {
+        if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(handle as _) } != 0 {
+            return;
+        }
+    }
     let size = window.size().to_logical(window.scale_factor());
+    if !size.width.is_finite()
+        || !size.height.is_finite()
+        || size.width < 100.0
+        || size.height < 100.0
+    {
+        return;
+    }
     let directory = ui_directory();
     if std::fs::create_dir_all(&directory).is_ok() {
         let _ = std::fs::write(

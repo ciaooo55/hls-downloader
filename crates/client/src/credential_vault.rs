@@ -12,7 +12,11 @@ impl CredentialVault {
         if value.is_empty() {
             return Ok(String::new());
         }
-        if value.starts_with(PREFIX) {
+        if let Some(hex) = value.strip_prefix(PREFIX) {
+            if hex.is_empty() {
+                return Err("DPAPI credential payload is empty".into());
+            }
+            decode_hex(hex)?;
             return Ok(value.to_string());
         }
         #[cfg(windows)]
@@ -158,6 +162,13 @@ fn hex_digit(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_malformed_stored_credentials_before_reuse() {
+        for invalid in ["dpapi:", "dpapi:aaa", "dpapi:gg"] {
+            assert!(CredentialVault.protect(invalid).is_err());
+        }
+    }
 
     #[test]
     fn empty_and_plain_values_are_stable() {

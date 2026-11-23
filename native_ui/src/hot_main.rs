@@ -35,7 +35,7 @@ use hls_client::{
 use serde::Deserialize;
 use slint::{ComponentHandle, Timer, TimerMode};
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::io::Write;
 use std::rc::Rc;
@@ -422,9 +422,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let workbench = Rc::new(RefCell::new(None::<Rc<workbench::Workbench>>));
     let ui_sequence = Rc::new(std::cell::Cell::new(initial_sequence));
-    let native_workbench = Rc::new(std::cell::Cell::new(
-        args.iter().any(|arg| arg == "--workbench"),
-    ));
+    let native_workbench = Rc::new(std::cell::Cell::new(true));
     confirm.on_open_workbench({
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
@@ -435,17 +433,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let launch_id = (!launch_id.is_empty()).then(|| launch_id.to_string());
             if explicit_native {
                 native_workbench.set(true);
-            }
-            // Keep the complete workbench available until native parity is verified.
-            if !native_workbench.get() {
-                thread::spawn(|| {
-                    if let Err(error) = CoreIpcClient::connect().and_then(|mut client| {
-                        client.command(CoreCommand::OpenMain { launch_id: None })
-                    }) {
-                        trace(&format!("open main failed: {error}"));
-                    }
-                });
-                return;
             }
             if workbench.borrow().is_none() {
                 let tasks = known_tasks
@@ -489,25 +476,59 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            if let Some(window) = workbench.borrow().as_ref() {
-                if let Err(error) = window.show_for_launch(launch_id.clone()) {
-                    workbench::report_ui_ready(launch_id, "main_failed");
-                    report_startup_error(&error.to_string());
-                }
+            let show_error = workbench
+                .borrow()
+                .as_ref()
+                .and_then(|window| window.show_for_launch(launch_id.clone()).err());
+            if let Some(error) = show_error {
+                workbench::report_ui_ready(launch_id, "main_failed");
+                report_startup_error(&error.to_string());
             }
         }
     });
+    let active_hud = Rc::new(RefCell::new(ActiveTaskHud::default()));
+    let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
     confirm.on_core_resynced({
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
         let ui_sequence = Rc::clone(&ui_sequence);
+        let active_hud = Rc::clone(&active_hud);
+        let rendered_hud_task = Arc::clone(&rendered_hud_task);
+        let runtime_settings = Rc::clone(&runtime_settings);
+        let progress = progress.as_weak();
         move |sequence| {
             let _ = settings_reload.send(());
             let sequence = sequence.parse().unwrap_or_default();
             ui_sequence.set(sequence);
-            if let (Some(window), Ok(tasks)) = (workbench.borrow().as_ref(), known_tasks.lock()) {
+            let tasks = known_tasks
+                .lock()
+                .map(|tasks| tasks.clone())
+                .unwrap_or_default();
+            if let Some(window) = workbench.borrow().as_ref() {
                 window.replace(tasks.clone(), sequence);
+            }
+            let primary = active_hud.borrow_mut().reconcile(&tasks);
+            match primary {
+                Some(primary) => {
+                    reset_progress_action_for_new_task(
+                        &progress,
+                        &rendered_hud_task,
+                        &primary.task_id,
+                    );
+                    render_progress_hud(&progress, *runtime_settings.borrow(), &primary);
+                }
+                None => {
+                    if let Ok(mut rendered) = rendered_hud_task.lock() {
+                        *rendered = None;
+                    }
+                    if let Some(item) = progress.upgrade() {
+                        item.set_action_busy(false);
+                        item.set_action_error(false);
+                        item.set_action_text("".into());
+                        let _ = item.hide();
+                    }
+                }
             }
         }
     });
@@ -528,8 +549,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
-    let active_hud = Rc::new(RefCell::new(ActiveTaskHud::default()));
-    let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
 
@@ -761,7 +780,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let Some(item) = window.upgrade() else {
                         return;
                     };
-                    match pick_folder(&item.get_download_dir()) {
+                    match file_dialogs::folder(native_window::hwnd(item.window())) {
                         Ok(Some(path)) => {
                             item.set_download_dir(path.into());
                             clear_confirm_issue(&item);
@@ -804,13 +823,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "open_existing" => {
                     if let Some(item) = window.upgrade() {
-                        item.invoke_open_workbench(false, "".into());
+                        item.invoke_open_workbench(true, "".into());
                     }
                     return;
                 }
                 "more" => {
                     if let Some(item) = window.upgrade() {
-                        item.invoke_open_workbench(false, "".into());
+                        item.invoke_open_workbench(true, "".into());
                     }
                     return;
                 }
@@ -881,8 +900,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(|mut client| client.command(request))
                     .and_then(core_feedback::command_result);
                 let _ = result_window.upgrade_in_event_loop(move |item| {
-                    // 下一项下载完成后，旧窗口的操作结果不能隐藏新通知。
-                    if item.get_task_id().as_str() != task_id.as_deref().unwrap_or("") {
+                    // 下一项下载完成后，旧窗口的打开文件结果不能隐藏新通知；
+                    // 但取消电源动作是全局指令，不绑定特定任务 ID。
+                    if !cancel_power
+                        && item.get_task_id().as_str() != task_id.as_deref().unwrap_or("")
+                    {
                         return;
                     }
                     item.set_action_busy(false);
@@ -920,13 +942,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
     });
-    let rx = Rc::new(RefCell::new(rx));
     // IPC 线程只在收到事件后唤醒界面；空闲时不再每秒轮询 250 次。
     confirm.on_core_events_ready({
         let workbench = Rc::clone(&workbench);
         let native_workbench = Rc::clone(&native_workbench);
         let ui_sequence = Rc::clone(&ui_sequence);
-        let rx = Rc::clone(&rx);
         let active_hud = Rc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
@@ -960,7 +980,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            while let Ok(events) = rx.borrow_mut().try_recv() {
+            // 先全部取出再分发，避免嵌套模态消息循环重入时借用冲突。
+            let mut batches = Vec::new();
+            while let Ok(events) = rx.try_recv() {
+                batches.push(events);
+            }
+            for events in batches {
                 for envelope in events {
                     ui_sequence.set(ui_sequence.get().max(envelope.sequence));
                     if native_workbench.get()
@@ -1001,6 +1026,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
                                 *completed_task.borrow_mut() = None;
                                 if let Some(item) = complete.upgrade() {
+                                    item.set_task_id("".into());
                                     let _ = item.hide();
                                 }
                             }
@@ -1858,7 +1884,7 @@ fn show_next_offer(
         if let Ok(mut items) = pending.lock() {
             items.retain(|item| item.handoff_id != offer.handoff_id);
         }
-        item.invoke_open_workbench(false, "".into());
+        item.invoke_open_workbench(true, "".into());
     }
 }
 
@@ -2078,9 +2104,22 @@ fn correct_native_click_position(window: &slint::Window) {
                     .try_dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
                 return EventResult::PreventDefault;
             }
-            if matches!(event, winit::event::WindowEvent::CursorLeft { .. }) && left_pressed.get() {
-                // 鼠标已捕获，离开窗口不代表取消拖动；Winit 的默认按下状态被拦截了。
-                return EventResult::PreventDefault;
+            if matches!(event, winit::event::WindowEvent::CursorLeft { .. }) {
+                if left_pressed.get() {
+                    // 鼠标已捕获，离开窗口不代表取消拖动；Winit 的默认按下状态被拦截了。
+                    return EventResult::PreventDefault;
+                }
+                cursor_position.set(None);
+                return EventResult::Propagate;
+            }
+            if matches!(event, winit::event::WindowEvent::Focused(false)) {
+                if left_pressed.replace(false) {
+                    unsafe {
+                        ReleaseCapture();
+                    }
+                }
+                cursor_position.set(None);
+                return EventResult::Propagate;
             }
             let winit::event::WindowEvent::MouseInput {
                 state,
@@ -2136,17 +2175,20 @@ fn correct_native_click_position(window: &slint::Window) {
             } else {
                 slint::platform::WindowEvent::PointerReleased { position, button }
             };
+            if *state == winit::event::ElementState::Released {
+                // 先释放鼠标捕获，再派发点击，避免回调里打开系统文件夹模态窗时仍占着捕获。
+                unsafe {
+                    ReleaseCapture();
+                }
+                left_pressed.set(false);
+                cursor_position.set(None);
+            }
             trace(&format!(
                 "native left button: {state:?} at {},{}",
                 position.x, position.y
             ));
             let _ = window.try_dispatch_event(event);
             if *state == winit::event::ElementState::Released {
-                unsafe {
-                    ReleaseCapture();
-                }
-                left_pressed.set(false);
-                cursor_position.set(None);
                 window.request_redraw();
             }
             EventResult::PreventDefault
@@ -2265,6 +2307,32 @@ impl ActiveTaskHud {
         self.entries.first().map(|entry| entry.snapshot.clone())
     }
 
+    /// Reconcile active HUD entries against a fresh full snapshot after reconnect/resync.
+    fn reconcile(&mut self, tasks: &[TaskSnapshot]) -> Option<TaskSnapshot> {
+        let active: HashMap<&str, &TaskSnapshot> = tasks
+            .iter()
+            .filter(|task| task_is_active(&task.status))
+            .map(|task| (task.task_id.as_str(), task))
+            .collect();
+        self.entries
+            .retain(|entry| active.contains_key(entry.task_id.as_str()));
+        for entry in &mut self.entries {
+            if let Some(snapshot) = active.get(entry.task_id.as_str()) {
+                entry.snapshot = (*snapshot).clone();
+            }
+        }
+        for snapshot in tasks.iter().filter(|task| task_is_active(&task.status)) {
+            if !self
+                .entries
+                .iter()
+                .any(|entry| entry.task_id == snapshot.task_id)
+            {
+                self.observe(snapshot.clone());
+            }
+        }
+        self.entries.first().map(|entry| entry.snapshot.clone())
+    }
+
     fn primary_task_id(&self) -> Option<String> {
         self.entries.first().map(|entry| entry.task_id.clone())
     }
@@ -2281,6 +2349,9 @@ fn update_task_windows(
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
 ) {
+    if task_is_active(&snapshot.status) {
+        completed_notified.borrow_mut().remove(&snapshot.task_id);
+    }
     let primary = active_hud.borrow_mut().observe(snapshot.clone());
     match primary {
         Some(primary) => {
@@ -2588,28 +2659,6 @@ fn task_status_label(status: &str) -> &str {
         "queued" => "排队中",
         _ => status,
     }
-}
-
-#[cfg(windows)]
-fn pick_folder(initial: &str) -> Result<Option<String>, String> {
-    let script = r#"[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = '选择下载保存位置'; if ($env:HLS_V7_INITIAL_DIR -and (Test-Path -LiteralPath $env:HLS_V7_INITIAL_DIR)) { $dialog.SelectedPath = $env:HLS_V7_INITIAL_DIR }; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }"#;
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-STA", "-Command", script])
-        .env("HLS_V7_INITIAL_DIR", initial)
-        .output()
-        .map_err(|error| format!("无法打开文件夹选择器：{error}"))?;
-    if !output.status.success() {
-        return Err("文件夹选择器未能正常打开".into());
-    }
-    let path =
-        String::from_utf8(output.stdout).map_err(|_| "文件夹选择器返回了无效路径".to_string())?;
-    let path = path.trim().to_string();
-    Ok((!path.is_empty()).then_some(path))
-}
-
-#[cfg(not(windows))]
-fn pick_folder(_initial: &str) -> Result<Option<String>, String> {
-    Err("当前系统不支持文件夹选择器".into())
 }
 
 fn task_progress(task: &TaskSnapshot) -> f32 {
@@ -3022,6 +3071,24 @@ mod tests {
         assert_eq!(hud.primary_task_id().as_deref(), Some("b-2"));
         hud.remove("b-2");
         assert_eq!(hud.primary_task_id().as_deref(), None);
+    }
+
+    #[test]
+    fn progress_hud_reconcile_drops_stale_tasks_missing_from_resync_snapshot() {
+        let mut hud = ActiveTaskHud::default();
+        hud.observe(hud_snapshot("stale-1", "downloading"));
+        hud.observe(hud_snapshot("live-2", "recording"));
+        assert_eq!(hud.primary_task_id().as_deref(), Some("stale-1"));
+
+        let next = hud.reconcile(&[
+            hud_snapshot("stale-1", "completed"),
+            hud_snapshot("live-2", "recording"),
+        ]);
+        assert_eq!(next.as_ref().map(|t| t.task_id.as_str()), Some("live-2"));
+        assert_eq!(hud.primary_task_id().as_deref(), Some("live-2"));
+
+        assert!(hud.reconcile(&[]).is_none());
+        assert_eq!(hud.primary_task_id(), None);
     }
 
     #[test]

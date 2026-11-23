@@ -68,13 +68,31 @@ fn budget() -> &'static Mutex<BudgetState> {
     BUDGET.get_or_init(|| Mutex::new(BudgetState::default()))
 }
 
+fn valid_url_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}
+
 fn host_key(url: &str) -> String {
-    url.split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .split(['/', '?', '#'])
+    let trimmed = url.trim();
+    let rest = if let Some((scheme, after)) = trimmed.split_once("://") {
+        if !valid_url_scheme(scheme) {
+            return String::new();
+        }
+        after
+    } else if trimmed.contains(':') {
+        // Non-authority URI schemes such as `magnet:?...` have no host authority.
+        return String::new();
+    } else {
+        trimmed
+    };
+    rest.split(['/', '?', '#'])
         .next()
-        .unwrap_or(url)
+        .unwrap_or("")
         .to_ascii_lowercase()
 }
 
@@ -106,7 +124,11 @@ pub fn url_allowed(url: &str, patterns: &str) -> bool {
                 return true;
             }
             if let Ok(address) = host.parse::<IpAddr>() {
-                if address_in_cidr(address, &item) {
+                if item
+                    .parse::<IpAddr>()
+                    .is_ok_and(|pattern_ip| pattern_ip == address)
+                    || address_in_cidr(address, &item)
+                {
                     return true;
                 }
             }
@@ -628,14 +650,22 @@ pub fn host_bypassed(host: &str, bypass: &str) -> bool {
     if host.is_empty() || bypass.trim().is_empty() {
         return false;
     }
+    let host_ip = host.parse::<IpAddr>().ok();
     bypass
         .split([';', ',', '\n', '\t', ' '])
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .any(|pattern| {
-            let pattern = pattern.trim_start_matches('.').to_ascii_lowercase();
+            let pattern = pattern
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim_start_matches('.')
+                .to_ascii_lowercase();
             if pattern == "<local>" {
-                return !host.contains('.');
+                return !host.contains('.') && !host.contains(':');
+            }
+            if let (Some(h_ip), Ok(p_ip)) = (host_ip, pattern.parse::<IpAddr>()) {
+                return h_ip == p_ip;
             }
             host == pattern || host.ends_with(&format!(".{pattern}"))
         })
@@ -725,10 +755,24 @@ fn unix_now() -> i64 {
 pub(crate) fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
     let (date, time_zone) = value.split_once('T')?;
     let mut date_parts = date.split('-');
-    let year = date_parts.next()?.parse::<i64>().ok()?;
-    let month = date_parts.next()?.parse::<u32>().ok()?;
-    let day = date_parts.next()?.parse::<u32>().ok()?;
-    if date_parts.next().is_some() || !(1..=12).contains(&month) {
+    let year_str = date_parts.next()?;
+    if year_str.len() != 4 || !year_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let year = year_str.parse::<i64>().ok()?;
+    let month_str = date_parts.next()?;
+    let day_str = date_parts.next()?;
+    if date_parts.next().is_some()
+        || month_str.len() != 2
+        || !month_str.bytes().all(|b| b.is_ascii_digit())
+        || day_str.len() != 2
+        || !day_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let month = month_str.parse::<u32>().ok()?;
+    let day = day_str.parse::<u32>().ok()?;
+    if !(1..=12).contains(&month) {
         return None;
     }
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
@@ -748,19 +792,52 @@ pub(crate) fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
         let (clock, offset) = time_zone.split_at(index);
         let sign = if offset.starts_with('-') { -1i64 } else { 1i64 };
         let mut parts = offset[1..].split(':');
-        let hours = parts.next()?.parse::<i64>().ok()?;
-        let minutes = parts.next()?.parse::<i64>().ok()?;
-        if parts.next().is_some() || hours > 23 || minutes > 59 {
+        let hours_str = parts.next()?;
+        let minutes_str = parts.next()?;
+        if parts.next().is_some()
+            || hours_str.len() != 2
+            || !hours_str.bytes().all(|b| b.is_ascii_digit())
+            || minutes_str.len() != 2
+            || !minutes_str.bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
-        (clock, sign * (hours * 3600 + minutes * 60))
+        let hours = hours_str.parse::<u32>().ok()?;
+        let minutes = minutes_str.parse::<u32>().ok()?;
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (
+            clock,
+            sign * (i64::from(hours) * 3600 + i64::from(minutes) * 60),
+        )
     };
-    let clock = clock.split('.').next()?;
+    let clock = if let Some((clock, fraction)) = clock.split_once('.') {
+        if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        clock
+    } else {
+        clock
+    };
     let mut clock_parts = clock.split(':');
-    let hour = clock_parts.next()?.parse::<i64>().ok()?;
-    let minute = clock_parts.next()?.parse::<i64>().ok()?;
-    let second = clock_parts.next()?.parse::<i64>().ok()?;
-    if clock_parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+    let hour_str = clock_parts.next()?;
+    let minute_str = clock_parts.next()?;
+    let second_str = clock_parts.next()?;
+    if clock_parts.next().is_some()
+        || hour_str.len() != 2
+        || !hour_str.bytes().all(|b| b.is_ascii_digit())
+        || minute_str.len() != 2
+        || !minute_str.bytes().all(|b| b.is_ascii_digit())
+        || second_str.len() != 2
+        || !second_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let hour = hour_str.parse::<u32>().ok()?;
+    let minute = minute_str.parse::<u32>().ok()?;
+    let second = second_str.parse::<u32>().ok()?;
+    if hour > 23 || minute > 59 || second > 59 {
         return None;
     }
     let adjusted_year = year - i64::from(month <= 2);
@@ -774,7 +851,9 @@ pub(crate) fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
     let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     let days = era * 146_097 + day_of_era - 719_468;
-    Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds)
+    days.checked_mul(86_400)?
+        .checked_add(i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second))?
+        .checked_sub(offset_seconds)
 }
 
 /// 本地 ISO 星期（1=周一…7=周日）。
@@ -830,6 +909,16 @@ fn chrono_minutes_now() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_policy_matches_canonical_address_without_treating_it_as_local_name() {
+        assert!(url_allowed(
+            "https://[2001:db8::1]/x",
+            "[2001:0db8:0:0:0:0:0:1]"
+        ));
+        assert!(!host_bypassed("2001:db8::1", "<local>"));
+        assert!(!url_allowed("magnet:?xt=urn:test", "*"));
+    }
 
     #[test]
     fn saturated_connection_budget_can_stop_without_leaking_a_slot() {

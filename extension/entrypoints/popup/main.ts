@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser'
 import { downloadSelectionKey, normalizeHost, selectMediaVariant, visibleMediaResources, type MediaResource } from '../../lib/resources'
 import { resourceQuality } from '../../lib/hlsManifest'
-import { HANDOFF_SUPPRESSION_STORAGE_KEY, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
+import { HANDOFF_SUPPRESSION_STORAGE_KEY, hostForPage, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
@@ -375,6 +375,7 @@ async function main() {
 
   let enabled = true
   let host = ''
+  let suppressionHost = ''
   let authorizedCookieHosts: string[] = []
   let excluded: string[] = []
   let suppressions: HandoffSuppression[] = []
@@ -617,13 +618,16 @@ async function main() {
     excludeBtn.title = siteExcluded ? '\u5f53\u524d\u5df2\u5728\u672c\u7ad9\u9690\u85cf\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u6062\u590d' : '\u5f53\u524d\u4f1a\u5728\u672c\u7ad9\u663e\u793a\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u9690\u85cf'
     excludeBtn.setAttribute('aria-pressed', String(siteExcluded))
     excludeBtn.classList.toggle('active', siteExcluded)
-    const suppressedKinds = suppressions.filter(rule => rule.host === host).map(rule => rule.kind)
+    const suppressedKinds = suppressions
+      .filter(rule => rule.host === suppressionHost || (host && rule.host === host))
+      .map(rule => rule.kind)
     restorePromptsBtn.hidden = suppressedKinds.length === 0
     restorePromptsBtn.title = suppressedKinds.length
       ? `\u6062\u590d\u672c\u7ad9 ${suppressedKinds.join('\u3001')} \u8d44\u6e90\u7684\u81ea\u52a8\u63d0\u793a`
       : ''
     for (const button of [enableBtn, cookieBtn, excludeBtn, restorePromptsBtn]) {
-      button.disabled = Boolean(settingsBusy) || (button !== enableBtn && !host)
+      button.disabled = Boolean(settingsBusy)
+        || (button === restorePromptsBtn ? (!host && !suppressionHost) : (button !== enableBtn && !host))
       button.setAttribute('aria-busy', String(settingsBusy === button))
     }
   }
@@ -855,8 +859,8 @@ async function main() {
     }
   })
   restorePromptsBtn.addEventListener('click', async () => {
-    if (!host || settingsBusy) return
-    const next = suppressions.filter(rule => rule.host !== host)
+    if ((!host && !suppressionHost) || settingsBusy) return
+    const next = suppressions.filter(rule => rule.host !== suppressionHost && rule.host !== host)
     settingsBusy = restorePromptsBtn
     refreshButtons()
     setError('')
@@ -875,16 +879,20 @@ async function main() {
   const windowTabs = await withDeadline(browser.tabs.query({ currentWindow: true }), 1_000).catch(() => [])
   // A normal toolbar popup leaves the web tab active. Developer tools and
   // automated browser checks can open popup.html as an extension tab instead;
-  // in that case fall back to the most recently listed web tab rather than
-  // showing a misleading zero-resource state for the extension page itself.
+  // fall back to a web tab ONLY when the active tab is this extension's own page.
+  const extensionOrigin = browser.runtime.getURL('')
+  const activeTab = windowTabs.find(candidate => candidate.active)
   const tab = windowTabs.find(candidate => candidate.active && /^https?:\/\//i.test(candidate.url || ''))
-    || [...windowTabs].reverse().find(candidate => /^https?:\/\//i.test(candidate.url || ''))
-    || windowTabs.find(candidate => candidate.active)
+    || (activeTab?.url?.startsWith(extensionOrigin)
+      ? [...windowTabs].reverse().find(candidate => /^https?:\/\//i.test(candidate.url || ''))
+      : undefined)
+    || activeTab
   const pageUrl = tab?.url || ''
   pageTabId = /^https?:\/\//i.test(pageUrl) ? tab?.id : undefined
   if (tabs[1].getAttribute('aria-selected') === 'true') selectPanel(1)
   if (pageTabId === undefined) subtitlePanel.replaceChildren(el('p', 'panel-hint', '请在包含播放器的网页中使用字幕翻译。'))
   host = normalizeHost(pageUrl)
+  suppressionHost = hostForPage(pageUrl)
   settingsSite.textContent = host ? `当前站点 · ${host}` : '当前页面不是普通网页，站点设置不可用。'
   title.textContent = host || '当前页面不支持媒体识别'
   title.title = pageUrl
@@ -894,10 +902,17 @@ async function main() {
   }).catch(() => undefined)
   browser.storage.onChanged.addListener((changes, area) => {
     if (area === 'session' && changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
+    if (area === 'local' && changes.enabled && !settingsBusy) {
+      enabled = changes.enabled.newValue !== false
+      refreshButtons()
+    }
   })
   canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
+  let listGeneration = 0
   rescanPage = async () => {
     if (!canScanPage || tab?.id == null || resourceState === 'scanning') return
+    listGeneration += 1
+    const scanGeneration = listGeneration
     showCandidates = true
     resourceState = 'scanning'
     scanBtn.disabled = true
@@ -914,11 +929,15 @@ async function main() {
         1_500,
         '\u8bfb\u53d6\u8bc6\u522b\u7ed3\u679c\u8d85\u65f6',
       )
-      resources = Array.isArray(listed) ? listed : []
-      resourceState = 'ready'
+      if (scanGeneration === listGeneration) {
+        resources = Array.isArray(listed) ? listed : []
+        resourceState = 'ready'
+      }
     } catch (reason) {
-      resourceState = 'error'
-      setError(reason instanceof Error ? reason.message : '嗅探全部资源\u5931\u8d25')
+      if (scanGeneration === listGeneration) {
+        resourceState = 'error'
+        setError(reason instanceof Error ? reason.message : '嗅探全部资源\u5931\u8d25')
+      }
     } finally {
       scanBtn.disabled = !canScanPage
       renderList()
@@ -946,12 +965,18 @@ async function main() {
     withDeadline(browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }), 1_500).catch(() => []),
     withDeadline(connectionRequest, 1_800).catch(() => ({ reconnecting: true })),
   ])
-  resources = Array.isArray(listed) ? listed : []
-  resourceState = 'ready'
+  if (listGeneration === 0) {
+    resources = Array.isArray(listed) ? listed : []
+    resourceState = 'ready'
+  }
   function showConnection(response: any) {
     const online = Boolean(response?.ok)
     statusEl.textContent = engineConnectionLabel(online, Boolean(response?.reconnecting))
     statusEl.classList.toggle('online', online)
+    if (typeof response?.takeover_enabled === 'boolean' && !settingsBusy) {
+      enabled = response.takeover_enabled
+      refreshButtons()
+    }
     const recommendedExtensionVersion = String(response?.recommended_extension_version || '')
     const extensionReleaseUrl = String(response?.extension_release_url || '')
     if (extensionNeedsUpgrade(browser.runtime.getManifest().version, recommendedExtensionVersion)) {

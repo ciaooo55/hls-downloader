@@ -38,10 +38,57 @@ fn io_error(_: std::io::Error) -> Failure {
     Failure(5, "无法读写输入或输出文件".into())
 }
 
+fn core_failure(error: String, fallback: &str) -> Failure {
+    let lower = error.to_ascii_lowercase();
+    let is_transport = lower.starts_with("core pipe ")
+        || lower.starts_with("core ipc ")
+        || lower.starts_with("core stream ")
+        || lower.starts_with("v7 core connect")
+        || lower.starts_with("createfilew")
+        || lower.starts_with("waitnamedpipew");
+    if is_transport {
+        Failure(3, format!("无法连接 Core：{error}"))
+    } else if error.trim().is_empty() {
+        rejected(fallback)
+    } else {
+        rejected(error)
+    }
+}
+
+fn split_json_flag(raw: Vec<String>) -> (bool, Vec<String>) {
+    let mut as_json = false;
+    let mut filtered = Vec::with_capacity(raw.len());
+    let mut expect_value = false;
+    for arg in raw {
+        if expect_value {
+            filtered.push(arg);
+            expect_value = false;
+            continue;
+        }
+        if arg == "--json" {
+            as_json = true;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "--dir"
+                | "--name"
+                | "--queue"
+                | "--context"
+                | "--kind"
+                | "--spec"
+                | "--format"
+                | "--output"
+        ) {
+            expect_value = true;
+        }
+        filtered.push(arg);
+    }
+    (as_json, filtered)
+}
+
 fn main() {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let as_json = args.iter().any(|arg| arg == "--json");
-    args.retain(|arg| arg != "--json");
+    let (as_json, args) = split_json_flag(std::env::args().skip(1).collect());
     if args.is_empty() || args[0] == "--help" || args[0] == "help" {
         print!("{HELP}");
         return;
@@ -79,10 +126,17 @@ fn connect() -> Result<CoreIpcClient> {
 fn command(client: &mut CoreIpcClient, cmd: CoreCommand) -> Result<Vec<EventEnvelope>> {
     let events = client
         .command(cmd)
-        .map_err(|_| rejected("Core 拒绝请求；请检查任务、设置及使用条款状态"))?;
+        .map_err(|error| core_failure(error, "Core 拒绝请求；请检查任务、设置及使用条款状态"))?;
     for envelope in &events {
         match &envelope.event {
-            CoreEvent::Error { code, .. } => return Err(rejected(format!("Core 错误: {code}"))),
+            CoreEvent::Error { code, message } => {
+                let detail = if message.trim().is_empty() {
+                    format!("Core 错误: {code}")
+                } else {
+                    format!("Core 错误 ({code}): {message}")
+                };
+                return Err(rejected(detail));
+            }
             CoreEvent::DuplicateOffered { .. } => {
                 return Err(rejected("任务已存在，需要在工作台选择重复任务处理方式"))
             }
@@ -159,12 +213,17 @@ fn read_context(source: &str, spec: &mut TaskSpec) -> Result<()> {
         spec.request_method = v;
     }
     if let Some(v) = context.body_path {
-        spec.body_path = absolute(&v)?;
+        if !v.trim().is_empty() {
+            spec.body_path = absolute(&v)?;
+        }
     }
     Ok(())
 }
 
 fn absolute(path: &str) -> Result<String> {
+    if path.trim().is_empty() {
+        return Err(usage("路径参数不能为空"));
+    }
     let path = Path::new(path);
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -211,8 +270,13 @@ fn run(args: &[String]) -> Result<Value> {
             }
         }
         "list" if args.len() == 1 => {}
-        "show" | "pause" | "resume" | "retry" if args.len() == 2 => ids.push(args[1].clone()),
-        "remove" if args.len() == 2 || (args.len() == 3 && args[2] == "--delete-files") => {
+        "show" | "pause" | "resume" | "retry" if args.len() == 2 && !args[1].starts_with('-') => {
+            ids.push(args[1].clone())
+        }
+        "remove"
+            if !args.get(1).is_none_or(|arg| arg.starts_with('-'))
+                && (args.len() == 2 || (args.len() == 3 && args[2] == "--delete-files")) =>
+        {
             ids.push(args[1].clone());
             delete_files = args.len() == 3;
         }
@@ -397,8 +461,12 @@ fn run(args: &[String]) -> Result<Value> {
             profile.enabled = args[1] == "start";
             client
                 .store_setting("queue_profiles", serde_json::to_value(&profiles).unwrap())
-                .map_err(|_| rejected("无法保存队列"))?;
-            for task in client.snapshot().map_err(|_| rejected("无法读取任务"))? {
+                .map_err(|error| core_failure(error, "无法保存队列"))?;
+            let mut failed = Vec::new();
+            for task in client
+                .snapshot()
+                .map_err(|error| core_failure(error, "无法读取任务"))?
+            {
                 if task.queue_id != args[2] {
                     continue;
                 }
@@ -410,17 +478,42 @@ fn run(args: &[String]) -> Result<Value> {
                     "start"
                 };
                 if task.available_actions.iter().any(|a| a == action) {
-                    command(
+                    if let Err(Failure(code, message)) = command(
                         &mut client,
                         CoreCommand::TaskAction {
-                            task_id: task.task_id,
+                            task_id: task.task_id.clone(),
                             action: action.into(),
                         },
-                    )?;
+                    ) {
+                        if code == 3 {
+                            return Err(Failure(code, message));
+                        }
+                        failed.push(json!({"task_id": task.task_id, "error": message}));
+                    }
                 }
             }
-            Ok(json!({"ok":true,"queue_id":args[2],"enabled":args[1]=="start"}))
+            if failed.is_empty() {
+                Ok(json!({"ok":true,"queue_id":args[2],"enabled":args[1]=="start"}))
+            } else {
+                Ok(
+                    json!({"ok":true,"queue_id":args[2],"enabled":args[1]=="start","skipped_tasks":failed}),
+                )
+            }
         }
         _ => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_flag_preserves_literal_option_values() {
+        let args = ["add", "--name", "--json", "--json"].map(str::to_string);
+        let (json, rest) = split_json_flag(args.into());
+        assert!(json);
+        assert_eq!(rest, ["add", "--name", "--json"]);
+        assert!(absolute("  ").is_err());
     }
 }

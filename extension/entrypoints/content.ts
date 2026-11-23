@@ -1230,14 +1230,70 @@ export default defineContentScript({
       if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+      const httpUrlOnly = (value: unknown): string | undefined => {
+        if (typeof value !== 'string' || !value.trim()) return undefined
+        try {
+          const parsed = new URL(value)
+          return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : undefined
+        } catch {
+          return undefined
+        }
+      }
+      const safeVariants = Array.isArray(inspection?.variants)
+        ? inspection.variants
+            .map(variant => {
+              if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return null
+              const safeUrl = httpUrlOnly(variant.url)
+              if (!safeUrl) return null
+              return {
+                url: safeUrl,
+                ...(typeof variant.width === 'number' && Number.isFinite(variant.width) && variant.width > 0 ? { width: variant.width } : {}),
+                ...(typeof variant.height === 'number' && Number.isFinite(variant.height) && variant.height > 0 ? { height: variant.height } : {}),
+                ...(typeof variant.bandwidth === 'number' && Number.isFinite(variant.bandwidth) && variant.bandwidth > 0 ? { bandwidth: variant.bandwidth } : {}),
+                ...(typeof variant.quality === 'string' && variant.quality.trim() ? { quality: variant.quality.trim().slice(0, 64) } : {}),
+              }
+            })
+            .filter((variant): variant is NonNullable<typeof variant> => variant !== null)
+            .slice(0, 12)
+        : undefined
+      const safeAudioTracks = Array.isArray(inspection?.audioTracks)
+        ? inspection.audioTracks
+            .map(track => {
+              if (!track || typeof track !== 'object' || Array.isArray(track)) return null
+              const safeUrl = track.url ? httpUrlOnly(track.url) : undefined
+              if (track.url && !safeUrl) return null
+              return {
+                label: typeof track.label === 'string' ? track.label.slice(0, 128) : '',
+                language: typeof track.language === 'string' ? track.language.slice(0, 64) : '',
+                ...(safeUrl ? { url: safeUrl } : {}),
+                ...(typeof track.default === 'boolean' ? { default: track.default } : {}),
+              }
+            })
+            .filter((track): track is NonNullable<typeof track> => track !== null)
+            .slice(0, 24)
+        : undefined
+      const safeUrlList = (values: unknown, limit: number): string[] | undefined => (
+        Array.isArray(values)
+          ? values.map(httpUrlOnly).filter((item): item is string => Boolean(item)).slice(0, limit)
+          : undefined
+      )
+      const safeHashList = (values: unknown, limit: number): string[] | undefined => (
+        Array.isArray(values)
+          ? values
+              .filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 128)
+              .slice(0, limit)
+          : undefined
+      )
       const resource = {
-        // MAIN 桥仅接收解析结果，不能用网页事件覆盖请求身份或凭据。
+        // MAIN 桥仅接收解析结果，不能用网页事件覆盖请求身份或凭据，且只接受 http(s) 地址。
         ...(inspection?.inspected === true ? {
           inspected: true, manifestType: inspection.manifestType, isLive: inspection.isLive,
           lowLatencyLive: inspection.lowLatencyLive, partOnlyLive: inspection.partOnlyLive,
-          duration: inspection.duration, variants: inspection.variants, audioTracks: inspection.audioTracks,
-          renditionUrls: inspection.renditionUrls, playbackUrls: inspection.playbackUrls,
-          playbackUrlHashes: inspection.playbackUrlHashes, playbackPatterns: inspection.playbackPatterns,
+          duration: inspection.duration, variants: safeVariants, audioTracks: safeAudioTracks,
+          renditionUrls: safeUrlList(inspection.renditionUrls, 24),
+          playbackUrls: safeUrlList(inspection.playbackUrls, 48),
+          playbackUrlHashes: safeHashList(inspection.playbackUrlHashes, 512),
+          playbackPatterns: safeUrlList(inspection.playbackPatterns, 48),
           width: inspection.width, height: inspection.height, bandwidth: inspection.bandwidth,
           estimatedSize: inspection.estimatedSize, quality: inspection.quality,
         } : {}),

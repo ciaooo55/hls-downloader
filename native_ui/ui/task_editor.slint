@@ -63,7 +63,14 @@ export component TaskEditorWindow inherits Window {
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     FieldLabel { label: "类型"; width: 80px; }
-                    HotComboBox { height: Tokens.control-height; model: ["自动识别", "普通文件", "HLS", "DASH", "直播", "种子 / 磁力"]; current-value <=> root.kind; }
+                    HotComboBox {
+                        height: Tokens.control-height;
+                        model: ["自动识别", "普通文件", "HLS", "DASH", "直播", "种子 / 磁力"];
+                        property <string> bound: root.kind;
+                        current-index: root.kind == "种子 / 磁力" ? 5 : root.kind == "直播" ? 4 : root.kind == "DASH" ? 3 : root.kind == "HLS" ? 2 : root.kind == "普通文件" ? 1 : 0;
+                        changed bound => { self.current-index = root.kind == "种子 / 磁力" ? 5 : root.kind == "直播" ? 4 : root.kind == "DASH" ? 3 : root.kind == "HLS" ? 2 : root.kind == "普通文件" ? 1 : 0; }
+                        selected(value) => { root.kind = value; }
+                    }
                     HotButton { label: "识别 / 探测"; icon: "search"; enabled: !root.busy; clicked => { root.action("probe"); } }
                 }
                 if root.variants.length > 0: HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "清晰度"; width: 80px; } HotComboBox { height: Tokens.control-height; model: root.variants; current-index <=> root.variant-index; } }
@@ -71,7 +78,14 @@ export component TaskEditorWindow inherits Window {
                 HorizontalLayout {
                     spacing: Tokens.control-gap;
                     FieldLabel { label: "请求方法"; width: 80px; }
-                    HotComboBox { height: Tokens.control-height; model: ["GET", "POST", "PUT", "PATCH", "HEAD"]; current-value <=> root.method; }
+                    HotComboBox {
+                        height: Tokens.control-height;
+                        model: ["GET", "POST", "PUT", "PATCH", "HEAD"];
+                        property <string> bound: root.method;
+                        current-index: root.method == "HEAD" ? 4 : root.method == "PATCH" ? 3 : root.method == "PUT" ? 2 : root.method == "POST" ? 1 : 0;
+                        changed bound => { self.current-index = root.method == "HEAD" ? 4 : root.method == "PATCH" ? 3 : root.method == "PUT" ? 2 : root.method == "POST" ? 1 : 0; }
+                        selected(value) => { root.method = value; }
+                    }
                     FieldLabel { label: "并发连接"; }
                     SpinBox { value <=> root.concurrency; accessible-label: "并发连接"; height: Tokens.control-height; minimum: 0; maximum: 128; }
                 }
@@ -90,8 +104,8 @@ export component TaskEditorWindow inherits Window {
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "校验值"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.checksum; accessible-label: "校验值"; placeholder-text: "SHA-256、SHA-1 或 MD5"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "镜像地址"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.mirrors; accessible-label: "镜像地址"; placeholder-text: "多个地址使用 | 分隔"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; accessible-label: "任务限速 KiB/s"; height: Tokens.control-height; minimum: 0; maximum: 1000000; } Text { text: "0 表示不限速"; color: Tokens.faint; font-size: 11px; vertical-alignment: center; } }
-                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划开始"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.start-at; accessible-label: "计划开始"; placeholder-text: "YYYY-MM-DD HH:mm"; } }
-                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划停止"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.stop-at; accessible-label: "计划停止"; placeholder-text: "YYYY-MM-DD HH:mm"; } }
+                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划开始"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.start-at; accessible-label: "计划开始"; placeholder-text: "HH:mm 或 2026-01-01T22:00:00+08:00"; } }
+                HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划停止"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.stop-at; accessible-label: "计划停止"; placeholder-text: "HH:mm 或 2026-01-01T23:30:00+08:00"; } }
                 HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "队列 ID"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.queue-id; accessible-label: "队列 ID"; } }
                 Rectangle { height: 4px; }
                 HotCheckBox { text: "添加后暂不开始"; checked <=> root.start-paused; }

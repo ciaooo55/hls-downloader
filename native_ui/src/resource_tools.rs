@@ -548,6 +548,12 @@ impl ResourceTools {
 
     pub fn resynchronize(&self) {
         self.seen.borrow_mut().clear();
+        self.pending.set(None);
+        self.refresh_pending.set(None);
+        self.waiting_torrent.set(false);
+        self.creating_project.set(false);
+        self.listing_projects.set(false);
+        self.window.set_busy(false);
     }
 
     pub fn event(&self, envelope: &EventEnvelope) {

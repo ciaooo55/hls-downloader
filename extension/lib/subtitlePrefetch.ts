@@ -31,7 +31,7 @@ export function prefetchSubtitleAudio(options: {
   let position = options.position
   let generation = 0
   let stopped = false
-  let active = false
+  let activeGeneration = -1
   let buffered = new Uint8Array()
   let bufferedAt = position
   let waiting: number | undefined
@@ -46,11 +46,11 @@ export function prefetchSubtitleAudio(options: {
     return btoa(value)
   }
   const tick = async () => {
-    if (stopped || active) return
+    if (stopped || activeGeneration === generation) return
     const current = generation
     const clock = options.clock()
     if (!clock.running) return
-    active = true
+    activeGeneration = current
     try {
       if (waiting != null) {
         if (!options.ready(waiting, epoch)) {
@@ -98,13 +98,15 @@ export function prefetchSubtitleAudio(options: {
         stopped = true; clearInterval(timer)
         options.failed(reason instanceof Error ? reason.message : '字幕预取失败')
       }
-    } finally { active = false }
+    } finally {
+      if (activeGeneration === current) activeGeneration = -1
+    }
   }
   const timer = setInterval(() => { void tick() }, 50)
   void tick()
   return {
     reset(nextEpoch, nextPosition) {
-      generation++; epoch = nextEpoch; position = nextPosition
+      generation++; activeGeneration = -1; epoch = nextEpoch; position = nextPosition
       buffered = new Uint8Array(); bufferedAt = position; windowBytes = new Uint8Array(); offset = 0
       waiting = undefined; nextSendAt = 0
     },

@@ -245,8 +245,12 @@ export interface PlaybackContext {
   mseResourceUrls?: string[]
 }
 
+function stringArray(values: unknown): string[] {
+  return Array.isArray(values) ? values.filter((item): item is string => typeof item === 'string') : []
+}
+
 function mseEvidenceAffinity(resource: MediaResource, mediaUrl: string): number {
-  if (resource.playbackUrlHashes?.includes(resourceId(resourceFingerprint({ kind: resource.kind, url: mediaUrl })))) return 1_000
+  if (stringArray(resource.playbackUrlHashes).includes(resourceId(resourceFingerprint({ kind: resource.kind, url: mediaUrl })))) return 1_000
   const candidates = [resource.url, ...(resource.playbackUrls || [])]
   const exact = Math.max(...candidates.map(candidate => {
     try {
@@ -679,8 +683,10 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
           ? {}
           : { request_id: older.replayContext.request_id })),
     }
-    const mergedHashes = (older.playbackUrlHashes || newer.playbackUrlHashes)
-      ? [...new Set([...(older.playbackUrlHashes || []), ...(newer.playbackUrlHashes || [])])].slice(-512)
+    const olderHashes = stringArray(older.playbackUrlHashes)
+    const newerHashes = stringArray(newer.playbackUrlHashes)
+    const mergedHashes = (olderHashes.length || newerHashes.length)
+      ? [...new Set([...olderHashes, ...newerHashes])].slice(-512)
       : undefined
     byKey.set(key, {
       ...older,
@@ -725,7 +731,7 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
     for (const parentIndex of parents) {
       parentPlaybackHashes.set(parentIndex, [...new Set([
         ...(parentPlaybackHashes.get(parentIndex) || []),
-        ...(child.playbackUrlHashes || []),
+        ...stringArray(child.playbackUrlHashes),
       ])].slice(-512))
       refreshedParents.set(parentIndex, Math.max(
         refreshedParents.get(parentIndex) || 0,
@@ -751,14 +757,16 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       ...(item.playbackPatterns || []),
       ...(parentPlaybackPatterns.get(index) || []),
     ])].slice(-48)
+    const currentHashes = stringArray(item.playbackUrlHashes)
     const playbackUrlHashes = [...new Set([
-      ...(item.playbackUrlHashes || []),
+      ...currentHashes,
       ...(parentPlaybackHashes.get(index) || []),
     ])].slice(-512)
     return seenAt === item.seenAt
       && playbackUrls.length === (item.playbackUrls || []).length
       && playbackPatterns.length === (item.playbackPatterns || []).length
-      && playbackUrlHashes.length === (item.playbackUrlHashes || []).length
+      && playbackUrlHashes.length === currentHashes.length
+      && (item.playbackUrlHashes === undefined || Array.isArray(item.playbackUrlHashes))
       ? item
       : { ...item, seenAt, playbackUrls, playbackPatterns, playbackUrlHashes }
   })

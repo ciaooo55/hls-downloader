@@ -461,6 +461,7 @@ fn password_bearing_ftp_duplicates_reuse_tasks_and_refresh_credentials() {
                     })
                     .unwrap();
                 let incoming = TaskSpec {
+                    start_paused: secret == "original",
                     url: format!("{scheme}://alice:{secret}@host/file.bin"),
                     ..spec.clone()
                 };
@@ -472,7 +473,14 @@ fn password_bearing_ftp_duplicates_reuse_tasks_and_refresh_credentials() {
                 assert_eq!(tasks.len(), 1);
                 assert_eq!(tasks[0].task_id, id);
                 assert_eq!(tasks[0].url, format!("{scheme}://alice@host/file.bin"));
-                assert_eq!(tasks[0].status, "queued");
+                assert_eq!(
+                    tasks[0].status,
+                    if incoming.start_paused {
+                        status
+                    } else {
+                        "queued"
+                    }
+                );
                 let core = coordinator.lock().unwrap();
                 assert_eq!(
                     core.store().hydrate_url(&tasks[0].url).unwrap(),
@@ -2590,6 +2598,11 @@ fn default_torrent_creation_publishes_files_without_refetching_metadata() {
             .is_err());
         reopened.handle(CoreCommand::ClearCompleted).unwrap();
         drop(reopened);
+        // A worker may still own the SQLite connection after publishing completion.
+        while Arc::strong_count(&coordinator.core) != 1 {
+            assert!(Instant::now() < deadline, "torrent worker did not finish");
+            thread::yield_now();
+        }
         drop(coordinator);
         fs::remove_dir_all(root).unwrap();
     }
