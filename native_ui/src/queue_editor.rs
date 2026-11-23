@@ -162,7 +162,6 @@ impl QueueEditor {
             "关机" => "shutdown",
             "睡眠" => "sleep",
             "休眠" => "hibernate",
-            "退出程序" => "exit",
             _ => "",
         }
         .into();
@@ -193,7 +192,6 @@ impl QueueEditor {
                 "shutdown" => "关机",
                 "sleep" => "睡眠",
                 "hibernate" => "休眠",
-                "exit" => "退出程序",
                 _ => "无操作",
             }
             .into(),

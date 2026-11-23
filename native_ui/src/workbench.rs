@@ -1599,6 +1599,29 @@ impl Workbench {
     }
 
     fn editor_action(&self, action: &str) {
+        if action == "folder" {
+            let owner = {
+                let editor = self.editor.borrow();
+                let Some(editor) = editor.as_ref() else {
+                    return;
+                };
+                native_window::hwnd(editor.window())
+            };
+            let picked = file_dialogs::folder(owner);
+            let editor = self.editor.borrow();
+            let Some(editor) = editor.as_ref() else {
+                return;
+            };
+            match picked {
+                Ok(Some(path)) => editor.set_download_dir(path.into()),
+                Err(error) => {
+                    editor.set_result_tone("error".into());
+                    editor.set_result(error.into());
+                }
+                _ => {}
+            }
+            return;
+        }
         let editor = self.editor.borrow();
         let Some(editor) = editor.as_ref() else {
             return;
@@ -1612,14 +1635,6 @@ impl Workbench {
                 editor.set_cookie("".into());
                 editor.set_headers("".into());
             }
-            "folder" => match file_dialogs::folder(native_window::hwnd(editor.window())) {
-                Ok(Some(path)) => editor.set_download_dir(path.into()),
-                Err(error) => {
-                    editor.set_result_tone("error".into());
-                    editor.set_result(error.into())
-                }
-                _ => {}
-            },
             "probe" | "create" => {
                 let result = editor_spec(editor, &self.editor_variants.borrow());
                 let spec = match result {
@@ -2000,104 +2015,137 @@ impl Workbench {
         });
         let weak = Rc::downgrade(self);
         editor.window.on_site_rule_action(move |index, action| {
-            if let Some(this) = weak.upgrade() {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            if action.as_str() == "folder" {
+                let owner = {
+                    let settings = this.settings.borrow();
+                    let Some(editor) = settings.as_ref() else {
+                        return;
+                    };
+                    native_window::hwnd(editor.window.window())
+                };
+                // Drop RefCell borrow before Win32 modal folder loop pumps timers/IPC.
+                let picked = file_dialogs::folder(owner);
                 let mut settings = this.settings.borrow_mut();
                 let Some(editor) = settings.as_mut() else {
                     return;
                 };
-                let result = match action.as_str() {
-                    "folder" => file_dialogs::folder(native_window::hwnd(editor.window.window()))
-                        .map(|path| {
-                            if let Some(path) = path {
-                                editor.edit_rule(index, "directory", &path);
-                            }
-                        }),
-                    "credentials" => editor
-                        .credential_host(index)
-                        .map(|host| this.open_service_settings("credentials", &host)),
-                    action => editor.rule_action(index, action),
-                };
-                if let Err(error) = result {
-                    editor.window.set_status_tone("warning".into());
-                    editor.window.set_status(error.into());
+                match picked {
+                    Ok(Some(path)) => editor.edit_rule(index, "directory", &path),
+                    Err(error) => {
+                        editor.window.set_status_tone("warning".into());
+                        editor.window.set_status(error.into());
+                    }
+                    _ => {}
                 }
+                return;
+            }
+            let mut settings = this.settings.borrow_mut();
+            let Some(editor) = settings.as_mut() else {
+                return;
+            };
+            let result = match action.as_str() {
+                "credentials" => editor
+                    .credential_host(index)
+                    .map(|host| this.open_service_settings("credentials", &host)),
+                action => editor.rule_action(index, action),
+            };
+            if let Err(error) = result {
+                editor.window.set_status_tone("warning".into());
+                editor.window.set_status(error.into());
             }
         });
         let weak = Rc::downgrade(self);
         editor.window.on_action(move |action| {
-            if let Some(this) = weak.upgrade() {
-                let mut settings = this.settings.borrow_mut();
-                let Some(editor) = settings.as_mut() else {
-                    return;
-                };
-                match action.as_str() {
-                    "close" => {
-                        let _ = editor.window.hide();
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let mut settings = this.settings.borrow_mut();
+            let Some(editor) = settings.as_mut() else {
+                return;
+            };
+            match action.as_str() {
+                "close" => {
+                    let _ = editor.window.hide();
+                }
+                "save" => {
+                    if editor.window.get_busy() {
+                        return;
                     }
-                    "save" => {
-                        if editor.window.get_busy() {
-                            return;
+                    if this
+                        .service_settings
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|service| service.window.get_busy())
+                    {
+                        editor.window.set_status_tone("warning".into());
+                        editor
+                            .window
+                            .set_status("请等待服务配置或登录信息保存完成".into());
+                        return;
+                    }
+                    match editor.storage_changes() {
+                        Ok(values) => {
+                            let id = this.id();
+                            if this.request(CorePipeRequest::StoreSettings {
+                                request_id: id,
+                                values,
+                            }) {
+                                this.settings_save_id.set(Some(id));
+                                editor.window.set_busy(true);
+                            } else {
+                                editor.window.set_status_tone("error".into());
+                                editor.window.set_status("命令队列已满，请稍后重试".into());
+                            }
                         }
-                        if this
-                            .service_settings
-                            .borrow()
-                            .as_ref()
-                            .is_some_and(|service| service.window.get_busy())
-                        {
+                        Err(error) => {
                             editor.window.set_status_tone("warning".into());
-                            editor
-                                .window
-                                .set_status("请等待服务配置或登录信息保存完成".into());
-                            return;
-                        }
-                        match editor.storage_changes() {
-                            Ok(values) => {
-                                let id = this.id();
-                                if this.request(CorePipeRequest::StoreSettings {
-                                    request_id: id,
-                                    values,
-                                }) {
-                                    this.settings_save_id.set(Some(id));
-                                    editor.window.set_busy(true);
-                                } else {
-                                    editor.window.set_status_tone("error".into());
-                                    editor.window.set_status("命令队列已满，请稍后重试".into());
-                                }
-                            }
-                            Err(error) => {
-                                editor.window.set_status_tone("warning".into());
-                                editor.window.set_status(error.into())
-                            }
+                            editor.window.set_status(error.into())
                         }
                     }
-                    "preview_sound" => hls_client::completion_sound(),
-                    "update" => {
-                        if let Some(system) = this.system.borrow().as_ref() {
-                            system.show("updates");
-                        }
+                }
+                "preview_sound" => hls_client::completion_sound(),
+                "update" => {
+                    if let Some(system) = this.system.borrow().as_ref() {
+                        system.show("updates");
                     }
-                    "extension" => {
-                        if let Some(system) = this.system.borrow().as_ref() {
-                            system.show("browser");
-                        }
+                }
+                "extension" => {
+                    if let Some(system) = this.system.borrow().as_ref() {
+                        system.show("browser");
                     }
-                    "subtitle" => this.open_service_settings("subtitle", ""),
-                    "default_cookie" => this.open_service_settings("credentials", ""),
-                    value if value.starts_with("folder:") => {
-                        let key = &value[7..];
-                        if let Ok(Some(path)) =
-                            file_dialogs::folder(native_window::hwnd(editor.window.window()))
-                        {
+                }
+                "subtitle" => this.open_service_settings("subtitle", ""),
+                "default_cookie" => this.open_service_settings("credentials", ""),
+                value if value.starts_with("folder:") => {
+                    let key = value.strip_prefix("folder:").unwrap_or("");
+                    let owner = native_window::hwnd(editor.window.window());
+                    // Drop RefCell borrow before Win32 modal folder loop pumps timers/IPC.
+                    drop(settings);
+                    let picked = file_dialogs::folder(owner);
+                    let mut settings = this.settings.borrow_mut();
+                    let Some(editor) = settings.as_mut() else {
+                        return;
+                    };
+                    match picked {
+                        Ok(Some(path)) => {
                             let _ = editor.edit(key, &path);
                             editor.render(&editor.window.get_selected_group());
                         }
+                        Err(error) => {
+                            editor.window.set_status_tone("warning".into());
+                            editor.window.set_status(error.into());
+                        }
+                        _ => {}
                     }
-                    _ => {
-                        editor.window.set_status_tone("info".into());
-                        editor
-                            .window
-                            .set_status("该设置页面的专用编辑器尚在迁移中".into())
-                    }
+                }
+                _ => {
+                    editor.window.set_status_tone("info".into());
+                    editor
+                        .window
+                        .set_status("该设置页面的专用编辑器尚在迁移中".into())
                 }
             }
         });

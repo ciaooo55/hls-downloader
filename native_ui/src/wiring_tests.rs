@@ -564,3 +564,63 @@ fn fullscreen_media_blocks_task_shortcuts_and_routes_escape() {
     );
     ui.hide().unwrap();
 }
+
+#[test]
+fn hot_combo_box_one_way_index_bindings_keep_changed_sync() {
+    let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+    for entry in std::fs::read_dir(&ui_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("slint") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        let mut cursor = 0usize;
+        while let Some(found) = source[cursor..].find("HotComboBox {") {
+            let start = cursor + found;
+            let mut depth = 0usize;
+            let mut end = start;
+            for (offset, ch) in source[start..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = start + offset + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let block = &source[start..end];
+            if block.contains("current-index:") {
+                assert!(
+                    block.contains("changed "),
+                    "{} has HotComboBox with one-way current-index: without changed sync:\n{block}",
+                    path.display()
+                );
+            }
+            cursor = end.max(start + 1);
+        }
+    }
+}
+
+#[test]
+fn completion_action_choices_exclude_unsupported_exit_wire_value() {
+    let allowed = ["", "none", "shutdown", "sleep", "hibernate"];
+    let choices = crate::settings_editor::choice_options("completion_power_action");
+    assert!(!choices.is_empty());
+    for (wire, label) in choices {
+        assert!(
+            allowed.contains(wire),
+            "unsupported completion_power_action option {wire} ({label})"
+        );
+        assert_ne!(*wire, "exit");
+        assert_ne!(*label, "退出程序");
+    }
+    let queues = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/queues.slint"),
+    )
+    .unwrap();
+    assert!(!queues.contains("退出程序"));
+}

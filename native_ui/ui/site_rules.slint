@@ -66,7 +66,9 @@ export component SiteRulesEditor inherits VerticalLayout {
                 VerticalLayout { spacing: 6px; FieldLabel { label: "代理"; }
                 HotComboBox {
                     model: ["跟随全局", "直连", "系统代理", "手动代理"];
+                    property <string> bound: rule.proxy-mode;
                     current-index: rule.proxy-mode == "manual" ? 3 : rule.proxy-mode == "system" ? 2 : rule.proxy-mode == "direct" ? 1 : 0;
+                    changed bound => { self.current-index = rule.proxy-mode == "manual" ? 3 : rule.proxy-mode == "system" ? 2 : rule.proxy-mode == "direct" ? 1 : 0; }
                     height: Tokens.control-height; enabled: root.enabled && root.expanded == index;
                     selected(value) => { root.edited(index, "proxy_mode", self.current-index == 3 ? "manual" : self.current-index == 2 ? "system" : self.current-index == 1 ? "direct" : ""); }
                 }

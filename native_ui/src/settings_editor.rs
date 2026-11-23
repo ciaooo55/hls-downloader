@@ -95,7 +95,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
 ];
 
 // Choice settings keep Core values in storage and show product copy in the UI.
-fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
+pub(crate) fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
     match key {
         "theme_mode" => &[
             ("system", "跟随系统 / System"),
@@ -117,7 +117,6 @@ fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
             ("shutdown", "关机"),
             ("sleep", "睡眠"),
             ("hibernate", "休眠"),
-            ("exit", "退出程序"),
         ],
         "task_sort" => &[
             ("queue:asc", "队列顺序"),

@@ -86,24 +86,12 @@ unsafe fn load_product_icon() -> windows_sys::Win32::UI::WindowsAndMessaging::HI
 pub fn show_notification(title: &str, body: &str) {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::UI::Shell::{
-            Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_MODIFY,
-            NOTIFYICONDATAW,
-        };
+        use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIM_MODIFY};
         let hwnd = TRAY_HWND.load(std::sync::atomic::Ordering::SeqCst);
         if hwnd == 0 {
             return;
         }
-        let mut data: NOTIFYICONDATAW = std::mem::zeroed();
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = hwnd as _;
-        data.uID = 1;
-        data.uFlags = NIF_INFO | NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        data.dwInfoFlags = NIIF_INFO;
-        data.hIcon = load_product_icon();
-        copy_utf16(&mut data.szInfoTitle, title);
-        copy_utf16(&mut data.szInfo, body);
-        copy_utf16(&mut data.szTip, "HLS Downloader");
+        let data = build_notification_data(hwnd, title, body);
         Shell_NotifyIconW(NIM_MODIFY, &data);
     }
     #[cfg(not(windows))]
@@ -113,12 +101,43 @@ pub fn show_notification(title: &str, body: &str) {
 }
 
 #[cfg(windows)]
+fn build_notification_data(
+    hwnd: isize,
+    title: &str,
+    body: &str,
+) -> windows_sys::Win32::UI::Shell::NOTIFYICONDATAW {
+    use windows_sys::Win32::UI::Shell::{NIF_INFO, NIIF_INFO, NOTIFYICONDATAW};
+    // Only modify the balloon info fields; setting NIF_MESSAGE/NIF_ICON/NIF_TIP
+    // with zeroed fields would overwrite uCallbackMessage (killing tray clicks).
+    let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+    data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    data.hWnd = hwnd as _;
+    data.uID = 1;
+    data.uFlags = NIF_INFO;
+    data.dwInfoFlags = NIIF_INFO;
+    copy_utf16(&mut data.szInfoTitle, title);
+    copy_utf16(&mut data.szInfo, body);
+    data
+}
+
+#[cfg(windows)]
 fn copy_utf16(dest: &mut [u16], text: &str) {
-    let mut units: Vec<u16> = text.encode_utf16().collect();
-    units.push(0);
-    for (index, unit) in units.iter().take(dest.len()).enumerate() {
-        dest[index] = *unit;
+    if dest.is_empty() {
+        return;
     }
+    let max_units = dest.len() - 1;
+    let mut written = 0usize;
+    for ch in text.chars() {
+        let len = ch.len_utf16();
+        if written + len > max_units {
+            break;
+        }
+        let mut buf = [0u16; 2];
+        let encoded = ch.encode_utf16(&mut buf);
+        dest[written..written + len].copy_from_slice(encoded);
+        written += len;
+    }
+    dest[written] = 0;
 }
 
 #[cfg(windows)]
@@ -349,5 +368,27 @@ mod tests {
         let fallback = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
         assert!(!icon.is_null());
         assert_ne!(icon, fallback);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn notification_does_not_overwrite_callback_message_and_always_nul_terminates() {
+        use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP};
+        let long_title = "标题".repeat(50);
+        let long_body = "🚀".repeat(200);
+        let data = super::build_notification_data(1234, &long_title, &long_body);
+        assert_eq!(data.uFlags, NIF_INFO);
+        assert_eq!(data.uFlags & (NIF_MESSAGE | NIF_ICON | NIF_TIP), 0);
+        assert_eq!(*data.szInfoTitle.last().unwrap(), 0);
+        assert_eq!(*data.szInfo.last().unwrap(), 0);
+        let mut small = [0xFFFFu16; 4];
+        super::copy_utf16(&mut small, "a🚀b");
+        // 'a' (1) + '🚀' (2) = 3 units + NUL fits in 4.
+        assert_eq!(small[3], 0);
+        let mut tiny = [0xFFFFu16; 3];
+        super::copy_utf16(&mut tiny, "a🚀b");
+        // '🚀' needs 2 units; must not leave an unpaired high surrogate at index 1.
+        assert_eq!(tiny[0], 'a' as u16);
+        assert_eq!(tiny[1], 0);
     }
 }
