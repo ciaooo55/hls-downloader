@@ -16,8 +16,6 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 pub struct CoreStore {
     pub(crate) connection: Connection,
-    #[cfg(not(windows))]
-    pub(crate) url_passwords: std::cell::RefCell<BTreeMap<String, String>>,
     path: Option<PathBuf>,
 }
 
@@ -66,8 +64,6 @@ impl CoreStore {
         mark("version_read");
         let mut store = Self {
             connection,
-            #[cfg(not(windows))]
-            url_passwords: Default::default(),
             path: Some(path.to_path_buf()),
         };
         // 文件库可能另有进度写线程的连接（见 `progress_writer`）。显式事务一律 IMMEDIATE：
@@ -87,8 +83,6 @@ impl CoreStore {
             .map_err(|error| format!("open in-memory Core database: {error}"))?;
         let mut store = Self {
             connection,
-            #[cfg(not(windows))]
-            url_passwords: Default::default(),
             path: None,
         };
         store.initialize(0)?;
@@ -764,6 +758,11 @@ impl CoreStore {
     }
 
     fn initialize(&mut self, existing_version: u32) -> Result<(), String> {
+        #[cfg(not(windows))]
+        self.connection.execute_batch(
+            "ATTACH ':memory:' AS volatile_vault;
+             CREATE TABLE volatile_vault.url_passwords(credential_ref TEXT PRIMARY KEY, password TEXT NOT NULL);"
+        ).map_err(|e| e.to_string())?;
         let started = std::time::Instant::now();
         let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
         let mark = |stage: &str| {
@@ -872,13 +871,77 @@ fn write_settings(
     transaction: &Transaction<'_>,
     settings: &BTreeMap<String, serde_json::Value>,
 ) -> Result<(), String> {
+    let proxy_change = settings.contains_key("proxy_url") || settings.contains_key("site_rules");
+    let previous = if proxy_change {
+        configured_proxy_keys(transaction)?
+    } else {
+        Default::default()
+    };
     for (key, value) in settings {
         let encoded = serde_json::to_string(value)
             .map_err(|error| format!("encode Core setting {key}: {error}"))?;
         transaction.execute("INSERT INTO settings(key, value_json) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json", params![key, encoded])
             .map_err(|error| format!("write Core setting {key}: {error}"))?;
     }
+    if !previous.is_empty() {
+        let current = configured_proxy_keys(transaction)?;
+        let mut removed: std::collections::BTreeSet<_> = previous.difference(&current).collect();
+        if !removed.is_empty() {
+            // Queued tasks retain the selected proxy across changes to defaults.
+            let mut query = transaction.prepare("SELECT json_extract(spec_json,'$.proxy') FROM task_specs WHERE json_valid(spec_json) AND json_type(spec_json,'$.proxy')='text'").map_err(|e| e.to_string())?;
+            let proxies = query
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            for proxy in proxies {
+                if let Some(key) =
+                    crate::url_credentials::proxy_password_key(&proxy.map_err(|e| e.to_string())?)
+                {
+                    removed.remove(&key);
+                }
+                if removed.is_empty() {
+                    break;
+                }
+            }
+            #[cfg(windows)]
+            let delete = "DELETE FROM credentials WHERE credential_ref=?1 AND kind='url_password'";
+            #[cfg(not(windows))]
+            let delete = "DELETE FROM volatile_vault.url_passwords WHERE credential_ref=?1";
+            for key in removed {
+                transaction
+                    .execute(delete, [key])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
     Ok(())
+}
+
+fn configured_proxy_keys(
+    transaction: &Transaction<'_>,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut keys = std::collections::BTreeSet::new();
+    let mut query = transaction
+        .prepare("SELECT key, value_json FROM settings WHERE key IN ('proxy_url','site_rules')")
+        .map_err(|e| e.to_string())?;
+    let rows = query
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (key, raw) = row.map_err(|e| e.to_string())?;
+        let raw = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+        if key == "proxy_url" {
+            keys.extend(crate::url_credentials::proxy_password_key(&raw));
+        } else {
+            keys.extend(
+                crate::parse_site_rules(&raw)
+                    .iter()
+                    .filter_map(|rule| crate::url_credentials::proxy_password_key(&rule.proxy)),
+            );
+        }
+    }
+    Ok(keys)
 }
 
 fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Result<(), String> {
@@ -1387,8 +1450,6 @@ mod tests {
                 .unwrap();
             let mut store = CoreStore {
                 connection,
-                #[cfg(not(windows))]
-                url_passwords: Default::default(),
                 path: None,
             };
             assert!(store.initialize(version).is_err());

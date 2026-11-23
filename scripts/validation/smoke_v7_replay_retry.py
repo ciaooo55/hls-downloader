@@ -142,7 +142,7 @@ def run(engine, root):
                 output = Path(task['output_path']) if task['output_path'] else None
                 if not failed:
                     assert output.read_bytes() == payload
-                    assert not (root/'downloads/.hls-tasks'/tid).exists()
+                    wait(lambda: not (root/'downloads/.hls-tasks'/tid).exists())
                 recorded = requests[start:]
                 assert recorded and len(recorded) < 20, recorded
                 if credential and name != 'unscoped_cross_origin':

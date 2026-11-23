@@ -1,6 +1,6 @@
-//! FTP secrets share the request-header credential table and DPAPI vault.
+//! Transfer and proxy passwords share the request-header DPAPI vault.
 use crate::CoreStore;
-use hls_client::url_credentials::map_ftp_passwords;
+use hls_client::url_credentials::{map_url_passwords, proxy_scheme};
 use serde::{de::DeserializeOwned, Serialize};
 
 fn url_password_key(authority: &str) -> String {
@@ -14,6 +14,25 @@ fn url_password_key(authority: &str) -> String {
             "sftp" => crate::sftp_engine::parse_sftp_url(&url)
                 .ok()
                 .map(|target| (scheme, target.host, target.port, target.user)),
+            _ if proxy_scheme(&scheme) => {
+                let (user, endpoint) = rest.rsplit_once('@')?;
+                let endpoint = endpoint
+                    .trim_end()
+                    .parse::<tokio_tungstenite::tungstenite::http::uri::Authority>()
+                    .ok()?;
+                let host = endpoint.host().to_ascii_lowercase();
+                let host = host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .map_or(host, |ip| ip.to_string());
+                // Match the effective destination chosen by libcurl.
+                let port = match endpoint.as_str().strip_prefix(endpoint.host())? {
+                    "" if scheme == "https" => 443,
+                    "" => 1080,
+                    suffix => suffix.strip_prefix(':')?.parse::<u16>().ok()?,
+                };
+                Some((scheme, host, port, proxy_username(user)?))
+            }
             _ => None,
         }
     });
@@ -21,6 +40,31 @@ fn url_password_key(authority: &str) -> String {
         Some(identity) => format!("url-password:{}", serde_json::json!(identity)),
         None => format!("url-password:{authority}"),
     }
+}
+
+fn proxy_username(user: &str) -> Option<String> {
+    let mut bytes = user.bytes();
+    let mut decoded = Vec::with_capacity(user.len());
+    while let Some(byte) = bytes.next() {
+        decoded.push(if byte == b'%' {
+            let high = char::from(bytes.next()?).to_digit(16)?;
+            let low = char::from(bytes.next()?).to_digit(16)?;
+            (high * 16 + low) as u8
+        } else {
+            byte
+        });
+    }
+    String::from_utf8(decoded).ok()
+}
+
+pub(super) fn proxy_password_key(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let (userinfo, endpoint) = authority.rsplit_once('@')?;
+    let user = userinfo.split(':').next()?;
+    proxy_scheme(&scheme.to_ascii_lowercase())
+        .then(|| url_password_key(&format!("{scheme}://{user}@{endpoint}")))
 }
 
 pub(crate) fn redact_urls<T: Serialize + DeserializeOwned>(value: T) -> Result<T, String> {
@@ -40,7 +84,10 @@ impl CoreStore {
             ).map_err(|e| e.to_string())?;
         }
         #[cfg(not(windows))]
-        self.url_passwords.borrow_mut().insert(key, password.into());
+        self.connection.execute(
+            "INSERT OR REPLACE INTO volatile_vault.url_passwords(credential_ref,password) VALUES (?1,?2)",
+            rusqlite::params![key, password],
+        ).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -74,30 +121,39 @@ impl CoreStore {
             .connection
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
-        #[cfg(windows)]
         for (authority, password) in &passwords {
             self.protect_url_password(authority, password)?;
         }
         let result = write(clean, &transaction)?;
         transaction.commit().map_err(|e| e.to_string())?;
-        #[cfg(not(windows))]
-        for (authority, password) in passwords {
-            self.protect_url_password(&authority, &password)?;
-        }
         Ok(result)
     }
 
     pub(crate) fn hydrate_url(&self, url: &str) -> Result<String, String> {
+        self.hydrate_url_field(url, false)
+    }
+
+    pub(crate) fn hydrate_proxy(&self, url: &str) -> Result<String, String> {
+        self.hydrate_url_field(url.trim(), true)
+    }
+
+    fn hydrate_url_field(&self, url: &str, proxy: bool) -> Result<String, String> {
         let Some((scheme, rest)) = url.split_once("://") else {
             return Ok(url.into());
         };
-        if !matches!(
-            scheme.to_ascii_lowercase().as_str(),
-            "ftp" | "ftps" | "sftp"
-        ) {
+        let lower = scheme.to_ascii_lowercase();
+        let supported = if proxy {
+            proxy_scheme(&lower)
+        } else {
+            matches!(lower.as_str(), "ftp" | "ftps" | "sftp")
+        };
+        if !supported {
             return Ok(url.into());
         }
-        let authority = rest.split('/').next().unwrap_or(rest);
+        let authority = rest
+            .split(|c| c == '/' || (proxy && matches!(c, '?' | '#')))
+            .next()
+            .unwrap_or(rest);
         let Some(at) = authority.rfind('@') else {
             return Ok(url.into());
         };
@@ -114,7 +170,17 @@ impl CoreStore {
             })
             .transpose()?;
         #[cfg(not(windows))]
-        let password = self.url_passwords.borrow().get(&key).cloned();
+        let password: Option<String> = {
+            use rusqlite::OptionalExtension;
+            self.connection
+                .query_row(
+                    "SELECT password FROM volatile_vault.url_passwords WHERE credential_ref=?1",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+        };
         let Some(password) = password else {
             return Ok(url.into());
         };
@@ -145,28 +211,53 @@ impl CoreStore {
                 ("media_tracks", "track_json"),
                 ("crawl_projects", "state_json"),
             ] {
+                let proxy_field = if table == "settings" {
+                    "key IN ('proxy_url', 'proxy')"
+                } else {
+                    "0"
+                };
                 let mut statement = self
                     .connection
-                    .prepare(&format!("SELECT rowid, {column} FROM {table} WHERE rowid >= ?1 ORDER BY rowid LIMIT 1"))
+                    .prepare(&format!("SELECT rowid, {column}, {proxy_field} FROM {table} WHERE rowid >= ?1 ORDER BY rowid LIMIT 1"))
                     .map_err(|e| e.to_string())?;
                 let mut next = i64::MIN;
                 loop {
                     use rusqlite::OptionalExtension;
                     let row = statement
                         .query_row([next], |row| {
-                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, bool>(2)?,
+                            ))
                         })
                         .optional()
                         .map_err(|e| e.to_string())?;
-                    let Some((id, text)) = row else { break };
-                    let mut value = serde_json::Value::String(text.clone());
-                    sanitize_url_value(&mut value, &mut |authority, password| {
-                        self.protect_url_password(authority, password)
-                    })?;
-                    let sanitized = value
-                        .as_str()
-                        .expect("sanitizing a string preserves its type");
-                    if sanitized != text {
+                    let Some((id, text, proxy_field)) = row else {
+                        break;
+                    };
+                    let decoded = if table == "logs" {
+                        None
+                    } else {
+                        serde_json::from_str(&text).ok()
+                    };
+                    let is_json = decoded.is_some();
+                    let mut value =
+                        decoded.unwrap_or_else(|| serde_json::Value::String(text.clone()));
+                    let before = value.clone();
+                    if table == "logs" {
+                        redact_diagnostic(&mut value)?;
+                    } else {
+                        sanitize_url_value(&mut value, proxy_field, &mut |authority, password| {
+                            self.protect_url_password(authority, password)
+                        })?;
+                    }
+                    if value != before {
+                        let sanitized = if is_json {
+                            value.to_string()
+                        } else {
+                            value.as_str().unwrap().to_owned()
+                        };
                         changed = true;
                         self.connection
                             .execute(
@@ -208,7 +299,7 @@ fn collect_url_passwords<T: Serialize + DeserializeOwned>(
 ) -> Result<(T, UrlPasswords), String> {
     let mut value = serde_json::to_value(value).map_err(|e| e.to_string())?;
     let mut passwords = Vec::new();
-    sanitize_url_value(&mut value, &mut |authority, password| {
+    sanitize_url_value(&mut value, false, &mut |authority, password| {
         passwords.push((authority.into(), password.into()));
         Ok(())
     })?;
@@ -218,8 +309,34 @@ fn collect_url_passwords<T: Serialize + DeserializeOwned>(
     ))
 }
 
+// Diagnostics have no authority to update a proxy account's password.
+fn redact_diagnostic(value: &mut serde_json::Value) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(text) => *text = map_url_passwords(text, true, |_, _| Ok(()))?,
+        serde_json::Value::Array(lines) => {
+            for line in lines {
+                redact_diagnostic(line)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn sanitize_field(
+    key: &str,
+    value: &mut serde_json::Value,
+    protect: &mut impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    if matches!(key, "message" | "error_message" | "log_tail" | "lines") {
+        redact_diagnostic(value)?;
+    }
+    sanitize_url_value(value, matches!(key, "proxy" | "proxy_url"), protect)
+}
+
 fn sanitize_url_value(
     value: &mut serde_json::Value,
+    proxy_field: bool,
     protect: &mut impl FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<(), String> {
     match value {
@@ -228,31 +345,31 @@ fn sanitize_url_value(
             if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text) {
                 if nested.is_object() || nested.is_array() {
                     let before = nested.clone();
-                    sanitize_url_value(&mut nested, protect)?;
+                    sanitize_url_value(&mut nested, proxy_field, protect)?;
                     if nested != before {
                         *text = nested.to_string();
                     }
                     return Ok(());
                 }
             }
-            *text = map_ftp_passwords(text, protect)?;
+            *text = map_url_passwords(text, proxy_field, protect)?;
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                sanitize_url_value(item, protect)?;
+                sanitize_url_value(item, proxy_field, protect)?;
             }
         }
         serde_json::Value::Object(items) if !items.keys().any(|key| key.contains("://")) => {
-            for item in items.values_mut() {
-                sanitize_url_value(item, protect)?;
+            for (key, item) in items {
+                sanitize_field(key, item, protect)?;
             }
         }
         serde_json::Value::Object(items) => {
             // URL-indexed maps need the same redaction as ordinary field values.
             for (key, mut item) in std::mem::take(items) {
-                sanitize_url_value(&mut item, protect)?;
+                sanitize_field(&key, &mut item, protect)?;
                 let key = if key.contains("://") {
-                    map_ftp_passwords(&key, &mut *protect)?
+                    map_url_passwords(&key, false, &mut *protect)?
                 } else {
                     key
                 };
@@ -301,6 +418,76 @@ mod tests {
                 .unwrap()
                 .contains("p%40ss"));
         }
+    }
+
+    #[test]
+    fn proxy_settings_keep_shared_credentials_and_rollback_rejected_changes() {
+        let mut store = CoreStore::in_memory().unwrap();
+        let clean = "http://alice@proxy.example:8080";
+        let first = "http://alice:accepted@proxy.example:8080";
+        store.set_setting("proxy_url", first).unwrap();
+        store.set_setting("proxy_url", clean).unwrap();
+        assert_eq!(store.hydrate_proxy(clean).unwrap(), first);
+        store.connection.execute_batch("CREATE TRIGGER reject_proxy BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(store
+            .set_setting("proxy_url", "http://alice:wrong@proxy.example:8080")
+            .is_err());
+        assert_eq!(store.hydrate_proxy(clean).unwrap(), first);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_proxy")
+            .unwrap();
+        store
+            .set_setting(
+                "site_rules",
+                serde_json::json!([{"host":"files.example","proxy": clean}]).to_string(),
+            )
+            .unwrap();
+        store.set_setting("proxy_url", "").unwrap();
+        assert_eq!(store.hydrate_proxy(clean).unwrap(), first);
+        store.set_setting("site_rules", "[]").unwrap();
+        assert_eq!(store.hydrate_proxy(clean).unwrap(), clean);
+    }
+
+    #[test]
+    fn task_proxy_vaulting_preserves_download_userinfo_and_rejected_commands() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        let spec = TaskSpec {
+            url: "https://alice:download-secret@example.com/file.mp4".into(),
+            proxy: "https://alice:proxy-secret@PROXY.example:443".into(),
+            filename: "file.mp4".into(),
+            start_paused: true,
+            ..Default::default()
+        };
+        let events = core
+            .handle(CoreCommand::CreateTask { spec: spec.clone() })
+            .unwrap();
+        assert!(!serde_json::to_string(&events)
+            .unwrap()
+            .contains("proxy-secret"));
+        let stored = core.store().load_task_specs().unwrap().remove(0).1;
+        assert_eq!(stored.url, spec.url);
+        assert_eq!(stored.proxy, "https://alice@PROXY.example:443");
+        let rejected = TaskSpec {
+            filename: "a".repeat(256),
+            proxy: "https://alice:wrong@proxy.example:443".into(),
+            ..spec
+        };
+        assert!(core
+            .handle(CoreCommand::CreateTask { spec: rejected })
+            .is_err());
+        assert_eq!(
+            core.store()
+                .hydrate_proxy("https://alice@proxy.example:443")
+                .unwrap(),
+            "https://alice:proxy-secret@proxy.example:443"
+        );
+        assert_eq!(
+            core.store()
+                .hydrate_url("https://alice@proxy.example:443")
+                .unwrap(),
+            "https://alice@proxy.example:443"
+        );
     }
 
     #[test]
@@ -530,8 +717,48 @@ mod tests {
                 .unwrap();
             assert!(blob.starts_with("dpapi:"));
             assert!(!blob.contains("restart-secret"));
+            let proxy = "http://alice:legacy-setting-secret@proxy.example:8080";
+            let rules = serde_json::json!([{"host":"files.example","proxy":"https://r:legacy-rule-secret@rules:443"}]).to_string();
+            for (key, raw) in [("proxy_url", proxy), ("site_rules", rules.as_str())] {
+                store
+                    .connection
+                    .execute(
+                        "INSERT INTO settings(key,value_json) VALUES (?1,?2)",
+                        rusqlite::params![key, serde_json::to_string(raw).unwrap()],
+                    )
+                    .unwrap();
+            }
+            let spec = TaskSpec {
+                proxy: "socks5://bob:legacy-task-secret@127.0.0.1:1080".into(),
+                ..Default::default()
+            };
+            store
+                .connection
+                .execute(
+                    "INSERT INTO task_specs(task_id,spec_json) VALUES ('legacy',?1)",
+                    [serde_json::to_string(&spec).unwrap()],
+                )
+                .unwrap();
         }
         let store = CoreStore::open(&path).unwrap();
+        let proxy = store.setting_string("proxy_url", "").unwrap();
+        assert_eq!(proxy, "http://alice@proxy.example:8080");
+        assert_eq!(
+            store.hydrate_proxy(&proxy).unwrap(),
+            "http://alice:legacy-setting-secret@proxy.example:8080"
+        );
+        let rules = crate::parse_site_rules(&store.setting_string("site_rules", "").unwrap());
+        assert_eq!(rules[0].proxy, "https://r@rules:443");
+        assert_eq!(
+            store.hydrate_proxy(&rules[0].proxy).unwrap(),
+            "https://r:legacy-rule-secret@rules:443"
+        );
+        let proxy = store.load_task_specs().unwrap().remove(0).1.proxy;
+        assert_eq!(proxy, "socks5://bob@127.0.0.1:1080");
+        assert_eq!(
+            store.hydrate_proxy(&proxy).unwrap(),
+            "socks5://bob:legacy-task-secret@127.0.0.1:1080"
+        );
         let url = store.setting_string("url", "").unwrap();
         assert_eq!(url, "ftp://user@host/file");
         assert_eq!(
@@ -539,7 +766,15 @@ mod tests {
             "ftp://user:restart-secret@host/file"
         );
         drop(store);
-        assert!(!String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains("restart-secret"));
+        let bytes = std::fs::read(&path).unwrap();
+        for secret in [
+            "restart-secret",
+            "legacy-task-secret",
+            "legacy-setting-secret",
+            "legacy-rule-secret",
+        ] {
+            assert!(!String::from_utf8_lossy(&bytes).contains(secret));
+        }
         std::fs::remove_file(path).unwrap();
     }
 }

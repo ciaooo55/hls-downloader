@@ -287,15 +287,7 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
         {
             return Err("站点规则 Origin 必须是 HTTP(S) 地址".into());
         }
-        if !rule.proxy.trim().is_empty()
-            && !matches!(
-                rule.proxy
-                    .split_once("://")
-                    .map(|(scheme, _)| scheme.to_ascii_lowercase())
-                    .as_deref(),
-                Some("http" | "https" | "socks5" | "socks5h")
-            )
-        {
+        if !crate::download_worker::proxy_url_allowed(&rule.proxy) {
             return Err("站点规则代理地址无效".into());
         }
     }

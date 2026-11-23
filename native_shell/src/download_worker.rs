@@ -97,7 +97,7 @@ fn is_importable_local_path(url: &str) -> bool {
     false
 }
 
-fn proxy_url_allowed(url: &str) -> bool {
+pub(crate) fn proxy_url_allowed(url: &str) -> bool {
     let url = url.trim();
     if url.is_empty() {
         return true;
@@ -105,11 +105,9 @@ fn proxy_url_allowed(url: &str) -> bool {
     if url.chars().any(|ch| ch.is_control()) {
         return false;
     }
-    let lower = url.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("socks5://")
-        || lower.starts_with("socks5h://")
+    url.split_once("://").is_some_and(|(scheme, _)| {
+        hls_client::url_credentials::proxy_scheme(&scheme.to_ascii_lowercase())
+    })
 }
 
 fn validate_helper_executable(path: &str, names: &[&str]) -> Result<(), String> {
@@ -186,14 +184,15 @@ pub(crate) fn hydrate_replay_headers(
     core: &Arc<Mutex<PersistentCore>>,
     mut spec: TaskSpec,
 ) -> Result<(TaskSpec, String), String> {
-    let Some(credential_ref) = spec.credential_ref.clone() else {
-        return Ok((spec, String::new()));
-    };
     let blob = {
         let locked = core
             .lock()
             .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-        locked.store().load_credential(&credential_ref)?
+        spec.proxy = locked.store().hydrate_proxy(&spec.proxy)?;
+        let Some(credential_ref) = &spec.credential_ref else {
+            return Ok((spec, String::new()));
+        };
+        locked.store().load_credential(credential_ref)?
     };
     let blob = blob.ok_or_else(|| "请求凭据不存在，请重新获取站点凭据".to_string())?;
     let plain = CredentialVault
@@ -1074,7 +1073,7 @@ impl CoreCoordinator {
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
                     let imported = self.apply_defaults_to_spec(imported)?;
-                    validate_torrent_spec(imported, settings.bt_enable_dht)
+                    validate_torrent_spec(self, imported, settings.bt_enable_dht)
                 })
                 .collect();
         }
@@ -1090,7 +1089,7 @@ impl CoreCoordinator {
                     crate::http_engine::http_fetch_url_allowed(mirror)
                         && crate::net_policy::url_allowed(mirror, &settings.allowed_hosts)
                 });
-                let mut spec = validate_torrent_spec(spec, enable_dht)?;
+                let mut spec = validate_torrent_spec(self, spec, enable_dht)?;
                 if spec.resource_kind == crate::ResourceKind::Torrent
                     && spec.crawl_resource_key.is_empty()
                 {
@@ -1135,7 +1134,7 @@ impl CoreCoordinator {
             let (_, body) = crate::http_engine::fetch_bytes_limited(
                 &spec.url,
                 &std::collections::HashMap::new(),
-                &spec.proxy,
+                &self.transfer_proxy(&spec.proxy)?,
                 1024 * 1024,
             )
             .map_err(|error| error.to_string())?;
@@ -1161,7 +1160,7 @@ impl CoreCoordinator {
             let (_, body) = crate::http_engine::fetch_bytes_limited(
                 &spec.url,
                 &std::collections::HashMap::new(),
-                &spec.proxy,
+                &self.transfer_proxy(&spec.proxy)?,
                 1024 * 1024,
             )
             .map_err(|error| error.to_string())?;
@@ -1178,7 +1177,7 @@ impl CoreCoordinator {
 
     fn dispatch_created(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
         let start_paused = spec.start_paused;
-        let spec = seal_spec_secrets(self, spec)?;
+        let mut spec = seal_spec_secrets(self, spec)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
             let lookup = crate::url_credentials::redact_urls(spec.clone())?;
@@ -1191,6 +1190,8 @@ impl CoreCoordinator {
             // clients must not both commit after observing an absent task.
             match duplicate {
                 Some(duplicate) => {
+                    // A reused task keeps its original route. Only an admitted proxy may rotate its password.
+                    spec.proxy.clear();
                     core.store().sanitize_urls(spec)?;
                     duplicate
                 }
@@ -1792,6 +1793,10 @@ impl CoreCoordinator {
 
     fn apply_defaults_to_spec(&self, spec: TaskSpec) -> Result<TaskSpec, String> {
         self.apply_defaults_to_spec_inner(spec, false)
+    }
+
+    fn transfer_proxy(&self, proxy: &str) -> Result<String, String> {
+        self.lock()?.store().hydrate_proxy(proxy)
     }
 
     fn apply_defaults_to_spec_inner(
@@ -2594,7 +2599,11 @@ fn task_schedule_stop_due(task: &crate::TaskSnapshot, profiles: &[QueueProfile])
         }))
 }
 
-fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, String> {
+fn validate_torrent_spec(
+    coordinator: &CoreCoordinator,
+    spec: TaskSpec,
+    enable_dht: bool,
+) -> Result<TaskSpec, String> {
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Ok(spec);
     }
@@ -2603,8 +2612,12 @@ fn validate_torrent_spec(spec: TaskSpec, enable_dht: bool) -> Result<TaskSpec, S
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let meta =
-        crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &spec.proxy, enable_dht)?;
+    let meta = crate::torrent_engine::probe_torrent_source(
+        &spec.url,
+        &headers,
+        &coordinator.transfer_proxy(&spec.proxy)?,
+        enable_dht,
+    )?;
     let mut checked = spec;
     checked.filename = resolved_torrent_filename(&checked, &meta.name);
     if checked.title.trim().is_empty() {
@@ -2663,8 +2676,15 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
-    let (spec, replay_json) = hydrate_replay_headers(&core, spec)?;
     let spec = apply_site_rules_to_spec(&core, spec)?;
+    let (spec, replay_json) = hydrate_replay_headers(&core, spec)?;
+    if matches!(
+        spec.resource_kind,
+        crate::ResourceKind::Ftp | crate::ResourceKind::Sftp
+    ) && crate::url_credentials::proxy_password_key(&spec.proxy).is_some()
+    {
+        return Err("原生 FTP/SFTP 传输尚不支持认证代理".into());
+    }
     let throttle = task_throttle_context(&core, task_id, &spec)?;
     crate::net_policy::configure_throttle_context(&throttle);
     crate::net_policy::with_throttle_context(Some(throttle), || {
@@ -5097,7 +5117,7 @@ fn probe_torrent_command(
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
     let proxy = if source.starts_with("http://") || source.starts_with("https://") {
-        settings_proxy(&settings, source)
+        coordinator.transfer_proxy(&settings_proxy(&settings, source))?
     } else {
         String::new()
     };
@@ -5123,7 +5143,7 @@ fn select_torrent_files_command(
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
     let proxy = if source.starts_with("http://") || source.starts_with("https://") {
-        settings_proxy(&settings, source)
+        coordinator.transfer_proxy(&settings_proxy(&settings, source))?
     } else {
         String::new()
     };
@@ -5307,62 +5327,60 @@ fn harvest_page(
         headers.insert("Referer".into(), referer.trim().to_string());
     }
     let settings = coordinator.settings()?;
-    let proxy = settings_proxy(&settings, url);
     if !probe_urls.is_empty() {
         if probe_urls.len() > 100 {
             return Err("一次最多读取 100 个链接的大小".into());
         }
-        let links = probe_urls
-            .iter()
-            .filter_map(|candidate| {
-                let candidate = candidate.trim();
-                if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
-                    return None;
-                }
-                if reject_task_url(candidate).is_err() {
-                    return None;
-                }
-                let job = crate::http_engine::Job {
-                    url: candidate.to_string(),
-                    headers: headers.clone(),
-                    // 大小探测没有成品，留空以跳过下载后缀元数据落盘。
-                    output: PathBuf::new(),
-                    connections: 1,
-                    chunk_bytes: 1024 * 1024,
-                    total: 0,
-                    sequential: true,
-                    resume_from: 0,
-                    proxy: settings_proxy(&settings, candidate),
-                    resource_key: candidate.to_string(),
-                    etag: String::new(),
-                    last_modified: String::new(),
-                    control: PathBuf::new(),
-                    progress: PathBuf::new(),
-                    method: "GET".into(),
-                    body_path: PathBuf::new(),
-                    mirrors: Vec::new(),
-                    replay_json: String::new(),
-                    curl_body_limit: None,
-                    range_stop: None,
-                    installer_download: false,
-                    origin_boundary: String::new(),
-                };
-                let size = crate::http_engine::probe_resource(&job)
-                    .ok()
-                    .and_then(|probe| probe.total)
-                    .unwrap_or(0);
-                Some(crate::HarvestCandidate {
-                    url: candidate.to_string(),
-                    size,
-                    ..Default::default()
-                })
-            })
-            .collect();
+        let mut links = Vec::new();
+        for candidate in probe_urls {
+            let candidate = candidate.trim();
+            if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
+                continue;
+            }
+            if reject_task_url(candidate).is_err() {
+                continue;
+            }
+            let job = crate::http_engine::Job {
+                url: candidate.to_string(),
+                headers: headers.clone(),
+                // 大小探测没有成品，留空以跳过下载后缀元数据落盘。
+                output: PathBuf::new(),
+                connections: 1,
+                chunk_bytes: 1024 * 1024,
+                total: 0,
+                sequential: true,
+                resume_from: 0,
+                proxy: coordinator.transfer_proxy(&settings_proxy(&settings, candidate))?,
+                resource_key: candidate.to_string(),
+                etag: String::new(),
+                last_modified: String::new(),
+                control: PathBuf::new(),
+                progress: PathBuf::new(),
+                method: "GET".into(),
+                body_path: PathBuf::new(),
+                mirrors: Vec::new(),
+                replay_json: String::new(),
+                curl_body_limit: None,
+                range_stop: None,
+                installer_download: false,
+                origin_boundary: String::new(),
+            };
+            let size = crate::http_engine::probe_resource(&job)
+                .ok()
+                .and_then(|probe| probe.total)
+                .unwrap_or(0);
+            links.push(crate::HarvestCandidate {
+                url: candidate.to_string(),
+                size,
+                ..Default::default()
+            });
+        }
         return coordinator.lock()?.emit(CoreEvent::HarvestProbeResult {
             url: url.to_string(),
             links,
         });
     }
+    let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, url))?;
     let (_, _, _, harvest) = crate::recognize::probe_with_harvest_context(url, &headers, &proxy)?;
     coordinator.lock()?.emit(CoreEvent::HarvestResult {
         url: url.to_string(),
@@ -5529,7 +5547,10 @@ fn check_update(coordinator: &CoreCoordinator, silent: bool) -> Result<Vec<Event
     // 网络请求完成后再获取任务/数据库共享锁，避免阻塞进度写入和其他客户端。
     let event = match crate::updater::check_for_update_with_proxy(
         crate::updater::CURRENT_VERSION,
-        &settings_proxy(&coordinator.settings()?, crate::updater::LATEST_API),
+        &coordinator.transfer_proxy(&settings_proxy(
+            &coordinator.settings()?,
+            crate::updater::LATEST_API,
+        ))?,
     ) {
         Ok(info) if info.newer => CoreEvent::UpdateAvailable {
             current: info.current,
@@ -5561,7 +5582,10 @@ fn download_update(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, 
         Some(info) => info,
         None => crate::updater::check_for_update_with_proxy(
             crate::updater::CURRENT_VERSION,
-            &settings_proxy(&coordinator.settings()?, crate::updater::LATEST_API),
+            &coordinator.transfer_proxy(&settings_proxy(
+                &coordinator.settings()?,
+                crate::updater::LATEST_API,
+            ))?,
         )?,
     };
     if !info.newer {
@@ -5571,7 +5595,10 @@ fn download_update(coordinator: &CoreCoordinator) -> Result<Vec<EventEnvelope>, 
     }
     let path = crate::updater::download_installer_with_proxy(
         &info,
-        &settings_proxy(&coordinator.settings()?, &info.installer_url),
+        &coordinator.transfer_proxy(&settings_proxy(
+            &coordinator.settings()?,
+            &info.installer_url,
+        ))?,
     )?;
     let identity = crate::updater::verify_installer_identity(&path, &info.latest)?;
     coordinator.lock()?.emit(CoreEvent::UpdateReady {
@@ -5595,7 +5622,10 @@ fn install_update(
     }
     let path = crate::updater::download_installer_with_proxy(
         &info,
-        &settings_proxy(&coordinator.settings()?, &info.installer_url),
+        &coordinator.transfer_proxy(&settings_proxy(
+            &coordinator.settings()?,
+            &info.installer_url,
+        ))?,
     )?;
     crate::updater::verify_installer_identity(&path, &info.latest)?;
     let tracked = coordinator.prepare_for_update_tracking(Duration::from_secs(15))?;
