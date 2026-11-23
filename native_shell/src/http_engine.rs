@@ -3747,6 +3747,59 @@ fn drop_cross_origin_secrets(
     *headers = map.into_iter().collect();
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CurlProxyPlan {
+    Direct,
+    Arg(String),
+    Config(String),
+}
+
+fn curl_proxy_for_system_lookup(lookup: Result<Option<String>, String>) -> Option<CurlProxyPlan> {
+    match lookup {
+        Ok(None) => Some(CurlProxyPlan::Direct),
+        Ok(Some(proxy)) => {
+            if proxy.chars().any(char::is_control) {
+                return None;
+            }
+            let (scheme, rest) = proxy.split_once("://")?;
+            if rest.is_empty() {
+                return None;
+            }
+            match scheme.to_ascii_lowercase().as_str() {
+                "http" | "socks4" | "socks4a" | "socks5" | "socks5h" => {
+                    Some(CurlProxyPlan::Config(proxy))
+                }
+                _ => None,
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+fn apply_curl_proxy_args(
+    command: &mut std::process::Command,
+    plan: &CurlProxyPlan,
+) -> Option<String> {
+    match plan {
+        CurlProxyPlan::Direct => {
+            command.arg("--noproxy").arg("*");
+            None
+        }
+        CurlProxyPlan::Arg(proxy) => {
+            command.args(["--noproxy", ""]);
+            command.arg("-x").arg(proxy);
+            None
+        }
+        CurlProxyPlan::Config(proxy) => {
+            command.args(["--noproxy", ""]);
+            // Keep authenticated or resolved proxy endpoints out of process listings and curl diagnostics.
+            let escaped = proxy.replace('\\', "\\\\").replace('"', "\\\"");
+            command.args(["--config", "-"]);
+            Some(format!("proxy = \"{escaped}\"\n"))
+        }
+    }
+}
+
 fn fetch_via_curl_impersonate(
     job: &Job,
     range: Option<&str>,
@@ -3773,9 +3826,38 @@ fn fetch_via_curl_impersonate(
         let path = PathBuf::from("/usr/bin/curl");
         path.is_file().then_some(path)
     })?;
-    if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
-        return None;
-    }
+    let proxy_plan = match proxy_route(&job.proxy) {
+        ProxyRoute::Direct => CurlProxyPlan::Direct,
+        ProxyRoute::Manual(proxy) => {
+            if proxy_needs_curl(proxy) {
+                if proxy.chars().any(char::is_control) {
+                    return Some(Err(EngineError::Failed("代理地址无效".into())));
+                }
+                CurlProxyPlan::Config(proxy.to_string())
+            } else {
+                CurlProxyPlan::Arg(proxy.to_string())
+            }
+        }
+        ProxyRoute::System => {
+            if let Err(error) = check_job_control(job) {
+                return Some(Err(error));
+            }
+            #[cfg(windows)]
+            {
+                let lookup = crate::proxy_tunnel::resolve_system_proxy(&job.url, || {
+                    check_job_control(job).map_err(|error| error.to_string())
+                });
+                if let Err(error) = check_job_control(job) {
+                    return Some(Err(error));
+                }
+                curl_proxy_for_system_lookup(lookup)?
+            }
+            #[cfg(not(windows))]
+            {
+                return None;
+            }
+        }
+    };
     let headers = &job.headers;
     let dir = std::env::temp_dir().join(format!(
         "hls-curl-impersonate-{}-{}",
@@ -3863,27 +3945,7 @@ fn fetch_via_curl_impersonate(
             }
         }
         command.args(curl_request_args(job, headers));
-        let mut proxy_config = None;
-        match proxy_route(&job.proxy) {
-            ProxyRoute::Direct => {
-                command.arg("--noproxy").arg("*");
-            }
-            ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
-            ProxyRoute::Manual(proxy) => {
-                command.args(["--noproxy", ""]);
-                if proxy_needs_curl(proxy) {
-                    if proxy.chars().any(char::is_control) {
-                        return Err(EngineError::Failed("代理地址无效".into()));
-                    }
-                    // Keep authenticated endpoints out of process listings and curl diagnostics.
-                    let escaped = proxy.replace('\\', "\\\\").replace('"', "\\\"");
-                    proxy_config = Some(format!("proxy = \"{escaped}\"\n"));
-                    command.args(["--config", "-"]);
-                } else {
-                    command.arg("-x").arg(proxy);
-                }
-            }
-        }
+        let proxy_config = apply_curl_proxy_args(&mut command, &proxy_plan);
         command.arg(&job.url);
         #[cfg(windows)]
         {
@@ -10032,5 +10094,118 @@ mod tests {
             "206 with unknown total length must disable parallel range splitting"
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn curl_proxy_for_system_lookup_covers_all_variants() {
+        assert_eq!(
+            curl_proxy_for_system_lookup(Ok(None)),
+            Some(CurlProxyPlan::Direct)
+        );
+        for url in [
+            "http://127.0.0.1:7890",
+            "HTTP://proxy.local:8080",
+            "socks4://127.0.0.1:1080",
+            "socks4a://127.0.0.1:1080",
+            "socks5://user:pass@127.0.0.1:1080",
+            "socks5h://[::1]:1080",
+        ] {
+            assert_eq!(
+                curl_proxy_for_system_lookup(Ok(Some(url.into()))),
+                Some(CurlProxyPlan::Config(url.into())),
+                "{url}"
+            );
+        }
+        for rejected in [
+            Ok(Some("https://proxy.example:443".into())),
+            Ok(Some("HTTPS://proxy.example:443".into())),
+            Ok(Some("http://proxy.example:8080\r\n".into())),
+            Ok(Some("http://".into())),
+            Ok(Some("ftp://proxy.example:21".into())),
+            Ok(Some("not-a-url".into())),
+            Err("WinINet lookup failed".into()),
+        ] {
+            assert_eq!(
+                curl_proxy_for_system_lookup(rejected.clone()),
+                None,
+                "{rejected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_curl_proxy_args_formats_direct_arg_and_escaped_config() {
+        let args_of = |plan: &CurlProxyPlan| {
+            let mut cmd = std::process::Command::new("curl");
+            let config = apply_curl_proxy_args(&mut cmd, plan);
+            let args: Vec<String> = cmd
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            (args, config)
+        };
+
+        assert_eq!(
+            args_of(&CurlProxyPlan::Direct),
+            (vec!["--noproxy".into(), "*".into()], None)
+        );
+        assert_eq!(
+            args_of(&CurlProxyPlan::Arg("http://127.0.0.1:8080".into())),
+            (
+                vec![
+                    "--noproxy".into(),
+                    "".into(),
+                    "-x".into(),
+                    "http://127.0.0.1:8080".into(),
+                ],
+                None
+            )
+        );
+        assert_eq!(
+            args_of(&CurlProxyPlan::Config(
+                r#"http://u"name:p\w@127.0.0.1:8080"#.into()
+            )),
+            (
+                vec!["--noproxy".into(), "".into(), "--config".into(), "-".into(),],
+                Some("proxy = \"http://u\\\"name:p\\\\w@127.0.0.1:8080\"\n".into())
+            )
+        );
+    }
+
+    #[test]
+    fn system_proxy_curl_impersonate_propagates_pause_and_cancel() {
+        let prefix = format!(
+            "https://system-proxy-control-{}.invalid/",
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((prefix.clone(), PathBuf::from("fake-curl-unused")));
+
+        for (command, expect_pause) in [("pause", true), ("cancel", false)] {
+            let (mut job, dir) = temp_job(&format!("{prefix}file.bin"), true, 0, 1);
+            job.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into();
+            fs::write(&job.control, command).unwrap();
+            let status_or_err = fetch_via_curl_impersonate(&job, None, &[])
+                .map(|result| result.map(|fetched| fetched.status));
+            fs::remove_dir_all(dir).unwrap();
+            if expect_pause {
+                assert!(
+                    matches!(status_or_err, Some(Err(EngineError::Pause))),
+                    "expected Pause, got {status_or_err:?}"
+                );
+            } else {
+                assert!(
+                    matches!(status_or_err, Some(Err(EngineError::Cancel))),
+                    "expected Cancel, got {status_or_err:?}"
+                );
+            }
+        }
+
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &prefix);
     }
 }

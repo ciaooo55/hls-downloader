@@ -35,13 +35,20 @@ export function filterPopupResources(
     if (!needle) return true
     let host = ''
     try { host = new URL(item.url).host } catch {}
+    const variantTokens = (item.variants || []).flatMap(variant => [
+      variant.quality,
+      variant.height ? `${variant.height}p` : '',
+      variant.width && variant.height ? `${variant.width}x${variant.height}` : '',
+    ])
     const haystack = [
       item.title,
       item.filename,
       item.url,
       item.quality,
+      item.height ? `${item.height}p` : '',
       item.kind,
       host,
+      ...variantTokens,
     ]
       .filter(Boolean)
       .join(' ')

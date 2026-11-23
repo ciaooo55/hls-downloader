@@ -232,7 +232,7 @@ export default defineContentScript({
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string, state?: SendState }>()
-    const preferredVariants = new Map<string, { height: number, bandwidth: number }>()
+    const preferredVariants = new Map<string, { variantId?: string, height: number, bandwidth: number }>()
     let renderedListSignature = ''
     let renderedVideoSignature = ''
     let activePlayback: PlaybackContext | null = null
@@ -1038,9 +1038,16 @@ export default defineContentScript({
         const resourceLocation = safeResourceLocation(resource.url)
         const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
         const preference = preferredVariants.get(resourceFingerprint(resource))
-        const selectedIndex = preference
-          ? resource.variants?.findIndex(variant => (variant.height || 0) === preference.height
-            && (variant.bandwidth || 0) === preference.bandwidth) ?? -1 : -1
+        const selectedIndex = preference && resource.variants?.length
+          ? (() => {
+            if (preference.variantId) {
+              const byId = resource.variants.findIndex(variant => variant.variantId === preference.variantId)
+              if (byId >= 0) return byId
+            }
+            return resource.variants.findIndex(variant => (variant.height || 0) === preference.height
+              && (variant.bandwidth || 0) === preference.bandwidth)
+          })()
+          : -1
         let selected = selectedIndex >= 0 ? selectMediaVariant(resource, resource.variants![selectedIndex]) : resource
         const actions = document.createElement('div'); actions.className = 'item-actions'
         const button = document.createElement('button'); button.type = 'button'; button.className = 'download'; button.textContent = '下载'
@@ -1064,8 +1071,13 @@ export default defineContentScript({
           select.addEventListener('change', () => {
             const variant = resource.variants?.[Number(select.value)]
             selected = variant ? selectMediaVariant(resource, variant) : resource
-            if (variant) preferredVariants.set(resourceFingerprint(resource), { height: variant.height || 0, bandwidth: variant.bandwidth || 0 })
-            else preferredVariants.delete(resourceFingerprint(resource))
+            if (variant) {
+              preferredVariants.set(resourceFingerprint(resource), {
+                ...(variant.variantId ? { variantId: variant.variantId } : {}),
+                height: variant.height || 0,
+                bandwidth: variant.bandwidth || 0,
+              })
+            } else preferredVariants.delete(resourceFingerprint(resource))
             applySendState(selected, button, '下载'); applySendState(selected, pushButton, overlayActionFallback('tvbox'), 'tvbox'); applySendState(selected, castButton, overlayActionFallback('cast'), 'cast')
           })
           meta.append(name, kind, resourceUrl, select)
@@ -1245,8 +1257,12 @@ export default defineContentScript({
               if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return null
               const safeUrl = httpUrlOnly(variant.url)
               if (!safeUrl) return null
+              const safeVariantId = typeof variant.variantId === 'string' && variant.variantId.trim()
+                ? variant.variantId.trim().slice(0, 256)
+                : undefined
               return {
                 url: safeUrl,
+                ...(safeVariantId ? { variantId: safeVariantId } : {}),
                 ...(typeof variant.width === 'number' && Number.isFinite(variant.width) && variant.width > 0 ? { width: variant.width } : {}),
                 ...(typeof variant.height === 'number' && Number.isFinite(variant.height) && variant.height > 0 ? { height: variant.height } : {}),
                 ...(typeof variant.bandwidth === 'number' && Number.isFinite(variant.bandwidth) && variant.bandwidth > 0 ? { bandwidth: variant.bandwidth } : {}),

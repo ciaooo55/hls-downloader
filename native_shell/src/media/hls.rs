@@ -2468,6 +2468,22 @@ fn load_playlist(
 const MAX_SEGMENT_ATTEMPTS: u32 = 3;
 const SEGMENT_RETRY_DELAY_MS: u64 = 250;
 
+pub(super) fn is_retryable_segment_error(error: &MediaTransferError) -> bool {
+    match error {
+        MediaTransferError::Output(_) => false,
+        MediaTransferError::Transfer(error) => {
+            if matches!(
+                error,
+                EngineError::Pause | EngineError::Cancel | EngineError::RangeUnsupported(_)
+            ) {
+                return false;
+            }
+            let message = error.to_string();
+            !extract_http_status(&message).is_some_and(|status| !retryable_http_status(status))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn download_segment(
     segment: &Segment,
@@ -2502,15 +2518,9 @@ fn download_segment(
             sync,
         ) {
             Ok(path) => return Ok(path),
-            Err(MediaTransferError::Output(error)) => return Err(error.to_string()),
-            Err(MediaTransferError::Transfer(error)) => {
+            Err(error) => {
                 let message = error.to_string();
-                if matches!(
-                    error,
-                    EngineError::Pause | EngineError::Cancel | EngineError::RangeUnsupported(_)
-                ) || extract_http_status(&message)
-                    .is_some_and(|status| !retryable_http_status(status))
-                {
+                if !is_retryable_segment_error(&error) {
                     return Err(message);
                 }
                 if attempt == MAX_SEGMENT_ATTEMPTS {

@@ -80,7 +80,54 @@ struct PersistedHandoff {
     status: String,
     #[serde(default)]
     presentation: String,
+    #[serde(default)]
+    task_id: Option<String>,
     offer: ResourceOffer,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct VariantSelection {
+    preferred_variant_id: String,
+    preferred_height: u32,
+    preferred_bandwidth: u64,
+}
+
+impl VariantSelection {
+    fn from_offer(offer: &ResourceOffer) -> Self {
+        Self {
+            preferred_variant_id: offer.preferred_variant_id.trim().to_string(),
+            preferred_height: offer.preferred_height,
+            preferred_bandwidth: offer.preferred_bandwidth,
+        }
+    }
+
+    fn is_explicit(&self) -> bool {
+        !self.preferred_variant_id.is_empty()
+            || self.preferred_height > 0
+            || self.preferred_bandwidth > 0
+    }
+}
+
+fn find_duplicate_task<'a>(
+    tasks: &'a [TaskSnapshot],
+    task_variants: &HashMap<String, VariantSelection>,
+    offer: &ResourceOffer,
+) -> Option<&'a TaskSnapshot> {
+    let want_url = canonical_url(&offer.url);
+    let offer_variant = VariantSelection::from_offer(offer);
+    let is_adaptive = matches!(offer.resource_kind, ResourceKind::Hls | ResourceKind::Dash);
+    tasks.iter().find(|task| {
+        if canonical_url(&task.url) != want_url {
+            return false;
+        }
+        if let Some(existing) = task_variants.get(&task.task_id) {
+            return *existing == offer_variant;
+        }
+        if is_adaptive && offer_variant.is_explicit() {
+            return false;
+        }
+        true
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -325,12 +372,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut initial_client = connect_or_start_core()?;
     let (initial_tasks, initial_sequence) = initial_client.snapshot_state()?;
-    let initial_pending = load_pending_offers(&mut initial_client);
+    let (initial_pending, initial_task_variants) = load_handoff_state(&mut initial_client);
     let settings = initial_client.load_settings().ok();
     let presenter_settings = Arc::new(Mutex::new(PresenterSettings::from_response(
         settings.as_ref(),
     )));
     let known_tasks = Arc::new(Mutex::new(initial_tasks));
+    let known_task_variants = Arc::new(Mutex::new(initial_task_variants));
     let runtime_settings = Rc::new(RefCell::new(PresenterRuntimeSettings::from_response(
         settings.as_ref(),
     )));
@@ -623,6 +671,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
+        let known_task_variants = Arc::clone(&known_task_variants);
         let window = confirm.as_weak();
         move |command| {
             let command = command.to_string();
@@ -862,6 +911,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &active_handoff,
                 &presenter_settings,
                 &known_tasks,
+                &known_task_variants,
             );
         }
     });
@@ -942,15 +992,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
+        let known_task_variants = Arc::clone(&known_task_variants);
         move || {
             event_loop(
                 tx,
                 initial_sequence,
                 confirm,
-                pending,
-                active_handoff,
-                presenter_settings,
-                known_tasks,
+                EventLoopState {
+                    pending,
+                    active_handoff,
+                    presenter_settings,
+                    known_tasks,
+                    known_task_variants,
+                },
             )
         }
     });
@@ -1147,6 +1201,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &active_handoff,
         &presenter_settings,
         &known_tasks,
+        &known_task_variants,
     );
     if args.iter().any(|arg| arg == "--workbench") {
         confirm.invoke_open_workbench(
@@ -1233,6 +1288,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                 dark,
                 env::var_os("HLS_V7_RENDER_MOTION").is_none(),
             )?;
+            offscreen::OffscreenPlatform::sync_workbench_viewport(&workbench.window);
             workbench.show()?;
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
@@ -1453,15 +1509,28 @@ fn remember_category_directory(
         .and_then(core_feedback::command_result)
 }
 
-fn event_loop(
-    tx: mpsc::SyncSender<Vec<EventEnvelope>>,
-    mut after: u64,
-    confirm: slint::Weak<ConfirmWindow>,
+#[derive(Clone)]
+struct EventLoopState {
     pending: Arc<Mutex<VecDeque<ResourceOffer>>>,
     active_handoff: Arc<Mutex<Option<String>>>,
     presenter_settings: Arc<Mutex<PresenterSettings>>,
     known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
+    known_task_variants: Arc<Mutex<HashMap<String, VariantSelection>>>,
+}
+
+fn event_loop(
+    tx: mpsc::SyncSender<Vec<EventEnvelope>>,
+    mut after: u64,
+    confirm: slint::Weak<ConfirmWindow>,
+    state: EventLoopState,
 ) {
+    let EventLoopState {
+        pending,
+        active_handoff,
+        presenter_settings,
+        known_tasks,
+        known_task_variants,
+    } = state;
     loop {
         let Ok(mut client) = CoreIpcClient::connect() else {
             thread::sleep(Duration::from_millis(200));
@@ -1499,15 +1568,19 @@ fn event_loop(
         {
             return;
         }
-        let restored = load_pending_offers(&mut client);
+        let (restored, restored_variants) = load_handoff_state(&mut client);
         let resync_pending = Arc::clone(&pending);
         let resync_active_handoff = Arc::clone(&active_handoff);
         let resync_settings = Arc::clone(&presenter_settings);
         let resync_tasks = Arc::clone(&known_tasks);
+        let resync_variants = Arc::clone(&known_task_variants);
         if confirm
             .upgrade_in_event_loop(move |item| {
                 if let Ok(mut items) = resync_pending.lock() {
                     *items = restored;
+                }
+                if let Ok(mut variants) = resync_variants.lock() {
+                    *variants = restored_variants;
                 }
                 show_next_offer(
                     &item.as_weak(),
@@ -1515,6 +1588,7 @@ fn event_loop(
                     &resync_active_handoff,
                     &resync_settings,
                     &resync_tasks,
+                    &resync_variants,
                 );
             })
             .is_err()
@@ -1546,6 +1620,7 @@ fn event_loop(
                         let active_handoff = Arc::clone(&active_handoff);
                         let presenter_settings = Arc::clone(&presenter_settings);
                         let known_tasks = Arc::clone(&known_tasks);
+                        let known_task_variants = Arc::clone(&known_task_variants);
                         if confirm
                             .upgrade_in_event_loop(move |item| {
                                 if let Ok(mut items) = pending.lock() {
@@ -1562,6 +1637,7 @@ fn event_loop(
                                     &active_handoff,
                                     &presenter_settings,
                                     &known_tasks,
+                                    &known_task_variants,
                                 );
                             })
                             .is_err()
@@ -1569,15 +1645,31 @@ fn event_loop(
                             return;
                         }
                     }
-                    CoreEvent::HandoffResolved { handoff_id, .. } => {
+                    CoreEvent::HandoffResolved {
+                        handoff_id,
+                        task_id,
+                        ..
+                    } => {
                         let pending = Arc::clone(&pending);
                         let active_handoff = Arc::clone(&active_handoff);
                         let presenter_settings = Arc::clone(&presenter_settings);
                         let known_tasks = Arc::clone(&known_tasks);
+                        let known_task_variants = Arc::clone(&known_task_variants);
                         if confirm
                             .upgrade_in_event_loop(move |item| {
-                                if let Ok(mut items) = pending.lock() {
+                                let resolved_variant = pending.lock().ok().and_then(|mut items| {
+                                    let variant = items
+                                        .iter()
+                                        .find(|entry| entry.handoff_id == handoff_id)
+                                        .map(VariantSelection::from_offer);
                                     items.retain(|entry| entry.handoff_id != handoff_id);
+                                    variant
+                                });
+                                if let (Some(task_id), Some(variant)) = (task_id, resolved_variant)
+                                {
+                                    if let Ok(mut variants) = known_task_variants.lock() {
+                                        variants.insert(task_id, variant);
+                                    }
                                 }
                                 show_next_offer(
                                     &item.as_weak(),
@@ -1585,6 +1677,7 @@ fn event_loop(
                                     &active_handoff,
                                     &presenter_settings,
                                     &known_tasks,
+                                    &known_task_variants,
                                 );
                             })
                             .is_err()
@@ -1593,6 +1686,11 @@ fn event_loop(
                         }
                     }
                     event => {
+                        if let CoreEvent::TaskDeleted { ref task_id } = event {
+                            if let Ok(mut variants) = known_task_variants.lock() {
+                                variants.remove(task_id);
+                            }
+                        }
                         update_known_tasks(&known_tasks, &event);
                         batched.push(EventEnvelope {
                             sequence: envelope.sequence,
@@ -1640,6 +1738,7 @@ fn event_loop(
                     let active_handoff = Arc::clone(&active_handoff);
                     let presenter_settings = Arc::clone(&presenter_settings);
                     let known_tasks = Arc::clone(&known_tasks);
+                    let known_task_variants = Arc::clone(&known_task_variants);
                     let _ = confirm.upgrade_in_event_loop(move |item| {
                         show_next_offer(
                             &item.as_weak(),
@@ -1647,6 +1746,7 @@ fn event_loop(
                             &active_handoff,
                             &presenter_settings,
                             &known_tasks,
+                            &known_task_variants,
                         );
                     });
                 }
@@ -1656,36 +1756,39 @@ fn event_loop(
     }
 }
 
-fn load_pending_offers(client: &mut CoreIpcClient) -> VecDeque<ResourceOffer> {
-    let encoded = match client.query_handoffs(None, None, true) {
+fn load_handoff_state(
+    client: &mut CoreIpcClient,
+) -> (VecDeque<ResourceOffer>, HashMap<String, VariantSelection>) {
+    let encoded = match client.query_handoffs(None, None, false) {
         Ok(encoded) => encoded,
         Err(error) => {
             trace(&format!("恢复浏览器接管请求失败: {error}"));
-            return VecDeque::new();
+            return (VecDeque::new(), HashMap::new());
         }
     };
-    encoded
-        .into_iter()
-        .filter_map(
-            |encoded| match serde_json::from_str::<PersistedHandoff>(&encoded) {
-                Ok(handoff) => Some(handoff),
-                Err(error) => {
-                    trace(&format!("忽略损坏的持久化接管请求: {error}"));
-                    None
-                }
-            },
-        )
-        .filter(|handoff| handoff.status == "pending" && handoff.presentation != "fallback")
-        .map(|handoff| handoff.offer)
-        .fold(VecDeque::new(), |mut pending, offer| {
-            if !pending
-                .iter()
-                .any(|item| item.handoff_id == offer.handoff_id)
-            {
-                pending.push_back(offer);
+    let mut pending = VecDeque::new();
+    let mut variants = HashMap::new();
+    for encoded in encoded {
+        let handoff = match serde_json::from_str::<PersistedHandoff>(&encoded) {
+            Ok(handoff) => handoff,
+            Err(error) => {
+                trace(&format!("忽略损坏的持久化接管请求: {error}"));
+                continue;
             }
-            pending
-        })
+        };
+        if let Some(task_id) = handoff.task_id.filter(|id| !id.is_empty()) {
+            variants.insert(task_id, VariantSelection::from_offer(&handoff.offer));
+        }
+        if handoff.status == "pending"
+            && handoff.presentation != "fallback"
+            && !pending
+                .iter()
+                .any(|item: &ResourceOffer| item.handoff_id == handoff.offer.handoff_id)
+        {
+            pending.push_back(handoff.offer);
+        }
+    }
+    (pending, variants)
 }
 
 // 输入为 rcWork 的物理尺寸；紧凑窗口不能超出可用工作区。
@@ -1774,6 +1877,7 @@ fn show_next_offer(
     active_handoff: &Arc<Mutex<Option<String>>>,
     presenter_settings: &Arc<Mutex<PresenterSettings>>,
     known_tasks: &Arc<Mutex<Vec<TaskSnapshot>>>,
+    known_task_variants: &Arc<Mutex<HashMap<String, VariantSelection>>>,
 ) {
     let Some(item) = window.upgrade() else {
         return;
@@ -1803,20 +1907,21 @@ fn show_next_offer(
         .lock()
         .map(|settings| settings.directory_for(category))
         .unwrap_or_default();
+    let variants_snapshot = known_task_variants
+        .lock()
+        .map(|variants| variants.clone())
+        .unwrap_or_default();
     let duplicate_text = known_tasks
         .lock()
         .ok()
         .and_then(|tasks| {
-            tasks
-                .iter()
-                .find(|task| canonical_url(&task.url) == canonical_url(&offer.url))
-                .map(|task| {
-                    format!(
-                        "已有同一地址的任务：{}（{}）",
-                        task.filename,
-                        task_status_label(&task.status)
-                    )
-                })
+            find_duplicate_task(&tasks, &variants_snapshot, &offer).map(|task| {
+                format!(
+                    "已有同一地址的任务：{}（{}）",
+                    task.filename,
+                    task_status_label(&task.status)
+                )
+            })
         })
         .unwrap_or_default();
     item.set_filename(filename.clone().into());
@@ -1861,9 +1966,12 @@ fn show_next_offer(
     });
     if claimed.is_err() {
         if let Ok(mut client) = CoreIpcClient::connect() {
-            let restored = load_pending_offers(&mut client);
+            let (restored, restored_variants) = load_handoff_state(&mut client);
             if let Ok(mut items) = pending.lock() {
                 *items = restored;
+            }
+            if let Ok(mut variants) = known_task_variants.lock() {
+                *variants = restored_variants;
             }
         }
         if let Ok(mut active) = active_handoff.lock() {
@@ -2615,6 +2723,32 @@ fn resource_kind_label(kind: ResourceKind) -> &'static str {
     }
 }
 
+fn format_bitrate(bits_per_sec: u64) -> String {
+    if bits_per_sec >= 1_000_000 {
+        format!("{:.1} Mbps", bits_per_sec as f64 / 1_000_000.0)
+    } else if bits_per_sec >= 1_000 {
+        format!("{} kbps", bits_per_sec / 1_000)
+    } else {
+        format!("{bits_per_sec} bps")
+    }
+}
+
+fn concise_variant_hint(variant_id: &str) -> Option<String> {
+    let trimmed = variant_id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains("://") {
+        let clean = safe_display_url(trimmed);
+        let leaf = clean
+            .rsplit('/')
+            .find(|segment| !segment.is_empty())
+            .unwrap_or(&clean);
+        return Some(leaf.chars().take(40).collect());
+    }
+    Some(trimmed.chars().take(40).collect())
+}
+
 fn format_resource_meta(offer: &ResourceOffer, filename: &str) -> String {
     let extension = file_extension(filename);
     let extension = if extension == "未知后缀" {
@@ -2627,26 +2761,48 @@ fn format_resource_meta(offer: &ResourceOffer, filename: &str) -> String {
     } else {
         "大小未知".into()
     };
-    let parts = [
+    let mut parts = vec![
         resource_kind_label(offer.resource_kind).to_string(),
         extension,
         size,
     ];
+    if offer.preferred_height > 0 {
+        parts.push(format!("{}p", offer.preferred_height));
+    }
+    if offer.preferred_bandwidth > 0 {
+        parts.push(format_bitrate(offer.preferred_bandwidth));
+    }
+    if offer.preferred_height == 0 && offer.preferred_bandwidth == 0 {
+        if let Some(hint) = concise_variant_hint(&offer.preferred_variant_id) {
+            parts.push(format!("轨道 {hint}"));
+        }
+    }
     parts.join(" · ")
 }
 
 fn format_request_details(offer: &ResourceOffer) -> String {
     let method = offer.request_method.trim().to_ascii_uppercase();
-    let request = format!(
+    let mut parts = vec![format!(
         "请求方式：{}",
         if method.is_empty() { "GET" } else { &method }
-    );
+    )];
     let mime = offer.mime_type.trim();
-    if mime.is_empty() {
-        request
-    } else {
-        format!("{request} · 内容类型：{mime}")
+    if !mime.is_empty() {
+        parts.push(format!("内容类型：{mime}"));
     }
+    if offer.preferred_height > 0 {
+        parts.push(format!("清晰度：{}p", offer.preferred_height));
+    }
+    if offer.preferred_bandwidth > 0 {
+        parts.push(format!(
+            "码率：{}",
+            format_bitrate(offer.preferred_bandwidth)
+        ));
+    }
+    if let Some(hint) = concise_variant_hint(&offer.preferred_variant_id) {
+        parts.push(format!("轨道：{hint}"));
+    }
+    parts.join(" · ")
 }
 
 fn canonical_url(value: &str) -> &str {
@@ -3228,5 +3384,95 @@ mod tests {
         assert!(summary.contains("传输中"));
         assert!(summary.contains("待分配"));
         assert!(!summary.contains("ConnectionPart {"));
+    }
+
+    #[test]
+    fn confirm_duplicate_detection_is_variant_aware_for_adaptive_masters() {
+        use super::{find_duplicate_task, VariantSelection};
+        use std::collections::HashMap;
+
+        let master = "https://cdn.example.test/video/master.m3u8";
+        let existing = TaskSnapshot {
+            task_id: "task-720".into(),
+            url: master.into(),
+            filename: "movie-720p.mp4".into(),
+            resource_kind: ResourceKind::Hls,
+            status: "downloading".into(),
+            ..Default::default()
+        };
+        let mut variants = HashMap::new();
+        variants.insert(
+            "task-720".to_string(),
+            VariantSelection {
+                preferred_variant_id: "v720".into(),
+                preferred_height: 720,
+                preferred_bandwidth: 2_500_000,
+            },
+        );
+
+        let same_variant = ResourceOffer {
+            url: master.into(),
+            resource_kind: ResourceKind::Hls,
+            preferred_variant_id: "v720".into(),
+            preferred_height: 720,
+            preferred_bandwidth: 2_500_000,
+            ..Default::default()
+        };
+        assert!(find_duplicate_task(&[existing.clone()], &variants, &same_variant).is_some());
+
+        let different_height = ResourceOffer {
+            preferred_variant_id: "v1080".into(),
+            preferred_height: 1080,
+            preferred_bandwidth: 5_000_000,
+            ..same_variant.clone()
+        };
+        assert!(find_duplicate_task(&[existing.clone()], &variants, &different_height).is_none());
+
+        let different_variant_id_only = ResourceOffer {
+            preferred_variant_id: "v720-alt".into(),
+            ..same_variant.clone()
+        };
+        assert!(
+            find_duplicate_task(&[existing.clone()], &variants, &different_variant_id_only)
+                .is_none()
+        );
+
+        // Even without recorded handoff variant history, an explicit adaptive variant
+        // does not falsely warn against a master-URL task.
+        assert!(find_duplicate_task(&[existing], &HashMap::new(), &different_height).is_none());
+    }
+
+    #[test]
+    fn confirm_meta_and_details_include_chosen_quality_and_sanitized_variant_hint() {
+        let offer = ResourceOffer {
+            resource_kind: ResourceKind::Dash,
+            size: 64 * 1024 * 1024,
+            mime_type: "application/dash+xml".into(),
+            preferred_height: 1080,
+            preferred_bandwidth: 4_800_000,
+            preferred_variant_id:
+                "https://user:secret@cdn.example.test/hls/1080p.m3u8?token=private".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            format_resource_meta(&offer, "movie.mpd"),
+            "DASH · .mpd · 64.0 MB · 1080p · 4.8 Mbps"
+        );
+        let details = format_request_details(&offer);
+        assert!(details.contains("清晰度：1080p"));
+        assert!(details.contains("码率：4.8 Mbps"));
+        assert!(details.contains("轨道：1080p.m3u8"));
+        assert!(!details.contains("secret"));
+        assert!(!details.contains("token"));
+
+        let id_only = ResourceOffer {
+            resource_kind: ResourceKind::Dash,
+            preferred_variant_id: "rep-avc-high".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            format_resource_meta(&id_only, "stream.mpd"),
+            "DASH · .mpd · 大小未知 · 轨道 rep-avc-high"
+        );
     }
 }

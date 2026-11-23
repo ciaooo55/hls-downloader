@@ -47,4 +47,33 @@ describe('popup resource filtering', () => {
     expect(filterPopupResources(sample, 'file', 'release').map(r => r.id)).toEqual(['zip'])
     expect(filterPopupResources(sample, 'video', 'podcast')).toEqual([])
   })
+
+  it('matches variant quality labels and height-derived resolutions in keyword search', () => {
+    const withVariants: MediaResource[] = [
+      item({
+        id: 'adaptive',
+        url: 'https://cdn.example/master.m3u8',
+        kind: 'hls',
+        title: 'Course Recording',
+        variants: [
+          { url: 'https://cdn.example/720.m3u8', height: 720, bandwidth: 2_500_000 },
+          { url: 'https://cdn.example/4k.m3u8', width: 3840, height: 2160, quality: '4K' },
+        ],
+      }),
+      item({
+        id: 'plain',
+        url: 'https://cdn.example/clip.mp4',
+        kind: 'media',
+        mimeType: 'video/mp4',
+        title: 'Short Clip',
+        height: 480,
+      }),
+    ]
+    expect(filterPopupResources(withVariants, 'all', '720p').map(r => r.id)).toEqual(['adaptive'])
+    expect(filterPopupResources(withVariants, 'all', '2160p').map(r => r.id)).toEqual(['adaptive'])
+    expect(filterPopupResources(withVariants, 'all', '4k').map(r => r.id)).toEqual(['adaptive'])
+    expect(filterPopupResources(withVariants, 'all', '3840x2160').map(r => r.id)).toEqual(['adaptive'])
+    expect(filterPopupResources(withVariants, 'all', '480p').map(r => r.id)).toEqual(['plain'])
+    expect(filterPopupResources(withVariants, 'all', '1080p')).toEqual([])
+  })
 })

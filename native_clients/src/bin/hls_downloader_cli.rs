@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const HELP: &str = "HLSDownloaderCli [--json] COMMAND
   add URL [--dir PATH] [--name NAME] [--queue ID] [--paused] [--kind file|hls|dash]
-          [--context FILE|-]  (JSON: url, headers, request_method, body_path)
+          [--variant ID] [--context FILE|-]  (JSON: url, headers, request_method, body_path, preferred_variant_id)
   list | show TASK_ID
   pause|resume|retry TASK_ID
   remove TASK_ID [--delete-files]
@@ -76,6 +76,7 @@ fn split_json_flag(raw: Vec<String>) -> (bool, Vec<String>) {
                 | "--queue"
                 | "--context"
                 | "--kind"
+                | "--variant"
                 | "--spec"
                 | "--format"
                 | "--output"
@@ -200,6 +201,7 @@ fn read_context(source: &str, spec: &mut TaskSpec) -> Result<()> {
         headers: Option<std::collections::BTreeMap<String, String>>,
         request_method: Option<String>,
         body_path: Option<String>,
+        preferred_variant_id: Option<String>,
     }
     let context: Context =
         serde_json::from_slice(&bytes).map_err(|_| usage("请求上下文 JSON 无效"))?;
@@ -215,6 +217,15 @@ fn read_context(source: &str, spec: &mut TaskSpec) -> Result<()> {
     if let Some(v) = context.body_path {
         if !v.trim().is_empty() {
             spec.body_path = absolute(&v)?;
+        }
+    }
+    if let Some(v) = context.preferred_variant_id {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            if trimmed.len() > 2048 || trimmed.chars().any(char::is_control) {
+                return Err(usage("preferred_variant_id 无效"));
+            }
+            spec.preferred_variant_id = trimmed.into();
         }
     }
     Ok(())
@@ -259,6 +270,13 @@ fn run(args: &[String]) -> Result<Value> {
                             "dash" => ResourceKind::Dash,
                             _ => return Err(usage("不支持的资源类型")),
                         }
+                    }
+                    "--variant" => {
+                        let raw = value(args, &mut i)?.trim();
+                        if raw.is_empty() || raw.len() > 2048 || raw.chars().any(char::is_control) {
+                            return Err(usage("preferred_variant_id 无效"));
+                        }
+                        spec.preferred_variant_id = raw.into();
                     }
                     v if !v.starts_with('-') && spec.url.is_empty() => spec.url = v.into(),
                     _ => return Err(usage("add 参数无效")),
@@ -510,10 +528,10 @@ mod tests {
 
     #[test]
     fn json_flag_preserves_literal_option_values() {
-        let args = ["add", "--name", "--json", "--json"].map(str::to_string);
+        let args = ["add", "--name", "--json", "--variant", "1080p", "--json"].map(str::to_string);
         let (json, rest) = split_json_flag(args.into());
         assert!(json);
-        assert_eq!(rest, ["add", "--name", "--json"]);
+        assert_eq!(rest, ["add", "--name", "--json", "--variant", "1080p"]);
         assert!(absolute("  ").is_err());
     }
 }

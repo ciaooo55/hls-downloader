@@ -13,13 +13,18 @@ $presenterManifest = Get-Content -LiteralPath (Join-Path $repo 'native_ui\Cargo.
 $presenterSource = Get-Content -LiteralPath (Join-Path $repo 'native_ui\src\hot_main.rs') -Raw -Encoding UTF8
 $presenterBuild = Get-Content -LiteralPath (Join-Path $repo 'native_ui\build.rs') -Raw -Encoding UTF8
 $presenterUi = Get-Content -LiteralPath (Join-Path $repo 'native_ui\ui\hot.slint') -Raw -Encoding UTF8
+$requiredHotWindows = @('ConfirmWindow', 'ProgressWindow', 'CompleteWindow')
+$missingHotWindows = @($requiredHotWindows | Where-Object {
+    $presenterUi -notmatch ('export\s+component\s+' + [regex]::Escape($_) + '\b')
+})
 if ($presenterManifest -notmatch 'autobins\s*=\s*false' -or
     $presenterManifest -notmatch 'path\s*=\s*"src/hot_main.rs"' -or
-    $presenterSource -match '\b(MainWindow|SettingsWindow|PlayerWindow)\b' -or
+    $presenterSource -match '\bMainWindow\b' -or
     $presenterBuild -notmatch 'ui/hot\.slint' -or
-    $presenterUi -match '\b(MainWindow|SettingsWindow|PlayerWindow|LegalWindow|NewTaskWindow)\b' -or
-    ([regex]::Matches($presenterUi, 'export component\s+\w+Window')).Count -ne 3) {
-    throw 'v7 presenter architecture gate failed: only the dedicated hot-window entry may be active.'
+    $presenterUi -notmatch 'export\s*\{[^}]*\bWorkbenchWindow\b[^}]*\}\s*from\s*"workbench\.slint"' -or
+    $presenterUi -match '\b(MainWindow|LegalWindow|NewTaskWindow)\b' -or
+    $missingHotWindows.Count -gt 0) {
+    throw "v7 presenter architecture gate failed: native presenter entry must expose WorkbenchWindow and hot windows ($($requiredHotWindows -join ', '))."
 }
 # Project build outputs stay inside the repository.
 $cacheRoot = Join-Path $repo '.tool-cache\build-cache'

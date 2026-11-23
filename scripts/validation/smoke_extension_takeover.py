@@ -691,28 +691,35 @@ def run(
                     lambda: _cdp_evaluate(
                         str(site_popup_target["webSocketDebuggerUrl"]),
                         "[...document.querySelectorAll('button')].some(button => "
-                        "button.textContent.includes('本站提示：已显示') && !button.disabled)",
+                        "((button.getAttribute('aria-label') || '').includes('本站提示：已显示') || "
+                        "(button.textContent || '').includes('本站提示：已显示')) && !button.disabled)",
                     ),
                     "排除本站按钮绑定顶层页面",
                 )
                 # 先等到按钮真的可点再点：popup 的控件文案是在读到 storage 之后才写入的，
                 # 上一轮直接点会撞上"按钮还没渲染好"。失败时把真实文案带进错误信息。
                 click_deadline = time.monotonic() + 20
-                button_texts: list[str] = []
+                button_labels: list[dict[str, str]] = []
                 while True:
-                    button_texts = _cdp_evaluate(
+                    button_labels = _cdp_evaluate(
                         str(site_popup_target["webSocketDebuggerUrl"]),
-                        "[...document.querySelectorAll('button')].map(button => button.textContent)",
+                        "[...document.querySelectorAll('button')].map(button => "
+                        "({ariaLabel: button.getAttribute('aria-label') || '', text: button.textContent || ''}))",
                     )
-                    if any("本站提示：已显示" in text for text in button_texts):
+                    if any(
+                        "本站提示：已显示" in item.get("ariaLabel", "")
+                        or "本站提示：已显示" in item.get("text", "")
+                        for item in button_labels
+                    ):
                         break
                     if time.monotonic() >= click_deadline:
-                        raise AssertionError(f"排除本站按钮未出现：{button_texts}")
+                        raise AssertionError(f"排除本站按钮未出现：{button_labels}")
                     time.sleep(0.1)
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('本站提示：已显示')).click()"
+                    "(button.getAttribute('aria-label') || '').includes('本站提示：已显示') || "
+                    "(button.textContent || '').includes('本站提示：已显示')).click()"
                 )
                 _wait_until(
                     lambda: _cdp_evaluate(
@@ -734,21 +741,27 @@ def run(
                 # Unexclude through the same real popup control.
                 # 恢复显示同样要等按钮文案翻转过来再点，否则点的还是排除前那个状态。
                 restore_deadline = time.monotonic() + 20
-                restore_texts: list[str] = []
+                restore_labels: list[dict[str, str]] = []
                 while True:
-                    restore_texts = _cdp_evaluate(
+                    restore_labels = _cdp_evaluate(
                         str(site_popup_target["webSocketDebuggerUrl"]),
-                        "[...document.querySelectorAll('button')].map(button => button.textContent)",
+                        "[...document.querySelectorAll('button')].map(button => "
+                        "({ariaLabel: button.getAttribute('aria-label') || '', text: button.textContent || ''}))",
                     )
-                    if any("本站提示：已隐藏" in text for text in restore_texts):
+                    if any(
+                        "本站提示：已隐藏" in item.get("ariaLabel", "")
+                        or "本站提示：已隐藏" in item.get("text", "")
+                        for item in restore_labels
+                    ):
                         break
                     if time.monotonic() >= restore_deadline:
-                        raise AssertionError(f"取消排除本站按钮未出现：{restore_texts}")
+                        raise AssertionError(f"取消排除本站按钮未出现：{restore_labels}")
                     time.sleep(0.1)
                 _cdp_evaluate(
                     str(site_popup_target["webSocketDebuggerUrl"]),
                     "[...document.querySelectorAll('button')].find(button => "
-                    "button.textContent.includes('本站提示：已隐藏')).click()"
+                    "(button.getAttribute('aria-label') || '').includes('本站提示：已隐藏') || "
+                    "(button.textContent || '').includes('本站提示：已隐藏')).click()"
                 )
                 _wait_until(
                     lambda: not _cdp_evaluate(
@@ -765,17 +778,24 @@ def run(
                 driver.switch_to.window(inspector)
                 def auto_button():
                     return driver.find_element(
-                        By.XPATH, "//button[starts-with(normalize-space(.), '自动接管')]"
+                        By.XPATH,
+                        "//button[starts-with(normalize-space(@aria-label), '自动接管') "
+                        "or starts-with(normalize-space(.), '自动接管')]",
                     )
+
+                def auto_button_label():
+                    button = auto_button()
+                    return f"{button.get_attribute('aria-label') or ''} {button.text or ''}"
+
                 _wait_until(lambda: not auto_button().get_attribute("disabled"), "自动接管按钮就绪")
                 auto_button().click()
                 try:
-                    _wait_until(lambda: "关" in auto_button().text, "自动接管立即关闭", 5)
+                    _wait_until(lambda: "关" in auto_button_label(), "自动接管立即关闭", 5)
                 except AssertionError as error:
                     diagnostic = _extension_call(
                         driver,
                         "chrome.storage.local.get(null, value => done({value, buttons:"
-                        "[...document.querySelectorAll('button')].map(button => ({text:button.innerText,disabled:button.disabled})),"
+                        "[...document.querySelectorAll('button')].map(button => ({ariaLabel:button.getAttribute('aria-label')||'',text:button.innerText,disabled:button.disabled})),"
                         "error:document.querySelector('.send-error')?.innerText||''}));",
                     )
                     raise AssertionError(f"{error}; popup={diagnostic}") from error
@@ -788,7 +808,7 @@ def run(
                     raise AssertionError("自动接管关闭后仍发送下载")
                 driver.switch_to.window(inspector)
                 auto_button().click()
-                _wait_until(lambda: "开" in auto_button().text, "自动接管重新开启")
+                _wait_until(lambda: "开" in auto_button_label(), "自动接管重新开启")
 
                 for name in ('accept', 'fallback', 'reject', 'disconnect'):
                     _click_download(driver, page, name)

@@ -82,6 +82,62 @@ fn authority(host: &str, port: u16) -> String {
     }
 }
 
+pub(crate) fn resolve_system_proxy(
+    target_url: &str,
+    check: impl Fn() -> Result<(), String>,
+) -> Result<Option<String>, String> {
+    lookup_system_proxy(target_url, true, check)
+}
+
+fn lookup_system_proxy(
+    target_url: &str,
+    allow_https: bool,
+    check: impl Fn() -> Result<(), String>,
+) -> Result<Option<String>, String> {
+    check()?;
+    #[cfg(windows)]
+    {
+        let url = target_url.to_string();
+        if tokio::runtime::Handle::try_current().is_err() {
+            runtime()?.block_on(controlled(
+                async {
+                    tokio::task::spawn_blocking(move || system::lookup(&url, allow_https))
+                        .await
+                        .map_err(|_| "系统代理解析失败".to_string())?
+                },
+                check,
+            ))
+        } else {
+            // Calling Runtime::block_on inside an active Tokio runtime panics; run
+            // WinINet on the dedicated runtime's blocking pool and poll control.
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            runtime()?.spawn_blocking(move || {
+                let _ = tx.send(system::lookup(&url, allow_https));
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                check()?;
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err("代理连接或握手超时".into());
+                }
+                match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                    Ok(result) => return result,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err("系统代理解析失败".into());
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (target_url, allow_https);
+        Ok(None)
+    }
+}
+
 impl Proxy {
     pub(crate) fn resolve(
         route: &str,
@@ -91,32 +147,9 @@ impl Proxy {
         match proxy_route(route) {
             ProxyRoute::Direct => Ok(None),
             ProxyRoute::Manual(url) => Self::parse(url).map(Some),
-            ProxyRoute::System => {
-                #[cfg(windows)]
-                {
-                    // PAC receives the target URL without transfer credentials.
-                    let (scheme, rest) = target_url.split_once("://").ok_or("目标地址无效")?;
-                    let (endpoint, path) = rest.split_once('/').unwrap_or((rest, ""));
-                    let endpoint = endpoint.rsplit('@').next().unwrap_or(endpoint);
-                    let url = format!("{scheme}://{endpoint}/{path}");
-                    runtime()?
-                        .block_on(controlled(
-                            async {
-                                tokio::task::spawn_blocking(move || system::lookup(&url))
-                                    .await
-                                    .map_err(|_| "系统代理解析失败".to_string())?
-                            },
-                            check,
-                        ))?
-                        .map(|url| Self::parse(&url))
-                        .transpose()
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = (target_url, check);
-                    Ok(None)
-                }
-            }
+            ProxyRoute::System => lookup_system_proxy(target_url, false, check)?
+                .map(|url| Self::parse(&url))
+                .transpose(),
         }
     }
 

@@ -1,14 +1,14 @@
 //! WinINet resolves per-user manual settings, bypass rules and PAC for
-//! non-HTTP target URLs. Only the first route selected by Windows is used.
+//! target URLs, falling back across the returned proxy list when needed.
 use std::{ffi::c_void, ptr};
 
 #[repr(C)]
-struct ProxyInfo {
-    proxy: i32,
-    bypass: i32,
-    scheme: i32,
-    host: *const u16,
-    port: u16,
+pub(super) struct ProxyInfo {
+    pub(super) proxy: i32,
+    pub(super) bypass: i32,
+    pub(super) scheme: i32,
+    pub(super) host: *const u16,
+    pub(super) port: u16,
 }
 
 #[repr(C)]
@@ -24,7 +24,62 @@ unsafe extern "system" {
     fn InternetFreeProxyInfoList(list: *mut ProxyList);
 }
 
-pub(super) fn lookup(url: &str) -> Result<Option<String>, String> {
+pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String> {
+    let (scheme, rest) = target_url.split_once("://").ok_or("目标地址无效")?;
+    let scheme = scheme.trim().to_ascii_lowercase();
+    if scheme.is_empty() {
+        return Err("目标地址无效".into());
+    }
+    let without_fragment = rest.split_once('#').map_or(rest, |(head, _)| head);
+    let (authority, tail) = match without_fragment.find(['/', '?']) {
+        Some(pos) => (&without_fragment[..pos], &without_fragment[pos..]),
+        None => (without_fragment, ""),
+    };
+    let endpoint = authority.rsplit('@').next().unwrap_or(authority);
+    if endpoint.is_empty() {
+        return Err("目标地址无效".into());
+    }
+    let suffix = if tail.is_empty() {
+        "/".to_string()
+    } else if tail.starts_with('/') {
+        tail.to_string()
+    } else {
+        format!("/{tail}")
+    };
+    let schemes: &[&str] = match scheme.as_str() {
+        "ftps" => &["ftp", "https"],
+        "sftp" => &["https"],
+        _ => &[scheme.as_str()],
+    };
+    Ok(schemes
+        .iter()
+        .map(|normalized| format!("{normalized}://{endpoint}{suffix}"))
+        .collect())
+}
+
+pub(super) fn lookup(target_url: &str, allow_https: bool) -> Result<Option<String>, String> {
+    let candidates = lookup_candidates(target_url)?;
+    let mut first_error = None;
+    let mut saw_direct = false;
+    for candidate in &candidates {
+        match lookup_url(candidate, allow_https) {
+            Ok(Some(proxy)) => return Ok(Some(proxy)),
+            Ok(None) => saw_direct = true,
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if saw_direct {
+        Ok(None)
+    } else {
+        Err(first_error.unwrap_or_else(|| "Windows 系统代理未返回路由".into()))
+    }
+}
+
+fn lookup_url(url: &str, allow_https: bool) -> Result<Option<String>, String> {
     let url: Vec<_> = url.encode_utf16().chain(Some(0)).collect();
     let mut list = ProxyList {
         count: 0,
@@ -39,7 +94,8 @@ pub(super) fn lookup(url: &str) -> Result<Option<String>, String> {
         Err("Windows 系统代理未返回路由".into())
     } else {
         // WinINet owns the entries and their NUL-terminated host names until free.
-        route(unsafe { &*list.entries })
+        let entries = unsafe { std::slice::from_raw_parts(list.entries, list.count as usize) };
+        select_route(entries, allow_https)
     };
     unsafe {
         InternetFreeProxyInfoList(&mut list);
@@ -47,13 +103,32 @@ pub(super) fn lookup(url: &str) -> Result<Option<String>, String> {
     result
 }
 
-fn route(entry: &ProxyInfo) -> Result<Option<String>, String> {
+pub(super) fn select_route(
+    entries: &[ProxyInfo],
+    allow_https: bool,
+) -> Result<Option<String>, String> {
+    let mut first_error = None;
+    for entry in entries {
+        match route(entry, allow_https) {
+            Ok(selected) => return Ok(selected),
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| "Windows 系统代理未返回路由".into()))
+}
+
+fn route(entry: &ProxyInfo, allow_https: bool) -> Result<Option<String>, String> {
     if entry.proxy == 0 || entry.bypass != 0 {
         return Ok(None);
     }
     let scheme = match entry.scheme {
         3 => "http", // INTERNET_SCHEME_HTTP
-        4 => "https",
+        4 if allow_https => "https",
+        4 => return Err("原生 FTP/SFTP 尚不支持到 HTTPS 代理的 TLS 连接".into()),
         8 => "socks4", // WinINet's SOCKS setting uses SOCKSv4.
         _ => return Err("Windows 返回了不支持的系统代理协议".into()),
     };

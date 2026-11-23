@@ -54,8 +54,19 @@ export component WorkbenchWindow inherits Window {
     min-width: 560px;
     min-height: 360px;
     in property <[TaskRow]> tasks;
-    in property <length> viewport-width: 1400px;
-    in property <length> viewport-height: 820px;
+    in-out property <length> viewport-width: 1400px;
+    in-out property <length> viewport-height: 820px;
+    changed width => {
+        if (self.width > 0px && self.width != root.viewport-width) {
+            root.viewport-width = self.width;
+            root.viewport-resized(self.width / 1px);
+        }
+    }
+    changed height => {
+        if (self.height > 0px && self.height != root.viewport-height) {
+            root.viewport-height = self.height;
+        }
+    }
     in property <[NavigationRow]> navigation;
     in property <[TaskMenuRow]> task-menu;
     in property <[TaskColumn]> columns;
@@ -96,6 +107,7 @@ export component WorkbenchWindow inherits Window {
     in property <image> media-thumbnail;
     in property <string> media-notice;
     in-out property <bool> inspector-open: false;
+    callback inspector-opened();
     in property <string> inspector-title;
     in property <string> inspector-kind: "file";
     in property <string> inspector-status;
@@ -139,18 +151,27 @@ export component WorkbenchWindow inherits Window {
                 if (event.text == Key.Escape) { root.media-action("escape"); return accept; }
                 return reject;
             }
-            if (event.modifiers.control && (event.text == "a" || event.text == "A")) { root.key-command("select_all", true, false); return accept; }
+            if (event.text == Key.Escape && search.has-focus) {
+                if (root.query != "") { root.query = ""; root.query-edited(""); }
+                keyboard.focus();
+                return accept;
+            }
+            if (event.modifiers.control && (event.text == "a" || event.text == "A") && !search.has-focus) { root.key-command("select_all", true, false); return accept; }
             if (event.text == Key.Escape) { root.media-action("escape"); root.context-open = false; root.tools-open = false; root.key-command("clear_selection", false, false); return accept; }
-            if (event.text == Key.Delete) { root.action("delete"); return accept; }
-            if (event.text == Key.Return) { root.action("details"); return accept; }
-            if (event.text == Key.UpArrow) { root.key-command("up", event.modifiers.control, event.modifiers.shift); return accept; }
-            if (event.text == Key.DownArrow) { root.key-command("down", event.modifiers.control, event.modifiers.shift); return accept; }
+            if (event.text == Key.Delete && !search.has-focus) { root.action("delete"); return accept; }
+            if (event.text == Key.Return && !search.has-focus) { root.action("details"); return accept; }
+            if (event.text == Key.UpArrow && !search.has-focus) { root.key-command("up", event.modifiers.control, event.modifiers.shift); return accept; }
+            if (event.text == Key.DownArrow && !search.has-focus) { root.key-command("down", event.modifiers.control, event.modifiers.shift); return accept; }
             if (event.modifiers.control && (event.text == "n" || event.text == "N")) { root.action("new"); return accept; }
-            if (event.modifiers.control && (event.text == "v" || event.text == "V")) { root.action("paste"); return accept; }
-            if (event.modifiers.control && (event.text == "c" || event.text == "C")) { root.action("task:copy_file"); return accept; }
+            if (event.modifiers.control && (event.text == "v" || event.text == "V") && !search.has-focus) { root.action("paste"); return accept; }
+            if (event.modifiers.control && (event.text == "c" || event.text == "C") && !search.has-focus) { root.action("task:copy_file"); return accept; }
             if (event.modifiers.control && (event.text == "f" || event.text == "F")) { search.focus(); return accept; }
             if (event.modifiers.control && event.text == ",") { root.action("settings"); return accept; }
-            if (event.modifiers.alt && (event.text == "i" || event.text == "I")) { root.inspector-open = !root.inspector-open; return accept; }
+            if (event.modifiers.alt && (event.text == "i" || event.text == "I")) {
+                root.inspector-open = !root.inspector-open;
+                if (root.inspector-open) { root.inspector-opened(); }
+                return accept;
+            }
             if (event.text == " " && !search.has-focus && root.selected-count > 0) { root.key-command("toggle_pause", false, false); return accept; }
             return reject;
         }
@@ -208,7 +229,7 @@ export component WorkbenchWindow inherits Window {
                                                 icon-only: true; width: 24px; height: 24px;
                                                 clicked => { if entry.group == "queues" { root.queues-expanded = !root.queues-expanded; } else { root.categories-expanded = !root.categories-expanded; } }
                                             }
-                                            if entry.group == "queues": WorkbenchButton { label: "管理队列"; icon: "settings"; icon-only: true; width: 24px; height: 24px; y: (parent.height - self.height) / 2; clicked => { root.action("queues"); } }
+                                            if entry.group == "queues": WorkbenchButton { label: "队列设置"; icon: "settings"; icon-only: true; width: 24px; height: 24px; y: (parent.height - self.height) / 2; clicked => { root.action("queues"); } }
                                         }
                                         if entry.heading != "" && root.compact-sidebar && entry.group != "status": Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; width: parent.width - 12px; background: Tokens.line; } }
                                         if root.compact-sidebar || entry.group == "status" || (entry.group == "queues" && root.queues-expanded) || (entry.group == "categories" && root.categories-expanded): NavigationItem {
@@ -274,7 +295,7 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
                             Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.line; }
-                            WorkbenchButton { label: "设置 (Ctrl+,)"; icon: "settings"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
+                            WorkbenchButton { label: "设置"; hint: "设置 (Ctrl+,)"; icon: "settings"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
                             WorkbenchButton { label: "切换主题 / Cycle System, Light, Dark"; icon: Tokens.dark ? "sun" : "theme"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
                         }
                         Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.line; }
@@ -308,7 +329,7 @@ export component WorkbenchWindow inherits Window {
                                     }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                WorkbenchButton { label: root.inspector-open ? "收起检视" : "任务检视"; hint: "切换底部实时检视面板 (Alt+I)"; icon: "details"; active: root.inspector-open; icon-only: root.viewport-width < 1180px; y: (parent.height - self.height) / 2; clicked => { root.inspector-open = !root.inspector-open; } }
+                                WorkbenchButton { label: root.inspector-open ? "收起检视" : "任务检视"; hint: "切换底部实时检视面板 (Alt+I)"; icon: "details"; active: root.inspector-open; icon-only: root.viewport-width < 1180px; y: (parent.height - self.height) / 2; clicked => { root.inspector-open = !root.inspector-open; if (root.inspector-open) { root.inspector-opened(); } } }
                                 WorkbenchButton { label: "导入"; icon: "import"; icon-only: root.viewport-width < 1100px; y: (parent.height - self.height) / 2; clicked => { root.action("import"); } }
                                 WorkbenchButton { label: "导出"; icon: "export"; icon-only: root.viewport-width < 1100px; y: (parent.height - self.height) / 2; clicked => { root.action("export"); } }
                                 WorkbenchButton { label: "刷新"; icon: "refresh"; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("refresh"); } }
@@ -528,8 +549,8 @@ export component WorkbenchWindow inherits Window {
                                                     Text { text: root.inspector-title; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; }
                                                     Rectangle {
                                                         height: 20px; width: insp-st.preferred-width + 14px; y: (parent.height - self.height) / 2; border-radius: 10px;
-                                                        background: root.inspector-status-code == "paused" ? Tokens.warn-surface : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.success-surface : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail-surface : Tokens.info-surface;
-                                                        insp-st := Text { text: root.inspector-status; color: root.inspector-status-code == "paused" ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail : Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                                        background: root.inspector-status-code == "paused" ? Tokens.warn-surface : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.success-surface : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail-surface : root.inspector-status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
+                                                        insp-st := Text { text: root.inspector-status; color: root.inspector-status-code == "paused" ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail : root.inspector-status-code == "queued" ? Tokens.muted : Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                                     }
                                                 }
                                                 Text { text: root.inspector-transfer + (root.inspector-speed-stats != "" ? "  ·  " + root.inspector-speed-stats : ""); color: Tokens.muted; font-size: 11px; overflow: elide; }

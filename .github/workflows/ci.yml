@@ -72,6 +72,8 @@ jobs:
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-received-msi.ps1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-media-push-wrapper.ps1
           pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-media-push-wrapper.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-portable-upgrade.ps1 -Shell powershell.exe
+          pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/validation/test-v7-portable-upgrade.ps1 -Shell pwsh.exe
           # Release scripts must not carry a developer-specific profile path. The
           # guard lives in validate-powershell.ps1, but a guard nobody exercises can
           # be narrowed back to one file without anyone noticing.

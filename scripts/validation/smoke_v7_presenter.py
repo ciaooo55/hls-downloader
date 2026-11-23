@@ -176,6 +176,8 @@ def visible_handoff_smoke(
     engine = root / "HLSDownloaderEngine.exe"
     engine_process: subprocess.Popen[bytes] | None = None
     presenter_process: subprocess.Popen[bytes] | None = None
+    presenter_stderr_file = None
+    presenter_stderr_path = root / "presenter.stderr.log"
     host_process: subprocess.Popen[bytes] | None = None
     environment = os.environ.copy()
     environment["HLS_V7_DATA_DIR"] = str(root / "data")
@@ -183,20 +185,39 @@ def visible_handoff_smoke(
     environment["HLS_V7_PRESENTER_TRACE"] = "1"
     ready_file = root / "presenter.ready"
     environment["HLS_V7_PRESENTER_READY_FILE"] = str(ready_file)
+
+    def start_presenter() -> subprocess.Popen[bytes]:
+        nonlocal presenter_stderr_file
+        if presenter_stderr_file is not None:
+            presenter_stderr_file.close()
+        # File-backed stderr avoids filling Windows's 4 KiB anonymous pipe buffer
+        # when HLS_V7_PRESENTER_TRACE=1 emits diagnostics across 20+ handoffs.
+        presenter_stderr_file = presenter_stderr_path.open("wb")
+        return subprocess.Popen(
+            [str(presenter)], env=environment, stdout=subprocess.DEVNULL, stderr=presenter_stderr_file
+        )
+
+    def read_presenter_stderr() -> str:
+        if presenter_stderr_file is not None:
+            try:
+                presenter_stderr_file.flush()
+            except OSError:
+                pass
+        try:
+            return presenter_stderr_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
     try:
         shutil.copy2(presenter_source, presenter)
         shutil.copy2(host_source, host)
         shutil.copy2(engine_source, engine)
         engine_process = subprocess.Popen([str(engine)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        presenter_process = subprocess.Popen(
-            [str(presenter)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-        )
+        presenter_process = start_presenter()
         prewarm_started = time.perf_counter()
         while not ready_file.exists():
             if presenter_process.poll() is not None:
-                details = ""
-                if presenter_process.stderr is not None:
-                    details = presenter_process.stderr.read().decode("utf-8", errors="replace").strip()
+                details = read_presenter_stderr().strip()
                 hint = ""
                 if presenter_process.returncode == 0:
                     hint = (
@@ -211,9 +232,7 @@ def visible_handoff_smoke(
                     f"; stderr={details!r}.{hint}"
                 )
             if time.perf_counter() - prewarm_started > 15:
-                details = ""
-                if presenter_process.stderr is not None and presenter_process.poll() is not None:
-                    details = presenter_process.stderr.read().decode("utf-8", errors="replace")
+                details = read_presenter_stderr()
                 raise TimeoutError(
                     "Presenter renderer did not report ready within 15 seconds"
                     f"; presenter_exit={presenter_process.poll()}; engine_exit={engine_process.poll() if engine_process else None}"
@@ -222,7 +241,7 @@ def visible_handoff_smoke(
             time.sleep(0.005)
         prewarm_ms = (time.perf_counter() - prewarm_started) * 1000
         host_process = subprocess.Popen(
-            [str(host)], env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            [str(host)], env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
         ping = native_message(host_process, {"op": "ping"})
         if ping.get("ok") is not True:
@@ -260,7 +279,7 @@ def visible_handoff_smoke(
                     [str(engine)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 host_process = subprocess.Popen(
-                    [str(host)], env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                    [str(host)], env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
                 )
                 restarted_ping = native_message(host_process, {"op": "ping"})
                 if restarted_ping.get("ok") is not True:
@@ -289,9 +308,7 @@ def visible_handoff_smoke(
                 if exit_code is None:
                     stop_process(presenter_process)
                     exit_code = presenter_process.returncode
-                details = ""
-                if presenter_process.stderr is not None:
-                    details = presenter_process.stderr.read().decode("utf-8", errors="replace")
+                details = read_presenter_stderr()
                 raise TimeoutError(f"{error}; presenter_exit={exit_code}; stderr={details!r}") from error
             visible = time.perf_counter()
             sample_ms = (visible - started) * 1000
@@ -316,9 +333,7 @@ def visible_handoff_smoke(
                 presenter_pid_before_crash = presenter_process.pid
                 stop_process(presenter_process)
                 ready_file.unlink(missing_ok=True)
-                presenter_process = subprocess.Popen(
-                    [str(presenter)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-                )
+                presenter_process = start_presenter()
                 presenter_pid_after_restart = presenter_process.pid
                 # Pending recovery opens the real confirmation instead of the idle prewarm.
                 wait_window(presenter_process.pid, "确认下载", True, 30)
@@ -366,6 +381,8 @@ def visible_handoff_smoke(
         stop_process(host_process)
         stop_process(presenter_process)
         stop_process(engine_process)
+        if presenter_stderr_file is not None:
+            presenter_stderr_file.close()
         shutil.rmtree(root, ignore_errors=True)
 
 

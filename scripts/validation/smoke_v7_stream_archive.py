@@ -109,8 +109,14 @@ def run(args):
                 check('server-supplied-xpi-extension', lambda: download('/server-xpi', 'package.php', zipped, '.xpi'))
                 check('quoted-semicolon-filename', lambda: download('/quoted', 'report.php', b'a,b\n1,2\n', '.csv'))
                 check('chunked-extensions-trailers-sha256', lambda: download('/chunk', 'stream.bin', payload, '.bin'))
-                check('chunked-ignores-conflicting-content-length', lambda: download('/chunk-conflicting-length', 'stream.bin', payload, '.bin'))
-                check('system-proxy-chunked-conflicting-length', lambda: download('/chunk-conflicting-length', 'system.bin', payload, '.bin', proxy='hls-downloader://system-proxy'))
+                def reject_conflicting(filename, **extras):
+                    task = finished(create('/chunk-conflicting-length', filename, **extras))
+                    assert task['status'] == 'failed', task
+                    assert 'conflicting HTTP response framing' in (task.get('error_message') or ''), task
+                    assert not task.get('output_path') or not Path(task['output_path']).is_file(), task
+                    return task['error_message']
+                check('chunked-rejects-conflicting-content-length', lambda: reject_conflicting('conflicting.bin'))
+                check('system-proxy-rejects-conflicting-content-length', lambda: reject_conflicting('system.bin', proxy='hls-downloader://system-proxy'))
                 post = root/'post'; post.write_bytes(b'fixture=ok')
                 def one_post():
                     detail = download('/chunk-post', 'post.bin', payload, '.bin', request_method='POST', body_path=str(post))

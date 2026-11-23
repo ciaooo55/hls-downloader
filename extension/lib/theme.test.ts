@@ -172,6 +172,7 @@ describe('contrast guards', () => {
       expect(contrast(t['green-ink'], mix(t['green'], t['surface-3'], 22))).toBeGreaterThanOrEqual(4.5) // .hlsd-button.active:hover
       expect(contrast(t['green-ink'], mix(t['green'], t['surface'], 14))).toBeGreaterThanOrEqual(4.5) // .result
       expect(contrast(t['green-ink'], mix(t['green'], t['surface-3'], 18))).toBeGreaterThanOrEqual(4.5) // .pin.active
+      expect(contrast(t['amber-ink'], mix(t['amber'], t['surface'], 10))).toBeGreaterThanOrEqual(4.5) // [data-state=checking], [data-state=recoverable]
       expect(contrast(t['red-ink'], mix(t['red'], t['surface'], 12))).toBeGreaterThanOrEqual(4.5) // .result.error
       expect(contrast(t['red-ink'], mix(t['red'], t['surface'], 10))).toBeGreaterThanOrEqual(4.5) // .send-error
       expect(contrast(t['purple-ink'], mix(t['purple'], t['surface-3'], 22))).toBeGreaterThanOrEqual(4.5) // .push-button
@@ -182,7 +183,7 @@ describe('contrast guards', () => {
   it('every accent has a dedicated tint ink, and it is not the plain accent', () => {
     for (const theme of ['dark', 'light'] as const) {
       const t = themeTokens(theme)
-      for (const hue of ['primary', 'green', 'red', 'purple']) {
+      for (const hue of ['primary', 'green', 'amber', 'red', 'purple']) {
         expect(t[`${hue}-ink`], `${theme}: --${hue}-ink missing`).toBeTruthy()
         // Collapsing the ink back onto the accent is the exact regression the
         // tinted pills hit; keeping them distinct is what makes it fail loudly.

@@ -2001,6 +2001,12 @@ fn download_dash_primary(
     let kind = if video { "video" } else { "audio" };
     let mut missing = HashMap::new();
     let mut invalidated = false;
+    let mut downloaded_bytes: u64 = files
+        .iter()
+        .chain(audio_files.iter())
+        .map(|path| path.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum();
+    let mut completed_segments: u64 = (files.len() + audio_files.len()) as u64;
     for (rep, paths, kind, offset) in std::iter::once((track, &planned, kind, offset))
         .chain(audio.map(|rep| (rep, &audio_planned, "audio", 0)))
     {
@@ -2017,6 +2023,8 @@ fn download_dash_primary(
             let size = path.metadata().map(|m| m.len()).unwrap_or(0);
             if vod.can_reuse(&slot, &identity, size) {
                 super::preview::mark_ready(task_dir, path)?;
+                downloaded_bytes = downloaded_bytes.saturating_add(size);
+                completed_segments = completed_segments.saturating_add(1);
             } else {
                 invalidated |= vod.records.remove(&slot).is_some();
                 super::preview::reset_ready(task_dir, path)?;
@@ -2043,6 +2051,24 @@ fn download_dash_primary(
             &audio.media_durations,
             true,
         )?;
+    }
+    let mut preview_master_written = false;
+    let first_segments_ready = |task_dir: &Path| {
+        let first_video_ready = planned.first().is_some_and(|path| {
+            super::preview::is_ready(task_dir, &relative_posix(task_dir, path))
+        });
+        let first_audio_ready = audio.is_none()
+            || audio_planned.first().is_some_and(|path| {
+                super::preview::is_ready(task_dir, &relative_posix(task_dir, path))
+            });
+        first_video_ready && first_audio_ready
+    };
+    if preview && first_segments_ready(task_dir) {
+        write_dash_preview_master(task_dir, audio.is_some())?;
+        preview_master_written = true;
+    }
+    if completed_segments > 0 {
+        report_dash_tracks_progress(task_dir, downloaded_bytes, completed_segments, total, false);
     }
     let durations: Vec<_> = (0..planned.len())
         .map(|index| track.media_durations.get(index).copied().unwrap_or(1.0))
@@ -2077,24 +2103,22 @@ fn download_dash_primary(
                     }
                 }
                 let (is_audio, index) = pending.pop_front().unwrap();
-                let (rep, path, landed) = if is_audio {
-                    (audio.unwrap(), &audio_planned[index], &mut audio_files)
+                let (rep, path) = if is_audio {
+                    (audio.unwrap(), &audio_planned[index])
                 } else {
-                    (track, &planned[index], &mut files)
+                    (track, &planned[index])
                 };
                 if let Some(identity) = missing.remove(path) {
                     let init = rep.init_markers.contains(&index);
-                    super::hls::save_segment(
+                    save_dash_segment_with_retry(
                         &rep.media[index],
                         headers,
                         proxy,
                         path,
                         control,
                         rep.media_ranges[index].map(|range| (range.start, range.length)),
-                        None,
                         init,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    )?;
                     let size = path.metadata().map_err(|e| e.to_string())?.len();
                     sender
                         .send(LandedSegment {
@@ -2105,17 +2129,19 @@ fn download_dash_primary(
                         })
                         .map_err(|_| "DASH segment checkpoint worker stopped".to_owned())?;
                     super::preview::mark_ready(task_dir, path)?;
+                    downloaded_bytes = downloaded_bytes.saturating_add(size);
+                    completed_segments = completed_segments.saturating_add(1);
+                    report_dash_tracks_progress(
+                        task_dir,
+                        downloaded_bytes,
+                        completed_segments,
+                        total,
+                        false,
+                    );
                 }
-                landed.push(path.clone());
-                report_dash_tracks_progress(task_dir, &files, &audio_files, total, false);
-                let first_video_ready =
-                    super::preview::is_ready(task_dir, &relative_posix(task_dir, &planned[0]));
-                let first_audio_ready = audio.is_none()
-                    || audio_planned.first().is_some_and(|path| {
-                        super::preview::is_ready(task_dir, &relative_posix(task_dir, path))
-                    });
-                if preview && first_video_ready && first_audio_ready {
+                if preview && !preview_master_written && first_segments_ready(task_dir) {
                     write_dash_preview_master(task_dir, audio.is_some())?;
+                    preview_master_written = true;
                 }
             }
             Ok(())
@@ -2543,22 +2569,74 @@ fn control_stop_error(control: &Path) -> String {
     }
 }
 
+const MAX_DASH_SEGMENT_ATTEMPTS: u32 = 3;
+const DASH_SEGMENT_RETRY_DELAY_MS: u64 = 250;
+
+#[allow(clippy::too_many_arguments)]
+fn save_dash_segment_with_retry(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    path: &Path,
+    control: &Path,
+    byterange: Option<(u64, u64)>,
+    sync: bool,
+) -> Result<PathBuf, String> {
+    let mut attempt = 1u32;
+    loop {
+        if read_control(control) != "run" {
+            return Err(control_stop_error(control));
+        }
+        match super::hls::save_segment(url, headers, proxy, path, control, byterange, None, sync) {
+            Ok(saved) => return Ok(saved),
+            Err(error) => {
+                if read_control(control) != "run" {
+                    return Err(control_stop_error(control));
+                }
+                let message = error.to_string();
+                if !super::hls::is_retryable_segment_error(&error) {
+                    return Err(message);
+                }
+                if attempt >= MAX_DASH_SEGMENT_ATTEMPTS {
+                    return Err(format!("{message}（已重试 {} 次）", attempt - 1));
+                }
+                wait_dash_retry(
+                    control,
+                    std::time::Duration::from_millis(
+                        DASH_SEGMENT_RETRY_DELAY_MS * u64::from(attempt),
+                    ),
+                )?;
+                attempt += 1;
+            }
+        }
+    }
+}
+
+fn wait_dash_retry(control: &Path, delay: std::time::Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + delay;
+    loop {
+        if read_control(control) != "run" {
+            return Err(control_stop_error(control));
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(50)));
+    }
+}
+
 fn report_dash_tracks_progress(
     task_dir: &Path,
-    files: &[PathBuf],
-    audio_files: &[PathBuf],
+    downloaded: u64,
+    completed: u64,
     total: u64,
     live: bool,
 ) {
-    let downloaded: u64 = files
-        .iter()
-        .chain(audio_files.iter())
-        .map(|path| fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
-        .sum();
     crate::http_engine::write_media_progress(
         &task_dir.join("progress.json"),
         downloaded,
-        (files.len() + audio_files.len()) as u64,
+        completed,
         total,
         live,
     );
@@ -4523,8 +4601,13 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/all.mp4", listener.local_addr().unwrap());
         let server = std::thread::spawn(move || {
-            for (start, body, broken) in [(0, "AAAA", false), (4, "BBBB", true), (0, "AAAA", false)]
-            {
+            for (start, body, broken) in [
+                (0, "AAAA", false),
+                (4, "BBBB", true),
+                (4, "BBBB", true),
+                (4, "BBBB", true),
+                (0, "AAAA", false),
+            ] {
                 let (mut socket, _) = listener.accept().unwrap();
                 socket
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
@@ -6624,5 +6707,165 @@ mod tests {
         assert_eq!(loaded_subs.len(), 1);
         assert_eq!(loaded_subs[0].media, vec!["https://cdn.test/sub-0.vtt"]);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dash_vod_segment_retries_transient_503_and_completes_cleanly() {
+        let root = std::env::temp_dir().join(format!("dash-vod-retry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        // 2x 503 followed by 200 succeeds on the 3rd attempt.
+        let (url, server) = dash_status_server(vec![503, 503, 200]);
+        let track = Representation {
+            id: "v0".into(),
+            mime: "video/mp4".into(),
+            media: vec![url],
+            media_ranges: vec![None],
+            media_durations: vec![4.0],
+            ..Default::default()
+        };
+        let mut vod = DashCheckpoint::load(&root);
+        let (files, _) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod,
+            None,
+            1,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), b"ok");
+
+        // 404 is non-retryable and fails immediately after a single request.
+        let fail_dir = root.join("fail-404");
+        fs::create_dir_all(&fail_dir).unwrap();
+        let (url_404, server_404) = dash_status_server(vec![404]);
+        let track_404 = Representation {
+            id: "v0".into(),
+            mime: "video/mp4".into(),
+            media: vec![url_404],
+            media_ranges: vec![None],
+            media_durations: vec![4.0],
+            ..Default::default()
+        };
+        let mut vod_404 = DashCheckpoint::load(&fail_dir);
+        let err = download_dash_primary(
+            &track_404,
+            true,
+            &fail_dir,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod_404,
+            None,
+            1,
+        )
+        .unwrap_err();
+        server_404.join().unwrap();
+        assert!(err.contains("404"), "{err}");
+        assert!(
+            !err.contains("已重试"),
+            "404 must fail immediately without retry: {err}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dash_vod_resume_progress_includes_reused_segments_without_re_fetching() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let root = std::env::temp_dir().join(format!("dash-vod-resume-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&requests);
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            assert!(
+                req.starts_with("GET /seg-2.m4s "),
+                "only missing segment may be fetched: {req}"
+            );
+            counter.fetch_add(1, Ordering::SeqCst);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nseg2!",
+                )
+                .unwrap();
+        });
+
+        let seg0_url = format!("http://{addr}/seg-0.m4s");
+        let seg1_url = format!("http://{addr}/seg-1.m4s");
+        let seg2_url = format!("http://{addr}/seg-2.m4s");
+        let track = Representation {
+            id: "v0".into(),
+            mime: "video/mp4".into(),
+            media: vec![seg0_url.clone(), seg1_url.clone(), seg2_url],
+            media_ranges: vec![None, None, None],
+            media_durations: vec![4.0, 4.0, 4.0],
+            ..Default::default()
+        };
+
+        // Pre-populate seg-0 and seg-1 with valid checkpoint entries so they are reused.
+        let seg0_path = root.join("seg-0000.m4s");
+        let seg1_path = root.join("seg-0001.m4s");
+        fs::write(&seg0_path, b"seg0-bytes").unwrap();
+        fs::write(&seg1_path, b"seg1-bytes!!").unwrap();
+        let mut vod = DashCheckpoint::load(&root);
+        vod.remember(
+            "seg-0000.m4s",
+            &dash_file_identity("video", "0", "v0", &seg0_url, None, "video/mp4"),
+            10,
+        );
+        vod.remember(
+            "seg-0001.m4s",
+            &dash_file_identity("video", "1", "v0", &seg1_url, None, "video/mp4"),
+            12,
+        );
+        vod.save(&root).unwrap();
+
+        let (files, _) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod,
+            None,
+            3,
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert!(root.join("preview.m3u8").is_file());
+        let progress: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("progress.json")).unwrap()).unwrap();
+        assert_eq!(progress["downloaded"].as_u64(), Some(10 + 12 + 5));
+        assert_eq!(progress["completed_segments"].as_u64(), Some(3));
+        assert_eq!(progress["total_segments"].as_u64(), Some(3));
+        let _ = fs::remove_dir_all(root);
     }
 }

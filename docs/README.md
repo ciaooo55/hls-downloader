@@ -1,6 +1,6 @@
 # 文档索引
 
-桌面程序及浏览器扩展从[正式版下载页](https://github.com/ciaooo55/hls-downloader/releases/latest)获取。[7.0.9 发布说明](releases/v7.0.9.md)列出了功能、安装方式和验证范围。
+桌面程序及浏览器扩展从[正式版下载页](https://github.com/ciaooo55/hls-downloader/releases/latest)获取。最新已发布正式版为 [10.0.0](releases/v10.0.0.md)，当前源码目标为 [10.1.0（发布草案）](releases/v10.1.0.md)；历史 [7.0.9](releases/v7.0.9.md) 与 [7.0.10](releases/v7.0.10.md) 发布说明保留在 `releases/` 中供追溯。
 
 目录按用途划分：`guides/` 为使用说明，`architecture/` 为架构与维护约束，`releases/` 为发布说明和流程，`validation/` 为当前验收范围和证据索引，`images/` 为项目介绍图片。维护入口见 [脚本索引](../scripts/README.md)，产品合同见 [配置说明](../config/README.md)。
 
