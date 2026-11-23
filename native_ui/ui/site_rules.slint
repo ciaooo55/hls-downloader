@@ -27,7 +27,9 @@ export component SiteRulesEditor inherits VerticalLayout {
         Text { text: "尚无站点规则，使用全局下载设置"; color: Tokens.faint; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
     }
     for rule[index] in root.rows: Rectangle {
-        background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px; border-color: Tokens.line;
+        background: Tokens.surface; border-radius: Tokens.card-radius; border-width: 1px;
+        border-color: root.expanded == index ? Tokens.accent-border : Tokens.line;
+        animate border-color { duration: Tokens.motion-fast; }
         VerticalLayout {
             padding: 14px; spacing: 12px;
             HorizontalLayout {

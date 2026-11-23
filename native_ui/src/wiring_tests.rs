@@ -562,6 +562,34 @@ fn fullscreen_media_blocks_task_shortcuts_and_routes_escape() {
         keys.borrow().last().map(String::as_str),
         Some("clear_selection")
     );
+    // New productivity shortcuts: Ctrl+, opens settings, Alt+I toggles inline inspector,
+    // Space emits toggle_pause when at least one row is selected.
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Control.into(),
+    });
+    press(",".into());
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Control.into(),
+    });
+    assert_eq!(
+        actions.borrow().last().map(String::as_str),
+        Some("settings")
+    );
+    assert!(!ui.get_inspector_open());
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Alt.into(),
+    });
+    press("i".into());
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Alt.into(),
+    });
+    assert!(ui.get_inspector_open());
+    ui.set_selected_count(1);
+    press(" ".into());
+    assert_eq!(
+        keys.borrow().last().map(String::as_str),
+        Some("toggle_pause")
+    );
     ui.hide().unwrap();
 }
 

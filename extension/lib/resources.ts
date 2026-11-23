@@ -7,6 +7,7 @@ export type ResourceKind = 'hls' | 'dash' | 'media' | 'file' | 'magnet'
 
 export interface MediaVariant {
   url: string
+  variantId?: string
   width?: number
   height?: number
   bandwidth?: number
@@ -58,6 +59,7 @@ export interface MediaResource {
   manifestUrl?: string
   preferredBandwidth?: number
   preferredHeight?: number
+  preferredVariantId?: string
   /** Child rendition playlists owned by a master (audio, subtitles, alternate video). */
   renditionUrls?: string[]
   audioTracks?: MediaAudioTrack[]
@@ -371,6 +373,7 @@ export function selectMediaVariant(resource: MediaResource, variant: MediaVarian
     manifestUrl: resource.kind === 'hls' || resource.kind === 'dash' ? resource.url : undefined,
     preferredBandwidth: variant.bandwidth || 0,
     preferredHeight: variant.height || 0,
+    preferredVariantId: variant.variantId || (resource.kind === 'hls' ? variant.url : undefined),
   }
 }
 

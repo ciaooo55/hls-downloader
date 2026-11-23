@@ -501,6 +501,26 @@ impl Workbench {
                 match action.as_str() {
                     "select_all" => state.selected = state.visible.iter().cloned().collect(),
                     "clear_selection" => state.selected.clear(),
+                    "toggle_pause" => {
+                        let targets: Vec<_> = state
+                            .visible
+                            .iter()
+                            .filter(|id| state.selected.contains(*id))
+                            .filter_map(|id| state.tasks.get(id))
+                            .collect();
+                        let should_pause = targets
+                            .iter()
+                            .any(|task| task_action_allowed(task, "pause"));
+                        let should_start = !should_pause
+                            && targets.iter().any(|task| task_start_action(task).is_some());
+                        drop(state);
+                        if should_pause {
+                            this.action("pause");
+                        } else if should_start {
+                            this.action("start");
+                        }
+                        return;
+                    }
                     "up" | "down" => {
                         let selected = state
                             .anchor
@@ -714,6 +734,7 @@ impl Workbench {
             }
             if self.state.borrow().selected.contains(&id) {
                 self.render_menu();
+                self.render_inspector();
             }
         }
         match &event.event {
@@ -764,6 +785,7 @@ impl Workbench {
         drop(state);
         self.render_status();
         self.render_menu();
+        self.render_inspector();
     }
 
     fn table_viewport(&self) -> f32 {
@@ -820,6 +842,97 @@ impl Workbench {
         drop(state);
         self.render_status();
         self.render_menu();
+        self.render_inspector();
+    }
+
+    fn render_inspector(&self) {
+        let state = self.state.borrow();
+        let focused = state
+            .anchor
+            .as_ref()
+            .filter(|id| state.selected.contains(*id))
+            .or_else(|| state.visible.iter().find(|id| state.selected.contains(*id)))
+            .and_then(|id| state.tasks.get(id));
+        let Some(task) = focused else {
+            self.window.set_inspector_title("".into());
+            self.window.set_inspector_diagnostic("".into());
+            self.window.set_inspector_segments(ModelRc::default());
+            self.window.set_inspector_speed_history(ModelRc::default());
+            self.window.set_inspector_can_open_folder(false);
+            return;
+        };
+        let title = if !task.filename.is_empty() {
+            task.filename.as_str()
+        } else if !task.title.is_empty() {
+            task.title.as_str()
+        } else {
+            task.task_id.as_str()
+        };
+        let kind = hls_client::download_category(&task.filename, &task.url, task.resource_kind);
+        self.window.set_inspector_title(title.into());
+        self.window
+            .set_inspector_kind(if kind == "other" { "file" } else { kind }.into());
+        self.window
+            .set_inspector_status(crate::task_status_label(&task.status).into());
+        self.window
+            .set_inspector_status_code(task.status.clone().into());
+        self.window.set_inspector_transfer(
+            format!(
+                "{} / {} · {} /s",
+                crate::format_bytes(task.downloaded_bytes),
+                task.total_bytes
+                    .map(crate::format_bytes)
+                    .unwrap_or_else(|| "未知".into()),
+                crate::format_bytes(task.speed_bytes_per_sec)
+            )
+            .into(),
+        );
+        self.window
+            .set_inspector_connections(crate::format_connection_summary(task).into());
+        self.window.set_inspector_diagnostic(
+            [
+                task.error_message.clone().unwrap_or_default(),
+                task.error_hint.clone(),
+            ]
+            .join(" ")
+            .trim()
+            .into(),
+        );
+        let speeds = crate::speed_stats::summarize(task.speed_bytes_per_sec, &task.speed_history);
+        self.window.set_inspector_speed_stats(
+            if speeds.peak > 0 {
+                format!(
+                    "峰值 {}/s · 平均 {}/s",
+                    crate::format_bytes(speeds.peak),
+                    crate::format_bytes(speeds.average)
+                )
+            } else {
+                String::new()
+            }
+            .into(),
+        );
+        self.window
+            .set_inspector_progress(crate::task_progress(task));
+        self.window
+            .set_inspector_segments(ModelRc::new(VecModel::from(crate::build_segment_blocks(
+                task,
+            ))));
+        let maximum = task.speed_history.iter().copied().max().unwrap_or(1).max(1) as f32;
+        self.window
+            .set_inspector_speed_history(ModelRc::new(VecModel::from(
+                task.speed_history
+                    .iter()
+                    .rev()
+                    .take(60)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .map(|value| value as f32 / maximum)
+                    .collect::<Vec<_>>(),
+            )));
+        self.window
+            .set_inspector_can_open_folder(task_action_allowed(task, "open_folder"));
     }
 
     fn render_menu(&self) {

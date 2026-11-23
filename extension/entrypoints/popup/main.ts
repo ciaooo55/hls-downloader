@@ -9,6 +9,7 @@ import { withDeadline } from '../../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../../lib/downloadConfirmation'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import { formatBitrate, formatBytes, formatDuration } from '../../lib/format'
+import { countPopupCategories, filterPopupResources, type ResourceFilterCategory } from '../../lib/popupFilter'
 import { mountSubtitlePopup } from '../../lib/subtitlePopup'
 import { SEND_LABELS, SEND_LOCKED, SEND_PENDING, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../../lib/downloadSendState'
 import { DESKTOP_RELEASES_URL, launchDesktop, launchView, type LaunchAction, type LaunchState } from '../../lib/desktopLaunch'
@@ -287,11 +288,26 @@ async function main() {
   scanBtn.append(icon('scan'), el('span', '', '嗅探全部资源'))
   scanBtn.title = '\u91cd\u65b0\u626b\u63cf\u5f53\u524d\u9875\u9762\u7684\u5a92\u4f53\u548c\u4e0b\u8f7d\u8d44\u6e90'
   sectionHeader.append(title, scanBtn)
+  const resourceToolbar = el('div', 'resource-toolbar')
+  resourceToolbar.hidden = true
+  const filterRow = el('div', 'resource-filter-row')
+  const filterSearch = el('input', 'resource-search') as HTMLInputElement
+  filterSearch.type = 'search'
+  filterSearch.placeholder = '筛选标题、清晰度或域名…'
+  filterSearch.setAttribute('aria-label', '筛选当前页面资源')
+  const batchBtn = el('button', 'hlsd-button batch-download-btn') as HTMLButtonElement
+  batchBtn.type = 'button'
+  batchBtn.title = '将当前筛选出的可下载资源批量交给桌面端队列'
+  filterRow.append(filterSearch, batchBtn)
+  const filterChips = el('div', 'resource-chips')
+  filterChips.setAttribute('role', 'group')
+  filterChips.setAttribute('aria-label', '按类型筛选资源')
+  resourceToolbar.append(filterRow, filterChips)
   const list = el('div', 'list')
   const browserTransfers = el('div', 'browser-transfers')
   browserTransfers.hidden = true
   browserTransfers.setAttribute('aria-live', 'polite')
-  section.append(sectionHeader, browserTransfers, list)
+  section.append(sectionHeader, resourceToolbar, browserTransfers, list)
   const footer = el('footer')
   const restorePromptsBtn = el('button', 'restore-site-prompts', '\u6062\u590d\u672c\u7ad9\u81ea\u52a8\u63d0\u793a') as HTMLButtonElement
   restorePromptsBtn.type = 'button'
@@ -403,11 +419,25 @@ async function main() {
   }
   // DASH 的多个清晰度可能共用 URL；选择和重绘恢复必须同时包含码率与高度。
   const chosenVariant: Record<string, string> = {}
+  let filterCategory: ResourceFilterCategory = 'all'
+  let filterQuery = ''
   let resources: MediaResource[] = []
   let showCandidates = false
   let resourceState: 'loading' | 'ready' | 'scanning' | 'error' = 'loading'
   let canScanPage = false
   let rescanPage = async () => {}
+
+  const resolveSelectedVariant = (item: MediaResource): MediaResource => {
+    const remembered = chosenVariant[item.id]
+    if (!remembered) return item
+    const variant = item.variants?.find(value => downloadSelectionKey(selectMediaVariant(item, value)) === remembered)
+    return variant ? selectMediaVariant(item, variant) : item
+  }
+
+  filterSearch.addEventListener('input', () => {
+    filterQuery = filterSearch.value
+    renderList()
+  })
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
   const setError = (message = '') => {
@@ -423,6 +453,53 @@ async function main() {
       .map(node => node.closest<HTMLElement>('article')?.dataset.resourceId))
     const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
     count.textContent = String(visible.length)
+    const categoryCounts = countPopupCategories(visible)
+    if (filterCategory !== 'all' && categoryCounts[filterCategory] === 0) {
+      filterCategory = 'all'
+    }
+    const filtered = filterPopupResources(visible, filterCategory, filterQuery)
+    const showToolbar = visible.length > 1 || filterCategory !== 'all' || filterQuery.trim() !== ''
+    resourceToolbar.hidden = !showToolbar
+    if (showToolbar) {
+      const chipDefs: Array<[ResourceFilterCategory, string]> = [
+        ['all', '全部'],
+        ['stream', '流媒体'],
+        ['video', '视频'],
+        ['audio', '音频'],
+        ['file', '文件'],
+      ]
+      const activeNonAllCategories = chipDefs.slice(1).filter(([key]) => categoryCounts[key] > 0)
+      filterChips.hidden = activeNonAllCategories.length < 2
+      filterChips.replaceChildren()
+      if (!filterChips.hidden) {
+        for (const [key, label] of chipDefs) {
+          if (key !== 'all' && categoryCounts[key] === 0) continue
+          const chip = el('button', 'filter-chip') as HTMLButtonElement
+          chip.type = 'button'
+          chip.setAttribute('aria-pressed', String(filterCategory === key))
+          chip.append(document.createTextNode(label), el('b', '', String(categoryCounts[key])))
+          chip.addEventListener('click', () => {
+            filterCategory = key
+            renderList()
+          })
+          filterChips.append(chip)
+        }
+      }
+      const batchTargets = filtered
+        .map(resolveSelectedVariant)
+        .filter(candidate => {
+          const state = sending[actionKey(candidate)]
+          return !state || !SEND_LOCKED.has(state)
+        })
+      const batchCount = Math.min(batchTargets.length, 20)
+      batchBtn.disabled = batchCount === 0
+      batchBtn.replaceChildren(icon('download'), el('span', '', batchCount > 0 ? `批量下载 (${batchCount})` : '已全部发送'))
+      batchBtn.onclick = () => {
+        for (const target of batchTargets.slice(0, 20)) {
+          void send(target)
+        }
+      }
+    }
     list.replaceChildren()
     if (!visible.length) {
       const empty = el('div', 'empty')
@@ -449,13 +526,30 @@ async function main() {
       list.append(empty)
       return
     }
-    for (const item of visible) {
-      let selected = item
-      const remembered = chosenVariant[item.id]
-      if (remembered) {
-        const variant = item.variants?.find(value => downloadSelectionKey(selectMediaVariant(item, value)) === remembered)
-        if (variant) selected = selectMediaVariant(item, variant)
-      }
+    if (!filtered.length) {
+      const empty = el('div', 'empty')
+      const emptyIcon = el('div', 'empty-icon')
+      emptyIcon.append(icon('media'))
+      empty.append(
+        emptyIcon,
+        el('strong', '', '没有匹配当前筛选的资源'),
+        el('span', '', '试试清空关键词或切回“全部”类型。'),
+      )
+      const reset = el('button', 'empty-retry') as HTMLButtonElement
+      reset.type = 'button'
+      reset.append(icon('scan'), el('span', '', '重置筛选'))
+      reset.addEventListener('click', () => {
+        filterCategory = 'all'
+        filterQuery = ''
+        filterSearch.value = ''
+        renderList()
+      })
+      empty.append(reset)
+      list.append(empty)
+      return
+    }
+    for (const item of filtered) {
+      const selected = resolveSelectedVariant(item)
       let itemHost = selected.url
       try { itemHost = new URL(selected.url).host } catch {}
       const likelySize = selected.size || selected.estimatedSize || 0

@@ -1,5 +1,5 @@
 import { LineEdit } from "std-widgets.slint";
-import { Tokens, HotButton, FieldLabel, HotCheckBox, HotScrollView, HotComboBox } from "theme.slint";
+import { Tokens, HotButton, FieldLabel, HotCheckBox, HotScrollView, HotComboBox, Panel } from "theme.slint";
 import { DialogHeader, DialogFooter } from "dialog_components.slint";
 import { NavigationItem, WorkbenchButton } from "workbench_components.slint";
 
@@ -66,35 +66,44 @@ export component QueueWindow inherits Window {
                 viewport-width: self.width;
                 enabled: !root.busy;
                 VerticalLayout {
-                    padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 12px;
-                    Text { text: "队列设置"; color: Tokens.ink; font-size: 17px; font-weight: 600; }
-                    // 标签与输入框成组（6px），组与组之间 12px，与左右并排字段一致。
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列名称"; } LineEdit { text <=> root.queue-name; height: Tokens.control-height; accessible-label: "队列名称"; } }
-                    HotCheckBox { text: "启用队列"; checked <=> root.queue-enabled; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        VerticalLayout { spacing: 6px; FieldLabel { label: "优先级 -100 至 100"; } LineEdit { text <=> root.priority; height: Tokens.control-height; } }
-                        VerticalLayout { spacing: 6px; FieldLabel { label: "活动任务 1 至 64"; } LineEdit { text <=> root.max-active; height: Tokens.control-height; } }
+                    padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 14px; alignment: start;
+                    Panel {
+                        VerticalLayout {
+                            padding: 16px; spacing: 12px;
+                            Text { text: "队列设置"; color: Tokens.ink; font-size: 15px; font-weight: 700; }
+                            // 标签与输入框成组（6px），组与组之间 12px，与左右并排字段一致。
+                            VerticalLayout { spacing: 6px; FieldLabel { label: "队列名称"; } LineEdit { text <=> root.queue-name; height: Tokens.control-height; accessible-label: "队列名称"; } }
+                            HotCheckBox { text: "启用队列"; checked <=> root.queue-enabled; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout { spacing: 6px; FieldLabel { label: "优先级 -100 至 100"; } LineEdit { text <=> root.priority; height: Tokens.control-height; } }
+                                VerticalLayout { spacing: 6px; FieldLabel { label: "活动任务 1 至 64"; } LineEdit { text <=> root.max-active; height: Tokens.control-height; } }
+                            }
+                            VerticalLayout { spacing: 6px; FieldLabel { label: "队列总限速 KiB/s（0 不限制）"; } LineEdit { text <=> root.speed-limit; height: Tokens.control-height; } }
+                        }
                     }
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列总限速 KiB/s（0 不限制）"; } LineEdit { text <=> root.speed-limit; height: Tokens.control-height; } }
-                    Rectangle { height: 9px; Rectangle { y: 4px; height: 1px; background: Tokens.line; } }
-                    Text { text: "时间与完成动作"; color: Tokens.ink; font-size: 15px; font-weight: 600; }
-                    HotCheckBox { text: "启用时间表"; checked <=> root.schedule-enabled; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        VerticalLayout { spacing: 6px; FieldLabel { label: "开始 HH:mm"; } LineEdit { text <=> root.start-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
-                        VerticalLayout { spacing: 6px; FieldLabel { label: "停止 HH:mm"; } LineEdit { text <=> root.stop-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
+                    Panel {
+                        VerticalLayout {
+                            padding: 16px; spacing: 12px;
+                            Text { text: "时间与完成动作"; color: Tokens.ink; font-size: 15px; font-weight: 700; }
+                            HotCheckBox { text: "启用时间表"; checked <=> root.schedule-enabled; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout { spacing: 6px; FieldLabel { label: "开始 HH:mm"; } LineEdit { text <=> root.start-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
+                                VerticalLayout { spacing: 6px; FieldLabel { label: "停止 HH:mm"; } LineEdit { text <=> root.stop-time; height: Tokens.control-height; enabled: root.schedule-enabled; } }
+                            }
+                            VerticalLayout { spacing: 6px; FieldLabel { label: "生效星期（周一为 1，以逗号分隔）"; } LineEdit { text <=> root.active-days; height: Tokens.control-height; } }
+                            VerticalLayout { spacing: 6px; FieldLabel { label: "队列全部完成后"; } HotComboBox {
+                                model: ["无操作", "关机", "睡眠", "休眠"];
+                                property <string> bound: root.completion-action;
+                                current-index: root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0;
+                                changed bound => { self.current-index = root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0; }
+                                selected(value) => { root.completion-action = value; }
+                                height: Tokens.control-height;
+                            } }
+                            Text { text: "仅在队列中的任务全部成功后触发，执行前可取消。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
+                        }
                     }
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "生效星期（周一为 1，以逗号分隔）"; } LineEdit { text <=> root.active-days; height: Tokens.control-height; } }
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列全部完成后"; } HotComboBox {
-                        model: ["无操作", "关机", "睡眠", "休眠"];
-                        property <string> bound: root.completion-action;
-                        current-index: root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0;
-                        changed bound => { self.current-index = root.completion-action == "休眠" ? 3 : root.completion-action == "睡眠" ? 2 : root.completion-action == "关机" ? 1 : 0; }
-                        selected(value) => { root.completion-action = value; }
-                        height: Tokens.control-height;
-                    } }
-                    Text { text: "仅在队列中的任务全部成功后触发，执行前可取消。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
                 }
             }
         }

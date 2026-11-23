@@ -102,14 +102,28 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     const style = document.createElement('style')
     // 播放器顶行留给下载和更多操作；窄播放器也不能让字幕工具栏遮住它们。
     style.textContent = `:host{position:fixed;z-index:2147483646;pointer-events:none;display:block;box-sizing:border-box}
-      *{box-sizing:border-box} [hidden]{display:none!important} .tools{position:absolute;right:8px;top:50px;display:flex;justify-content:flex-end;gap:4px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 16px);pointer-events:auto;font:12px system-ui;color:white}
-      button{border:1px solid #596675;border-radius:4px;padding:5px 8px;background:#17202ee8;color:#fff;cursor:pointer;font:12px system-ui}button:hover{background:#285379}button:disabled{opacity:.65;cursor:default}
-      button:focus-visible,summary:focus-visible{outline:2px solid #9ac5ff;outline-offset:2px}
-      details{position:relative}summary{padding:5px 8px;border:1px solid #596675;border-radius:4px;background:#17202ee8;cursor:pointer;list-style:none;font:12px system-ui}summary:hover{background:#285379}summary::-webkit-details-marker{display:none}
-      .options{position:absolute;right:0;top:32px;width:220px;max-width:calc(100vw - 24px);display:flex;flex-wrap:wrap;gap:5px;padding:8px;border:1px solid #596675;border-radius:8px;background:#17202ef5;box-shadow:0 4px 16px #0006}
-      .status{padding:5px 8px;border:1px solid transparent;background:#111b;border-radius:4px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      .captions{position:absolute;bottom:48px;left:5%;width:90%;text-align:center;font:600 clamp(15px,2vw,24px)/1.4 system-ui;color:#fff;text-shadow:0 1px 3px #000;white-space:pre-wrap;overflow-wrap:anywhere}
-      .line{display:table;margin:2px auto;padding:2px 8px;background:#000b;border-radius:4px}.line:empty{display:none}.source{font-size:.76em;font-weight:400;color:#eee}`
+      *{box-sizing:border-box} [hidden]{display:none!important}
+      .tools{position:absolute;right:10px;top:52px;display:flex;justify-content:flex-end;gap:5px;align-items:center;flex-wrap:wrap;max-width:calc(100% - 20px);pointer-events:auto;font:600 12px "Segoe UI Variable Text","Segoe UI",system-ui;color:#eef1f6;opacity:.86;transition:opacity .16s ease}
+      .tools:hover,.tools:focus-within{opacity:1}
+      button{border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:5px 11px;background:rgba(16,19,25,.82);backdrop-filter:blur(12px) saturate(150%);color:#f1f4f9;cursor:pointer;font:600 12px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;box-shadow:0 4px 12px rgba(0,0,0,.36);transition:background-color .14s ease,border-color .14s ease,transform .1s ease}
+      button:hover:not(:disabled){background:rgba(36,42,55,.94);border-color:rgba(122,162,255,.55)}
+      button:active:not(:disabled){transform:scale(.96)}
+      button[data-active=true]{background:rgba(46,91,234,.92);border-color:rgba(151,182,255,.68);color:#fff}
+      button[data-active=true]:hover:not(:disabled){background:rgba(35,76,212,.96)}
+      button:disabled{opacity:.52;cursor:default}
+      button:focus-visible,summary:focus-visible{outline:2px solid #97b6ff;outline-offset:2px}
+      details{position:relative}
+      summary{padding:5px 11px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(16,19,25,.82);backdrop-filter:blur(12px) saturate(150%);color:#f1f4f9;cursor:pointer;list-style:none;font:600 12px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;box-shadow:0 4px 12px rgba(0,0,0,.36);transition:background-color .14s ease,border-color .14s ease}
+      summary:hover{background:rgba(36,42,55,.94);border-color:rgba(122,162,255,.55)}
+      summary::-webkit-details-marker{display:none}
+      .options{position:absolute;right:0;top:34px;width:236px;max-width:calc(100vw - 24px);display:flex;flex-wrap:wrap;gap:6px;padding:9px;border:1px solid rgba(255,255,255,.16);border-radius:12px;background:rgba(16,19,25,.92);backdrop-filter:blur(16px) saturate(160%);box-shadow:0 12px 28px rgba(0,0,0,.55)}
+      .options button{border-radius:6px;padding:5px 9px;box-shadow:none}
+      .status{padding:4px 10px;border:1px solid rgba(255,255,255,.12);background:rgba(12,14,18,.78);backdrop-filter:blur(10px);border-radius:999px;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:11px;color:#cbd5e1}
+      .status:empty{display:none}
+      .captions{position:absolute;bottom:48px;left:6%;width:88%;text-align:center;font:600 clamp(15px,2.1vw,25px)/1.42 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui;color:#f8fafc;text-shadow:0 1px 2px rgba(0,0,0,.9),0 2px 10px rgba(0,0,0,.65);white-space:pre-wrap;overflow-wrap:anywhere;text-wrap:balance}
+      .line{display:table;margin:3px auto;padding:4px 13px;border:1px solid rgba(255,255,255,.10);background:rgba(12,14,18,.76);backdrop-filter:blur(10px);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.42)}.line:empty{display:none}
+      .source{font-size:.76em;font-weight:450;color:#dbe4f0;padding:2px 10px;background:rgba(12,14,18,.64)}
+      @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}`
     const tools = document.createElement('div'); tools.className = 'tools'
     const start = button('翻译字幕', () => {
       if (selected === media && !['stopped', 'failed'].includes(status)) {
@@ -258,6 +272,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       ui.hold.hidden = !active || selected !== media || !preparing || !resumeAfterPrepare
       ui.status.hidden = !ui.startError && (selected !== media || (!active && !error))
       ui.button.disabled = !allowed || ui.starting
+      ui.button.dataset.active = String(active)
       ui.button.textContent = !allowed ? '字幕翻译已关闭' : active ? '停止翻译' : '翻译字幕'
       ui.button.title = !allowed ? '在主程序启用字幕翻译，并检查插件的网页开关' : '在线翻译当前播放器音频'
       ui.status.textContent = ui.startError || (selected !== media ? '' : error || (active ? status === 'running'

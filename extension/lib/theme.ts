@@ -17,26 +17,28 @@ export const THEME_STORAGE_KEY = 'themePreference'
 export const THEME_TOKENS_CSS = `
 [data-hlsd-theme="dark"]{
   color-scheme:dark;
-  --bg:#0f1115;--surface:#171a20;--surface-2:#1c2027;--surface-3:#262b34;
+  --bg:#0f1115;--surface:#171a20;--surface-2:#1c2027;--surface-3:#262b34;--surface-hover:#232833;
   --border:#2a2f39;--control-border:#717a8a;--text:#eef1f6;--muted:#b6bcc8;--faint:#8b93a1;
   --primary:#7aa2ff;--primary-hover:#97b6ff;--primary-pressed:#6489e6;--focus-ring:#97b6ff;--on-primary:#0f1115;
   --green:#3ccf7a;--amber:#f5a524;--red:#ff7a73;--purple:#b69cff;
-  --primary-ink:#9dbaff;--green-ink:#62e19c;--red-ink:#ff9b95;--purple-ink:#d0c0ff;
-  --shadow:rgba(0,0,0,.42);--rail:#12141a;
+  --primary-ink:#9dbaff;--green-ink:#62e19c;--amber-ink:#ffca6b;--red-ink:#ff9b95;--purple-ink:#d0c0ff;
+  --shadow:rgba(0,0,0,.42);--shadow-sm:0 1px 2px rgba(0,0,0,.38);--shadow-md:0 4px 14px rgba(0,0,0,.46);--shadow-lg:0 12px 28px rgba(0,0,0,.58);--rail:#12141a;
+  --glass-bg:rgba(23,26,32,.84);--glass-strong:rgba(23,26,32,.93);--glass-border:rgba(255,255,255,.12);--glass-rim:rgba(255,255,255,.16);
   --overlay-border:#3a404b;
-  --radius:4px;--radius-lg:8px;
+  --radius:6px;--radius-lg:10px;--radius-pill:999px;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 [data-hlsd-theme="light"]{
   color-scheme:light;
-  --bg:#f2f3f6;--surface:#ffffff;--surface-2:#f6f7f9;--surface-3:#eceef2;
+  --bg:#f2f3f6;--surface:#ffffff;--surface-2:#f6f7f9;--surface-3:#eceef2;--surface-hover:#eff2f7;
   --border:#e2e5eb;--control-border:#7d8594;--text:#0c111d;--muted:#475467;--faint:#5f6b7d;
   --primary:#2e5bea;--primary-hover:#2149cf;--primary-pressed:#1a3cb0;--focus-ring:#2e5bea;--on-primary:#ffffff;
   --green:#157f3c;--amber:#b54708;--red:#c4271b;--purple:#6941c6;
-  --primary-ink:#1f45c4;--green-ink:#0d5c28;--red-ink:#9a1d17;--purple-ink:#4b2f91;
-  --shadow:rgba(16,24,40,.10);--rail:#f8f9fb;
+  --primary-ink:#1f45c4;--green-ink:#0d5c28;--amber-ink:#92400e;--red-ink:#9a1d17;--purple-ink:#4b2f91;
+  --shadow:rgba(16,24,40,.10);--shadow-sm:0 1px 2px rgba(16,24,40,.08);--shadow-md:0 4px 14px rgba(16,24,40,.12);--shadow-lg:0 12px 28px rgba(16,24,40,.18);--rail:#f8f9fb;
+  --glass-bg:rgba(255,255,255,.86);--glass-strong:rgba(255,255,255,.94);--glass-border:rgba(16,24,40,.10);--glass-rim:rgba(255,255,255,.72);
   --overlay-border:#d0d5dd;
-  --radius:4px;--radius-lg:8px;
+  --radius:6px;--radius-lg:10px;--radius-pill:999px;
   --z-extension-overlay:2147483647;--z-extension-video:2147483646;
 }
 `
@@ -132,16 +134,16 @@ export const THEME_TOKENS_CSS = `
  * 悬停只改变颜色，保持紧凑列表里的按钮位置稳定；按压给一次短缩放。
  */
 export const THEME_BASE_CSS = `
-.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:4px;background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .18s ease,color .18s ease,border-color .18s ease,transform .12s ease}
+.hlsd-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid transparent;border-radius:var(--radius);background:var(--surface-3);color:var(--text);cursor:pointer;font:600 13px/1 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;letter-spacing:0;white-space:nowrap;transition:background-color .16s ease,color .16s ease,border-color .16s ease,box-shadow .16s ease,transform .12s ease}
 .hlsd-button:hover:not(:disabled){background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}
 .hlsd-button:active:not(:disabled){transform:scale(.975)}.hlsd-button.primary:active:not(:disabled){background:var(--primary-pressed)}.hlsd-button.subtle:active:not(:disabled){background:var(--surface-3)}
 .hlsd-button:disabled{opacity:.45;cursor:default}
 .hlsd-button.busy:disabled{opacity:1;cursor:progress}
-.hlsd-button.primary{background:var(--primary);color:var(--on-primary);box-shadow:0 1px 2px var(--shadow),0 4px 12px color-mix(in srgb,var(--primary) 22%,transparent)}
-.hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover)}
+.hlsd-button.primary{background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 1px 2px var(--shadow),0 4px 12px color-mix(in srgb,var(--primary) 26%,transparent)}
+.hlsd-button.primary:hover:not(:disabled){background:var(--primary-hover);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 2px 6px var(--shadow),0 6px 16px color-mix(in srgb,var(--primary) 30%,transparent)}
 .hlsd-button.subtle{background:transparent;color:var(--muted)}
-.hlsd-button.subtle:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
-.hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 34%,transparent)}
+.hlsd-button.subtle:hover:not(:disabled){background:var(--surface-hover);color:var(--text)}
+.hlsd-button.active{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 36%,transparent)}
 .hlsd-button.active:hover:not(:disabled){background:color-mix(in srgb,var(--green) 22%,var(--surface-3))}
 .hlsd-button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .hlsd-icon{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;flex:none}
@@ -149,11 +151,11 @@ export const THEME_BASE_CSS = `
 .hlsd-button.primary .hlsd-icon{width:14px;height:14px}
 .hlsd-button.busy .hlsd-icon{animation:hlsd-spin .8s linear infinite}
 @keyframes hlsd-spin{to{transform:rotate(360deg)}}
-.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:4px;background:var(--surface-2);color:var(--text);font:12.5px system-ui,sans-serif;-webkit-appearance:none;appearance:none;padding:0 26px 0 8px;background-image:linear-gradient(45deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px)),linear-gradient(135deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px));background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat;cursor:pointer;text-overflow:ellipsis}
-.hlsd-select:hover:not(:disabled){border-color:var(--primary)}
+.hlsd-select{height:30px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);font:12.5px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;-webkit-appearance:none;appearance:none;padding:0 26px 0 9px;background-image:linear-gradient(45deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px)),linear-gradient(135deg,transparent calc(50% - .75px),var(--muted) calc(50% - .75px),var(--muted) calc(50% + .75px),transparent calc(50% + .75px));background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat;cursor:pointer;text-overflow:ellipsis;transition:border-color .14s ease,background-color .14s ease}
+.hlsd-select:hover:not(:disabled){border-color:var(--primary);background-color:var(--surface)}
 .hlsd-select:disabled{opacity:.55;cursor:default}
 .hlsd-select option{background:var(--surface);color:var(--text)}
-.hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary-ink);font:700 11.5px system-ui,sans-serif}
+.hlsd-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 7px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 20%,var(--surface-2));color:var(--primary-ink);font:700 11.5px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums}
 `
 
 export function resolveTheme(preference: ThemePreference, systemDark: boolean): ResolvedTheme {
