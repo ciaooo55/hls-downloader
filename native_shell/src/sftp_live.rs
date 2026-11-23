@@ -17,16 +17,42 @@ use crate::sftp_engine::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const IO_TIMEOUT: Duration = Duration::from_secs(90);
+const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub(crate) struct LiveSession {
     rt: tokio::runtime::Runtime,
     sftp: RusshSftp,
     _ssh: Handle<TofuHandler>,
+    control: PathBuf,
 }
 
 struct LiveFile {
     handle: tokio::runtime::Handle,
     file: russh_sftp::client::fs::File,
+    control: PathBuf,
+}
+
+async fn run_controlled<T>(
+    control: &std::path::Path,
+    timeout: Duration,
+    timeout_message: &str,
+    operation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    crate::sftp_engine::check_sftp_control(control)?;
+    let mut poll = tokio::time::interval(CONTROL_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    poll.tick().await;
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(operation, deadline);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut deadline => return Err(timeout_message.to_string()),
+            _ = poll.tick() => crate::sftp_engine::check_sftp_control(control)?,
+            result = &mut operation => return result,
+        }
+    }
 }
 
 struct TofuHandler {
@@ -97,16 +123,29 @@ fn map_ssh_error(error: impl std::fmt::Display) -> String {
 
 impl SftpFile for LiveFile {
     fn seek(&mut self, offset: u64) -> Result<(), String> {
-        self.handle
-            .block_on(self.file.seek(SeekFrom::Start(offset)))
-            .map(|_| ())
-            .map_err(map_sftp_io)
+        let control = self.control.clone();
+        self.handle.block_on(run_controlled(
+            &control,
+            IO_TIMEOUT,
+            "SFTP 连接超时",
+            async {
+                self.file
+                    .seek(SeekFrom::Start(offset))
+                    .await
+                    .map(|_| ())
+                    .map_err(map_sftp_io)
+            },
+        ))
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
-        self.handle
-            .block_on(self.file.read(buf))
-            .map_err(map_sftp_io)
+        let control = self.control.clone();
+        self.handle.block_on(run_controlled(
+            &control,
+            IO_TIMEOUT,
+            "SFTP 连接超时",
+            async { self.file.read(buf).await.map_err(map_sftp_io) },
+        ))
     }
 }
 
@@ -122,21 +161,31 @@ fn file_stat(meta: FileAttributes) -> Result<SftpStat, String> {
 
 impl SftpSession for LiveSession {
     fn stat(&self, path: &str) -> Result<SftpStat, String> {
-        let meta = self
-            .rt
-            .block_on(self.sftp.metadata(path.to_string()))
-            .map_err(map_sftp_io)?;
+        let meta = self.rt.block_on(run_controlled(
+            &self.control,
+            IO_TIMEOUT,
+            "SFTP 连接超时",
+            async {
+                self.sftp
+                    .metadata(path.to_string())
+                    .await
+                    .map_err(map_sftp_io)
+            },
+        ))?;
         file_stat(meta)
     }
 
     fn open(&self, path: &str) -> Result<Box<dyn SftpFile>, String> {
-        let file = self
-            .rt
-            .block_on(self.sftp.open(path.to_string()))
-            .map_err(map_sftp_io)?;
+        let file = self.rt.block_on(run_controlled(
+            &self.control,
+            IO_TIMEOUT,
+            "SFTP 连接超时",
+            async { self.sftp.open(path.to_string()).await.map_err(map_sftp_io) },
+        ))?;
         Ok(Box::new(LiveFile {
             handle: self.rt.handle().clone(),
             file,
+            control: self.control.clone(),
         }))
     }
 }
@@ -146,6 +195,7 @@ pub(crate) fn open_live_session(
     proxy: Option<&crate::proxy_tunnel::Proxy>,
     control: &std::path::Path,
 ) -> Result<LiveSession, String> {
+    crate::sftp_engine::check_sftp_control(control)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -166,6 +216,7 @@ pub(crate) fn open_live_session(
         rt,
         sftp,
         _ssh: ssh,
+        control: control.to_path_buf(),
     })
 }
 
@@ -183,50 +234,59 @@ async fn connect_and_open(
     let mut session = if let Some(proxy) = proxy {
         let check = || crate::sftp_engine::check_sftp_control(control);
         let stream = proxy.connect(&target.host, target.port, check).await?;
-        crate::proxy_tunnel::controlled(
-            async {
-                client::connect_stream(config, stream, handler)
-                    .await
-                    .map_err(map_ssh_error)
-            },
-            check,
-        )
+        run_controlled(control, CONNECT_TIMEOUT, "SFTP 连接超时", async {
+            client::connect_stream(config, stream, handler)
+                .await
+                .map_err(map_ssh_error)
+        })
         .await?
     } else {
-        tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            client::connect(config, (target.host.as_str(), target.port), handler),
-        )
-        .await
-        .map_err(|_| "SFTP 连接超时".to_string())?
-        .map_err(map_ssh_error)?
+        run_controlled(control, CONNECT_TIMEOUT, "SFTP 连接超时", async {
+            client::connect(config, (target.host.as_str(), target.port), handler)
+                .await
+                .map_err(map_ssh_error)
+        })
+        .await?
     };
 
     if !target.password.is_empty() {
-        let result = session
-            .authenticate_password(target.user.clone(), target.password.clone())
-            .await
-            .map_err(map_ssh_error)?;
+        let result = run_controlled(control, CONNECT_TIMEOUT, "SFTP 连接超时", async {
+            session
+                .authenticate_password(target.user.clone(), target.password.clone())
+                .await
+                .map_err(map_ssh_error)
+        })
+        .await?;
         if !result.success() {
             return Err("SFTP 登录失败，请检查用户名、密码或私钥".into());
         }
-    } else if !authenticate_default_keys(&mut session, &target.user).await?
-        && !authenticate_agent(&mut session, &target.user).await?
-    {
-        return Err("SFTP 登录失败，请检查用户名、密码或私钥".into());
+    } else {
+        let authed = run_controlled(control, CONNECT_TIMEOUT, "SFTP 连接超时", async {
+            if authenticate_default_keys(&mut session, &target.user).await? {
+                return Ok(true);
+            }
+            authenticate_agent(&mut session, &target.user).await
+        })
+        .await?;
+        if !authed {
+            return Err("SFTP 登录失败，请检查用户名、密码或私钥".into());
+        }
     }
 
-    let channel = session
-        .channel_open_session()
-        .await
-        .map_err(map_ssh_error)?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(map_ssh_error)?;
-    let sftp = RusshSftp::new(channel.into_stream())
-        .await
-        .map_err(map_sftp_io)?;
+    let sftp = run_controlled(control, CONNECT_TIMEOUT, "SFTP 连接超时", async {
+        let channel = session
+            .channel_open_session()
+            .await
+            .map_err(map_ssh_error)?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(map_ssh_error)?;
+        RusshSftp::new(channel.into_stream())
+            .await
+            .map_err(map_sftp_io)
+    })
+    .await?;
     Ok((sftp, session))
 }
 
@@ -314,5 +374,63 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(file_stat(empty).unwrap().size, 0);
+    }
+
+    #[test]
+    fn open_live_session_stalled_listener_interrupts_on_pause_and_cancel() {
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::time::Instant;
+
+        for (command, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-sftp-live-control-{}-{command}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (accepted_tx, accepted_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (_stream, _) = listener.accept().unwrap();
+                let _ = accepted_tx.send(());
+                // Hold the TCP connection open without sending an SSH banner.
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            });
+
+            let target = SftpTarget {
+                host: "127.0.0.1".into(),
+                port: addr.port(),
+                user: "demo".into(),
+                password: "secret".into(),
+                path: "/file.bin".into(),
+            };
+            let worker_control = control.clone();
+            let worker = std::thread::spawn(move || {
+                let started = Instant::now();
+                let result = open_live_session(&target, None, &worker_control);
+                (result.err(), started.elapsed())
+            });
+
+            accepted_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let triggered = Instant::now();
+            std::fs::write(&control, command).unwrap();
+            let (error, _total_elapsed) = worker.join().unwrap();
+            let interrupt_elapsed = triggered.elapsed();
+            let _ = release_tx.send(());
+            server.join().unwrap();
+
+            assert_eq!(error.as_deref(), Some(expected));
+            assert!(
+                interrupt_elapsed < Duration::from_secs(2),
+                "{command} took too long: {interrupt_elapsed:?}"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }

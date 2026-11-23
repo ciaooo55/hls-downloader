@@ -309,3 +309,173 @@ async fn relay(mut stream: TcpStream, scheme: &str, log: Arc<Mutex<Vec<u16>>>) -
     let _ = tokio::io::copy_bidirectional(&mut upstream, &mut stream).await;
     Ok(())
 }
+
+#[cfg(windows)]
+mod system_tests {
+    use super::*;
+    use crate::proxy_tunnel::system::{lookup_candidates, select_route, ProxyInfo};
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn proxy_entry(scheme: i32, host: &[u16], port: u16) -> ProxyInfo {
+        ProxyInfo {
+            proxy: 1,
+            bypass: 0,
+            scheme,
+            host: host.as_ptr(),
+            port,
+        }
+    }
+
+    fn direct_entry() -> ProxyInfo {
+        ProxyInfo {
+            proxy: 0,
+            bypass: 1,
+            scheme: 0,
+            host: std::ptr::null(),
+            port: 0,
+        }
+    }
+
+    #[test]
+    fn select_route_falls_back_across_invalid_and_unsupported_entries() {
+        let invalid = wide("bad host\r\n");
+        let http_host = wide("127.0.0.1");
+        let socks_host = wide("::1");
+        let https_host = wide("proxy.example");
+
+        // [unknown, invalid_host, http] -> http
+        let entries = [
+            proxy_entry(99, &http_host, 8080),
+            proxy_entry(3, &invalid, 8080),
+            proxy_entry(3, &http_host, 8080),
+        ];
+        assert_eq!(
+            select_route(&entries, false).unwrap(),
+            Some("http://127.0.0.1:8080".into())
+        );
+
+        // [port_zero, socks] -> socks4
+        let entries = [
+            proxy_entry(3, &http_host, 0),
+            proxy_entry(8, &socks_host, 1080),
+        ];
+        assert_eq!(
+            select_route(&entries, false).unwrap(),
+            Some("socks4://[::1]:1080".into())
+        );
+
+        // [https, direct] -> DIRECT when !allow_https, https when allow_https
+        let entries = [proxy_entry(4, &https_host, 443), direct_entry()];
+        assert_eq!(select_route(&entries, false).unwrap(), None);
+        assert_eq!(
+            select_route(&entries, true).unwrap(),
+            Some("https://proxy.example:443".into())
+        );
+
+        // [https, http] -> http when !allow_https, https when allow_https
+        let entries = [
+            proxy_entry(4, &https_host, 443),
+            proxy_entry(3, &http_host, 7890),
+        ];
+        assert_eq!(
+            select_route(&entries, false).unwrap(),
+            Some("http://127.0.0.1:7890".into())
+        );
+        assert_eq!(
+            select_route(&entries, true).unwrap(),
+            Some("https://proxy.example:443".into())
+        );
+    }
+
+    #[test]
+    fn select_route_fails_closed_when_no_usable_entry_exists() {
+        let invalid = wide("bad host");
+        let https_host = wide("proxy.example");
+
+        assert!(select_route(&[], false).is_err());
+
+        // Remembers first_error across multiple failures.
+        let entries = [
+            proxy_entry(99, &https_host, 8080),
+            proxy_entry(3, &https_host, 0),
+        ];
+        let err = select_route(&entries, false).unwrap_err();
+        assert!(err.contains("协议"), "{err}");
+
+        // HTTPS-only list fails closed when allow_https is false.
+        let entries = [proxy_entry(4, &https_host, 443)];
+        assert!(select_route(&entries, false).is_err());
+
+        // Null host + invalid host fails closed.
+        let entries = [
+            ProxyInfo {
+                proxy: 1,
+                bypass: 0,
+                scheme: 3,
+                host: std::ptr::null(),
+                port: 8080,
+            },
+            proxy_entry(3, &invalid, 8080),
+        ];
+        let err = select_route(&entries, false).unwrap_err();
+        assert!(err.contains("地址无效"), "{err}");
+    }
+
+    #[test]
+    fn lookup_candidates_strips_credentials_and_fragments_and_normalizes_schemes() {
+        assert_eq!(
+            lookup_candidates("sftp://user:p@ss@[::1]:2222/dir/file.bin?x=1#frag").unwrap(),
+            vec!["https://[::1]:2222/dir/file.bin?x=1".to_string()]
+        );
+        assert_eq!(
+            lookup_candidates("ftps://u:p@example.com:990/a?b=2#top").unwrap(),
+            vec![
+                "ftp://example.com:990/a?b=2".to_string(),
+                "https://example.com:990/a?b=2".to_string(),
+            ]
+        );
+        assert_eq!(
+            lookup_candidates("sftp://user@example.com?q=1#frag").unwrap(),
+            vec!["https://example.com/?q=1".to_string()]
+        );
+        assert_eq!(
+            lookup_candidates("ftps://example.com").unwrap(),
+            vec![
+                "ftp://example.com/".to_string(),
+                "https://example.com/".to_string(),
+            ]
+        );
+        assert!(lookup_candidates("not-a-url").is_err());
+        assert!(lookup_candidates("sftp://user@/path").is_err());
+    }
+
+    #[test]
+    fn system_proxy_resolve_normalizes_sftp_and_ftps_without_scheme_error() {
+        let sentinel = crate::net_policy::SYSTEM_PROXY_SENTINEL;
+        for url in ["sftp://example.com/a", "ftps://example.com/a"] {
+            if let Err(err) = Proxy::resolve(sentinel, url, || Ok(())) {
+                assert!(
+                    !err.contains("12006"),
+                    "WinINet rejected normalized scheme for {url}: {err}"
+                );
+            }
+        }
+        // Calling resolve_system_proxy from inside an active Tokio runtime must not panic.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            if let Err(err) = resolve_system_proxy("https://example.com/a", || Ok(())) {
+                assert!(!err.contains("12006"), "{err}");
+            }
+            assert_eq!(
+                resolve_system_proxy("https://example.com/a", || Err("paused".into())).unwrap_err(),
+                "paused"
+            );
+        });
+    }
+}

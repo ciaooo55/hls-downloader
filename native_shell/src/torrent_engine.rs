@@ -358,14 +358,20 @@ pub fn probe_torrent_source(
     let source = source.trim();
     if source.starts_with("magnet:") {
         let (mut magnet, exact_sources) = parse_magnet_sources(source)?;
-        return match fetch_magnet_metadata(&mut magnet, &exact_sources, headers, proxy, enable_dht)
-        {
+        return match fetch_magnet_metadata(
+            &mut magnet,
+            &exact_sources,
+            headers,
+            proxy,
+            enable_dht,
+            None,
+        ) {
             Ok(meta) => Ok(meta),
             Err(error) if magnet.info_hash.is_empty() && magnet.web_seeds.is_empty() => Err(error),
             Err(_) => Ok(magnet),
         };
     }
-    let bytes = read_torrent_bytes(source, headers, proxy)?;
+    let bytes = read_torrent_bytes(source, headers, proxy, None)?;
     parse_torrent_file(&bytes)
 }
 
@@ -373,15 +379,17 @@ fn read_torrent_bytes(
     source: &str,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
+    control: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        let (status, bytes) = crate::http_engine::fetch_bytes_limited(
+        let (status, bytes) = fetch_torrent_http_bytes(
             source,
             headers,
             proxy,
             MAX_UT_METADATA_BYTES as u64,
-        )
-        .map_err(|error| error.to_string())?;
+            control,
+            false,
+        )?;
         if !matches!(status, 200 | 206) {
             return Err(format!("torrent metadata HTTP {status}"));
         }
@@ -737,6 +745,7 @@ fn transfer_torrent(
     options: TorrentOptions,
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<(u64, TorrentMeta), String> {
+    check_optional_control(Some(control))?;
     let meta = if spec_url.starts_with("magnet:") {
         let (mut magnet, exact_sources) = parse_magnet_sources(spec_url)?;
         match fetch_magnet_metadata(
@@ -745,15 +754,17 @@ fn transfer_torrent(
             headers,
             proxy,
             options.enable_dht,
+            Some(control),
         ) {
             Ok(meta) => meta,
+            Err(error) if is_control_stop(&error) => return Err(error),
             Err(error) if !magnet.info_hash.is_empty() || magnet.web_seeds.is_empty() => {
                 return Err(error)
             }
             Err(_) => magnet,
         }
     } else if spec_url.ends_with(".torrent") || spec_url.starts_with("http") {
-        let bytes = read_torrent_bytes(spec_url, headers, proxy)?;
+        let bytes = read_torrent_bytes(spec_url, headers, proxy, Some(control))?;
         parse_torrent_file(&bytes)?
     } else {
         return Err("unsupported torrent source".into());
@@ -768,6 +779,7 @@ fn transfer_torrent(
         reporter(TorrentTelemetry::default());
         let mut last = "torrent web seed download failed".to_string();
         for seed in http_seeds {
+            check_optional_control(Some(control))?;
             let same_origin = same_torrent_origin(spec_url, &seed);
             let seed_headers = headers_for_torrent_aux_url(spec_url, &seed, headers, true);
             let job = Job {
@@ -815,7 +827,13 @@ fn transfer_torrent(
                 Err(error) => error.to_string(),
             };
         }
-        return Err(last);
+        let can_fallback_to_swarm = !meta.pieces.is_empty()
+            && meta.piece_length > 0
+            && !meta.info_hash.is_empty()
+            && (!meta.announce.is_empty() || !meta.hint_peers.is_empty());
+        if !can_fallback_to_swarm {
+            return Err(last);
+        }
     }
     if meta.pieces.is_empty() || meta.piece_length == 0 {
         return Err(format!(
@@ -903,25 +921,74 @@ fn headers_for_torrent_aux_url(
     strip_sensitive_headers(headers)
 }
 
+const CONTROL_POLL_SLICE: Duration = Duration::from_millis(200);
+
+fn check_optional_control(control: Option<&Path>) -> Result<(), String> {
+    if let Some(path) = control.filter(|path| !path.as_os_str().is_empty()) {
+        check_torrent_control(path)?;
+    }
+    Ok(())
+}
+
+fn is_control_stop(error: &str) -> bool {
+    matches!(error, "paused" | "canceled")
+}
+
+fn fetch_torrent_http_bytes(
+    url: &str,
+    headers: &std::collections::HashMap<String, String>,
+    proxy: &str,
+    limit: u64,
+    control: Option<&Path>,
+    strip_replay: bool,
+) -> Result<(u16, Vec<u8>), String> {
+    check_optional_control(control)?;
+    let run = || {
+        crate::http_engine::fetch_bytes_limited(url, headers, proxy, limit)
+            .map_err(|error| error.to_string())
+    };
+    let run_with_replay = || {
+        if strip_replay {
+            crate::with_replay_json("", run)
+        } else {
+            run()
+        }
+    };
+    if let Some(path) = control.filter(|path| !path.as_os_str().is_empty()) {
+        let mut context = crate::net_policy::current_throttle_context().unwrap_or_default();
+        context.control = path.to_path_buf();
+        crate::net_policy::with_throttle_context(Some(context), run_with_replay)
+    } else {
+        run_with_replay()
+    }
+}
+
 fn fetch_exact_source_metadata(
     magnet: &mut TorrentMeta,
     sources: &[String],
     hash: Option<&str>,
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
-) -> Option<TorrentMeta> {
+    control: Option<&Path>,
+) -> Result<Option<TorrentMeta>, String> {
     let aux_headers = strip_sensitive_headers(headers);
     for url in sources {
-        let Ok((200, body)) = crate::with_replay_json("", || {
-            crate::http_engine::fetch_bytes_limited(
-                url,
-                &aux_headers,
-                proxy,
-                MAX_UT_METADATA_BYTES as u64,
-            )
-        }) else {
-            continue;
+        check_optional_control(control)?;
+        let (status, body) = match fetch_torrent_http_bytes(
+            url,
+            &aux_headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+            control,
+            true,
+        ) {
+            Ok(response) => response,
+            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(_) => continue,
         };
+        if status != 200 {
+            continue;
+        }
         let Ok(mut parsed) = parse_torrent_file(&body) else {
             continue;
         };
@@ -933,9 +1000,9 @@ fn fetch_exact_source_metadata(
             continue;
         }
         merge_magnet_hints(&mut parsed, magnet);
-        return Some(parsed);
+        return Ok(Some(parsed));
     }
-    None
+    Ok(None)
 }
 
 fn merge_magnet_hints(parsed: &mut TorrentMeta, magnet: &TorrentMeta) {
@@ -961,12 +1028,19 @@ fn fetch_magnet_metadata(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     enable_dht: bool,
+    control: Option<&Path>,
 ) -> Result<TorrentMeta, String> {
+    check_optional_control(control)?;
     let hash = canonical_info_hash(&magnet.info_hash);
     if hash.is_some() || magnet.info_hash.is_empty() {
-        if let Some(meta) =
-            fetch_exact_source_metadata(magnet, exact_sources, hash.as_deref(), headers, proxy)
-        {
+        if let Some(meta) = fetch_exact_source_metadata(
+            magnet,
+            exact_sources,
+            hash.as_deref(),
+            headers,
+            proxy,
+            control,
+        )? {
             return Ok(meta);
         }
     }
@@ -977,8 +1051,9 @@ fn fetch_magnet_metadata(
             format!("magnet info_hash 无效: {}", magnet.info_hash)
         }
     })?;
-    let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht) {
+    let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht, control) {
         Ok(meta) => return Ok(meta),
+        Err(error) if is_control_stop(&error) => return Err(error),
         Err(error) => error,
     };
     let aux_headers = strip_sensitive_headers(headers);
@@ -989,14 +1064,15 @@ fn fetch_magnet_metadata(
         format!("https://btcache.me/torrent/{hash}"),
         format!("https://thetorrent.org/torrent/{hash}.torrent"),
     ] {
-        match crate::with_replay_json("", || {
-            crate::http_engine::fetch_bytes_limited(
-                &url,
-                &aux_headers,
-                proxy,
-                MAX_UT_METADATA_BYTES as u64,
-            )
-        }) {
+        check_optional_control(control)?;
+        match fetch_torrent_http_bytes(
+            &url,
+            &aux_headers,
+            proxy,
+            MAX_UT_METADATA_BYTES as u64,
+            control,
+            true,
+        ) {
             Ok((status, body)) if status == 200 || status == 206 => {
                 if let Ok(mut parsed) = parse_torrent_file(&body) {
                     if canonical_info_hash(&parsed.info_hash).as_deref() != Some(hash.as_str()) {
@@ -1012,7 +1088,8 @@ fn fetch_magnet_metadata(
                 }
             }
             Ok((status, _)) => last = format!("{url} HTTP {status}"),
-            Err(error) => last = error.to_string(),
+            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) => last = error,
         }
     }
     Err(format!("未能取得种子元数据：{swarm_error}；缓存：{last}"))
@@ -1091,7 +1168,7 @@ fn download_swarm(
             }
             check_torrent_control(control)?;
             discovered = true;
-            for peer in announce_peers(meta, headers, proxy, options.enable_dht)? {
+            for peer in announce_peers(meta, headers, proxy, options.enable_dht, Some(control))? {
                 if !peers.contains(&peer) {
                     peers.push(peer);
                 }
@@ -1135,7 +1212,9 @@ fn announce_peers(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     enable_dht: bool,
+    control: Option<&Path>,
 ) -> Result<Vec<std::net::SocketAddr>, String> {
+    check_optional_control(control)?;
     let info_hash = decode_info_hash(&meta.info_hash)?;
     let mut peers = resolve_hint_peers(&meta.hint_peers);
     let announces: Vec<String> = if meta.announce.is_empty() {
@@ -1147,12 +1226,15 @@ fn announce_peers(
         meta.announce.clone()
     };
     for announce in announces.iter().take(64) {
+        check_optional_control(control)?;
         if peers.len() >= 1000 {
             break;
         }
         if announce.starts_with("udp://") {
-            if let Ok(found) = announce_udp(announce, &info_hash, meta.length) {
-                peers.extend(found.into_iter().take(1000 - peers.len()));
+            match announce_udp(announce, &info_hash, meta.length, control) {
+                Ok(found) => peers.extend(found.into_iter().take(1000 - peers.len())),
+                Err(error) if is_control_stop(&error) => return Err(error),
+                Err(_) => {}
             }
             continue;
         }
@@ -1167,19 +1249,24 @@ fn announce_peers(
             meta.length
         );
         let tracker_headers = strip_sensitive_headers(headers);
-        if let Ok((200, body)) = crate::with_replay_json("", || {
-            crate::http_engine::fetch_bytes_limited(&url, &tracker_headers, proxy, 1024 * 1024)
-        }) {
-            peers.extend(
-                parse_compact_peers(&body)
-                    .into_iter()
-                    .take(1000 - peers.len()),
-            );
+        match fetch_torrent_http_bytes(&url, &tracker_headers, proxy, 1024 * 1024, control, true) {
+            Ok((200, body)) => {
+                peers.extend(
+                    parse_compact_peers(&body)
+                        .into_iter()
+                        .take(1000 - peers.len()),
+                );
+            }
+            Err(error) if is_control_stop(&error) => return Err(error),
+            _ => {}
         }
     }
     if enable_dht && peers.len() < 1000 {
-        if let Ok(found) = dht_get_peers(&info_hash) {
-            peers.extend(found.into_iter().take(1000 - peers.len()));
+        check_optional_control(control)?;
+        match dht_get_peers(&info_hash, control) {
+            Ok(found) => peers.extend(found.into_iter().take(1000 - peers.len())),
+            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(_) => {}
         }
     }
     peers.sort_unstable();
@@ -1216,19 +1303,22 @@ fn fetch_metadata_from_swarm(
     headers: &std::collections::HashMap<String, String>,
     proxy: &str,
     enable_dht: bool,
+    control: Option<&Path>,
 ) -> Result<TorrentMeta, String> {
+    check_optional_control(control)?;
     let mut last = "没有节点提供种子元数据".to_string();
     let mut queue = resolve_hint_peers(&magnet.hint_peers);
     let mut discovered = false;
     let mut seen = BTreeSet::new();
     let mut index = 0;
     while index < 24 {
+        check_optional_control(control)?;
         if index == queue.len() {
             if discovered {
                 break;
             }
             discovered = true;
-            for peer in announce_peers(magnet, headers, proxy, enable_dht)? {
+            for peer in announce_peers(magnet, headers, proxy, enable_dht, control)? {
                 if !queue.contains(&peer) {
                     queue.push(peer);
                 }
@@ -1243,8 +1333,9 @@ fn fetch_metadata_from_swarm(
             continue;
         }
         let mut extra = Vec::new();
-        match fetch_ut_metadata_from_peer(peer, magnet, &mut extra) {
+        match fetch_ut_metadata_from_peer(peer, magnet, &mut extra, control) {
             Ok(meta) => return Ok(meta),
+            Err(error) if is_control_stop(&error) => return Err(error),
             Err(error) => last = error,
         }
         for addr in extra {
@@ -1274,17 +1365,54 @@ pub fn udp_connect_request(transaction_id: u32) -> [u8; 16] {
     packet
 }
 
+fn udp_recv_controlled(
+    socket: &std::net::UdpSocket,
+    buf: &mut [u8],
+    timeout: Duration,
+    control: Option<&Path>,
+) -> Result<usize, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        check_optional_control(control)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("udp tracker response timed out".into());
+        }
+        let slice = if control.is_some_and(|path| !path.as_os_str().is_empty()) {
+            remaining.min(CONTROL_POLL_SLICE)
+        } else {
+            remaining
+        };
+        socket
+            .set_read_timeout(Some(slice))
+            .map_err(|error| error.to_string())?;
+        match socket.recv(buf) {
+            Ok(count) => return Ok(count),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
 fn announce_udp(
     url: &str,
     info_hash: &[u8],
     left: u64,
+    control: Option<&Path>,
 ) -> Result<Vec<std::net::SocketAddr>, String> {
     use std::net::UdpSocket;
+    check_optional_control(control)?;
     let (host, port) = parse_udp_tracker(url).ok_or_else(|| "udp tracker URL 无效".to_string())?;
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
-    socket
-        .set_read_timeout(Some(Duration::from_secs(4)))
-        .map_err(|error| error.to_string())?;
     let target = format!("{host}:{port}");
     socket.connect(target).map_err(|error| error.to_string())?;
     let tx = (std::time::SystemTime::now()
@@ -1296,7 +1424,7 @@ fn announce_udp(
         .send(&udp_connect_request(tx))
         .map_err(|error| error.to_string())?;
     let mut buf = [0u8; 1024];
-    let count = socket.recv(&mut buf).map_err(|error| error.to_string())?;
+    let count = udp_recv_controlled(&socket, &mut buf, Duration::from_secs(4), control)?;
     if count < 16 || be32(&buf[0..4]) != 0 {
         return Err("udp tracker connect 失败".into());
     }
@@ -1320,7 +1448,7 @@ fn announce_udp(
     announce.extend_from_slice(&((-1i32) as u32).to_be_bytes());
     announce.extend_from_slice(&6881u16.to_be_bytes());
     socket.send(&announce).map_err(|error| error.to_string())?;
-    let count = socket.recv(&mut buf).map_err(|error| error.to_string())?;
+    let count = udp_recv_controlled(&socket, &mut buf, Duration::from_secs(4), control)?;
     if count < 20 || be32(&buf[0..4]) != 1 || be32(&buf[4..8]) != tx2 {
         return Err("udp tracker announce 失败".into());
     }
@@ -1390,11 +1518,15 @@ pub fn decode_compact_nodes(raw: &[u8]) -> Vec<std::net::SocketAddr> {
         .collect()
 }
 
-fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> {
+fn dht_get_peers(
+    info_hash: &[u8],
+    control: Option<&Path>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     use std::net::{ToSocketAddrs, UdpSocket};
+    check_optional_control(control)?;
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
     socket
-        .set_read_timeout(Some(Duration::from_millis(250)))
+        .set_read_timeout(Some(CONTROL_POLL_SLICE))
         .map_err(|error| error.to_string())?;
     let node_id = crate::crypto_lite::sha1(format!("hls-v6-{}", std::process::id()).as_bytes());
     let mut bootstrap = Vec::new();
@@ -1404,6 +1536,7 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
         "router.utorrent.com:6881",
         "dht.libtorrent.org:25401",
     ] {
+        check_optional_control(control)?;
         if let Ok(addrs) = host.to_socket_addrs() {
             bootstrap.extend(addrs.filter(std::net::SocketAddr::is_ipv4).take(1));
         }
@@ -1411,6 +1544,7 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
     let mut pending = std::collections::BTreeMap::new();
     let mut queried = 0u16;
     for target in bootstrap.iter().copied() {
+        check_optional_control(control)?;
         let tx = queried.to_be_bytes();
         pending.insert(tx, target);
         let _ = socket.send_to(&krpc_get_peers_query(&tx, &node_id, info_hash), target);
@@ -1419,6 +1553,7 @@ fn dht_get_peers(info_hash: &[u8]) -> Result<Vec<std::net::SocketAddr>, String> 
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut peers = Vec::new();
     while Instant::now() < deadline {
+        check_optional_control(control)?;
         let mut buf = [0u8; 2048];
         match socket.recv_from(&mut buf) {
             Ok((count, source)) => {
@@ -1462,9 +1597,11 @@ fn fetch_ut_metadata_from_peer(
     addr: std::net::SocketAddr,
     magnet: &TorrentMeta,
     extra_peers: &mut Vec<std::net::SocketAddr>,
+    control: Option<&Path>,
 ) -> Result<TorrentMeta, String> {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpStream;
+    check_optional_control(control)?;
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
         .map_err(|error| error.to_string())?;
     stream
@@ -1485,9 +1622,12 @@ fn fetch_ut_metadata_from_peer(
         .write_all(&handshake)
         .map_err(|error| error.to_string())?;
     let mut peer_hs = [0u8; 68];
-    stream
-        .read_exact(&mut peer_hs)
-        .map_err(|error| error.to_string())?;
+    read_exact_controlled(
+        &mut stream,
+        &mut peer_hs,
+        Instant::now() + Duration::from_secs(12),
+        control,
+    )?;
     if &peer_hs[28..48] != info_hash.as_slice() {
         return Err("peer info_hash mismatch".into());
     }
@@ -1500,7 +1640,7 @@ fn fetch_ut_metadata_from_peer(
     let mut metadata_id = 0u8;
     let mut metadata_size = 0usize;
     for _ in 0..24 {
-        let (id, body) = read_message(&mut stream, deadline)?;
+        let (id, body) = read_message(&mut stream, deadline, control)?;
         take_extended(id, &body, extra_peers);
         if id != 20 || body.is_empty() {
             continue;
@@ -1536,11 +1676,12 @@ fn fetch_ut_metadata_from_peer(
     let pieces = metadata_size.div_ceil(16 * 1024);
     let mut info = vec![0u8; metadata_size];
     for index in 0..pieces {
+        check_optional_control(control)?;
         let request = format!("d8:msg_typei0e5:piecei{index}ee");
         send_extended(&mut stream, metadata_id, request.as_bytes())?;
         let deadline = Instant::now() + Duration::from_secs(12);
         loop {
-            let (id, body) = read_message(&mut stream, deadline)?;
+            let (id, body) = read_message(&mut stream, deadline, control)?;
             take_extended(id, &body, extra_peers);
             if id != 20 || body.len() < 2 || body[0] != 1 {
                 continue;
@@ -2076,8 +2217,12 @@ impl PeerMessageReader {
         // 下载写盘或限速时让 TCP 反压对端，不能把持续到来的 peer 消息无限堆进内存。
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let handle = std::thread::spawn(move || loop {
-            let message = read_message(&mut read_stream, Instant::now() + Duration::from_secs(15))
-                .map_err(|error| format!("peer {peer} message read: {error}"));
+            let message = read_message(
+                &mut read_stream,
+                Instant::now() + Duration::from_secs(15),
+                None,
+            )
+            .map_err(|error| format!("peer {peer} message read: {error}"));
             let failed = message.is_err();
             if sender.send(message).is_err() || failed {
                 break;
@@ -2117,31 +2262,53 @@ impl Drop for PeerMessageReader {
     }
 }
 
+fn read_exact_controlled(
+    stream: &mut std::net::TcpStream,
+    mut bytes: &mut [u8],
+    deadline: Instant,
+    control: Option<&Path>,
+) -> Result<(), String> {
+    while !bytes.is_empty() {
+        check_optional_control(control)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("peer response timed out".into());
+        }
+        let slice = if control.is_some_and(|path| !path.as_os_str().is_empty()) {
+            remaining.min(CONTROL_POLL_SLICE)
+        } else {
+            remaining
+        };
+        stream
+            .set_read_timeout(Some(slice))
+            .map_err(|e| e.to_string())?;
+        match stream.read(bytes) {
+            Ok(0) => return Err("truncated peer message".into()),
+            Ok(n) => bytes = &mut bytes[n..],
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
 fn read_message(
     stream: &mut std::net::TcpStream,
     deadline: Instant,
+    control: Option<&Path>,
 ) -> Result<(u8, Vec<u8>), String> {
-    let mut read_exact = |mut bytes: &mut [u8]| -> Result<(), String> {
-        while !bytes.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("peer response timed out".into());
-            }
-            stream
-                .set_read_timeout(Some(remaining))
-                .map_err(|e| e.to_string())?;
-            match stream.read(bytes) {
-                Ok(0) => return Err("truncated peer message".into()),
-                Ok(n) => bytes = &mut bytes[n..],
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        Ok(())
-    };
     loop {
         let mut len_buf = [0u8; 4];
-        read_exact(&mut len_buf)?;
+        read_exact_controlled(stream, &mut len_buf, deadline, control)?;
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 {
             continue; // keep-alive
@@ -2150,7 +2317,7 @@ fn read_message(
             return Err("peer message too large".into());
         }
         let mut body = vec![0u8; len];
-        read_exact(&mut body)?;
+        read_exact_controlled(stream, &mut body, deadline, control)?;
         return Ok((body[0], body[1..].to_vec()));
     }
 }
@@ -3500,7 +3667,7 @@ mod tests {
                 return;
             }
         });
-        let parsed = fetch_ut_metadata_from_peer(addr, &magnet, &mut Vec::new()).unwrap();
+        let parsed = fetch_ut_metadata_from_peer(addr, &magnet, &mut Vec::new(), None).unwrap();
         assert_eq!(parsed.name, "demo");
         assert_eq!(parsed.length, payload.len() as u64);
         assert_eq!(parsed.pieces.len(), 1);
@@ -3927,7 +4094,7 @@ mod tests {
             length: 4,
             files: Vec::new(),
         };
-        let _ = announce_peers(&meta, &headers, "", false).unwrap();
+        let _ = announce_peers(&meta, &headers, "", false, None).unwrap();
         let wire = rx
             .recv_timeout(Duration::from_secs(3))
             .unwrap()
@@ -3938,5 +4105,278 @@ mod tests {
             !wire.contains("authorization:"),
             "tracker leaked Authorization: {wire}"
         );
+    }
+
+    #[test]
+    fn stalled_udp_tracker_interrupts_on_pause_and_cancel() {
+        use std::net::UdpSocket;
+        use std::sync::mpsc;
+
+        for (command, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-v7-udp-tracker-control-{}-{command}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+
+            let tracker = UdpSocket::bind("127.0.0.1:0").unwrap();
+            tracker
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let addr = tracker.local_addr().unwrap();
+            let (received_tx, received_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let mut buf = [0u8; 64];
+                if tracker.recv_from(&mut buf).is_ok() {
+                    let _ = received_tx.send(());
+                }
+            });
+
+            let meta = TorrentMeta {
+                name: "stalled-udp".into(),
+                magnet: true,
+                multi_file: false,
+                web_seeds: Vec::new(),
+                info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+                announce: vec![format!("udp://{addr}/announce")],
+                hint_peers: Vec::new(),
+                piece_length: 0,
+                pieces: Vec::new(),
+                length: 0,
+                files: Vec::new(),
+            };
+            let worker_control = control.clone();
+            let worker = std::thread::spawn(move || {
+                announce_peers(
+                    &meta,
+                    &std::collections::HashMap::new(),
+                    "",
+                    false,
+                    Some(&worker_control),
+                )
+            });
+
+            received_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let triggered = Instant::now();
+            fs::write(&control, command).unwrap();
+            let err = worker.join().unwrap().unwrap_err();
+            let elapsed = triggered.elapsed();
+            server.join().unwrap();
+
+            assert_eq!(err, expected);
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "UDP tracker {command} took too long: {elapsed:?}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn stalled_peer_metadata_interrupts_on_pause_and_cancel() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        for (command, expected) in [("pause", "paused"), ("cancel", "canceled")] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-v7-peer-meta-control-{}-{command}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let peer = listener.local_addr().unwrap();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut hs = [0u8; 68];
+                stream.read_exact(&mut hs).unwrap();
+                // Reply with BitTorrent handshake advertising extension support,
+                // then stall before sending the extended metadata handshake.
+                stream.write_all(&hs).unwrap();
+                let _ = ready_tx.send(());
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            });
+
+            let magnet = TorrentMeta {
+                name: "stalled-meta".into(),
+                magnet: true,
+                multi_file: false,
+                web_seeds: Vec::new(),
+                info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+                announce: vec!["fixture://peer-hint".into()],
+                hint_peers: vec![peer.to_string()],
+                piece_length: 0,
+                pieces: Vec::new(),
+                length: 0,
+                files: Vec::new(),
+            };
+            let worker_control = control.clone();
+            let worker = std::thread::spawn(move || {
+                fetch_metadata_from_swarm(
+                    &magnet,
+                    &std::collections::HashMap::new(),
+                    "",
+                    false,
+                    Some(&worker_control),
+                )
+            });
+
+            ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let triggered = Instant::now();
+            fs::write(&control, command).unwrap();
+            let err = worker.join().unwrap().unwrap_err();
+            let elapsed = triggered.elapsed();
+            let _ = release_tx.send(());
+            server.join().unwrap();
+
+            assert_eq!(err, expected);
+            assert!(
+                elapsed < Duration::from_secs(2),
+                "peer metadata {command} took too long: {elapsed:?}"
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn web_seed_failure_falls_back_to_swarm_peer() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let payload = b"swarm-fallback-ok!".to_vec();
+        let piece_hash = crate::crypto_lite::sha1(&payload);
+
+        // 1. Failing HTTP web seed (returns 404 so run_job fails cleanly without retry backoff).
+        let web_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let web_addr = web_listener.local_addr().unwrap();
+        let web_server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = web_listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        // 2. Local BitTorrent swarm peer serving the verified piece.
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let peer_addr = peer_listener.local_addr().unwrap();
+        let peer_payload = payload.clone();
+        let peer_server = std::thread::spawn(move || {
+            let (mut stream, _) = peer_listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut hs = [0u8; 68];
+            stream.read_exact(&mut hs).unwrap();
+            stream.write_all(&hs).unwrap();
+            // Send unchoke (id=1).
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap();
+            loop {
+                let mut header = [0u8; 4];
+                if stream.read_exact(&mut header).is_err() {
+                    break;
+                }
+                let len = u32::from_be_bytes(header) as usize;
+                let mut msg = vec![0u8; len];
+                if stream.read_exact(&mut msg).is_err() || msg.is_empty() {
+                    break;
+                }
+                if msg[0] == 6 && msg.len() >= 13 {
+                    let index = be32(&msg[1..5]);
+                    let begin = be32(&msg[5..9]) as usize;
+                    let block = be32(&msg[9..13]) as usize;
+                    let mut resp = vec![7u8];
+                    resp.extend_from_slice(&index.to_be_bytes());
+                    resp.extend_from_slice(&(begin as u32).to_be_bytes());
+                    resp.extend_from_slice(&peer_payload[begin..begin + block]);
+                    stream
+                        .write_all(&(resp.len() as u32).to_be_bytes())
+                        .unwrap();
+                    stream.write_all(&resp).unwrap();
+                    break;
+                }
+            }
+        });
+
+        // 3. Local HTTP tracker returning compact peer_addr.
+        let tracker_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tracker_addr = tracker_listener.local_addr().unwrap();
+        let tracker_server = std::thread::spawn(move || {
+            let (mut stream, _) = tracker_listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let std::net::SocketAddr::V4(v4) = peer_addr else {
+                unreachable!();
+            };
+            let mut body = b"d5:peers6:".to_vec();
+            body.extend_from_slice(&v4.ip().octets());
+            body.extend_from_slice(&v4.port().to_be_bytes());
+            body.push(b'e');
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+
+        // Build a valid .torrent with both url-list (failing web seed) and announce (tracker).
+        let announce = format!("http://{tracker_addr}/announce");
+        let web_seed = format!("http://{web_addr}/payload.bin");
+        let mut torrent = Vec::new();
+        torrent.extend_from_slice(b"d8:announce");
+        torrent.extend_from_slice(format!("{}:{announce}", announce.len()).as_bytes());
+        torrent.extend_from_slice(b"4:infod6:lengthi");
+        torrent.extend_from_slice(payload.len().to_string().as_bytes());
+        torrent.extend_from_slice(b"e4:name11:payload.bin12:piece lengthi");
+        torrent.extend_from_slice(payload.len().to_string().as_bytes());
+        torrent.extend_from_slice(b"e6:pieces20:");
+        torrent.extend_from_slice(&piece_hash);
+        torrent.extend_from_slice(b"e8:url-list");
+        torrent.extend_from_slice(format!("{}:{web_seed}", web_seed.len()).as_bytes());
+        torrent.push(b'e');
+
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-webseed-fallback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let torrent_path = root.join("fallback.torrent");
+        let output = root.join("payload.bin");
+        let control = root.join("control");
+        fs::write(&torrent_path, &torrent).unwrap();
+        fs::write(&control, "run").unwrap();
+
+        let bytes = download_torrent_with_options(
+            torrent_path.to_str().unwrap(),
+            &output,
+            &control,
+            &std::collections::HashMap::new(),
+            "",
+            TorrentOptions {
+                enable_dht: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        web_server.join().unwrap();
+        tracker_server.join().unwrap();
+        peer_server.join().unwrap();
+
+        assert_eq!(bytes, payload.len() as u64);
+        assert_eq!(fs::read(&output).unwrap(), payload);
+        let _ = fs::remove_dir_all(&root);
     }
 }
