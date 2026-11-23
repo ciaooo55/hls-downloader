@@ -1,7 +1,23 @@
-//! Password-free FTP URL representations for persistence and diagnostics.
+//! Password-free URL representations for persistence and diagnostics.
 
 pub fn map_ftp_passwords(
     text: &str,
+    password: impl FnMut(&str, &str) -> Result<(), String>,
+) -> Result<String, String> {
+    map_url_passwords(text, false, password)
+}
+
+pub fn proxy_scheme(scheme: &str) -> bool {
+    matches!(
+        scheme,
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    )
+}
+
+/// HTTP userinfo belongs to the proxy vault only in a proxy field.
+pub fn map_url_passwords(
+    text: &str,
+    proxy_field: bool,
     mut password: impl FnMut(&str, &str) -> Result<(), String>,
 ) -> Result<String, String> {
     let lower = text.to_ascii_lowercase();
@@ -11,16 +27,18 @@ pub fn map_ftp_passwords(
         let separator = cursor + relative;
         let start = lower[..separator]
             .char_indices()
-            .rfind(|(_, c)| !c.is_ascii_alphabetic())
+            .rfind(|(_, c)| !c.is_ascii_alphanumeric())
             .map_or(0, |(index, c)| index + c.len_utf8());
-        if !matches!(&lower[start..separator], "ftp" | "ftps" | "sftp") {
+        let scheme = &lower[start..separator];
+        let proxy = proxy_scheme(scheme) && (proxy_field || scheme.starts_with("socks"));
+        if !proxy && !matches!(scheme, "ftp" | "ftps" | "sftp") {
             output.push_str(&text[cursor..separator + 3]);
             cursor = separator + 3;
             continue;
         }
         let authority_start = separator + 3;
         let end = text[authority_start..]
-            .find('/')
+            .find(|c| c == '/' || (proxy && matches!(c, '?' | '#')))
             .map_or(text.len(), |offset| authority_start + offset);
         // A pathless URL followed by another scheme can put that scheme's colon
         // inside our candidate authority. Leave the next scheme for the next pass.
@@ -32,7 +50,7 @@ pub fn map_ftp_passwords(
             end -= 1 + letters
                 .bytes()
                 .rev()
-                .take_while(u8::is_ascii_alphabetic)
+                .take_while(u8::is_ascii_alphanumeric)
                 .count();
         }
         let whole_url = start == 0 && !another_scheme;
@@ -79,6 +97,32 @@ pub fn redact_ftp_passwords(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_scheme_context_preserves_http_download_urls() {
+        for scheme in ["http", "https", "socks4", "socks4a", "socks5", "socks5h"] {
+            let raw = format!("{scheme}://alice:p%40ss@[::1]:1080?mode=a@b");
+            let authority = format!("{scheme}://alice@[::1]:1080");
+            let clean = format!("{authority}?mode=a@b");
+            assert_eq!(
+                map_url_passwords(&raw, true, |actual, pass| {
+                    assert_eq!(actual, authority);
+                    assert_eq!(pass, "p%40ss");
+                    Ok(())
+                })
+                .unwrap(),
+                clean
+            );
+            assert_eq!(
+                redact_ftp_passwords(&raw),
+                if scheme.starts_with("socks") {
+                    clean
+                } else {
+                    raw
+                }
+            );
+        }
+    }
 
     #[test]
     fn redacts_passwords_in_urls_and_diagnostics() {

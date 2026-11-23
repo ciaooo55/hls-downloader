@@ -1089,7 +1089,7 @@ function successfulChainForResource(resource: MediaResource, explicitChain?: Req
   const isMatchingSuccess = (candidate: RequestChain | undefined): candidate is RequestChain => {
     if (!candidate || candidate.statusCode < 200 || candidate.statusCode >= 400) return false
     const finalUrl = canonicalMediaUrl(candidate.finalUrl, resource.kind)
-    return resourceFingerprint({ url: finalUrl, kind: resource.kind }) === resourceFingerprint(resource)
+    return matchesResourceRequest(resource, finalUrl)
   }
   if (isMatchingSuccess(explicitChain)) return explicitChain
   const found = resource.tabId !== undefined && resource.tabId >= 0
@@ -1098,6 +1098,11 @@ function successfulChainForResource(resource: MediaResource, explicitChain?: Req
     : requestChains.find({ url: resource.url, referrer: resource.pageUrl || '', frameId: resource.frameId,
       requestId: resource.replayContext?.request_id, responseIdentity: resource.responseIdentity }, Date.now(), undefined, true)
   return isMatchingSuccess(found) ? found : undefined
+}
+
+function matchesResourceRequest({ kind, url }: MediaResource, requestUrl: string): boolean {
+  // Quality belongs to the user's selection. The browser requested the manifest URL itself.
+  return resourceFingerprint({ kind, url }) === resourceFingerprint({ kind, url: requestUrl })
 }
 
 async function readyResourceChain(resource: MediaResource, explicitChain?: RequestChain): Promise<RequestChain | undefined> {
@@ -1194,7 +1199,7 @@ async function resourcePayload(
     : undefined
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
-    if (resourceFingerprint({ url: freshUrl, kind: resource.kind }) === resourceFingerprint(resource)) {
+    if (matchesResourceRequest(resource, freshUrl)) {
       // LL-HLS and signed files keep refreshing while the selection panel is
       // open. Always hand off the most recently successful browser request,
       // not a stale Performance/fetch observation rendered by the page.

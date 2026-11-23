@@ -642,7 +642,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if item.get_busy() {
                         return;
                     }
-                    let filename = item.get_filename().trim().to_string();
+                    let filename = item.get_filename().to_string();
                     let download_dir = item.get_download_dir().trim().to_string();
                     let category = item.get_category().to_string();
                     let remember = item.get_remember_directory() && !download_dir.is_empty();
@@ -663,15 +663,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let weak = item.as_weak();
                     thread::spawn(move || {
                         let result = (|| {
-                            target_check::check_name(&filename)
+                            let filename = confirmed_filename(&filename)
                                 .map_err(|issue| issue.presentation_for(copy))?;
                             let filename = if copy {
-                                target_check::unique_name(&download_dir, &filename, &taken)
-                                    .map_err(|error| {
-                                        (error, [("选择其他位置", "browse"), ("", "")])
-                                    })?
+                                target_check::unique_name(&download_dir, filename, &taken).map_err(
+                                    |error| (error, [("选择其他位置", "browse"), ("", "")]),
+                                )?
                             } else {
-                                filename
+                                filename.to_owned()
                             };
                             target_check::check_target(&download_dir, &filename, allow_long)
                                 .map_err(|issue| issue.presentation_for(copy))?;
@@ -780,7 +779,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let Some(item) = window.upgrade() else {
                         return;
                     };
-                    match file_dialogs::folder(native_window::hwnd(item.window())) {
+                    let Some(handoff_id) = active_handoff.lock().ok().and_then(|id| id.clone())
+                    else {
+                        return;
+                    };
+                    let picked = file_dialogs::folder(native_window::hwnd(item.window()));
+                    // The modal picker pumps events, including resolution of the displayed offer.
+                    if !active_handoff
+                        .lock()
+                        .ok()
+                        .is_some_and(|id| id.as_ref() == Some(&handoff_id))
+                    {
+                        return;
+                    }
+                    match picked {
                         Ok(Some(path)) => {
                             item.set_download_dir(path.into());
                             clear_confirm_issue(&item);
@@ -2822,12 +2834,47 @@ fn attach_parent_console() {
 #[cfg(not(windows))]
 fn attach_parent_console() {}
 
+fn confirmed_filename(input: &str) -> Result<&str, target_check::TargetIssue> {
+    // Show the existing repair action for trailing spaces and control characters.
+    target_check::check_name(input)?;
+    let name = input.trim();
+    target_check::check_name(name)?;
+    Ok(name)
+}
+
+fn set_confirm_issue(item: &ConfirmWindow, text: &str, actions: [(&str, &str); 2]) {
+    item.set_error_text(text.into());
+    item.set_error_primary_label(actions[0].0.into());
+    item.set_error_primary_command(actions[0].1.into());
+    item.set_error_secondary_label(actions[1].0.into());
+    item.set_error_secondary_command(actions[1].1.into());
+}
+
+fn clear_confirm_issue(item: &ConfirmWindow) {
+    set_confirm_issue(item, "", [("", ""), ("", "")]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         update_presenter_settings, PresenterRuntimeSettings, PresenterSettings, SettingsReload,
     };
     use hls_client::CorePipeResponse;
+
+    #[test]
+    fn confirm_validates_the_typed_filename_before_normalization() {
+        use super::{confirmed_filename, target_check::TargetIssue};
+        assert_eq!(confirmed_filename(" clip.mp4"), Ok("clip.mp4"));
+        assert_eq!(
+            confirmed_filename("clip.mp4 "),
+            Err(TargetIssue::TrailingDot)
+        );
+        assert_eq!(
+            confirmed_filename("clip.mp4\t"),
+            Err(TargetIssue::InvalidName('\t'))
+        );
+        assert_eq!(confirmed_filename(" CON"), Err(TargetIssue::ReservedName));
+    }
 
     fn settings_response(directory: &str) -> CorePipeResponse {
         serde_json::from_value(serde_json::json!({
@@ -3182,16 +3229,4 @@ mod tests {
         assert!(summary.contains("待分配"));
         assert!(!summary.contains("ConnectionPart {"));
     }
-}
-
-fn set_confirm_issue(item: &ConfirmWindow, text: &str, actions: [(&str, &str); 2]) {
-    item.set_error_text(text.into());
-    item.set_error_primary_label(actions[0].0.into());
-    item.set_error_primary_command(actions[0].1.into());
-    item.set_error_secondary_label(actions[1].0.into());
-    item.set_error_secondary_command(actions[1].1.into());
-}
-
-fn clear_confirm_issue(item: &ConfirmWindow) {
-    set_confirm_issue(item, "", [("", ""), ("", "")]);
 }

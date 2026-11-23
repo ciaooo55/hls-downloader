@@ -329,64 +329,161 @@ fn verify_release_signer(state: windows_sys::Win32::Foundation::HANDLE) -> Resul
         .iter()
         .map(|byte| format!("{byte:02X}"))
         .collect::<String>();
-    authorize_release_signer(
+    signer_policy::authorize_release_signer(
         &candidate,
         option_env!("HLS_V7_SIGN_CERT_THUMBPRINT"),
-        include_str!("../../../config/release/update-signer-trust.json"),
+        signer_policy::SIGNER_TRUST_JSON,
     )
 }
 
 #[cfg(any(windows, test))]
-fn authorize_release_signer(
-    candidate: &str,
-    primary: Option<&str>,
-    policy: &str,
-) -> Result<(), String> {
-    #[derive(Deserialize)]
+mod signer_policy {
+    use serde::Deserialize;
+    use std::collections::HashSet;
+
+    pub(super) const SIGNER_TRUST_JSON: &str =
+        include_str!("../../../config/release/update-signer-trust.json");
+    const EXPECTED_TRUST_IDENTITY: &str = "authenticode_leaf_certificate_sha1";
+    const EXPECTED_TRUST_POLICY: &str = "formal-build-signer-or-explicit-rollover";
+
+    #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Policy {
+    struct SignerTrustContract {
         schema: u32,
         identity: String,
         policy: String,
-        rollover_signers: Vec<Rollover>,
+        rollover_signers: Vec<RolloverSigner>,
     }
-    #[derive(Deserialize)]
+
+    #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Rollover {
+    struct RolloverSigner {
         thumbprint: String,
         reason: String,
     }
-    let normalize = |value: &str| -> Result<String, String> {
-        let hex: String = value
+
+    fn normalize_thumbprint(value: &str) -> Result<String, String> {
+        let normalized: String = value
             .chars()
-            .filter(|c| !c.is_ascii_whitespace())
-            .map(|c| c.to_ascii_uppercase())
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .map(|ch| ch.to_ascii_uppercase())
             .collect();
-        if hex.len() == 40 && hex.bytes().all(|c| c.is_ascii_hexdigit()) {
-            Ok(hex)
-        } else {
-            Err("无效的发布证书指纹".into())
+        if normalized.len() != 40 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err("更新签名证书指纹必须是 40 位十六进制 SHA-1".into());
         }
-    };
-    let primary = normalize(primary.ok_or("缺少嵌入的 HLS_V7_SIGN_CERT_THUMBPRINT")?)?;
-    let policy: Policy =
-        serde_json::from_str(policy).map_err(|error| format!("更新签名信任配置无效: {error}"))?;
-    if policy.schema != 1
-        || policy.identity != "authenticode_leaf_certificate_sha1"
-        || policy.policy != "formal-build-signer-or-explicit-rollover"
-    {
-        return Err("不支持的更新签名信任配置".into());
+        Ok(normalized)
     }
-    let mut rollover = std::collections::HashSet::new();
-    for entry in policy.rollover_signers {
-        if entry.reason.trim().is_empty() || !rollover.insert(normalize(&entry.thumbprint)?) {
-            return Err("无效的更新签名 rollover 条目".into());
+
+    fn parse_signer_trust(json: &str) -> Result<HashSet<String>, String> {
+        let contract: SignerTrustContract = serde_json::from_str(json)
+            .map_err(|error| format!("解析更新签名信任配置失败: {error}"))?;
+        if contract.schema != 1 {
+            return Err(format!("不支持的更新签名信任 schema: {}", contract.schema));
         }
+        if contract.identity != EXPECTED_TRUST_IDENTITY {
+            return Err(format!("不支持的更新签名身份类型: {}", contract.identity));
+        }
+        if contract.policy != EXPECTED_TRUST_POLICY {
+            return Err(format!("不支持的更新签名信任策略: {}", contract.policy));
+        }
+
+        let mut signers = HashSet::new();
+        for signer in contract.rollover_signers {
+            if signer.reason.trim().is_empty() {
+                return Err("更新签名 rollover 条目缺少审核原因".into());
+            }
+            let thumbprint = normalize_thumbprint(&signer.thumbprint)?;
+            if !signers.insert(thumbprint) {
+                return Err("更新签名 rollover 指纹重复".into());
+            }
+        }
+        Ok(signers)
     }
-    if candidate == primary || rollover.contains(candidate) {
-        Ok(())
-    } else {
-        Err("升级安装包签名者不是受信任的 HLS Downloader 发布证书".into())
+
+    pub(super) fn authorize_release_signer(
+        candidate: &str,
+        primary: Option<&str>,
+        trust_json: &str,
+    ) -> Result<(), String> {
+        let candidate = normalize_thumbprint(candidate)?;
+        let primary = primary
+            .ok_or_else(|| "正式发布构建缺少嵌入的 HLS_V7_SIGN_CERT_THUMBPRINT".to_string())
+            .and_then(normalize_thumbprint)?;
+        let rollover = parse_signer_trust(trust_json)?;
+        if candidate == primary || rollover.contains(&candidate) {
+            return Ok(());
+        }
+        Err(format!(
+            "升级安装包签名者不是受信任的 HLS Downloader 发布证书: {candidate}"
+        ))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const PRIMARY: &str = "00112233445566778899AABBCCDDEEFF00112233";
+        const ROLLOVER: &str = "112233445566778899AABBCCDDEEFF0011223344";
+        const OTHER: &str = "FFEEDDCCBBAA99887766554433221100FFEEDDCC";
+
+        fn rollover_json() -> String {
+            format!(
+                r#"{{"schema":1,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[{{"thumbprint":"{ROLLOVER}","reason":"planned certificate rotation"}}]}}"#
+            )
+        }
+
+        #[test]
+        fn primary_and_rollover_signers_are_accepted_but_unrelated_signer_is_rejected() {
+            assert!(authorize_release_signer(PRIMARY, Some(PRIMARY), SIGNER_TRUST_JSON).is_ok());
+            assert!(authorize_release_signer(ROLLOVER, Some(PRIMARY), &rollover_json()).is_ok());
+            let error =
+                authorize_release_signer(OTHER, Some(PRIMARY), &rollover_json()).unwrap_err();
+            assert!(error.contains("不是受信任"));
+        }
+
+        #[test]
+        fn signer_trust_requires_a_formal_primary_identity() {
+            let error = authorize_release_signer(PRIMARY, None, SIGNER_TRUST_JSON).unwrap_err();
+            assert!(error.contains("HLS_V7_SIGN_CERT_THUMBPRINT"));
+        }
+
+        #[test]
+        fn signer_trust_rejects_malformed_duplicate_or_unexplained_rollovers() {
+            assert!(normalize_thumbprint("not-a-thumbprint").is_err());
+            let duplicate = format!(
+                r#"{{"schema":1,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[{{"thumbprint":"{ROLLOVER}","reason":"first"}},{{"thumbprint":"{ROLLOVER}","reason":"duplicate"}}]}}"#
+            );
+            assert!(parse_signer_trust(&duplicate).unwrap_err().contains("重复"));
+            let no_reason = format!(
+                r#"{{"schema":1,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[{{"thumbprint":"{ROLLOVER}","reason":"   "}}]}}"#
+            );
+            assert!(parse_signer_trust(&no_reason)
+                .unwrap_err()
+                .contains("审核原因"));
+        }
+
+        #[test]
+        fn signer_trust_rejects_unknown_contract_values() {
+            let wrong_schema = format!(
+                r#"{{"schema":2,"identity":"{EXPECTED_TRUST_IDENTITY}","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[]}}"#
+            );
+            assert!(parse_signer_trust(&wrong_schema)
+                .unwrap_err()
+                .contains("schema"));
+            let wrong_identity = format!(
+                r#"{{"schema":1,"identity":"subject_name","policy":"{EXPECTED_TRUST_POLICY}","rollover_signers":[]}}"#
+            );
+            assert!(parse_signer_trust(&wrong_identity)
+                .unwrap_err()
+                .contains("身份类型"));
+        }
+
+        #[test]
+        fn primary_signer_still_requires_a_valid_local_trust_contract() {
+            let malformed = r#"{"schema":1,"identity":"authenticode_leaf_certificate_sha1","policy":"formal-build-signer-or-explicit-rollover","rollover_signers":["#;
+            let error = authorize_release_signer(PRIMARY, Some(PRIMARY), malformed).unwrap_err();
+            assert!(error.contains("解析更新签名信任配置失败"));
+        }
     }
 }
 
@@ -510,6 +607,17 @@ struct HelperArgs {
     result: PathBuf,
 }
 
+#[cfg(windows)]
+fn lock_update_package(msi: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(msi)
+        .map_err(|error| format!("无法锁定升级安装包: {error}"))
+}
+
 pub fn run_update_helper(args: impl IntoIterator<Item = OsString>) -> Result<u8, String> {
     run_helper(args, None::<fn(&Path) -> Result<(), String>>)
 }
@@ -537,15 +645,7 @@ where
         &args,
         |path| {
             #[cfg(windows)]
-            let package = {
-                use std::os::windows::fs::OpenOptionsExt;
-                use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-                std::fs::OpenOptions::new()
-                    .read(true)
-                    .share_mode(FILE_SHARE_READ)
-                    .open(path)
-                    .map_err(|error| format!("无法锁定升级安装包: {error}"))?
-            };
+            let package = lock_update_package(path)?;
             if let Some(check) = additional_check {
                 check(path)?;
             }
@@ -1408,6 +1508,51 @@ mod tests {
         assert_eq!(calls, 1);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_signer_extraction_rejects_unsigned_payload() {
+        let path = std::env::temp_dir().join(format!(
+            "hls-updater-signer-unsigned-{}-{}.msi",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"unsigned signer fixture").unwrap();
+        let package = lock_update_package(&path).unwrap();
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        let error = verify_installer_authenticode(&path, Some(&package)).unwrap_err();
+        drop(package);
+        assert!(error.contains("Authenticode"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn helper_gate_reads_the_msi_argument_without_changing_argument_order() {
+        let args = [
+            "--version",
+            "7.0.2",
+            "--msi",
+            r"C:\Temp\HLSDownloader.msi",
+            "--core-pid",
+            "0",
+            "--workbench-pid",
+            "0",
+            "--install-root",
+            "app",
+            "--workbench",
+            "app.exe",
+            "--log",
+            "install.log",
+            "--result",
+            "result.json",
+        ];
+        let parsed = parse_helper_args(args.into_iter().map(OsString::from)).unwrap();
+        assert_eq!(parsed.msi, Path::new(r"C:\Temp\HLSDownloader.msi"));
+    }
+
     #[test]
     fn helper_arguments_keep_unicode_paths_and_reject_missing_values() {
         let args = parse_helper_args(
@@ -1533,7 +1678,8 @@ mod tests {
     fn release_signer_requires_a_valid_primary_and_reviewed_rollovers() {
         let primary = "0123456789ABCDEF0123456789ABCDEF01234567";
         let other = "123456789ABCDEF0123456789ABCDEF012345678";
-        let policy = include_str!("../../../config/release/update-signer-trust.json");
+        use super::signer_policy::{authorize_release_signer, SIGNER_TRUST_JSON};
+        let policy = SIGNER_TRUST_JSON;
         assert!(authorize_release_signer(primary, Some(primary), policy).is_ok());
         assert!(authorize_release_signer(primary, None, policy).is_err());
         let mut policy: serde_json::Value = serde_json::from_str(policy).unwrap();

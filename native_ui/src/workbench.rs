@@ -2094,6 +2094,7 @@ impl Workbench {
             };
             match action.as_str() {
                 "close" => {
+                    editor.discard_unsaved_secrets();
                     let _ = editor.window.hide();
                 }
                 "save" => {
@@ -2174,6 +2175,15 @@ impl Workbench {
                         .set_status("该设置页面的专用编辑器尚在迁移中".into())
                 }
             }
+        });
+        let weak = Rc::downgrade(self);
+        editor.window.window().on_close_requested(move || {
+            if let Some(this) = weak.upgrade() {
+                if let Some(editor) = this.settings.borrow_mut().as_mut() {
+                    editor.discard_unsaved_secrets();
+                }
+            }
+            slint::CloseRequestResponse::HideWindow
         });
         let _ = editor.window.show();
         native_window::prepare_dialog(

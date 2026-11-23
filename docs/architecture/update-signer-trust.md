@@ -21,17 +21,14 @@ The identity is the normalized 40-hex SHA-1 thumbprint of the already-verified A
 
 ## Runtime order
 
-The main process still performs its existing downloaded-file and MSI checks before launching the updater helper. The helper then adds a second fail-closed authorization boundary before `msiexec`:
+The main process checks the downloaded asset, Authenticode trust and MSI identity before launching the helper. The helper executable passes its arguments directly to `hls_client::update_install::run_update_helper`. The client library owns the embedded signer policy and performs one Authenticode verification inside the helper.
 
-1. parse the already-existing `--msi` helper argument;
-2. run `WinVerifyTrust(WINTRUST_ACTION_GENERIC_VERIFY_V2)` using the existing cache-only/revocation policy;
-3. obtain provider data from the verified WinTrust state;
-4. obtain the primary signer and its leaf certificate;
-5. read `CERT_SHA1_HASH_PROP_ID` from that certificate context;
-6. require the normalized thumbprint to equal the compile-time formal signer or one reviewed rollover signer;
-7. only then call the existing `run_update_helper`, which repeats Authenticode verification and enforces MSI product/version/upgrade/per-user identity before installation.
+1. Parse the helper arguments and open the MSI for reading with `FILE_SHARE_READ`. Windows denies write and delete access while this handle is open.
+2. Pass that handle to `WinVerifyTrust(WINTRUST_ACTION_GENERIC_VERIFY_V2)` with cache-only retrieval and no revocation checks. From the verified provider state, read the primary signer's leaf certificate thumbprint using `CERT_SHA1_HASH_PROP_ID`.
+3. Validate the embedded primary identity and the complete rollover policy, then require the verified thumbprint to match an authorized signer. Close the WinTrust state after this check.
+4. Check the MSI product name, version, upgrade code and per-user context. Keep the same file handle open through product shutdown and until `msiexec` returns, including any installer-busy retries.
 
-Missing formal signer identity, malformed local trust data, missing WinTrust provider/signer/certificate state, or signer mismatch prevents installation.
+Both helper entry points require these checks on Windows. `run_update_helper_with_verifier` can additionally reject the locked package before the mandatory checks. A lock, trust, policy or identity failure prevents installation.
 
 ## Deliberate certificate rotation
 
@@ -72,6 +69,6 @@ A rollover entry is an object with `thumbprint` and non-empty `reason`. The pars
 
 ## Validation
 
-Windows CI must compile and run the updater-helper tests. Pure authorization tests cover primary acceptance, rollover acceptance, unrelated-signer rejection, missing formal signer, malformed/duplicate rollover data and MSI argument extraction. A Windows-only test additionally proves that the real WinTrust signer-extraction path rejects an unsigned payload.
+Windows CI must run the client library and updater binary tests. The library tests exercise the primary and rollover policy, argument parsing, Windows sharing restrictions and unsigned payload rejection. The production updater entry point must record a WinTrust failure before installation when given an unsigned package.
 
 The existing SHA-256, MSI identity, WinVerifyTrust and compiled signer-ownership checks remain in force for automatic updates. Current formal publication stages unsigned assets without a signing or timestamp gate; publishing them does not authorize the updater to install them automatically.

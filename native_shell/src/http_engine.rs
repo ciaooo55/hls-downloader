@@ -87,6 +87,20 @@ fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
     }
 }
 
+// WinHTTP named proxies do not accept URL userinfo or SOCKS routes.
+fn proxy_needs_curl(proxy: &str) -> bool {
+    proxy
+        .trim()
+        .split_once("://")
+        .is_some_and(|(scheme, rest)| {
+            scheme.to_ascii_lowercase().starts_with("socks")
+                || rest
+                    .split(['/', '?', '#'])
+                    .next()
+                    .is_some_and(|a| a.contains('@'))
+        })
+}
+
 #[cfg(test)]
 #[test]
 fn proxy_route_identity_distinguishes_transports() {
@@ -1143,9 +1157,12 @@ pub(crate) fn copy_hls_body(
             break;
         }
         if expected.is_some_and(|length| count as u64 > length - received) {
-            return Err(
-                EngineError::Failed("media response exceeds expected length".into()).into(),
-            );
+            return Err(EngineError::Failed(if range.is_some() {
+                "byte range response exceeds requested length".into()
+            } else {
+                "media response exceeds expected length".into()
+            })
+            .into());
         }
         crate::net_policy::consume(count, || check_job_control(job))?;
         writer.write_all(&buffer[..count])?;
@@ -3160,7 +3177,7 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut prepared = job.clone();
     apply_browser_profile(&mut prepared.headers);
     let first = fetch_follow(&prepared, range)?;
-    if first.status != 403 {
+    if first.status != 403 || proxy_needs_curl(&job.proxy) {
         return Ok(first);
     }
     if let Some(via_curl) = fetch_curl_follow(&prepared, range) {
@@ -3173,7 +3190,7 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
     let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let browser_eligible = job.url.to_ascii_lowercase().starts_with("https://")
         && job.method.eq_ignore_ascii_case("GET");
-    if browser_eligible {
+    if browser_eligible && !proxy_needs_curl(&job.proxy) {
         if let Some(result) = fetch_curl_follow(job, range) {
             match result {
                 Ok(fetched) if (200..400).contains(&fetched.status) => return Ok(fetched),
@@ -3434,6 +3451,15 @@ fn fetch_follow_restricted(
         let request = |headers: &HashMap<String, String>| {
             let mut hop = hop.clone();
             hop.headers = headers.clone();
+            if proxy_needs_curl(&hop.proxy) {
+                return fetch_via_curl_impersonate(&hop, range, &destinations).unwrap_or_else(
+                    || {
+                        Err(EngineError::Failed(
+                            "代理认证或 SOCKS 路由需要 curl 传输".into(),
+                        ))
+                    },
+                );
+            }
             if parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct) {
                 #[cfg(windows)]
                 {
@@ -3726,7 +3752,27 @@ fn fetch_via_curl_impersonate(
     range: Option<&str>,
     destinations: &[SocketAddr],
 ) -> Option<Result<FetchResult, EngineError>> {
-    let exe = curl_exe_for(&job.url)?;
+    let bundled = curl_exe_for(&job.url);
+    let use_profile = bundled.is_some();
+    let exe = bundled.or_else(|| {
+        if !proxy_needs_curl(&job.proxy) {
+            return None;
+        }
+        #[cfg(windows)]
+        let path = {
+            use std::os::windows::ffi::OsStringExt;
+            use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+            let mut dir = vec![0u16; 32768];
+            let len = unsafe { GetSystemDirectoryW(dir.as_mut_ptr(), dir.len() as u32) } as usize;
+            if len == 0 || len >= dir.len() {
+                return None;
+            }
+            PathBuf::from(OsString::from_wide(&dir[..len])).join("curl.exe")
+        };
+        #[cfg(not(windows))]
+        let path = PathBuf::from("/usr/bin/curl");
+        path.is_file().then_some(path)
+    })?;
     if matches!(proxy_route(&job.proxy), ProxyRoute::System) {
         return None;
     }
@@ -3776,9 +3822,10 @@ fn fetch_via_curl_impersonate(
         if range.is_none() {
             command.arg("--compressed");
         }
+        if use_profile {
+            command.args(["--impersonate", "chrome146"]);
+        }
         command
-            .arg("--impersonate")
-            .arg("chrome146")
             .arg("-sS")
             .arg("--connect-timeout")
             .arg("15")
@@ -3816,13 +3863,25 @@ fn fetch_via_curl_impersonate(
             }
         }
         command.args(curl_request_args(job, headers));
+        let mut proxy_config = None;
         match proxy_route(&job.proxy) {
             ProxyRoute::Direct => {
                 command.arg("--noproxy").arg("*");
             }
             ProxyRoute::System => unreachable!("system route skips curl-impersonate"),
             ProxyRoute::Manual(proxy) => {
-                command.arg("--noproxy").arg("").arg("-x").arg(proxy);
+                command.args(["--noproxy", ""]);
+                if proxy_needs_curl(proxy) {
+                    if proxy.chars().any(char::is_control) {
+                        return Err(EngineError::Failed("代理地址无效".into()));
+                    }
+                    // Keep authenticated endpoints out of process listings and curl diagnostics.
+                    let escaped = proxy.replace('\\', "\\\\").replace('"', "\\\"");
+                    proxy_config = Some(format!("proxy = \"{escaped}\"\n"));
+                    command.args(["--config", "-"]);
+                } else {
+                    command.arg("-x").arg(proxy);
+                }
             }
         }
         command.arg(&job.url);
@@ -3831,15 +3890,32 @@ fn fetch_via_curl_impersonate(
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let error_file = File::create(dir.join("stderr"))
-            .map_err(|error| EngineError::Failed(error.to_string()))?;
+        let (stdin, stderr) = if proxy_config.is_some() {
+            (std::process::Stdio::piped(), std::process::Stdio::null())
+        } else {
+            let file = File::create(dir.join("stderr"))
+                .map_err(|error| EngineError::Failed(error.to_string()))?;
+            (std::process::Stdio::null(), std::process::Stdio::from(file))
+        };
         let mut child = command
-            .stdin(std::process::Stdio::null())
+            .stdin(stdin)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::from(error_file))
+            .stderr(stderr)
             .spawn()
             .map_err(|error| EngineError::Failed(error.to_string()))?;
         drop(command);
+        if let Some(config) = proxy_config {
+            if let Err(error) = child
+                .stdin
+                .take()
+                .expect("piped curl config")
+                .write_all(config.as_bytes())
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(EngineError::Failed(format!("write curl config: {error}")));
+            }
+        }
         let mut stdout = child
             .stdout
             .take()
@@ -5272,6 +5348,25 @@ mod tests {
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     };
+
+    #[test]
+    fn local_proxy_receives_vaulted_http_basic_credentials() {
+        let (endpoint, proxy_thread) = serve_redirect_test_responses(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".into(),
+        ]);
+        let mut store = crate::CoreStore::in_memory().unwrap();
+        let raw = endpoint.replacen("://", "://alice:secret@", 1);
+        store.set_setting("proxy_url", &raw).unwrap();
+        let clean = store.setting_string("proxy_url", "").unwrap();
+        let proxy = store.hydrate_proxy(&clean).unwrap();
+        let (status, body) =
+            fetch_bytes_limited("http://127.0.0.1:1/file", &HashMap::new(), &proxy, 16).unwrap();
+        assert_eq!((status, body.as_slice()), (200, b"ok".as_slice()));
+        let request = proxy_thread.join().unwrap().remove(0);
+        assert!(request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("Proxy-Authorization: Basic YWxpY2U6c2VjcmV0")));
+    }
 
     fn post_test_job(url: String, body_path: PathBuf) -> Job {
         Job {

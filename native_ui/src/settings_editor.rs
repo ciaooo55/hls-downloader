@@ -144,10 +144,25 @@ pub struct SettingsEditor {
     pub window: SettingsWindow,
     pub values: BTreeMap<String, Value>,
     pub dirty: BTreeMap<String, Value>,
-    invalid: BTreeMap<String, String>,
+    invalid: BTreeMap<String, (String, String)>,
     rules: Vec<crate::site_rules::SiteRuleDraft>,
     rules_error: Option<String>,
     rules_changed: bool,
+}
+
+fn settings_values(response: &CorePipeResponse) -> BTreeMap<String, Value> {
+    let mut values: BTreeMap<_, _> = serde_json::to_value(response)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Some(Value::String(url)) = values.get_mut("proxy_url") {
+        // Older Core versions can return the full URL. Keep only the editable vault identity.
+        *url = hls_client::url_credentials::map_url_passwords(url, true, |_, _| Ok(()))
+            .expect("redaction cannot fail");
+    }
+    values
 }
 
 impl SettingsEditor {
@@ -163,12 +178,7 @@ impl SettingsEditor {
                 .map(|group| (*group).into())
                 .collect::<Vec<_>>(),
         )));
-        let values: BTreeMap<String, Value> = serde_json::to_value(response)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        let values = settings_values(response);
         let parsed = crate::site_rules::SiteRuleDraft::parse(
             values
                 .get("site_rules")
@@ -193,10 +203,22 @@ impl SettingsEditor {
         Ok(editor)
     }
 
+    pub fn discard_unsaved_secrets(&mut self) {
+        if self.dirty.remove("proxy_url").is_some() || self.invalid.remove("proxy_url").is_some() {
+            self.render(&self.window.get_selected_group());
+        }
+    }
+
     pub fn edit(&mut self, key: &str, text: &str) -> Result<(), String> {
         let original = self.values.get(key).ok_or("未知设置项")?;
-        if let Err(error) = validate_schedule_time(key, text) {
-            self.invalid.insert(key.into(), text.into());
+        if let Err(error) = validate_setting_text(key, text) {
+            self.dirty.remove(key);
+            let draft = if key == "proxy_url" { "" } else { text };
+            self.invalid
+                .insert(key.into(), (draft.into(), error.clone()));
+            if key == "proxy_url" {
+                self.render(&self.window.get_selected_group());
+            }
             return Err(error);
         }
         // 下拉框显示中文选项，保存时换回 Core 使用的取值。
@@ -211,8 +233,9 @@ impl SettingsEditor {
                 let number: u64 = match text.trim().parse() {
                     Ok(number) => number,
                     Err(_) => {
-                        self.invalid.insert(key.into(), text.into());
-                        return Err("请输入有效的非负整数".into());
+                        let error = "请输入有效的非负整数";
+                        self.invalid.insert(key.into(), (text.into(), error.into()));
+                        return Err(error.into());
                     }
                 };
                 Value::from(number)
@@ -256,7 +279,7 @@ impl SettingsEditor {
                     value: self
                         .invalid
                         .get(*key)
-                        .cloned()
+                        .map(|(draft, _)| draft.clone())
                         .unwrap_or_else(|| {
                             value
                                 .as_str()
@@ -355,12 +378,12 @@ impl SettingsEditor {
     }
 
     pub fn receive_settings(&mut self, response: &CorePipeResponse, saved: bool) {
-        self.values = serde_json::to_value(response)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        let values = settings_values(response);
+        let refresh_proxy = values.get("proxy_url") != self.values.get("proxy_url")
+            && self.window.get_selected_group() == "网络"
+            && !self.dirty.contains_key("proxy_url")
+            && !self.invalid.contains_key("proxy_url");
+        self.values = values;
         let mode = crate::theme::ThemeMode::from_response(Some(response));
         self.values.insert("theme_mode".into(), mode.code().into());
         crate::native_window::apply_theme(&self.window, mode.is_dark());
@@ -384,21 +407,18 @@ impl SettingsEditor {
             }
             self.render_rules();
         }
-        if saved {
+        if saved || refresh_proxy {
             self.render(&self.window.get_selected_group());
         }
     }
 
     pub fn storage_changes(&self) -> Result<BTreeMap<String, Value>, String> {
-        if let Some(key) = self.invalid.keys().next() {
+        if let Some((key, (_, error))) = self.invalid.first_key_value() {
             let label = FIELDS
                 .iter()
                 .find(|(_, field, _)| *field == key)
                 .map(|(_, _, label)| *label)
                 .unwrap_or(key);
-            let error = validate_schedule_time(key, &self.invalid[key])
-                .err()
-                .unwrap_or_else(|| "请输入有效的非负整数".into());
             return Err(format!("{label}：{error}"));
         }
         let mut changes = storage_changes(&self.values, &self.dirty);
@@ -419,7 +439,12 @@ impl SettingsEditor {
     }
 }
 
-fn validate_schedule_time(key: &str, text: &str) -> Result<(), String> {
+fn validate_setting_text(key: &str, text: &str) -> Result<(), String> {
+    if matches!(key, "proxy_url" | "download_dir" | "temp_dir")
+        && text.chars().any(char::is_control)
+    {
+        return Err("设置值不能包含控制字符".into());
+    }
     if matches!(
         key,
         "schedule_start" | "schedule_end" | "queue_auto_start_time" | "queue_auto_stop_time"
@@ -504,19 +529,45 @@ mod tests {
             "queue_auto_stop_time",
         ] {
             for valid in ["00:00", "23:59", "08:30", "22:00"] {
-                assert!(validate_schedule_time(key, valid).is_ok());
+                assert!(validate_setting_text(key, valid).is_ok());
             }
             for invalid in [
                 "", "26:99", "25:99", "24:00", "12:60", "1:00", "01:0", "+1:00", " 01:00",
                 "01:00 ", "ab:cd", "中文a", "1:000",
             ] {
                 assert!(
-                    validate_schedule_time(key, invalid).is_err(),
+                    validate_setting_text(key, invalid).is_err(),
                     "{key}: {invalid}"
                 );
             }
         }
-        assert!(validate_schedule_time("download_dir", "").is_ok());
+        assert!(validate_setting_text("download_dir", "").is_ok());
+    }
+
+    #[test]
+    fn proxy_and_directory_edits_reject_controls_before_trimming() {
+        for key in ["proxy_url", "download_dir", "temp_dir"] {
+            for value in ["\rvalue", "a\0b", "value\n", "a\u{0085}b"] {
+                assert!(validate_setting_text(key, value).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn settings_keep_only_the_passwordless_proxy_identity() {
+        let clean = "http://user@proxy:8080";
+        for proxy in [clean, "http://user:p%40ss@proxy:8080"] {
+            let response = serde_json::from_value(serde_json::json!({
+                "type": "settings", "request_id": 1, "proxy_url": proxy,
+                "takeover_enabled": true, "takeover_minimum_bytes": 0,
+                "legal_accepted": true, "speed_limit_kib": 0, "download_dir": ""
+            }))
+            .unwrap();
+            let values = settings_values(&response);
+            assert_eq!(values["proxy_url"], clean);
+            assert!(validate_setting_text("proxy_url", clean).is_ok());
+            assert!(!storage_changes(&values, &BTreeMap::new()).contains_key("proxy_url"));
+        }
     }
     #[test]
     fn editing_one_category_keeps_the_other_directories_and_uses_core_storage_keys() {

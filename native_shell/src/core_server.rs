@@ -1187,6 +1187,70 @@ mod tests {
     }
 
     #[test]
+    fn proxy_settings_responses_and_events_are_passwordless() {
+        let server = CoreServer::in_memory().unwrap();
+        let handler = server.handler();
+        for (raw, clean) in [
+            (
+                "http://alice:secret@proxy.example:8080",
+                "http://alice@proxy.example:8080",
+            ),
+            (
+                "socks5://bob:pw@127.0.0.1:1080",
+                "socks5://bob@127.0.0.1:1080",
+            ),
+        ] {
+            let rules = serde_json::json!([{"host":"media.example","proxy":"https://rule:rule-password@rules.example:443"}]);
+            let written = handler(CorePipeRequest::StoreSettings {
+                request_id: 1,
+                values: BTreeMap::from([
+                    ("proxy_mode".into(), Value::String("manual".into())),
+                    ("proxy_url".into(), Value::String(raw.into())),
+                    ("site_rules".into(), Value::String(rules.to_string())),
+                ]),
+            });
+            for response in [
+                written,
+                handler(CorePipeRequest::LoadSettings { request_id: 2 }),
+            ] {
+                let CorePipeResponse::Settings {
+                    proxy_url,
+                    site_rules,
+                    ..
+                } = response
+                else {
+                    panic!("expected settings");
+                };
+                assert_eq!(proxy_url, clean);
+                assert_eq!(
+                    crate::parse_site_rules(&site_rules)[0].proxy,
+                    "https://rule@rules.example:443"
+                );
+            }
+            for (target, expected) in [
+                ("https://other.example/file", raw),
+                (
+                    "https://media.example/file",
+                    "https://rule:rule-password@rules.example:443",
+                ),
+            ] {
+                let spec = server.coordinator.metadata_spec(target).unwrap();
+                let (transfer, _) = crate::download_worker::hydrate_replay_headers(
+                    &server.coordinator.core(),
+                    spec,
+                )
+                .unwrap();
+                assert_eq!(transfer.proxy, expected);
+            }
+            let core = server.coordinator.lock().unwrap();
+            assert_eq!(core.store().setting_string("proxy_url", "").unwrap(), clean);
+            let events = serde_json::to_string(&core.events_after(0, 100)).unwrap();
+            assert!(!events.contains(raw) && !events.contains("rule-password"));
+        }
+        server.shutdown();
+    }
+
+    #[test]
     fn invalid_batch_setting_does_not_partially_commit() {
         let server = CoreServer::in_memory().unwrap();
         let response = (server.handler())(CorePipeRequest::StoreSettings {
