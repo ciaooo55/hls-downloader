@@ -42,6 +42,7 @@ pub struct Workbench {
     editor: RefCell<Option<TaskEditorWindow>>,
     editor_id: Cell<u64>,
     editor_variants: RefCell<Vec<StreamVariant>>,
+    editor_queues: RefCell<Vec<hls_client::QueueProfile>>,
     details: RefCell<Option<(String, DetailsWindow)>>,
     details_full_log: Cell<bool>,
     settings: RefCell<Option<SettingsEditor>>,
@@ -265,6 +266,7 @@ impl Workbench {
             editor: RefCell::new(None),
             editor_id: Cell::new(0),
             editor_variants: RefCell::new(Vec::new()),
+            editor_queues: RefCell::new(crate::queue_editor::ordered_profiles(&[])),
             details: RefCell::new(None),
             details_full_log: Cell::new(false),
             settings: RefCell::new(None),
@@ -711,7 +713,7 @@ impl Workbench {
         self.render();
     }
 
-    pub fn apply(&self, event: &EventEnvelope) {
+    pub fn apply(self: &Rc<Self>, event: &EventEnvelope) {
         if let Some(media) = self.media.borrow().as_ref() {
             media.event(event);
         }
@@ -763,9 +765,91 @@ impl Workbench {
             CoreEvent::UiShow { surface } if surface == "main" => {
                 let _ = self.show();
             }
+            CoreEvent::UiShow { surface } if surface == "new_download" => {
+                let _ = self.show();
+                self.open_editor("new");
+            }
             CoreEvent::UiShow { surface } if surface == "hide" => self.close(),
             _ => {}
         }
+    }
+
+    pub fn open_clipboard_offer(self: &Rc<Self>, urls: &[String]) {
+        if urls.is_empty() {
+            return;
+        }
+        let _ = self.show();
+        let mode_action = if urls.len() > 1 {
+            "批量添加"
+        } else {
+            "new"
+        };
+        self.open_editor(mode_action);
+        if let Some(editor) = self.editor.borrow().as_ref() {
+            editor.set_url(urls.join("\n").into());
+            editor.set_result_tone("info".into());
+            editor.set_result(
+                if urls.len() > 1 {
+                    format!("已从剪贴板识别 {} 个下载链接", urls.len())
+                } else {
+                    "已从剪贴板识别下载链接".into()
+                }
+                .into(),
+            );
+        }
+    }
+
+    pub fn open_editor_from_offer(
+        self: &Rc<Self>,
+        offer: &hls_client::ResourceOffer,
+        filename: &str,
+        download_dir: &str,
+        queue_id: &str,
+    ) {
+        let _ = self.show();
+        self.open_editor("new");
+        if let Some(editor) = self.editor.borrow().as_ref() {
+            editor.set_url(offer.url.clone().into());
+            if !filename.trim().is_empty() {
+                editor.set_filename(filename.trim().into());
+            }
+            if !download_dir.trim().is_empty() {
+                editor.set_download_dir(download_dir.trim().into());
+            }
+            editor.set_kind(kind_label(offer.resource_kind).into());
+            let method = offer.request_method.trim().to_ascii_uppercase();
+            if matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "HEAD") {
+                editor.set_method(method.into());
+            }
+            self.sync_editor_queues(editor, Some(queue_id));
+            let has_advanced = editor.get_has_advanced_values();
+            editor.set_advanced_expanded(has_advanced);
+            editor.set_result_tone("info".into());
+            editor.set_result("已载入当前下载信息，可调整高级参数后添加任务".into());
+        }
+    }
+
+    fn queue_profiles(&self) -> Vec<hls_client::QueueProfile> {
+        match self.settings_response.borrow().as_ref() {
+            Some(CorePipeResponse::Settings { queue_profiles, .. }) => {
+                crate::queue_editor::ordered_profiles(queue_profiles)
+            }
+            _ => crate::queue_editor::ordered_profiles(&[]),
+        }
+    }
+
+    fn sync_editor_queues(&self, editor: &TaskEditorWindow, preferred_queue_id: Option<&str>) {
+        let profiles = self.queue_profiles();
+        let names = crate::queue_editor::queue_option_names(&profiles);
+        let current = preferred_queue_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| editor.get_queue_id().to_string());
+        let index = crate::queue_editor::queue_index_for_id(&profiles, &current);
+        let resolved_id = crate::queue_editor::queue_id_at(&profiles, index);
+        *self.editor_queues.borrow_mut() = profiles;
+        editor.set_queue_names(ModelRc::new(VecModel::from(names)));
+        editor.set_queue_index(index);
+        editor.set_queue_id(resolved_id.into());
     }
 
     fn render(&self) {
@@ -1260,24 +1344,34 @@ impl Workbench {
                         "只移除任务和过程文件，已完成文件会保留。"
                     }
                 );
-                if file_dialogs::confirm(
-                    native_window::hwnd(self.window.window()),
-                    if files {
+                if let Some(system) = self.system.borrow().as_ref() {
+                    let weak = Rc::downgrade(self);
+                    let command_action = action.to_owned();
+                    let label = if files {
                         "删除任务和文件"
                     } else {
                         "删除任务"
-                    },
-                    &message,
-                ) {
-                    self.job(WorkbenchJob::Batch(
-                        self.id(),
-                        ids.into_iter()
-                            .map(|task_id| CoreCommand::TaskAction {
-                                task_id,
-                                action: action.into(),
-                            })
-                            .collect(),
-                    ));
+                    };
+                    system.confirm(
+                        if files { "delete_files" } else { "delete" },
+                        label,
+                        message,
+                        label,
+                        true,
+                        Box::new(move || {
+                            if let Some(this) = weak.upgrade() {
+                                this.job(WorkbenchJob::Batch(
+                                    this.id(),
+                                    ids.into_iter()
+                                        .map(|task_id| CoreCommand::TaskAction {
+                                            task_id,
+                                            action: command_action.clone(),
+                                        })
+                                        .collect(),
+                                ));
+                            }
+                        }),
+                    );
                 }
             }
             action if action.starts_with("task:") => {
@@ -1632,6 +1726,12 @@ impl Workbench {
                     }
                 }
                 *self.settings_response.borrow_mut() = Some(response.clone());
+                if let Some(editor) = self.editor.borrow().as_ref() {
+                    self.sync_editor_queues(editor, None);
+                }
+                if let Some(tools) = self.tools.borrow().as_ref() {
+                    tools.set_queues(&self.queue_profiles());
+                }
                 self.render_status();
                 if self.show_settings.replace(false) {
                     self.open_settings(&response);
@@ -1688,6 +1788,9 @@ impl Workbench {
     }
 
     fn open_editor(self: &Rc<Self>, action: &str) {
+        if let Some(previous) = self.editor.borrow().as_ref() {
+            let _ = previous.hide();
+        }
         let Ok(editor) = TaskEditorWindow::new() else {
             return;
         };
@@ -1709,6 +1812,7 @@ impl Workbench {
             editor.set_download_dir(download_dir.clone().into());
             editor.set_legal_accepted(*legal_accepted);
         }
+        self.sync_editor_queues(&editor, None);
         let has_advanced = editor.get_has_advanced_values();
         editor.set_advanced_expanded(has_advanced);
         self.editor_id.set(self.id());
@@ -1717,6 +1821,16 @@ impl Workbench {
         editor.on_action(move |action| {
             if let Some(this) = weak.upgrade() {
                 this.editor_action(action.as_str());
+            }
+        });
+        let weak = Rc::downgrade(self);
+        editor.on_queue_selected(move |index| {
+            if let Some(this) = weak.upgrade() {
+                let queue_id =
+                    crate::queue_editor::queue_id_at(&this.editor_queues.borrow(), index);
+                if let Some(editor) = this.editor.borrow().as_ref() {
+                    editor.set_queue_id(queue_id.into());
+                }
             }
         });
         let editor_weak = editor.as_weak();
@@ -2040,6 +2154,7 @@ impl Workbench {
         let id = Rc::new(move || id_owner.upgrade().map_or(0, |this| this.id()));
         match ResourceTools::new(mode, task_id, &directory, &self.window, request, batch, id) {
             Ok(tools) => {
+                tools.set_queues(&self.queue_profiles());
                 if let Some(previous) = self.tools.borrow_mut().replace(tools.clone()) {
                     let _ = previous.window.hide();
                 }
@@ -2081,6 +2196,14 @@ impl Workbench {
                         editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
                     }
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        editor.window.on_toggle_day(move |day| {
+            if let Some(this) = weak.upgrade() {
+                if let Some(editor) = this.queues.borrow_mut().as_mut() {
+                    editor.toggle_day(day);
                 }
             }
         });
@@ -2507,7 +2630,15 @@ fn editor_spec(
         preferred_audio: editor.get_audio().into(),
         scheduled_start_at: editor.get_start_at().trim().into(),
         scheduled_stop_at: editor.get_stop_at().trim().into(),
-        queue_id: editor.get_queue_id().trim().into(),
+        queue_id: {
+            let raw = editor.get_queue_id();
+            let queue_id = raw.trim();
+            if queue_id.is_empty() {
+                hls_client::DEFAULT_QUEUE_ID.into()
+            } else {
+                queue_id.into()
+            }
+        },
         allow_duplicate: editor.get_allow_duplicate(),
         start_paused: editor.get_start_paused(),
         ..Default::default()
@@ -2877,6 +3008,121 @@ mod file_selection_tests {
         let connections = workbench.window.get_inspector_connections();
         assert!(!connections.contains('\n'));
         assert!(connections.contains("4 个活动连接"));
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn ui_show_new_download_and_clipboard_offer_open_prefilled_editor_with_queue_combo() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, true, true).unwrap();
+        let settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_kib": 0,
+            "download_dir": "D:/Downloads",
+            "queue_profiles": [
+                {"id": "default", "name": "默认队列", "priority": 0},
+                {"id": "vip", "name": "高速队列", "priority": -10}
+            ]
+        }))
+        .unwrap();
+        workbench.response(settings);
+
+        workbench.apply(&EventEnvelope {
+            sequence: 2,
+            event: CoreEvent::UiShow {
+                surface: "new_download".into(),
+            },
+        });
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor
+                .as_ref()
+                .expect("new_download opens TaskEditorWindow");
+            assert_eq!(editor.get_mode().as_str(), "new");
+            assert_eq!(
+                editor
+                    .get_queue_names()
+                    .iter()
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+                vec!["高速队列", "默认队列"]
+            );
+            assert_eq!(editor.get_queue_id().as_str(), "default");
+            assert_eq!(editor.get_queue_index(), 1);
+            editor.invoke_queue_selected(0);
+            assert_eq!(editor.get_queue_id().as_str(), "vip");
+            editor.set_url("https://cdn.example.test/video.mp4".into());
+            assert_eq!(editor_spec(editor, &[]).unwrap().queue_id, "vip");
+        }
+
+        // Single URL clipboard offer -> "new" mode.
+        workbench.open_clipboard_offer(&["https://example.test/a.zip".into()]);
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert_eq!(editor.get_mode().as_str(), "new");
+            assert_eq!(editor.get_url().as_str(), "https://example.test/a.zip");
+        }
+
+        // Multi-URL clipboard offer -> "batch" mode.
+        workbench.open_clipboard_offer(&[
+            "https://example.test/1.bin".into(),
+            "https://example.test/2.bin".into(),
+        ]);
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert_eq!(editor.get_mode().as_str(), "batch");
+            assert_eq!(
+                editor.get_url().as_str(),
+                "https://example.test/1.bin\nhttps://example.test/2.bin"
+            );
+        }
+
+        // ConfirmWindow "更多设置" handoff -> prefilled single editor with offer fields & queue.
+        let offer = hls_client::ResourceOffer {
+            url: "https://cdn.example.test/stream/index.m3u8?sig=abc".into(),
+            resource_kind: ResourceKind::Hls,
+            request_method: "POST".into(),
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer, "lecture.mp4", "D:/Media", "vip");
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert_eq!(editor.get_mode().as_str(), "new");
+            assert_eq!(editor.get_url().as_str(), offer.url);
+            assert_eq!(editor.get_filename().as_str(), "lecture.mp4");
+            assert_eq!(editor.get_download_dir().as_str(), "D:/Media");
+            assert_eq!(editor.get_kind().as_str(), "HLS");
+            assert_eq!(editor.get_method().as_str(), "POST");
+            assert_eq!(editor.get_queue_id().as_str(), "vip");
+            assert_eq!(editor.get_queue_index(), 0);
+            assert!(editor.get_advanced_expanded());
+            let _ = editor.hide();
+        }
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn delete_action_routes_to_themed_decision_window() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let task = TaskSnapshot {
+            task_id: "del-1".into(),
+            filename: "sample.bin".into(),
+            status: "paused".into(),
+            available_actions: vec!["delete".into()],
+            ..Default::default()
+        };
+        let workbench = Workbench::new(vec![task], 1, true, true).unwrap();
+        workbench.state.borrow_mut().select("del-1", false, false);
+        workbench.render_selection();
+        workbench.action("delete");
+        assert!(workbench.system.borrow().as_ref().unwrap().keeps_ui_alive());
         workbench.window.hide().unwrap();
     }
 }
