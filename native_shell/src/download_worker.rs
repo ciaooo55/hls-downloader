@@ -2109,6 +2109,7 @@ impl CoreCoordinator {
         Err("legal terms not accepted".into())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn accept_handoff_command(
         &self,
         handoff_id: String,

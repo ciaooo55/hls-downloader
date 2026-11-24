@@ -62,7 +62,8 @@ pub fn format_active_days(flags: &[bool; 7]) -> String {
     flags
         .iter()
         .enumerate()
-        .filter_map(|(index, active)| active.then(|| (index + 1).to_string()))
+        .filter(|&(_, &active)| active)
+        .map(|(index, _)| (index + 1).to_string())
         .collect::<Vec<_>>()
         .join(",")
 }
