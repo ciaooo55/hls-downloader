@@ -28,7 +28,7 @@ export global Tokens {
     out property <color> control-pressed: dark ? #2d3546 : #e2e7f0;
     out property <color> canvas: dark ? #0c0e13 : #f1f3f7;
     out property <color> rail: dark ? #101319 : #f7f8fb;
-    out property <color> faint: dark ? #8690a2 : #5d697c;
+    out property <color> faint: dark ? #8690a2 : #4b5563;
     out property <color> selected: dark ? #192642 : #edf3ff;
     out property <color> hairline: dark ? #1f2430 : #edf0f5;
     out property <color> shadow: dark ? #0000004d : #0f172a12;
@@ -37,7 +37,7 @@ export global Tokens {
     out property <color> fail-surface: dark ? #3b1719 : #fef0ef;
     out property <color> info-surface: dark ? #162442 : #edf3ff;
     out property <color> ink: dark ? #f1f4f9 : #0f172a;
-    out property <color> muted: dark ? #b3bccb : #475569;
+    out property <color> muted: dark ? #b3bccb : #334155;
     out property <color> accent: dark ? #7aa2ff : #2e5bea;
     out property <color> accent-top: dark ? #8cb0ff : #3e6bf2;
     out property <color> accent-hover: dark ? #96b6ff : #234cd4;
@@ -178,7 +178,7 @@ export component HotButton inherits Rectangle {
     horizontal-stretch: 0;
     height: Tokens.control-height;
     border-radius: Tokens.control-radius;
-    opacity: root.enabled || root.busy ? 1 : 0.48;
+    opacity: root.enabled || root.busy ? 1 : 0.58;
     animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
     background: root.primary
         ? (root.down ? Tokens.accent-pressed : touch.has-hover && root.active ? Tokens.accent-hover : Tokens.accent)
@@ -241,7 +241,7 @@ export component HotCloseButton inherits Rectangle {
     height: 28px;
     border-radius: Tokens.control-radius;
     private property <bool> focus-visible: false;
-    opacity: enabled ? 1 : 0.45;
+    opacity: enabled ? 1 : 0.56;
     background: touch.pressed && enabled ? Tokens.control-pressed : touch.has-hover && enabled ? Tokens.surface-3 : transparent;
     animate background { duration: Tokens.motion-fast; easing: ease-out; }
     FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
@@ -296,7 +296,7 @@ export component ChoiceButton inherits Rectangle {
         }
         if root.align-start && root.selected: WorkbenchIcon { name: "check"; ink: Tokens.accent; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
     }
-    opacity: enabled ? 1 : 0.48;
+    opacity: enabled ? 1 : 0.58;
     private property <bool> focus-visible: false;
     forward-focus: focus;
     focus := FocusScope {

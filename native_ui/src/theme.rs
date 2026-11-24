@@ -110,4 +110,57 @@ mod tests {
     fn system_theme_falls_back_to_light_off_windows() {
         assert!(!ThemeMode::System.is_dark());
     }
+
+    #[test]
+    fn light_theme_secondary_tokens_meet_wcag_aa_contrast() {
+        use slint::ComponentHandle;
+
+        fn relative_luminance(color: slint::Color) -> f64 {
+            let linear = |channel: u8| {
+                let s = f64::from(channel) / 255.0;
+                if s <= 0.03928 {
+                    s / 12.92
+                } else {
+                    ((s + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color.red())
+                + 0.7152 * linear(color.green())
+                + 0.0722 * linear(color.blue())
+        }
+
+        fn contrast_ratio(fg: slint::Color, bg: slint::Color) -> f64 {
+            let l1 = relative_luminance(fg);
+            let l2 = relative_luminance(bg);
+            let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+            (hi + 0.05) / (lo + 0.05)
+        }
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let window = crate::ConfirmWindow::new().unwrap();
+        let tokens = window.global::<crate::Tokens>();
+        tokens.invoke_apply_theme(false);
+
+        let ink = tokens.get_ink();
+        let muted = tokens.get_muted();
+        let faint = tokens.get_faint();
+        for surface in [
+            tokens.get_surface(),
+            tokens.get_surface_2(),
+            tokens.get_canvas(),
+        ] {
+            assert!(
+                contrast_ratio(muted, surface) >= 4.5,
+                "light muted contrast too low: {:.2}",
+                contrast_ratio(muted, surface)
+            );
+            assert!(
+                contrast_ratio(faint, surface) >= 4.5,
+                "light faint contrast too low: {:.2}",
+                contrast_ratio(faint, surface)
+            );
+        }
+        assert!(relative_luminance(ink) < relative_luminance(muted));
+        assert!(relative_luminance(muted) < relative_luminance(faint));
+    }
 }

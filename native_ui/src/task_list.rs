@@ -223,6 +223,8 @@ impl TaskList {
                 | "recording"
                 | "processing"
                 | "merging"
+                | "remuxing"
+                | "finalizing"
                 | "checking"
                 | "parsing"
                 | "probing"

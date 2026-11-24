@@ -31,7 +31,7 @@ export component WorkbenchButton inherits Rectangle {
     drop-shadow-offset-y: subtle ? 0px : primary ? 2px : outlined ? 1px : 0px;
     drop-shadow-blur: subtle ? 0px : primary ? 10px : outlined ? 2px : 0px;
     drop-shadow-color: subtle || !enabled ? transparent : primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.28) : outlined ? Tokens.shadow : transparent;
-    opacity: enabled ? 1 : 0.4;
+    opacity: enabled ? 1 : 0.55;
     animate background, border-color { duration: Tokens.motion-fast; }
     accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
@@ -84,7 +84,7 @@ export component NavigationItem inherits Rectangle {
     border-color: active ? Tokens.accent-border : transparent;
     background: active ? (touch.pressed && enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected) : touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : transparent;
     animate background, border-color { duration: Tokens.motion-fast; }
-    opacity: root.enabled ? 1 : 0.48;
+    opacity: root.enabled ? 1 : 0.58;
     accessible-role: tab; accessible-label: root.show-count ? root.label + "，" + root.count + " 项" : root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     Tooltip { text: root.show-count ? @markdown("\{root.label}（\{root.count}）") : @markdown("\{root.label}"); }

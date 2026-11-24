@@ -478,6 +478,7 @@ export component WorkbenchWindow inherits Window {
                                     }
                                     if column.id == "size" || column.id == "speed": Text { x: root.compact-columns ? 10px : 16px; width: parent.width - self.x - 4px; text: column.id == "size" ? row.size : row.speed; color: column.id == "speed" && row.speed != "—" ? Tokens.ink : Tokens.muted; vertical-alignment: center; font-size: 12px; font-weight: column.id == "speed" && row.speed != "—" ? 600 : 400; overflow: elide; }
                                     if column.id == "progress": HorizontalLayout {
+                                        private property <bool> is-processing: row.status-code == "merging" || row.status-code == "checking" || row.status-code == "processing" || row.status-code == "remuxing" || row.status-code == "finalizing";
                                         padding-left: root.compact-columns ? 10px : 16px; padding-right: root.compact-columns ? 8px : 14px; spacing: root.compact-columns ? 6px : 10px;
                                         Rectangle {
                                             height: 7px; y: (parent.height - self.height) / 2; border-radius: 3.5px; background: Tokens.surface-3; horizontal-stretch: 1;
@@ -485,21 +486,27 @@ export component WorkbenchWindow inherits Window {
                                                 x: 0px; height: parent.height;
                                                 // 极小进度（如 1%–6%）也保持完整胶囊形状，不缩成一个圆点。
                                                 width: row.progress <= 0 ? 0px : max(parent.height * 2, parent.width * Math.clamp(row.progress, 0, 1));
-                                                background: row.status-code == "paused" ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.accent;
+                                                background: row.status-code == "paused" || is-processing ? Tokens.warn : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : Tokens.accent;
                                                 border-radius: 3.5px;
                                                 animate width { duration: Tokens.motion; easing: ease-out; }
                                                 animate background { duration: Tokens.motion-fast; }
                                             }
                                         }
-                                        Text { text: round(row.progress * 100) + "%"; width: root.compact-columns ? 30px : 36px; color: row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.progress >= 1 ? Tokens.done : Tokens.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: right; }
+                                        Text {
+                                            text: row.status-code == "merging" || row.status-code == "remuxing" ? "合并中" : row.status-code == "checking" ? "校验中" : row.status-code == "processing" || row.status-code == "finalizing" ? "处理中" : round(row.progress * 100) + "%";
+                                            width: root.compact-columns ? 38px : 44px;
+                                            color: row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : is-processing ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : Tokens.muted;
+                                            font-size: 11px; font-weight: 600; vertical-alignment: center; horizontal-alignment: right;
+                                        }
                                     }
                                     if column.id == "status": VerticalLayout {
+                                        private property <bool> is-processing: row.status-code == "merging" || row.status-code == "checking" || row.status-code == "processing" || row.status-code == "remuxing" || row.status-code == "finalizing";
                                         alignment: center; padding-left: root.compact-columns ? 10px : 16px; padding-right: 6px; spacing: 3px;
-                                        private property <color> tone: row.status-code == "paused" ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.status-code == "queued" ? Tokens.muted : Tokens.accent;
+                                        private property <color> tone: row.status-code == "paused" || is-processing ? Tokens.warn : row.status-code == "completed" || row.status-code == "done" ? Tokens.done : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail : row.status-code == "queued" ? Tokens.muted : Tokens.accent;
                                         Rectangle {
                                             width: min(parent.width - (column.width < 100 ? 16px : 24px), badge-row.preferred-width); height: 24px; border-radius: 12px;
                                             border-width: 1px; border-color: tone.with-alpha(Tokens.dark ? 0.34 : 0.22);
-                                            background: row.status-code == "paused" ? Tokens.warn-surface : row.status-code == "completed" || row.status-code == "done" ? Tokens.success-surface : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail-surface : row.status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
+                                            background: row.status-code == "paused" || is-processing ? Tokens.warn-surface : row.status-code == "completed" || row.status-code == "done" ? Tokens.success-surface : row.status-code == "failed" || row.status-code == "canceled" ? Tokens.fail-surface : row.status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
                                             animate background { duration: Tokens.motion-fast; }
                                             badge-row := HorizontalLayout {
                                                 padding-left: column.width < 100 ? 7px : 9px; padding-right: column.width < 100 ? 7px : 10px; spacing: 6px;
@@ -627,9 +634,10 @@ export component WorkbenchWindow inherits Window {
                                                     spacing: 8px;
                                                     Text { text: root.inspector-title; color: Tokens.ink; font-size: 13px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; }
                                                     Rectangle {
+                                                        private property <bool> is-processing: root.inspector-status-code == "merging" || root.inspector-status-code == "checking" || root.inspector-status-code == "processing" || root.inspector-status-code == "remuxing" || root.inspector-status-code == "finalizing";
                                                         height: 20px; width: insp-st.preferred-width + 14px; y: (parent.height - self.height) / 2; border-radius: 10px;
-                                                        background: root.inspector-status-code == "paused" ? Tokens.warn-surface : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.success-surface : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail-surface : root.inspector-status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
-                                                        insp-st := Text { text: root.inspector-status; color: root.inspector-status-code == "paused" ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail : root.inspector-status-code == "queued" ? Tokens.muted : Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                                        background: root.inspector-status-code == "paused" || is-processing ? Tokens.warn-surface : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.success-surface : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail-surface : root.inspector-status-code == "queued" ? Tokens.surface-3 : Tokens.info-surface;
+                                                        insp-st := Text { text: root.inspector-status; color: root.inspector-status-code == "paused" || is-processing ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : root.inspector-status-code == "failed" || root.inspector-status-code == "canceled" ? Tokens.fail : root.inspector-status-code == "queued" ? Tokens.muted : Tokens.accent; font-size: 10px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                                                     }
                                                 }
                                                 Text { text: root.inspector-transfer + (root.inspector-speed-stats != "" ? "  ·  " + root.inspector-speed-stats : ""); color: Tokens.muted; font-size: 11px; overflow: elide; }
@@ -644,8 +652,9 @@ export component WorkbenchWindow inherits Window {
                                                 horizontal-stretch: 2; spacing: 6px; alignment: center;
                                                 if root.inspector-segments.length > 0: SegmentMapBar { segments: root.inspector-segments; }
                                                 if root.inspector-segments.length == 0: Rectangle {
+                                                    private property <bool> is-processing: root.inspector-status-code == "merging" || root.inspector-status-code == "checking" || root.inspector-status-code == "processing" || root.inspector-status-code == "remuxing" || root.inspector-status-code == "finalizing";
                                                     height: 7px; border-radius: 3.5px; background: Tokens.surface-3; clip: true;
-                                                    Rectangle { x: 0px; height: parent.height; width: parent.width * Math.clamp(root.inspector-progress, 0, 1); border-radius: 3.5px; background: root.inspector-progress >= 1 ? Tokens.done : Tokens.accent; }
+                                                    Rectangle { x: 0px; height: parent.height; width: parent.width * Math.clamp(root.inspector-progress, 0, 1); border-radius: 3.5px; background: root.inspector-status-code == "paused" || is-processing ? Tokens.warn : root.inspector-status-code == "completed" || root.inspector-status-code == "done" ? Tokens.done : Tokens.accent; }
                                                 }
                                                 Text { text: root.inspector-connections; color: Tokens.faint; font-size: 11px; overflow: elide; }
                                             }
