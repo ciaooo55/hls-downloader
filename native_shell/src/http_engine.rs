@@ -3283,13 +3283,13 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut prepared = job.clone();
     apply_browser_profile(&mut prepared.headers);
     let origin = http_origin(&job.url).unwrap_or_default();
+    let mut tried_curl = false;
     if !proxy_needs_curl(&job.proxy) && !origin.is_empty() && waf_curl_cache_hit(&origin) {
         match fetch_curl_follow(&prepared, range) {
-            Some(Ok(fetched)) => {
-                if !(200..400).contains(&fetched.status) {
-                    waf_curl_cache_invalidate(&origin);
-                }
-                return Ok(fetched);
+            Some(Ok(fetched)) if (200..400).contains(&fetched.status) => return Ok(fetched),
+            Some(Ok(_)) => {
+                tried_curl = true;
+                waf_curl_cache_invalidate(&origin);
             }
             Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => return Err(error),
             Some(Err(_)) | None => {
@@ -3298,7 +3298,7 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
         }
     }
     let first = fetch_follow(&prepared, range)?;
-    if first.status != 403 || proxy_needs_curl(&job.proxy) {
+    if first.status != 403 || proxy_needs_curl(&job.proxy) || tried_curl {
         return Ok(first);
     }
     if let Some(via_curl) = fetch_curl_follow(&prepared, range) {
@@ -10654,6 +10654,132 @@ mod tests {
         third.body.read_to_end(&mut body3).unwrap();
         assert_eq!(body3, b"ok!!");
         assert_eq!(native_hits.load(Ordering::SeqCst), 2);
+
+        waf_curl_cache_invalidate(&origin_key);
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &origin_url);
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn waf_curl_cache_falls_back_to_native_when_cached_curl_gets_403() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let native_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&native_hits);
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let hit = server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let response = if hit == 0 {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnat!"
+                        .as_slice()
+                } else {
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .as_slice()
+                };
+                let _ = reader.into_inner().write_all(response);
+            }
+        });
+
+        let origin_url = format!("http://{addr}/");
+        let case_dir = std::env::temp_dir().join(format!(
+            "hls-waf-cache-fallback-test-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&case_dir).unwrap();
+        fs::write(
+            case_dir.join("head"),
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+        )
+        .unwrap();
+        fs::write(case_dir.join("body"), b"").unwrap();
+        let curl_log = case_dir.join("curl-hits.txt");
+
+        #[cfg(windows)]
+        let script = {
+            let path = case_dir.join("fake-curl-403.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 set \"dir=%~dp0\"\r\n\
+                 echo hit>> \"%dir%curl-hits.txt\"\r\n\
+                 :loop\r\n\
+                 if \"%~1\"==\"\" exit /b 1\r\n\
+                 if \"%~1\"==\"--dump-header\" (\r\n\
+                   type \"%dir%head\" > \"%~2\"\r\n\
+                   exit /b 0\r\n\
+                 )\r\n\
+                 shift /1\r\n\
+                 goto loop\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = case_dir.join("fake-curl-403.sh");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 d=\"$(dirname \"$0\")\"\n\
+                 echo hit >> \"$d/curl-hits.txt\"\n\
+                 h=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; done\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((origin_url.clone(), script));
+
+        let url = format!("{origin_url}seg.ts");
+        let origin_key = http_origin(&url).unwrap();
+        let (job, dir) = temp_job(&url, true, 0, 1);
+
+        // 1) Cached origin where curl gets 403 must invalidate cache and fall back to native HTTP.
+        waf_curl_cache_record(origin_key.clone());
+        let mut recovered = fetch(&job, None).unwrap();
+        assert_eq!(recovered.status, 200);
+        let mut body = Vec::new();
+        recovered.body.read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"nat!");
+        assert!(!waf_curl_cache_hit(&origin_key));
+        assert_eq!(native_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fs::read_to_string(&curl_log).unwrap().lines().count(),
+            1,
+            "curl should run once before falling back to native"
+        );
+
+        // 2) Cached origin where BOTH curl and native return 403 must not invoke curl twice.
+        waf_curl_cache_record(origin_key.clone());
+        let denied = fetch(&job, None).unwrap();
+        assert_eq!(denied.status, 403);
+        assert!(!waf_curl_cache_hit(&origin_key));
+        assert_eq!(native_hits.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fs::read_to_string(&curl_log).unwrap().lines().count(),
+            2,
+            "tried_curl guard must prevent invoking curl a second time after native 403"
+        );
 
         waf_curl_cache_invalidate(&origin_key);
         TEST_CURL_OVERRIDES

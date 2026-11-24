@@ -171,6 +171,16 @@ def confirmation_rendered(handle):
         include_layered_windows=True, all_screens=True))
 
 
+def _confirm_button_x_offset(rect, scale, accept):
+    # ConfirmWindow footer right-aligned order: 取消 | 稍后下载 | 开始下载
+    # Normal (>=496px): padding 18, spacing 8, widths 64 / 78 / 96 -> accept center 66 (54 hits), cancel center 240.
+    # Compact (<496px): padding 14, spacing 6, widths 56 / 72 / 84 -> accept center 56 (54 hits), cancel center 210.
+    if accept:
+        return 54
+    logical_width = (rect.right - rect.left) / max(scale, 0.5)
+    return 210 if logical_width < 496 else 240
+
+
 def click_download_confirmation(accept=True, input_mode='system', evidence_path=None, *, runtime):
     handle = wait(lambda: presenter_window(runtime=runtime), 'Desktop confirmation did not appear', 10)
     # 隔离浏览器的系统通知位于右下角；将测试窗口移到左上角，保留真实按钮输入。
@@ -200,7 +210,7 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
     user32.GetWindowRect(handle, ctypes.byref(rect))
     scale = user32.GetDpiForWindow(handle) / 96
     # 窗口底部固定的“确认下载”按钮；真实鼠标输入，保留生产回调。
-    user32.SetCursorPos(rect.right - round((54 if accept else 134) * scale), rect.bottom - round(35 * scale))
+    user32.SetCursorPos(rect.right - round(_confirm_button_x_offset(rect, scale, accept) * scale), rect.bottom - round(35 * scale))
     user32.WindowFromPoint.argtypes = [wintypes.POINT]
     user32.WindowFromPoint.restype = wintypes.HWND
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
@@ -210,7 +220,7 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
             user32.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
             user32.SetForegroundWindow(handle)
             user32.GetWindowRect(handle, ctypes.byref(rect))
-            user32.SetCursorPos(rect.right-round((54 if accept else 134)*scale), rect.bottom-round(35*scale))
+            user32.SetCursorPos(rect.right-round(_confirm_button_x_offset(rect, scale, accept)*scale), rect.bottom-round(35*scale))
             time.sleep(.1)
             point = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(point))
@@ -240,7 +250,7 @@ def click_download_confirmation(accept=True, input_mode='system', evidence_path=
         evidence['hit_root_window'] = user32.GetAncestor(evidence['hit_window'], 2)
         capture(handle, Path(evidence_path).with_suffix('.png'))
     if input_mode == 'window':
-        point=wintypes.POINT(rect.right-round((54 if accept else 134)*scale),rect.bottom-round(35*scale))
+        point=wintypes.POINT(rect.right-round(_confirm_button_x_offset(rect, scale, accept)*scale),rect.bottom-round(35*scale))
         user32.ScreenToClient(handle,ctypes.byref(point))
         position=(point.y << 16) | (point.x & 0xffff)
         for message, buttons in [(0x0200,0),(0x0201,1),(0x0202,0)]:

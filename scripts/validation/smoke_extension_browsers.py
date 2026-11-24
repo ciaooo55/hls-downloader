@@ -76,7 +76,7 @@ HOVER_EXPRESSION = r"""
   group.dispatchEvent(new MouseEvent('mouseenter'));
   const rect = hover.getBoundingClientRect();
   const opacity = Number(getComputedStyle(hover).opacity);
-  const actions = [...hover.querySelectorAll('.hover-action')].map(item => item.textContent?.trim());
+  const actions = [...hover.querySelectorAll('.hover-action')].filter(item => !item.hidden).map(item => item.textContent?.trim());
   return {
     visible: getComputedStyle(hover).visibility === 'visible' && opacity >= 0.99 && rect.width > 0 && rect.height > 0,
     opacity,
@@ -217,7 +217,7 @@ def _assert_hover_surface(driver: webdriver.Remote, browser_name: str) -> None:
             details
             and details.get("visible") is True
             and details.get("insideViewport") is True
-            and details.get("actions") == ["下载", "投屏", "TVBox"]
+            and details.get("actions") == ["下载", "投屏", "TVBox", "更多"]
         ):
             return
         time.sleep(0.05)
@@ -598,7 +598,7 @@ def _exercise_chrome(
                             isinstance(details, dict)
                             and details.get("visible") is True
                             and details.get("insideViewport") is True
-                            and details.get("actions") == ["下载", "投屏", "TVBox"]
+                            and details.get("actions") == ["下载", "投屏", "TVBox", "更多"]
                             and isinstance(pointer_transition, dict)
                             and pointer_transition.get("visible") is True
                             and pointer_transition.get("actionable") is True
