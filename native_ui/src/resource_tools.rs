@@ -466,9 +466,7 @@ impl ResourceTools {
     }
 
     pub fn response(&self, response: &CorePipeResponse) {
-        let id = serde_json::to_value(response)
-            .ok()
-            .and_then(|v| v.get("request_id").and_then(serde_json::Value::as_u64));
+        let id = response.request_id();
         if id.is_some() && self.refresh_pending.get() == id {
             self.refresh_pending.set(None);
             // A user command owns the next visible state. A background response

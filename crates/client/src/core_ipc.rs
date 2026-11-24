@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Clients keep pooled connections idle for at most 60 seconds. Keep the server
 // bound finite without invalidating a connection that the client may still reuse.
@@ -22,25 +22,80 @@ const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
 // 报完协议违规后收连接前，等对端把残留输入收尾的最长时间。见 linger_close。
 const V7_LINGER_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
+// Fallback wakeup interval for legacy callers that only flip `stop: AtomicBool`
+// without signaling `NamedPipeServer`'s manual-reset stop event handle.
+#[cfg(windows)]
+const V7_ACCEPT_STOP_CHECK_MS: u32 = 50;
+
 // 每连接一线程模型下的并发连接上限。命名管道在接收前等待槽位，
 // TCP 对超限连接立即关闭；客户端连接过程受自身超时约束。
 pub const MAX_IPC_CONNECTIONS: usize = 64;
 
-// 声明一个连接线程槽位；Drop 保证 panic 路径也不泄漏计数。
-struct ConnectionSlot(Arc<AtomicUsize>);
-impl ConnectionSlot {
-    fn claim(current: &Arc<AtomicUsize>) -> Option<Self> {
-        current
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                (count < MAX_IPC_CONNECTIONS).then_some(count + 1)
-            })
-            .ok()
-            .map(|_| Self(Arc::clone(current)))
+struct ConnectionSlots {
+    active: Mutex<usize>,
+    freed: Condvar,
+}
+
+impl ConnectionSlots {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            active: Mutex::new(0),
+            freed: Condvar::new(),
+        })
+    }
+
+    fn try_claim(self: &Arc<Self>) -> Option<ConnectionSlot> {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if *active < MAX_IPC_CONNECTIONS {
+            *active += 1;
+            Some(ConnectionSlot(Arc::clone(self)))
+        } else {
+            None
+        }
+    }
+
+    #[cfg(windows)]
+    fn claim_or_stop(self: &Arc<Self>, is_stopped: impl Fn() -> bool) -> Option<ConnectionSlot> {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if is_stopped() {
+                return None;
+            }
+            if *active < MAX_IPC_CONNECTIONS {
+                *active += 1;
+                return Some(ConnectionSlot(Arc::clone(self)));
+            }
+            let (guard, _) = self
+                .freed
+                .wait_timeout(
+                    active,
+                    Duration::from_millis(u64::from(V7_ACCEPT_STOP_CHECK_MS)),
+                )
+                .unwrap_or_else(|e| e.into_inner());
+            active = guard;
+        }
+    }
+
+    #[cfg(windows)]
+    fn notify_all(&self) {
+        let _guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        self.freed.notify_all();
+    }
+
+    #[cfg(all(test, windows))]
+    fn count(&self) -> usize {
+        *self.active.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
+
+// 声明一个连接线程槽位；Drop 保证 panic 路径也不泄漏计数并立即唤醒等待者。
+struct ConnectionSlot(Arc<ConnectionSlots>);
+
 impl Drop for ConnectionSlot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        let mut active = self.0.active.lock().unwrap_or_else(|e| e.into_inner());
+        *active = active.saturating_sub(1);
+        self.0.freed.notify_one();
     }
 }
 
@@ -87,90 +142,638 @@ fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<
 }
 
 #[cfg(windows)]
-fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
-    pipe: &mut std::fs::File,
-) -> Result<Option<T>, String> {
-    fn wait_available(
-        pipe: &std::fs::File,
-        needed: usize,
-        deadline: std::time::Instant,
-        timeout: Duration,
-        allow_eof: bool,
-    ) -> Result<Option<usize>, String> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED};
-        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+struct OwnedWinHandle(windows_sys::Win32::Foundation::HANDLE);
 
-        loop {
-            let mut available = 0u32;
-            let ok = unsafe {
-                PeekNamedPipe(
-                    pipe.as_raw_handle() as _,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null_mut(),
-                    &mut available,
-                    std::ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                let error = std::io::Error::last_os_error();
-                if allow_eof
-                    && available == 0
-                    && matches!(
-                        error.raw_os_error(),
-                        Some(code)
-                            if code == ERROR_BROKEN_PIPE as i32
-                                || code == ERROR_PIPE_NOT_CONNECTED as i32
-                    )
-                {
-                    return Ok(None);
-                }
-                return Err(format!("Core pipe peek: {error}"));
-            }
-            if available as usize >= needed {
-                return Ok(Some(available as usize));
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "Core pipe frame read timed out after {} ms",
-                    timeout.as_millis()
-                ));
-            }
-            thread::sleep(Duration::from_millis(10));
+// Win32 pipe and event handles can be moved and signaled across threads.
+#[cfg(windows)]
+unsafe impl Send for OwnedWinHandle {}
+#[cfg(windows)]
+unsafe impl Sync for OwnedWinHandle {}
+
+#[cfg(windows)]
+impl OwnedWinHandle {
+    fn from_raw(handle: windows_sys::Win32::Foundation::HANDLE) -> Result<Self, String> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            Err(format!(
+                "invalid Win32 handle: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(Self(handle))
         }
     }
 
-    // 先等完整字段可读，再进入同步 ReadFile，避免半帧永久占用连接槽位。
-    let header_deadline = std::time::Instant::now() + V7_IDLE_READ_TIMEOUT;
+    fn new_manual_reset_event() -> Result<Self, String> {
+        use windows_sys::Win32::System::Threading::CreateEventW;
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        Self::from_raw(handle).map_err(|error| format!("CreateEventW failed: {error}"))
+    }
+
+    fn raw(&self) -> windows_sys::Win32::Foundation::HANDLE {
+        self.0
+    }
+
+    fn set_event(&self) {
+        unsafe {
+            windows_sys::Win32::System::Threading::SetEvent(self.0);
+        }
+    }
+
+    fn reset_event(&self) -> Result<(), String> {
+        let ok = unsafe { windows_sys::Win32::System::Threading::ResetEvent(self.0) };
+        if ok == 0 {
+            Err(format!(
+                "ResetEvent failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OwnedWinHandle {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Immediate shutdown signal for [`NamedPipeServer`], backed by a Windows
+/// manual-reset event handle so idle overlapped `ConnectNamedPipe` and idle
+/// connection reads wake without polling delays.
+#[cfg(windows)]
+#[derive(Clone)]
+pub struct NamedPipeStopHandle {
+    signaled: Arc<AtomicBool>,
+    event: Option<Arc<OwnedWinHandle>>,
+    slots: Arc<ConnectionSlots>,
+}
+
+#[cfg(windows)]
+impl NamedPipeStopHandle {
+    pub fn signal(&self) {
+        self.signaled.store(true, Ordering::SeqCst);
+        if let Some(event) = &self.event {
+            event.set_event();
+        }
+        self.slots.notify_all();
+    }
+
+    fn is_signaled(&self) -> bool {
+        self.signaled.load(Ordering::SeqCst)
+    }
+
+    fn event_raw(&self) -> Option<windows_sys::Win32::Foundation::HANDLE> {
+        self.event.as_ref().map(|event| event.raw())
+    }
+}
+
+#[cfg(windows)]
+enum OverlappedOutcome {
+    Completed(u32),
+    TimedOut,
+    Stopped,
+    Eof,
+    OsError(u32),
+}
+
+/// Completes a pending Win32 overlapped operation (`ERROR_IO_PENDING`), enforcing
+/// strict cancellation safety: whenever a wait times out, stops, or fails, this
+/// function ALWAYS calls `CancelIoEx` followed by `GetOverlappedResult(..., TRUE)`
+/// before returning so the kernel never touches stack `OVERLAPPED` or I/O buffers
+/// after they are dropped.
+#[cfg(windows)]
+fn finish_pending_overlapped(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    io_event: windows_sys::Win32::Foundation::HANDLE,
+    overlapped: &mut windows_sys::Win32::System::IO::OVERLAPPED,
+    deadline: Option<Instant>,
+    stop_event: Option<windows_sys::Win32::Foundation::HANDLE>,
+    stop_flag: Option<&AtomicBool>,
+    poll_interval_ms: Option<u32>,
+) -> OverlappedOutcome {
+    use windows_sys::Win32::Foundation::{
+        GetLastError, ERROR_BROKEN_PIPE, ERROR_MORE_DATA, ERROR_OPERATION_ABORTED,
+        ERROR_PIPE_NOT_CONNECTED, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        WaitForMultipleObjects, WaitForSingleObject, INFINITE,
+    };
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult};
+
+    let mut cancel_reason: Option<OverlappedOutcome> = None;
+
+    loop {
+        if stop_flag.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            cancel_reason = Some(OverlappedOutcome::Stopped);
+            break;
+        }
+
+        let wait_ms = match deadline {
+            Some(dl) => {
+                let now = Instant::now();
+                if now >= dl {
+                    cancel_reason = Some(OverlappedOutcome::TimedOut);
+                    break;
+                }
+                let remaining = dl.saturating_duration_since(now);
+                let rem_ms = remaining.as_millis().max(1).min((INFINITE - 1) as u128) as u32;
+                match poll_interval_ms {
+                    Some(poll) => rem_ms.min(poll),
+                    None => rem_ms,
+                }
+            }
+            None => poll_interval_ms.unwrap_or(INFINITE),
+        };
+
+        let wait_result = match stop_event {
+            Some(stop_h) => {
+                let handles = [io_event, stop_h];
+                unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, wait_ms) }
+            }
+            None => unsafe { WaitForSingleObject(io_event, wait_ms) },
+        };
+
+        if wait_result == WAIT_OBJECT_0 {
+            break;
+        }
+        if stop_event.is_some() && wait_result == WAIT_OBJECT_0 + 1 {
+            cancel_reason = Some(OverlappedOutcome::Stopped);
+            break;
+        }
+        if wait_result == WAIT_TIMEOUT {
+            if let Some(dl) = deadline {
+                if Instant::now() >= dl {
+                    cancel_reason = Some(OverlappedOutcome::TimedOut);
+                    break;
+                }
+            }
+            continue;
+        }
+        if wait_result == WAIT_FAILED {
+            let err = unsafe { GetLastError() };
+            cancel_reason = Some(OverlappedOutcome::OsError(err));
+            break;
+        }
+        cancel_reason = Some(OverlappedOutcome::OsError(wait_result));
+        break;
+    }
+
+    if cancel_reason.is_some() {
+        unsafe {
+            CancelIoEx(handle, overlapped);
+        }
+    }
+
+    let mut transferred = 0u32;
+    let ok = unsafe { GetOverlappedResult(handle, overlapped, &mut transferred, 1) };
+    if ok != 0 {
+        if matches!(cancel_reason, Some(OverlappedOutcome::Stopped)) {
+            return OverlappedOutcome::Stopped;
+        }
+        return OverlappedOutcome::Completed(transferred);
+    }
+
+    let err = unsafe { GetLastError() };
+    if err == ERROR_MORE_DATA {
+        if matches!(cancel_reason, Some(OverlappedOutcome::Stopped)) {
+            return OverlappedOutcome::Stopped;
+        }
+        return OverlappedOutcome::Completed(transferred);
+    }
+    if err == ERROR_OPERATION_ABORTED {
+        if let Some(reason) = cancel_reason {
+            return reason;
+        }
+    }
+    if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED {
+        return OverlappedOutcome::Eof;
+    }
+    OverlappedOutcome::OsError(err)
+}
+
+#[cfg(windows)]
+struct OverlappedPipe {
+    handle: OwnedWinHandle,
+    io_event: OwnedWinHandle,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+}
+
+#[cfg(windows)]
+impl OverlappedPipe {
+    fn new(handle: OwnedWinHandle) -> Result<Self, String> {
+        let io_event = OwnedWinHandle::new_manual_reset_event()?;
+        Ok(Self {
+            handle,
+            io_event,
+            read_timeout: None,
+            write_timeout: None,
+        })
+    }
+
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) {
+        self.read_timeout = timeout;
+    }
+
+    fn set_write_timeout(&mut self, timeout: Option<Duration>) {
+        self.write_timeout = timeout;
+    }
+
+    fn read_once(
+        &mut self,
+        buf: &mut [u8],
+        deadline: Option<Instant>,
+        stop_handle: Option<&NamedPipeStopHandle>,
+    ) -> OverlappedOutcome {
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_MORE_DATA,
+            ERROR_PIPE_NOT_CONNECTED,
+        };
+        use windows_sys::Win32::Storage::FileSystem::ReadFile;
+        use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+
+        if buf.is_empty() {
+            return OverlappedOutcome::Completed(0);
+        }
+        if stop_handle.is_some_and(NamedPipeStopHandle::is_signaled) {
+            return OverlappedOutcome::Stopped;
+        }
+        if let Some(dl) = deadline {
+            if Instant::now() >= dl {
+                return OverlappedOutcome::TimedOut;
+            }
+        }
+        if self.io_event.reset_event().is_err() {
+            return OverlappedOutcome::OsError(unsafe { GetLastError() });
+        }
+
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = self.io_event.raw();
+        let to_read = buf.len().min(u32::MAX as usize) as u32;
+        let ok = unsafe {
+            ReadFile(
+                self.handle.raw(),
+                buf.as_mut_ptr(),
+                to_read,
+                std::ptr::null_mut(),
+                &mut overlapped,
+            )
+        };
+        if ok != 0 {
+            let mut transferred = 0u32;
+            let got =
+                unsafe { GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 1) };
+            if got != 0 {
+                return OverlappedOutcome::Completed(transferred);
+            }
+            let err = unsafe { GetLastError() };
+            if err == ERROR_MORE_DATA {
+                return OverlappedOutcome::Completed(transferred);
+            }
+            if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED {
+                return OverlappedOutcome::Eof;
+            }
+            return OverlappedOutcome::OsError(err);
+        }
+
+        let err = unsafe { GetLastError() };
+        match err {
+            ERROR_IO_PENDING => finish_pending_overlapped(
+                self.handle.raw(),
+                self.io_event.raw(),
+                &mut overlapped,
+                deadline,
+                stop_handle.and_then(NamedPipeStopHandle::event_raw),
+                None,
+                None,
+            ),
+            ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED => OverlappedOutcome::Eof,
+            ERROR_MORE_DATA => {
+                let mut transferred = 0u32;
+                let _ = unsafe {
+                    GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 0)
+                };
+                OverlappedOutcome::Completed(transferred)
+            }
+            other => OverlappedOutcome::OsError(other),
+        }
+    }
+
+    fn write_once(&mut self, buf: &[u8], deadline: Option<Instant>) -> OverlappedOutcome {
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA,
+            ERROR_PIPE_NOT_CONNECTED,
+        };
+        use windows_sys::Win32::Storage::FileSystem::WriteFile;
+        use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+
+        if buf.is_empty() {
+            return OverlappedOutcome::Completed(0);
+        }
+        if let Some(dl) = deadline {
+            if Instant::now() >= dl {
+                return OverlappedOutcome::TimedOut;
+            }
+        }
+        if self.io_event.reset_event().is_err() {
+            return OverlappedOutcome::OsError(unsafe { GetLastError() });
+        }
+
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = self.io_event.raw();
+        let to_write = buf.len().min(u32::MAX as usize) as u32;
+        let ok = unsafe {
+            WriteFile(
+                self.handle.raw(),
+                buf.as_ptr(),
+                to_write,
+                std::ptr::null_mut(),
+                &mut overlapped,
+            )
+        };
+        if ok != 0 {
+            let mut transferred = 0u32;
+            let got =
+                unsafe { GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 1) };
+            if got != 0 {
+                return OverlappedOutcome::Completed(transferred);
+            }
+            let err = unsafe { GetLastError() };
+            if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED || err == ERROR_NO_DATA {
+                return OverlappedOutcome::Eof;
+            }
+            return OverlappedOutcome::OsError(err);
+        }
+
+        let err = unsafe { GetLastError() };
+        match err {
+            ERROR_IO_PENDING => finish_pending_overlapped(
+                self.handle.raw(),
+                self.io_event.raw(),
+                &mut overlapped,
+                deadline,
+                None,
+                None,
+                None,
+            ),
+            ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED | ERROR_NO_DATA => OverlappedOutcome::Eof,
+            other => OverlappedOutcome::OsError(other),
+        }
+    }
+
+    fn write_all_deadline(
+        &mut self,
+        data: &[u8],
+        deadline: Option<Instant>,
+    ) -> std::io::Result<()> {
+        let mut offset = 0;
+        while offset < data.len() {
+            match self.write_once(&data[offset..], deadline) {
+                OverlappedOutcome::Completed(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "Core pipe write returned zero bytes",
+                    ));
+                }
+                OverlappedOutcome::Completed(written) => offset += written as usize,
+                OverlappedOutcome::Eof => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "Core pipe closed",
+                    ));
+                }
+                OverlappedOutcome::TimedOut => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Core pipe write timed out",
+                    ));
+                }
+                OverlappedOutcome::Stopped => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "Core pipe stopped",
+                    ));
+                }
+                OverlappedOutcome::OsError(code) => {
+                    return Err(std::io::Error::from_raw_os_error(code as i32));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_message_timeout<T: Serialize>(
+        &mut self,
+        message: &T,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let encoded = encode_message(message)?;
+        let deadline = Instant::now() + timeout;
+        self.write_all_deadline(&encoded, Some(deadline))
+            .map_err(|error| format!("Core pipe write: {error}"))
+    }
+
+    fn read_message_timeout<T: for<'de> Deserialize<'de>>(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<T>, String> {
+        let deadline = Instant::now() + timeout;
+        let mut header = [0u8; 4];
+        let mut offset = 0;
+        while offset < header.len() {
+            match self.read_once(&mut header[offset..], Some(deadline), None) {
+                OverlappedOutcome::Completed(0) | OverlappedOutcome::Eof => {
+                    return if offset == 0 {
+                        Ok(None)
+                    } else {
+                        Err("Core pipe closed in frame header".into())
+                    };
+                }
+                OverlappedOutcome::Completed(count) => offset += count as usize,
+                OverlappedOutcome::TimedOut => {
+                    return Err(format!(
+                        "Core pipe read timed out after {} ms",
+                        timeout.as_millis()
+                    ));
+                }
+                OverlappedOutcome::Stopped => return Ok(None),
+                OverlappedOutcome::OsError(code) => {
+                    let error = std::io::Error::from_raw_os_error(code as i32);
+                    return Err(format!("Core pipe read header: {error}"));
+                }
+            }
+        }
+        let length = u32::from_le_bytes(header) as usize;
+        if length > V7_PIPE_MAX_FRAME {
+            return Err("v7 Core pipe frame too large".into());
+        }
+        let mut payload = vec![0u8; length];
+        let mut offset = 0;
+        while offset < length {
+            match self.read_once(&mut payload[offset..], Some(deadline), None) {
+                OverlappedOutcome::Completed(0) | OverlappedOutcome::Eof => {
+                    return Err("Core pipe closed during frame payload".into());
+                }
+                OverlappedOutcome::Completed(count) => offset += count as usize,
+                OverlappedOutcome::TimedOut => {
+                    return Err(format!(
+                        "Core pipe read timed out after {} ms",
+                        timeout.as_millis()
+                    ));
+                }
+                OverlappedOutcome::Stopped => return Ok(None),
+                OverlappedOutcome::OsError(code) => {
+                    let error = std::io::Error::from_raw_os_error(code as i32);
+                    return Err(format!("Core pipe read payload: {error}"));
+                }
+            }
+        }
+        let mut frame = header.to_vec();
+        frame.extend_from_slice(&payload);
+        decode_message(&frame).map(Some)
+    }
+}
+
+#[cfg(windows)]
+impl Read for OverlappedPipe {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let deadline = self.read_timeout.map(|timeout| Instant::now() + timeout);
+        match self.read_once(buf, deadline, None) {
+            OverlappedOutcome::Completed(count) => Ok(count as usize),
+            OverlappedOutcome::Eof | OverlappedOutcome::Stopped => Ok(0),
+            OverlappedOutcome::TimedOut => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Core pipe read timed out",
+            )),
+            OverlappedOutcome::OsError(code) => Err(std::io::Error::from_raw_os_error(code as i32)),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Write for OverlappedPipe {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let deadline = self.write_timeout.map(|timeout| Instant::now() + timeout);
+        match self.write_once(buf, deadline) {
+            OverlappedOutcome::Completed(count) => Ok(count as usize),
+            OverlappedOutcome::Eof => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Core pipe closed",
+            )),
+            OverlappedOutcome::TimedOut => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Core pipe write timed out",
+            )),
+            OverlappedOutcome::Stopped => Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "Core pipe stopped",
+            )),
+            OverlappedOutcome::OsError(code) => Err(std::io::Error::from_raw_os_error(code as i32)),
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let deadline = self.write_timeout.map(|timeout| Instant::now() + timeout);
+        self.write_all_deadline(buf, deadline)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        // Overlapped WriteFile already commits bytes into the kernel pipe buffer;
+        // do not call synchronous FlushFileBuffers, which blocks until the peer reads.
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
+    pipe: &mut OverlappedPipe,
+    stop_handle: &NamedPipeStopHandle,
+    idle_timeout: Duration,
+    frame_timeout: Duration,
+) -> Result<Option<T>, String> {
+    // True overlapped ReadFile wakes immediately when data arrives or stop fires,
+    // without PeekNamedPipe polling sleeps.
+    let mut header_deadline = Instant::now() + idle_timeout;
+    let mut header_timeout_budget = idle_timeout;
     let mut header = [0u8; 4];
     let mut offset = 0;
     while offset < header.len() {
-        let Some(available) =
-            wait_available(pipe, 1, header_deadline, V7_IDLE_READ_TIMEOUT, offset == 0)?
-        else {
-            return Ok(None);
-        };
-        let end = offset + available.min(header.len() - offset);
-        pipe.read_exact(&mut header[offset..end])
-            .map_err(|error| format!("Core pipe read header: {error}"))?;
-        offset = end;
+        match pipe.read_once(
+            &mut header[offset..],
+            Some(header_deadline),
+            Some(stop_handle),
+        ) {
+            OverlappedOutcome::Completed(0) | OverlappedOutcome::Eof => {
+                return if offset == 0 {
+                    Ok(None)
+                } else {
+                    Err("Core pipe closed in frame header".into())
+                };
+            }
+            OverlappedOutcome::Completed(count) => {
+                if offset == 0 {
+                    // Once the first header byte arrives, tighten the remaining header
+                    // deadline to the frame budget so partial headers cannot pin a slot
+                    // for the full idle timeout.
+                    let tightened = Instant::now() + frame_timeout;
+                    if tightened < header_deadline {
+                        header_deadline = tightened;
+                        header_timeout_budget = frame_timeout;
+                    }
+                }
+                offset += count as usize;
+            }
+            OverlappedOutcome::Stopped => return Ok(None),
+            OverlappedOutcome::TimedOut => {
+                return Err(format!(
+                    "Core pipe frame read timed out after {} ms",
+                    header_timeout_budget.as_millis()
+                ));
+            }
+            OverlappedOutcome::OsError(code) => {
+                let error = std::io::Error::from_raw_os_error(code as i32);
+                return Err(format!("Core pipe read header: {error}"));
+            }
+        }
     }
     let length = u32::from_le_bytes(header) as usize;
     if length > V7_PIPE_MAX_FRAME {
         return Err("v7 Core pipe frame too large".into());
     }
     // A complete header starts one absolute body budget; progress cannot renew it.
-    let body_deadline = std::time::Instant::now() + V7_FRAME_READ_TIMEOUT;
+    let body_deadline = Instant::now() + frame_timeout;
     let mut payload = vec![0u8; length];
     let mut offset = 0;
     while offset < length {
-        let available = wait_available(pipe, 1, body_deadline, V7_FRAME_READ_TIMEOUT, false)?
-            .ok_or_else(|| "Core pipe closed during frame payload".to_string())?;
-        let end = offset + available.min(length - offset);
-        pipe.read_exact(&mut payload[offset..end])
-            .map_err(|error| format!("Core pipe read payload: {error}"))?;
-        offset = end;
+        match pipe.read_once(
+            &mut payload[offset..],
+            Some(body_deadline),
+            Some(stop_handle),
+        ) {
+            OverlappedOutcome::Completed(0) | OverlappedOutcome::Eof => {
+                return Err("Core pipe closed during frame payload".into());
+            }
+            OverlappedOutcome::Completed(count) => offset += count as usize,
+            OverlappedOutcome::Stopped => return Ok(None),
+            OverlappedOutcome::TimedOut => {
+                return Err(format!(
+                    "Core pipe frame read timed out after {} ms",
+                    frame_timeout.as_millis()
+                ));
+            }
+            OverlappedOutcome::OsError(code) => {
+                let error = std::io::Error::from_raw_os_error(code as i32);
+                return Err(format!("Core pipe read payload: {error}"));
+            }
+        }
     }
     let mut frame = header.to_vec();
     frame.extend_from_slice(&payload);
@@ -275,15 +878,85 @@ fn owner_pipe_sd() -> Option<OwnerPipeSd> {
 }
 
 #[cfg(windows)]
+enum PipeAcceptOutcome {
+    Connected(OverlappedPipe),
+    ClientDisconnectedEarly,
+    Stopped,
+}
+
+#[cfg(windows)]
+enum PipeAcceptError {
+    StartupFailed(String),
+    Transient(String),
+}
+
+#[cfg(windows)]
 pub struct NamedPipeServer {
     name: String,
+    idle_read_timeout: Duration,
+    frame_read_timeout: Duration,
+    stop_event: Option<Arc<OwnedWinHandle>>,
+    stop_signaled: Arc<AtomicBool>,
+    slots: Arc<ConnectionSlots>,
 }
 
 #[cfg(windows)]
 impl NamedPipeServer {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into(),
+            idle_read_timeout: V7_IDLE_READ_TIMEOUT,
+            frame_read_timeout: V7_FRAME_READ_TIMEOUT,
+            stop_event: OwnedWinHandle::new_manual_reset_event().ok().map(Arc::new),
+            stop_signaled: Arc::new(AtomicBool::new(false)),
+            slots: ConnectionSlots::new(),
+        }
     }
+
+    /// Returns a cloneable stop handle that sets this server's manual-reset
+    /// Windows stop event so an idle `ConnectNamedPipe` wakes immediately.
+    pub fn stop_handle(&self) -> NamedPipeStopHandle {
+        NamedPipeStopHandle {
+            signaled: Arc::clone(&self.stop_signaled),
+            event: self.stop_event.as_ref().map(Arc::clone),
+            slots: Arc::clone(&self.slots),
+        }
+    }
+
+    /// Signals this server's manual-reset stop event immediately.
+    pub fn signal_stop(&self) {
+        self.stop_handle().signal();
+    }
+
+    #[cfg(test)]
+    fn with_timeouts(mut self, idle_read_timeout: Duration, frame_read_timeout: Duration) -> Self {
+        self.idle_read_timeout = idle_read_timeout;
+        self.frame_read_timeout = frame_read_timeout;
+        self
+    }
+
+    #[cfg(test)]
+    fn claimed_slots(&self) -> usize {
+        self.slots.count()
+    }
+
+    fn is_stopped(&self, stop: &AtomicBool) -> bool {
+        stop.load(Ordering::SeqCst) || self.stop_signaled.load(Ordering::SeqCst)
+    }
+
+    fn wait_backoff_or_stop(&self, stop: &AtomicBool, millis: u32) {
+        if self.is_stopped(stop) {
+            return;
+        }
+        if let Some(event) = &self.stop_event {
+            unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(event.raw(), millis);
+            }
+        } else {
+            thread::sleep(Duration::from_millis(u64::from(millis)));
+        }
+    }
+
     pub fn serve_loop(
         &self,
         stop: Arc<AtomicBool>,
@@ -307,85 +980,21 @@ impl NamedPipeServer {
         handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync>,
         mut ready: Option<std::sync::mpsc::SyncSender<Result<(), String>>>,
     ) -> Result<(), String> {
-        struct DoneGuard(Arc<AtomicBool>);
-        impl Drop for DoneGuard {
+        struct ServerExitGuard(NamedPipeStopHandle);
+        impl Drop for ServerExitGuard {
             fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
+                self.0.signal();
             }
         }
-        if stop.load(Ordering::SeqCst) {
+
+        if self.is_stopped(&stop) {
             let error = "named pipe startup canceled before ready".to_string();
             if let Some(ready) = ready {
                 let _ = ready.send(Err(error.clone()));
             }
             return Err(error);
         }
-        let done = Arc::new(AtomicBool::new(false));
-        let _done_guard = DoneGuard(Arc::clone(&done));
-        wake_named_pipe_accept_on_stop(self.name.clone(), Arc::clone(&stop), Arc::clone(&done));
-        let active = Arc::new(AtomicUsize::new(0));
-        let mut is_first_instance = true;
-        while !stop.load(Ordering::SeqCst) {
-            // Reserve capacity before accepting. Recently closed clients may still
-            // occupy reader threads; accepting then dropping loses valid requests.
-            let slot = loop {
-                if stop.load(Ordering::SeqCst) {
-                    return Ok(());
-                }
-                if let Some(slot) = ConnectionSlot::claim(&active) {
-                    break slot;
-                }
-                thread::sleep(Duration::from_millis(10));
-            };
-            let first_ready = ready.take();
-            let first_instance = is_first_instance;
-            match self.serve_once_inner(first_ready.as_ref(), first_instance) {
-                Ok(stream) => {
-                    is_first_instance = false;
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let handler = Arc::clone(&handler);
-                    let stop = Arc::clone(&stop);
-                    thread::spawn(move || {
-                        let _slot = slot;
-                        handle_pipe_stream(stream, handler.as_ref(), &stop);
-                    });
-                }
-                Err(error) => {
-                    if first_ready.is_some() {
-                        return Err(error);
-                    }
-                    if stop.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    eprintln!("Core named pipe accept: {error}");
-                    thread::sleep(Duration::from_millis(40));
-                }
-            }
-        }
-        Ok(())
-    }
 
-    fn serve_once_inner(
-        &self,
-        ready: Option<&std::sync::mpsc::SyncSender<Result<(), String>>>,
-        first_instance: bool,
-    ) -> Result<std::fs::File, String> {
-        use std::fs::File;
-        use std::os::windows::io::FromRawHandle;
-        use std::os::windows::raw::HANDLE;
-        use std::ptr::null_mut;
-        use windows_sys::Win32::Foundation::{GetLastError, INVALID_HANDLE_VALUE};
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
-        };
-        use windows_sys::Win32::System::Pipes::{
-            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-            PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-        };
-
-        let name = wide(&self.name);
         let owner_sd = match owner_pipe_sd() {
             Some(value) => value,
             None => {
@@ -396,6 +1005,100 @@ impl NamedPipeServer {
                 return Err(error);
             }
         };
+        let connect_event = match OwnedWinHandle::new_manual_reset_event() {
+            Ok(event) => event,
+            Err(error) => {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error.clone()));
+                }
+                return Err(error);
+            }
+        };
+        let wide_name = wide(&self.name);
+        let _exit_guard = ServerExitGuard(self.stop_handle());
+        let mut is_first_instance = true;
+
+        while !self.is_stopped(&stop) {
+            // Reserve capacity before accepting. Recently closed clients may still
+            // occupy reader threads; accepting then dropping loses valid requests.
+            let Some(slot) = self.slots.claim_or_stop(|| self.is_stopped(&stop)) else {
+                return Ok(());
+            };
+            let first_ready = ready.take();
+            let first_instance = is_first_instance;
+            match self.serve_once_inner(
+                &wide_name,
+                &owner_sd,
+                &connect_event,
+                first_ready.as_ref(),
+                first_instance,
+                &stop,
+            ) {
+                Ok(PipeAcceptOutcome::Connected(stream)) => {
+                    is_first_instance = false;
+                    if self.is_stopped(&stop) {
+                        break;
+                    }
+                    let handler = Arc::clone(&handler);
+                    let stop = Arc::clone(&stop);
+                    let stop_handle = self.stop_handle();
+                    let idle_timeout = self.idle_read_timeout;
+                    let frame_timeout = self.frame_read_timeout;
+                    thread::spawn(move || {
+                        let _slot = slot;
+                        handle_pipe_stream(
+                            stream,
+                            handler.as_ref(),
+                            &stop,
+                            &stop_handle,
+                            idle_timeout,
+                            frame_timeout,
+                        );
+                    });
+                }
+                Ok(PipeAcceptOutcome::ClientDisconnectedEarly) => {
+                    is_first_instance = false;
+                }
+                Ok(PipeAcceptOutcome::Stopped) => {
+                    break;
+                }
+                Err(PipeAcceptError::StartupFailed(error)) => {
+                    return Err(error);
+                }
+                Err(PipeAcceptError::Transient(error)) => {
+                    if self.is_stopped(&stop) {
+                        break;
+                    }
+                    eprintln!("Core named pipe accept: {error}");
+                    self.wait_backoff_or_stop(&stop, 40);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn serve_once_inner(
+        &self,
+        wide_name: &[u16],
+        owner_sd: &OwnerPipeSd,
+        connect_event: &OwnedWinHandle,
+        ready: Option<&std::sync::mpsc::SyncSender<Result<(), String>>>,
+        first_instance: bool,
+        stop: &AtomicBool,
+    ) -> Result<PipeAcceptOutcome, PipeAcceptError> {
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
+            ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+        };
+        use windows_sys::Win32::System::Pipes::{
+            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+        };
+        use windows_sys::Win32::System::IO::OVERLAPPED;
+
         let attrs = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>()
                 as u32,
@@ -403,13 +1106,13 @@ impl NamedPipeServer {
             bInheritHandle: 0,
         };
         let open_mode = if first_instance {
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE
         } else {
-            PIPE_ACCESS_DUPLEX
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED
         };
-        let handle = unsafe {
+        let raw_handle = unsafe {
             CreateNamedPipeW(
-                name.as_ptr(),
+                wide_name.as_ptr(),
                 open_mode,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
@@ -419,73 +1122,142 @@ impl NamedPipeServer {
                 &attrs,
             )
         };
-        if handle == INVALID_HANDLE_VALUE {
+        if raw_handle == INVALID_HANDLE_VALUE {
             let error = format!("CreateNamedPipeW failed: {}", unsafe { GetLastError() });
             if let Some(ready) = ready {
                 let _ = ready.send(Err(error.clone()));
             }
-            return Err(error);
+            return Err(if ready.is_some() {
+                PipeAcceptError::StartupFailed(error)
+            } else {
+                PipeAcceptError::Transient(error)
+            });
         }
-        if let Some(ready) = ready {
-            let _ = ready.send(Ok(()));
+        let handle = OwnedWinHandle::from_raw(raw_handle)
+            .map_err(|error| PipeAcceptError::Transient(format!("CreateNamedPipeW: {error}")))?;
+
+        connect_event.reset_event().map_err(|error| {
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(error.clone()));
+            }
+            if ready.is_some() {
+                PipeAcceptError::StartupFailed(error)
+            } else {
+                PipeAcceptError::Transient(error)
+            }
+        })?;
+
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = connect_event.raw();
+        let connected = unsafe { ConnectNamedPipe(handle.raw(), &mut overlapped) } != 0;
+        if connected {
+            if let Some(ready) = ready {
+                let _ = ready.send(Ok(()));
+            }
+            let pipe = OverlappedPipe::new(handle).map_err(PipeAcceptError::Transient)?;
+            return Ok(PipeAcceptOutcome::Connected(pipe));
         }
-        let connected = unsafe { ConnectNamedPipe(handle, null_mut()) } != 0;
-        if !connected {
-            let err = unsafe { GetLastError() };
-            if err != 535 {
-                unsafe {
-                    windows_sys::Win32::Foundation::CloseHandle(handle);
+
+        let err = unsafe { GetLastError() };
+        match err {
+            ERROR_PIPE_CONNECTED => {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Ok(()));
                 }
-                return Err(format!("ConnectNamedPipe failed: {err}"));
+                let pipe = OverlappedPipe::new(handle).map_err(PipeAcceptError::Transient)?;
+                Ok(PipeAcceptOutcome::Connected(pipe))
+            }
+            ERROR_IO_PENDING => {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Ok(()));
+                }
+                let stop_event_raw = self.stop_event.as_ref().map(|event| event.raw());
+                match finish_pending_overlapped(
+                    handle.raw(),
+                    connect_event.raw(),
+                    &mut overlapped,
+                    None,
+                    stop_event_raw,
+                    Some(stop),
+                    Some(V7_ACCEPT_STOP_CHECK_MS),
+                ) {
+                    OverlappedOutcome::Completed(_) => {
+                        let pipe =
+                            OverlappedPipe::new(handle).map_err(PipeAcceptError::Transient)?;
+                        Ok(PipeAcceptOutcome::Connected(pipe))
+                    }
+                    OverlappedOutcome::Stopped => Ok(PipeAcceptOutcome::Stopped),
+                    OverlappedOutcome::Eof => Ok(PipeAcceptOutcome::ClientDisconnectedEarly),
+                    OverlappedOutcome::TimedOut => Err(PipeAcceptError::Transient(
+                        "ConnectNamedPipe unexpectedly timed out".into(),
+                    )),
+                    OverlappedOutcome::OsError(code)
+                        if code == ERROR_NO_DATA
+                            || code == ERROR_BROKEN_PIPE
+                            || code == ERROR_PIPE_NOT_CONNECTED =>
+                    {
+                        Ok(PipeAcceptOutcome::ClientDisconnectedEarly)
+                    }
+                    OverlappedOutcome::OsError(code) => Err(PipeAcceptError::Transient(format!(
+                        "ConnectNamedPipe failed: {code}"
+                    ))),
+                }
+            }
+            ERROR_NO_DATA | ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED => {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Ok(()));
+                }
+                Ok(PipeAcceptOutcome::ClientDisconnectedEarly)
+            }
+            other => {
+                let error = format!("ConnectNamedPipe failed: {other}");
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error.clone()));
+                    return Err(PipeAcceptError::StartupFailed(error));
+                }
+                Err(PipeAcceptError::Transient(error))
             }
         }
-        Ok(unsafe { File::from_raw_handle(handle as HANDLE) })
     }
 }
 
 #[cfg(windows)]
 fn handle_pipe_stream(
-    mut stream: std::fs::File,
+    mut stream: OverlappedPipe,
     handler: &(dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync),
     stop: &AtomicBool,
+    stop_handle: &NamedPipeStopHandle,
+    idle_timeout: Duration,
+    frame_timeout: Duration,
 ) {
+    stream.set_write_timeout(Some(V7_FRAME_READ_TIMEOUT));
     loop {
-        match read_server_pipe_message::<CorePipeRequest>(&mut stream) {
+        if stop.load(Ordering::SeqCst) || stop_handle.is_signaled() {
+            break;
+        }
+        match read_server_pipe_message::<CorePipeRequest>(
+            &mut stream,
+            stop_handle,
+            idle_timeout,
+            frame_timeout,
+        ) {
             Ok(Some(request)) => {
-                if dispatch_and_reply(&mut stream, request, handler, stop).is_err() {
+                let result = dispatch_and_reply(&mut stream, request, handler, stop);
+                if stop.load(Ordering::SeqCst) {
+                    stop_handle.signal();
+                }
+                if result.is_err() {
                     break;
                 }
             }
             Ok(None) => break,
             Err(error) => {
+                stream.set_write_timeout(Some(V7_LINGER_CLOSE_TIMEOUT));
                 report_protocol_violation(&mut stream, &error);
                 break;
             }
         }
     }
-}
-
-#[cfg(windows)]
-fn wake_named_pipe_accept_on_stop(name: String, stop: Arc<AtomicBool>, done: Arc<AtomicBool>) {
-    thread::spawn(move || {
-        while !stop.load(Ordering::SeqCst) {
-            if done.load(Ordering::SeqCst) {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        if done.load(Ordering::SeqCst) {
-            return;
-        }
-        // Connect without sending a frame. The accept loop observes `stop` and
-        // drops this stream instead of dispatching it as a normal client.
-        for _ in 0..20 {
-            if done.load(Ordering::SeqCst) || NamedPipeClient::connect(&name, 100).is_ok() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    });
 }
 
 #[cfg(windows)]
@@ -574,43 +1346,42 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
 
 #[cfg(windows)]
 pub struct NamedPipeClient {
-    stream: std::fs::File,
+    stream: OverlappedPipe,
 }
 
 #[cfg(windows)]
 impl NamedPipeClient {
     pub fn connect(name: &str, timeout_ms: u32) -> Result<Self, String> {
-        use std::fs::File;
-        use std::os::windows::io::FromRawHandle;
         use windows_sys::Win32::Foundation::{
-            CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
+            ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
         };
         use windows_sys::Win32::Storage::FileSystem::{
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-            OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ,
+            FILE_GENERIC_WRITE, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
         };
         use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
         let wide_name = wide(name);
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         loop {
-            let handle = unsafe {
+            let raw_handle = unsafe {
                 CreateFileW(
                     wide_name.as_ptr(),
                     FILE_GENERIC_READ | FILE_GENERIC_WRITE,
                     0,
                     std::ptr::null(),
                     OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                    FILE_ATTRIBUTE_NORMAL
+                        | FILE_FLAG_OVERLAPPED
+                        | SECURITY_SQOS_PRESENT
+                        | SECURITY_IDENTIFICATION,
                     std::ptr::null_mut(),
                 )
             };
-            if handle != INVALID_HANDLE_VALUE {
-                if let Err(error) = verify_pipe_server_owner(handle) {
-                    unsafe { CloseHandle(handle) };
-                    return Err(error);
-                }
+            if raw_handle != INVALID_HANDLE_VALUE {
+                let handle = OwnedWinHandle::from_raw(raw_handle)?;
+                verify_pipe_server_owner(handle.raw())?;
                 return Ok(Self {
-                    stream: unsafe { File::from_raw_handle(handle as _) },
+                    stream: OverlappedPipe::new(handle)?,
                 });
             }
             let mut error = std::io::Error::last_os_error();
@@ -632,17 +1403,61 @@ impl NamedPipeClient {
             }
             // 最后一个旧实例关闭到服务端创建下一实例之间，WaitNamedPipe 会立即返回找不到文件。
             // 等待原期限内的新实例，不能在这个窗口提前报错，也不能空转占满 CPU。
-            thread::sleep(Duration::from_millis(u64::from(remaining.min(10))));
+            thread::sleep(Duration::from_millis(u64::from(remaining.min(5))));
         }
     }
 
-    pub fn into_file(self) -> std::fs::File {
+    fn into_stream(self) -> OverlappedPipe {
         self.stream
     }
 
+    pub fn set_read_timeout(&mut self, timeout: Option<Duration>) {
+        self.stream.set_read_timeout(timeout);
+    }
+
+    pub fn set_write_timeout(&mut self, timeout: Option<Duration>) {
+        self.stream.set_write_timeout(timeout);
+    }
+
     pub fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
-        write_message(&mut self.stream, request)?;
-        read_message(&mut self.stream)?.ok_or_else(|| "Core pipe closed".into())
+        self.stream
+            .write_message_timeout(request, V7_FRAME_READ_TIMEOUT)?;
+        self.stream
+            .read_message_timeout(client_request_read_timeout(request))?
+            .ok_or_else(|| "Core pipe closed".into())
+    }
+
+    pub fn request_with_timeout(
+        &mut self,
+        request: &CorePipeRequest,
+        timeout: Duration,
+    ) -> Result<CorePipeResponse, String> {
+        self.stream.write_message_timeout(request, timeout)?;
+        self.stream
+            .read_message_timeout(timeout)?
+            .ok_or_else(|| "Core pipe closed".into())
+    }
+}
+
+#[cfg(windows)]
+impl Read for NamedPipeClient {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+
+#[cfg(windows)]
+impl Write for NamedPipeClient {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.stream.write_all(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
     }
 }
 
@@ -700,11 +1515,11 @@ pub fn serve_tcp_listener(
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("Core listener nonblocking: {error}"))?;
-    let active = Arc::new(AtomicUsize::new(0));
+    let slots = ConnectionSlots::new();
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _)) => {
-                let Some(slot) = ConnectionSlot::claim(&active) else {
+                let Some(slot) = slots.try_claim() else {
                     continue;
                 };
                 let handler = Arc::clone(&handler);
@@ -818,7 +1633,7 @@ pub struct CoreIpcClient {
 enum IpcTransport {
     Tcp(TcpStream),
     #[cfg(windows)]
-    Pipe(std::fs::File),
+    Pipe(OverlappedPipe),
 }
 
 fn client_request_read_timeout(request: &CorePipeRequest) -> Duration {
@@ -852,8 +1667,12 @@ impl IpcTransport {
             }
             #[cfg(windows)]
             Self::Pipe(stream) => {
-                write_message(stream, request)?;
-                read_message(stream)?.ok_or_else(|| "Core pipe closed".into())
+                let write_timeout = timeout.unwrap_or(V7_FRAME_READ_TIMEOUT);
+                let read_timeout = timeout.unwrap_or_else(|| client_request_read_timeout(request));
+                stream.write_message_timeout(request, write_timeout)?;
+                stream
+                    .read_message_timeout(read_timeout)?
+                    .ok_or_else(|| "Core pipe closed".into())
             }
         }
     }
@@ -992,11 +1811,18 @@ impl CoreIpcClient {
 
     #[cfg(windows)]
     fn connect_pipe_timeout(name: &str, timeout_ms: u32) -> Result<Self, String> {
+        let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
         let pipe = NamedPipeClient::connect(name, timeout_ms)?;
+        let hello_timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(50));
         let mut client = Self {
-            transport: IpcTransport::Pipe(pipe.into_file()),
+            transport: IpcTransport::Pipe(pipe.into_stream()),
         };
-        match client.request(&hello_request())? {
+        match client
+            .transport
+            .request_with_timeout(&hello_request(), Some(hello_timeout))?
+        {
             CorePipeResponse::Hello {
                 protocol, version, ..
             } if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION => Ok(client),
@@ -1762,7 +2588,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             if let Ok(pipe) = NamedPipeClient::connect(&name, 100) {
-                client = Some(pipe.into_file());
+                client = Some(pipe);
                 break;
             }
             thread::sleep(Duration::from_millis(20));
@@ -1837,7 +2663,7 @@ mod tests {
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while std::time::Instant::now() < deadline {
                 if let Ok(pipe) = NamedPipeClient::connect(&name, 100) {
-                    client = Some(pipe.into_file());
+                    client = Some(pipe);
                     break;
                 }
                 thread::sleep(Duration::from_millis(20));
@@ -1938,5 +2764,456 @@ mod tests {
             "probe took {:?}",
             started.elapsed()
         );
+    }
+
+    #[cfg(windows)]
+    fn unique_test_pipe_name(tag: &str) -> String {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        format!(
+            r"\\.\pipe\HLSDownloader.s3c.{tag}.{}.{}.{}",
+            std::process::id(),
+            id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn overlapped_named_pipe_roundtrip_latency_has_no_polling_delay() {
+        let name = unique_test_pipe_name("latency");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server = NamedPipeServer::new(name.clone());
+        let stop_handle = server.stop_handle();
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|request| match request {
+                CorePipeRequest::Hello { .. } => CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: std::process::id(),
+                },
+                CorePipeRequest::Command { request_id, .. } => CorePipeResponse::Events {
+                    request_id,
+                    events: Vec::new(),
+                },
+                other => CorePipeResponse::Error {
+                    request_id: None,
+                    code: "unexpected".into(),
+                    message: format!("unexpected request: {other:?}"),
+                },
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_stop = Arc::clone(&stop);
+        let worker =
+            thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready timed out")
+            .expect("ready failed");
+
+        let mut client = CoreIpcClient::connect_pipe(&name).expect("connect_pipe failed");
+        let started = Instant::now();
+        let mut samples = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let call_start = Instant::now();
+            let events = client.command(CoreCommand::Ping).expect("ping failed");
+            assert!(events.is_empty());
+            samples.push(call_start.elapsed());
+        }
+        let total = started.elapsed();
+        samples.sort_unstable();
+        let avg_ms = total.as_secs_f64() * 1000.0 / 20.0;
+        let max_ms = samples.last().copied().unwrap_or_default().as_secs_f64() * 1000.0;
+        println!(
+            "overlapped_named_pipe_20_roundtrips total_ms={:.3} avg_ms={:.3} max_ms={:.3}",
+            total.as_secs_f64() * 1000.0,
+            avg_ms,
+            max_ms
+        );
+        assert!(
+            total < Duration::from_millis(200),
+            "20 sequential named-pipe round-trips took {total:?} (expected < 200ms without 10ms polling); samples={samples:?}"
+        );
+
+        drop(client);
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn overlapped_named_pipe_shutdown_wakes_idle_accept_promptly() {
+        // Case 1: Stop event handle wakes an idle ConnectNamedPipe immediately.
+        {
+            let name = unique_test_pipe_name("stop-event");
+            let stop = Arc::new(AtomicBool::new(false));
+            let server = NamedPipeServer::new(name);
+            let stop_handle = server.stop_handle();
+            let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+                Arc::new(|_| CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: std::process::id(),
+                });
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let server_stop = Arc::clone(&stop);
+            let worker =
+                thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+            ready_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("ready timed out")
+                .expect("ready failed");
+
+            // Allow ConnectNamedPipe to enter its kernel wait state.
+            thread::sleep(Duration::from_millis(20));
+
+            let started = Instant::now();
+            stop.store(true, Ordering::SeqCst);
+            stop_handle.signal();
+            worker.join().unwrap().unwrap();
+            let elapsed = started.elapsed();
+            println!(
+                "overlapped_named_pipe_stop_event_wake_ms={:.3}",
+                elapsed.as_secs_f64() * 1000.0
+            );
+            assert!(
+                elapsed < Duration::from_millis(200),
+                "stop_handle.signal() took {elapsed:?} to wake idle ConnectNamedPipe"
+            );
+        }
+
+        // Case 2: Legacy AtomicBool-only stop still wakes idle ConnectNamedPipe promptly.
+        {
+            let name = unique_test_pipe_name("stop-flag");
+            let stop = Arc::new(AtomicBool::new(false));
+            let server = NamedPipeServer::new(name);
+            let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+                Arc::new(|_| CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: std::process::id(),
+                });
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let server_stop = Arc::clone(&stop);
+            let worker =
+                thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+            ready_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("ready timed out")
+                .expect("ready failed");
+
+            thread::sleep(Duration::from_millis(20));
+
+            let started = Instant::now();
+            stop.store(true, Ordering::SeqCst);
+            worker.join().unwrap().unwrap();
+            let elapsed = started.elapsed();
+            println!(
+                "overlapped_named_pipe_stop_flag_wake_ms={:.3}",
+                elapsed.as_secs_f64() * 1000.0
+            );
+            assert!(
+                elapsed < Duration::from_millis(200),
+                "AtomicBool-only stop took {elapsed:?} to wake idle ConnectNamedPipe"
+            );
+        }
+
+        // Case 3: In-band CoreCommand::Shutdown flushes reply, wakes idle accept & idle clients, and frees all slots.
+        {
+            let name = unique_test_pipe_name("stop-cmd");
+            let stop = Arc::new(AtomicBool::new(false));
+            let server = Arc::new(NamedPipeServer::new(name.clone()));
+            let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+                Arc::new(|request| match request {
+                    CorePipeRequest::Hello { .. } => CorePipeResponse::Hello {
+                        protocol: V7_PROTOCOL_NAME.into(),
+                        version: V7_PROTOCOL_VERSION,
+                        pid: std::process::id(),
+                    },
+                    CorePipeRequest::Command { request_id, .. } => CorePipeResponse::Events {
+                        request_id,
+                        events: Vec::new(),
+                    },
+                    other => CorePipeResponse::Error {
+                        request_id: None,
+                        code: "unexpected".into(),
+                        message: format!("unexpected: {other:?}"),
+                    },
+                });
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let server_for_thread = Arc::clone(&server);
+            let server_stop = Arc::clone(&stop);
+            let worker = thread::spawn(move || {
+                server_for_thread.serve_loop_with_ready(server_stop, handler, ready_tx)
+            });
+            ready_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("ready timed out")
+                .expect("ready failed");
+
+            let _idle_client = CoreIpcClient::connect_pipe(&name).expect("idle client connect");
+            let mut controller = CoreIpcClient::connect_pipe(&name).expect("controller connect");
+
+            let started = Instant::now();
+            let events = controller
+                .command(CoreCommand::Shutdown)
+                .expect("shutdown command reply");
+            assert!(events.is_empty());
+            worker.join().unwrap().unwrap();
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < Duration::from_millis(200),
+                "CoreCommand::Shutdown took {elapsed:?} to stop server"
+            );
+
+            let slot_deadline = Instant::now() + Duration::from_secs(1);
+            while server.claimed_slots() > 0 && Instant::now() < slot_deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                server.claimed_slots(),
+                0,
+                "idle client thread must exit and release its slot on shutdown"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn overlapped_named_pipe_partial_frame_timeout_cancels_and_frees_slot() {
+        let name = unique_test_pipe_name("partial-timeout");
+        let stop = Arc::new(AtomicBool::new(false));
+        let frame_timeout = Duration::from_millis(120);
+        let server = Arc::new(
+            NamedPipeServer::new(name.clone())
+                .with_timeouts(Duration::from_millis(500), frame_timeout),
+        );
+        let stop_handle = server.stop_handle();
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|request| match request {
+                CorePipeRequest::Hello { .. } => CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: std::process::id(),
+                },
+                CorePipeRequest::Command { request_id, .. } => CorePipeResponse::Events {
+                    request_id,
+                    events: Vec::new(),
+                },
+                other => CorePipeResponse::Error {
+                    request_id: None,
+                    code: "unexpected".into(),
+                    message: format!("unexpected: {other:?}"),
+                },
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_for_thread = Arc::clone(&server);
+        let server_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            server_for_thread.serve_loop_with_ready(server_stop, handler, ready_tx)
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready timed out")
+            .expect("ready failed");
+
+        // While the accept loop is waiting in ConnectNamedPipe, it holds 1 pre-claimed
+        // listening slot; each active client handler claims 1 additional slot.
+        assert_eq!(server.claimed_slots(), 1);
+        let wait_idle_slots = |label: &str| {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while server.claimed_slots() > 1 && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                server.claimed_slots(),
+                1,
+                "connection slot was not freed after {label}"
+            );
+        };
+
+        // 1. Incomplete payload: 4-byte length claims 64 bytes, only 4 bytes sent.
+        {
+            let mut client = NamedPipeClient::connect(&name, 2_000).expect("connect");
+            client.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut partial = 64u32.to_le_bytes().to_vec();
+            partial.extend_from_slice(b"part");
+            let started = Instant::now();
+            client.write_all(&partial).unwrap();
+            let occupied_deadline = Instant::now() + Duration::from_millis(100);
+            while server.claimed_slots() < 2 && Instant::now() < occupied_deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(
+                server.claimed_slots() >= 2,
+                "expected active handler slot while partial frame is in flight"
+            );
+            match read_message::<CorePipeResponse>(&mut client)
+                .expect("expected protocol_violation read to succeed")
+                .expect("expected protocol_violation frame")
+            {
+                CorePipeResponse::Error { code, message, .. } => {
+                    assert_eq!(code, "protocol_violation");
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected timeout message: {message}"
+                    );
+                }
+                other => panic!("expected protocol_violation, got {other:?}"),
+            }
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed >= Duration::from_millis(90) && elapsed < Duration::from_secs(1),
+                "unexpected incomplete-payload timeout duration: {elapsed:?}"
+            );
+            assert!(matches!(
+                read_message::<CorePipeResponse>(&mut client),
+                Ok(None)
+            ));
+            drop(client);
+            wait_idle_slots("incomplete payload timeout");
+        }
+
+        // 2. Drip-feed payload: progress MUST NOT renew the absolute body deadline.
+        {
+            let mut client = NamedPipeClient::connect(&name, 2_000).expect("connect");
+            client.set_read_timeout(Some(Duration::from_secs(2)));
+            client.set_write_timeout(Some(Duration::from_millis(200)));
+            let started = Instant::now();
+            client.write_all(&32u32.to_le_bytes()).unwrap();
+            for _ in 0..8 {
+                if client.write_all(b"x").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(30));
+            }
+            match read_message::<CorePipeResponse>(&mut client)
+                .expect("expected protocol_violation read")
+                .expect("expected protocol_violation frame")
+            {
+                CorePipeResponse::Error { code, message, .. } => {
+                    assert_eq!(code, "protocol_violation");
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected drip-feed message: {message}"
+                    );
+                }
+                other => panic!("expected protocol_violation, got {other:?}"),
+            }
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "drip-feed renewed body deadline: {elapsed:?}"
+            );
+            drop(client);
+            wait_idle_slots("drip-feed body timeout");
+        }
+
+        // 3. Partial header: only 2 of 4 header bytes sent.
+        {
+            let mut client = NamedPipeClient::connect(&name, 2_000).expect("connect");
+            client.set_read_timeout(Some(Duration::from_secs(2)));
+            let started = Instant::now();
+            client.write_all(&[10u8, 0u8]).unwrap();
+            match read_message::<CorePipeResponse>(&mut client)
+                .expect("expected protocol_violation read")
+                .expect("expected protocol_violation frame")
+            {
+                CorePipeResponse::Error { code, message, .. } => {
+                    assert_eq!(code, "protocol_violation");
+                    assert!(
+                        message.contains("timed out"),
+                        "unexpected partial-header message: {message}"
+                    );
+                }
+                other => panic!("expected protocol_violation, got {other:?}"),
+            }
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed >= Duration::from_millis(90) && elapsed < Duration::from_secs(1),
+                "unexpected partial-header timeout duration: {elapsed:?}"
+            );
+            drop(client);
+            wait_idle_slots("partial header timeout");
+        }
+
+        // 4. Server remains completely healthy and serves a normal client afterwards.
+        {
+            let mut client = CoreIpcClient::connect_pipe(&name).expect("healthy client connect");
+            assert!(client.command(CoreCommand::Ping).unwrap().is_empty());
+            drop(client);
+            wait_idle_slots("healthy follow-up client");
+        }
+
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
+        assert_eq!(
+            server.claimed_slots(),
+            0,
+            "all slots must be released after server shutdown"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn overlapped_named_pipe_client_timeout_cancels_cleanly() {
+        let name = unique_test_pipe_name("client-timeout");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server = NamedPipeServer::new(name.clone());
+        let stop_handle = server.stop_handle();
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|request| {
+                thread::sleep(Duration::from_millis(350));
+                match request {
+                    CorePipeRequest::Command { request_id, .. } => CorePipeResponse::Events {
+                        request_id,
+                        events: Vec::new(),
+                    },
+                    _ => CorePipeResponse::Hello {
+                        protocol: V7_PROTOCOL_NAME.into(),
+                        version: V7_PROTOCOL_VERSION,
+                        pid: std::process::id(),
+                    },
+                }
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_stop = Arc::clone(&stop);
+        let worker =
+            thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready timed out")
+            .expect("ready failed");
+
+        let mut client = NamedPipeClient::connect(&name, 2_000).expect("connect");
+        let started = Instant::now();
+        let err = client
+            .request_with_timeout(
+                &CorePipeRequest::Command {
+                    request_id: 1,
+                    command: CoreCommand::Ping,
+                },
+                Duration::from_millis(80),
+            )
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            err.contains("timed out"),
+            "expected client read timeout error, got: {err}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(60) && elapsed < Duration::from_millis(300),
+            "client timeout took unexpected duration: {elapsed:?}"
+        );
+
+        drop(client);
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
     }
 }

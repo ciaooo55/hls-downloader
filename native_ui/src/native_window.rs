@@ -11,6 +11,7 @@ where
         dark,
         tokens.get_surface(),
         tokens.get_ink(),
+        tokens.get_line(),
     );
 }
 
@@ -33,7 +34,32 @@ where
     apply_appearance(component, tokens.get_dark(), tokens.get_reduce_motion());
 }
 
-fn apply_caption_theme(window: &Window, dark: bool, background: slint::Color, text: slint::Color) {
+#[cfg(any(windows, test))]
+pub(crate) fn dwm_color_ref(color: slint::Color) -> u32 {
+    u32::from(color.red()) | (u32::from(color.green()) << 8) | (u32::from(color.blue()) << 16)
+}
+
+#[cfg(windows)]
+fn set_window_cloaked(handle: i64, cloaked: bool) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    let value: u32 = u32::from(cloaked);
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            handle as _,
+            DWMWA_CLOAK as u32,
+            std::ptr::from_ref(&value).cast(),
+            std::mem::size_of_val(&value) as u32,
+        )
+    };
+}
+
+fn apply_caption_theme(
+    window: &Window,
+    dark: bool,
+    background: slint::Color,
+    text: slint::Color,
+    border: slint::Color,
+) {
     #[cfg(windows)]
     {
         use slint::winit_030::{winit::window::Theme, WinitWindowAccessor};
@@ -42,20 +68,17 @@ fn apply_caption_theme(window: &Window, dark: bool, background: slint::Color, te
         });
         if let Some(handle) = hwnd(window) {
             use windows_sys::Win32::Graphics::Dwm::{
-                DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
-                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+                DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
             };
-            let color_ref = |color: slint::Color| {
-                u32::from(color.red())
-                    | (u32::from(color.green()) << 8)
-                    | (u32::from(color.blue()) << 16)
-            };
-            // Windows 11 supports explicit caption colors even when the application
-            // and system themes differ. Older Windows keeps Winit's native theme.
+            // Windows 11 supports explicit caption/border colors and rounded corners
+            // even when the application and system themes differ. Older Windows keeps defaults.
             for (attribute, value) in [
                 (DWMWA_USE_IMMERSIVE_DARK_MODE, u32::from(dark)),
-                (DWMWA_CAPTION_COLOR, color_ref(background)),
-                (DWMWA_TEXT_COLOR, color_ref(text)),
+                (DWMWA_CAPTION_COLOR, dwm_color_ref(background)),
+                (DWMWA_TEXT_COLOR, dwm_color_ref(text)),
+                (DWMWA_BORDER_COLOR, dwm_color_ref(border)),
+                (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND as u32),
             ] {
                 let result = unsafe {
                     DwmSetWindowAttribute(
@@ -70,7 +93,7 @@ fn apply_caption_theme(window: &Window, dark: bool, background: slint::Color, te
         }
     }
     #[cfg(not(windows))]
-    let _ = (window, dark, background, text);
+    let _ = (window, dark, background, text, border);
 }
 
 pub fn initialize_app_id() {
@@ -251,6 +274,7 @@ pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
                 tokens.get_dark(),
                 tokens.get_surface(),
                 tokens.get_ink(),
+                tokens.get_line(),
             );
             if let Some(handle) = hwnd(component.window()) {
                 hls_client::hide_window_from_taskbar(handle);
@@ -290,8 +314,11 @@ pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
                 tokens.get_dark(),
                 tokens.get_surface(),
                 tokens.get_ink(),
+                tokens.get_line(),
             );
             if let Some(handle) = hwnd(component.window()) {
+                // Cloak during owner/style/position adjustments to prevent any visible show→hide→show flash.
+                set_window_cloaked(handle, true);
                 if let Some(owner) = owner {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{
                         GetWindow, GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW,
@@ -346,6 +373,7 @@ pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
                 if center {
                     hls_client::center_window(handle);
                 }
+                set_window_cloaked(handle, false);
                 if activate && component.window().is_visible() {
                     hls_client::activate_window(handle);
                 }
@@ -503,7 +531,19 @@ pub fn save_geometry(window: &Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::bottom_right_toast_position;
+    use super::{bottom_right_toast_position, dwm_color_ref};
+
+    #[test]
+    fn dwm_color_ref_packs_rgb_in_win32_bgr_order() {
+        assert_eq!(
+            dwm_color_ref(slint::Color::from_rgb_u8(0x12, 0x34, 0x56)),
+            0x0056_3412
+        );
+        assert_eq!(
+            dwm_color_ref(slint::Color::from_rgb_u8(0xff, 0x00, 0x80)),
+            0x0080_00ff
+        );
+    }
 
     #[test]
     fn bottom_right_toast_anchors_above_taskbar_with_margin_and_clamps_small_screens() {

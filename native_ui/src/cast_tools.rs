@@ -75,9 +75,7 @@ impl CastTools {
                 if last_request.elapsed() >= Duration::from_secs(60) {
                     client = None;
                 }
-                let request_id = serde_json::to_value(&request)
-                    .ok()
-                    .and_then(|v| v["request_id"].as_u64());
+                let request_id = request.request_id();
                 let result = (|| {
                     if client.is_none() {
                         client = Some(CoreIpcClient::connect()?);
@@ -173,10 +171,7 @@ impl CastTools {
     }
 
     fn send(&self, request: CorePipeRequest, kind: Pending) -> bool {
-        let id = serde_json::to_value(&request)
-            .ok()
-            .and_then(|v| v["request_id"].as_u64())
-            .unwrap_or(0);
+        let id = request.request_id().unwrap_or(0);
         if self.jobs.try_send(request).is_err() {
             self.window.set_notice_tone("error".into());
             self.window.set_notice("操作队列已满，请稍后重试".into());
