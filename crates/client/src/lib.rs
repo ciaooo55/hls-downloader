@@ -18,7 +18,10 @@ pub use core_spawn::*;
 pub use credential_vault::CredentialVault;
 pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
 pub use media_ext::download_category;
-pub use profile_paths::{default_v7_database_path, default_v7_download_dir};
+pub use profile_paths::{
+    clear_user_shutdown, default_v7_database_path, default_v7_download_dir,
+    is_user_shutdown_active, record_user_shutdown, user_shutdown_marker_path,
+};
 pub use runtime_log::{init_runtime_log, record_runtime_log};
 pub use tray::{
     completion_sound, show_notification, spawn_tray, update_tray_state, TrayAction, TrayMenuState,

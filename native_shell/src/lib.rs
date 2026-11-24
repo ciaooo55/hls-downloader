@@ -178,7 +178,10 @@ pub use native_host_registration::{
 };
 #[cfg(feature = "full-core")]
 pub use player::{run_player_process, PLAYER_WINDOW_TITLE};
-pub use profile_paths::{default_v7_database_path, default_v7_download_dir};
+pub use profile_paths::{
+    clear_user_shutdown, default_v7_database_path, default_v7_download_dir,
+    is_user_shutdown_active, record_user_shutdown, user_shutdown_marker_path,
+};
 #[cfg(feature = "full-core")]
 pub use recognize::{classify_url, kind_label, probe_url};
 #[cfg(feature = "full-core")]

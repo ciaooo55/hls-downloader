@@ -193,6 +193,11 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
                         }
                     }
                     hls_native_shell::TrayAction::Quit => {
+                        // Write the profile-scoped user-shutdown marker BEFORE
+                        // closing Core IPC so any concurrent browser heartbeat
+                        // (`ping`) observing the broken pipe immediately sees
+                        // the user's explicit quit and never respawns Engine.
+                        hls_native_shell::record_user_shutdown();
                         let response = handler(hls_native_shell::CorePipeRequest::Command {
                             request_id: 0,
                             command: hls_native_shell::CoreCommand::Shutdown,
@@ -200,6 +205,7 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
                         match response {
                             hls_native_shell::CorePipeResponse::Events { .. } => break,
                             response => {
+                                hls_native_shell::clear_user_shutdown();
                                 eprintln!("tray shutdown failed: {response:?}");
                                 hls_native_shell::show_notification(
                                     "暂时无法退出",
@@ -358,6 +364,7 @@ fn main() -> ExitCode {
             eprintln!("download engine instance startup failed: {error}");
             return ExitCode::from(1);
         }
+        hls_native_shell::clear_user_shutdown();
         mark("instance_lock");
         if automatic_native_host_repair_enabled() {
             let spawned = std::thread::Builder::new()
