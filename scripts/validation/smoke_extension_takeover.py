@@ -25,6 +25,7 @@ import threading
 import time
 import zipfile
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 import winreg
 
@@ -471,8 +472,12 @@ def _download_items(driver, inspector: str) -> list[dict[str, Any]]:
 
 
 def _item_for(driver, inspector: str, suffix: str) -> dict[str, Any] | None:
-    matches = [item for item in _download_items(driver, inspector) if suffix in str(item.get("url", ""))]
-    return max(matches, key=lambda item:item['id'], default=None)
+    expected = suffix.lstrip("/")
+    matches = [
+        item for item in _download_items(driver, inspector)
+        if urlsplit(str(item.get("url", ""))).path.rsplit("/", 1)[-1] == expected
+    ]
+    return max(matches, key=lambda item: item['id'], default=None)
 
 
 def _assert_browser_absent(driver, inspector: str, suffix: str):
