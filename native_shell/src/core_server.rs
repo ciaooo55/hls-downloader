@@ -604,6 +604,7 @@ fn dispatch(
                 "get_task",
                 "get_task_log",
                 "refresh_task_request",
+                "arm_task_refresh",
                 "get_task_torrent_files",
                 "set_task_torrent_files",
                 "browser_hello",

@@ -349,6 +349,15 @@ impl CoreStore {
         self.apply_events_spec_and_settings(events, None, None, Some(handoff))
     }
 
+    pub(crate) fn apply_events_spec_and_handoff(
+        &mut self,
+        events: &[EventEnvelope],
+        spec: Option<&TaskSpec>,
+        handoff: Option<&crate::contract::BrowserHandoff>,
+    ) -> Result<(), String> {
+        self.apply_events_spec_and_settings(events, spec, None, handoff)
+    }
+
     fn apply_events_spec_and_settings(
         &mut self,
         events: &[EventEnvelope],

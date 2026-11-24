@@ -275,6 +275,17 @@ impl CoreCoordinator {
                 Value::String(crate::LEGAL_TERMS_VERSION.into()),
             );
         }
+        if let Some(limit_kib) = values
+            .get("download_speed_limit_kib")
+            .and_then(Value::as_u64)
+        {
+            if !values.contains_key("download_speed_limit_enabled") {
+                values.insert(
+                    "download_speed_limit_enabled".into(),
+                    Value::Bool(limit_kib > 0),
+                );
+            }
+        }
         let mut core = self.lock()?;
         let normalize_power = |raw: &str| -> String {
             let trimmed = raw.trim();
@@ -426,14 +437,22 @@ impl CoreCoordinator {
             matches!(
                 key.as_str(),
                 "download_speed_limit_kib"
+                    | "download_speed_limit_enabled"
                     | "download_speed_schedule_enabled"
                     | "download_speed_schedule_start"
                     | "download_speed_schedule_end"
                     | "download_speed_schedule_kib"
             )
         }) {
+            let configured_limit_kib = core.store().setting_u64("download_speed_limit_kib", 0)?;
+            let speed_limit_enabled = core
+                .store()
+                .setting_bool("download_speed_limit_enabled", configured_limit_kib > 0)?;
             crate::net_policy::configure_global_schedule(
-                core.store().setting_u64("download_speed_limit_kib", 0)?,
+                crate::net_policy::effective_global_speed_limit_kib(
+                    configured_limit_kib,
+                    speed_limit_enabled,
+                ),
                 core.store()
                     .setting_bool("download_speed_schedule_enabled", false)?,
                 &core
@@ -467,7 +486,9 @@ impl CoreCoordinator {
         }
         match key {
             "browser_takeover_enabled"
+            | "browser_quick_download_enabled"
             | "legal_terms_accepted"
+            | "download_speed_limit_enabled"
             | "download_speed_schedule_enabled"
             | "auto_category_dirs"
             | "av_scan_enabled"
@@ -803,8 +824,10 @@ fn valid_clock(value: &str) -> bool {
 pub const PUBLIC_SETTING_KEYS: &[&str] = &[
     "browser_takeover_enabled",
     "browser_takeover_minimum_bytes",
+    "browser_quick_download_enabled",
     "legal_terms_accepted",
     "download_speed_limit_kib",
+    "download_speed_limit_enabled",
     "download_hourly_quota_mib",
     "download_speed_schedule_enabled",
     "download_speed_schedule_start",
@@ -1002,5 +1025,74 @@ mod tests {
         assert_eq!(synced.completion_power_action, "shutdown");
         assert_eq!(synced.queue_profiles[0].max_active, 2);
         assert_eq!(synced.queue_profiles[0].completion_action, "shutdown");
+    }
+
+    #[test]
+    fn speed_limit_enabled_toggle_preserves_kib_and_updates_throttle() {
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        assert!(
+            CoreCoordinator::validate_setting("download_speed_limit_enabled", &json!("true"))
+                .is_err()
+        );
+        assert!(
+            CoreCoordinator::validate_setting("browser_quick_download_enabled", &json!(1)).is_err()
+        );
+        assert!(
+            CoreCoordinator::validate_setting("download_speed_limit_enabled", &json!(false))
+                .is_ok()
+        );
+        assert!(
+            CoreCoordinator::validate_setting("browser_quick_download_enabled", &json!(true))
+                .is_ok()
+        );
+
+        coordinator
+            .set_setting("browser_quick_download_enabled", json!(true))
+            .unwrap();
+        assert!(coordinator.settings().unwrap().quick_download_enabled);
+
+        // Setting download_speed_limit_kib > 0 auto-enables throttling.
+        coordinator
+            .set_setting("download_speed_limit_kib", json!(512))
+            .unwrap();
+        let settings = coordinator.settings().unwrap();
+        assert_eq!(settings.speed_limit_kib, 512);
+        assert!(settings.speed_limit_enabled);
+        assert_eq!(crate::net_policy::active_global_limit_bps(), 512.0 * 1024.0);
+
+        // Toggling download_speed_limit_enabled OFF disables throttling without zeroing speed_limit_kib.
+        coordinator
+            .set_setting("download_speed_limit_enabled", json!(false))
+            .unwrap();
+        let paused = coordinator.settings().unwrap();
+        assert_eq!(paused.speed_limit_kib, 512);
+        assert!(!paused.speed_limit_enabled);
+        assert_eq!(crate::net_policy::active_global_limit_bps(), 0.0);
+
+        // Toggling download_speed_limit_enabled back ON restores the exact saved limit.
+        coordinator
+            .set_setting("download_speed_limit_enabled", json!(true))
+            .unwrap();
+        let resumed = coordinator.settings().unwrap();
+        assert_eq!(resumed.speed_limit_kib, 512);
+        assert!(resumed.speed_limit_enabled);
+        assert_eq!(crate::net_policy::active_global_limit_bps(), 512.0 * 1024.0);
+
+        // Explicit batch with speed_limit_kib > 0 and speed_limit_enabled = false preserves disabled state.
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("download_speed_limit_kib".into(), json!(256)),
+                ("download_speed_limit_enabled".into(), json!(false)),
+            ]))
+            .unwrap();
+        let explicit_off = coordinator.settings().unwrap();
+        assert_eq!(explicit_off.speed_limit_kib, 256);
+        assert!(!explicit_off.speed_limit_enabled);
+        assert_eq!(crate::net_policy::active_global_limit_bps(), 0.0);
+
+        // Reset global throttle so other parallel tests observe clean state.
+        coordinator
+            .set_setting("download_speed_limit_kib", json!(0))
+            .unwrap();
     }
 }

@@ -7939,3 +7939,547 @@ fn accept_handoff_honors_start_paused_and_custom_queue_id() {
     assert!(stored_spec.start_paused);
     assert_eq!(stored_spec.queue_id, "night-media");
 }
+
+#[test]
+fn handoff_accept_persists_source_page_url_into_spec_and_snapshot() {
+    let page_url = "https://video.example.test/watch?v=42";
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.example.test/video.mp4".into(),
+                source_page_url: page_url.into(),
+                handoff_id: "handoff-source-page".into(),
+                filename: "video.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let events = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "handoff-source-page".into(),
+            filename: "video.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+        })
+        .unwrap();
+    let created = events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.clone()),
+            _ => None,
+        })
+        .expect("AcceptHandoff should emit TaskCreated");
+    assert_eq!(created.source_page_url, page_url);
+    let stored_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&created.task_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(stored_spec.source_page_url, page_url);
+    let listed = coordinator.tasks().unwrap();
+    assert_eq!(listed[0].source_page_url, page_url);
+
+    // Direct CoreRuntime::accept_handoff also preserves source_page_url.
+    let mut runtime = crate::CoreRuntime::new();
+    runtime.handle(CoreCommand::OfferResource {
+        offer: crate::ResourceOffer {
+            url: "https://cdn.example.test/direct.mp4".into(),
+            source_page_url: page_url.into(),
+            handoff_id: "handoff-direct".into(),
+            filename: "direct.mp4".into(),
+            ..Default::default()
+        },
+    });
+    let runtime_events = runtime.handle(CoreCommand::AcceptHandoff {
+        handoff_id: "handoff-direct".into(),
+        filename: "direct.mp4".into(),
+        download_dir: String::new(),
+        allow_duplicate: false,
+        trusted_ui: true,
+        start_paused: true,
+        queue_id: String::new(),
+    });
+    let runtime_created = runtime_events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(runtime_created.source_page_url, page_url);
+    assert_eq!(
+        runtime
+            .task_spec(&runtime_created.task_id)
+            .unwrap()
+            .source_page_url,
+        page_url
+    );
+}
+
+#[test]
+fn arm_task_refresh_updates_existing_task_via_offer_resource_without_duplicate() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let root = std::env::temp_dir().join(format!(
+        "hls-arm-refresh-offer-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let download_dir = root.join("downloads");
+    fs::create_dir_all(&download_dir).unwrap();
+    let payload: &'static [u8] = b"refreshed-payload-0123456789abcdef";
+    let seen_cookie = Arc::new(Mutex::new(String::new()));
+    let server_cookie = Arc::clone(&seen_cookie);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut cookie = String::new();
+            let mut range = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("cookie:") {
+                    cookie = value.trim().to_string();
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("range:") {
+                    range = Some(value.trim().to_string());
+                }
+            }
+            let mut stream = reader.into_inner();
+            if request_line.starts_with("GET /fresh.bin?sig=new ") {
+                if !cookie.is_empty() {
+                    *server_cookie.lock().unwrap() = cookie;
+                }
+                if let Some(spec) = range.and_then(|v| v.strip_prefix("bytes=").map(str::to_string))
+                {
+                    let (start_s, end_s) = spec.split_once('-').unwrap();
+                    let start: usize = start_s.parse().unwrap();
+                    let end: usize = if end_s.is_empty() {
+                        payload.len() - 1
+                    } else {
+                        end_s.parse::<usize>().unwrap().min(payload.len() - 1)
+                    };
+                    let slice = &payload[start..=end];
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: \"fresh-v1\"\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len(),
+                        slice.len()
+                    );
+                    let _ = stream.write_all(slice);
+                } else {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nETag: \"fresh-v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    let _ = stream.write_all(payload);
+                }
+            } else {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 410 Gone\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        }
+    });
+    let _ = server;
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(download_dir.to_string_lossy()),
+        )
+        .unwrap();
+
+    // Create a paused task and simulate a prior expired-URL failure on it.
+    let expired_url = format!("http://{addr}/expired.bin?sig=old");
+    let created_events = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: expired_url,
+                filename: "fresh.bin".into(),
+                download_dir: download_dir.to_string_lossy().into_owned(),
+                start_paused: true,
+                source_page_url: "https://origin.test/old-page".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = created_events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    coordinator
+        .lock()
+        .unwrap()
+        .report_failure(
+            &task_id,
+            crate::TaskFailure {
+                code: "HTTP_410".into(),
+                message: "HTTP 410".into(),
+                http_status: Some(410),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Store fresh browser credentials in vault.
+    let cred_ref = "cred-fresh-refresh".to_string();
+    let replay_plain = serde_json::json!({"cookie": "sid=fresh"}).to_string();
+    let protected = if cfg!(windows) {
+        crate::CredentialVault.protect(&replay_plain).unwrap()
+    } else {
+        replay_plain
+    };
+    coordinator
+        .store_credential(&cred_ref, &protected, "browser_replay")
+        .unwrap();
+
+    // Arm task refresh.
+    let arm_events = coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+    assert!(arm_events.iter().any(|envelope| matches!(
+        &envelope.event,
+        CoreEvent::Toast { level, message }
+            if level == "info" && message == "已进入刷新地址模式：请在浏览器重新点击该下载链接"
+    )));
+
+    // Subsequent browser OfferResource must refresh this task in place without emitting HandoffOffered.
+    let fresh_url = format!("http://{addr}/fresh.bin?sig=new");
+    let offer_events = coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: fresh_url.clone(),
+                source_page_url: "https://origin.test/new-page".into(),
+                credential_ref: Some(cred_ref.clone()),
+                replay_context_ref: Some("replay-ctx-2".into()),
+                request_method: "GET".into(),
+                handoff_id: "handoff-refresh-1".into(),
+                filename: "fresh.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(
+        !offer_events
+            .iter()
+            .any(|envelope| matches!(envelope.event, CoreEvent::HandoffOffered { .. })),
+        "consumed refresh offer must not open Confirm dialog: {offer_events:?}"
+    );
+    assert!(offer_events.iter().any(|envelope| matches!(
+        &envelope.event,
+        CoreEvent::HandoffResolved { handoff_id, task_id: Some(resolved) }
+            if handoff_id == "handoff-refresh-1" && resolved == &task_id
+    )));
+    assert!(offer_events.iter().any(|envelope| matches!(
+        &envelope.event,
+        CoreEvent::Toast { level, message }
+            if level == "info" && message == "下载地址与凭据已刷新，正在断点续传"
+    )));
+    assert!(offer_events.iter().any(|envelope| matches!(
+        &envelope.event,
+        CoreEvent::TaskUpdated { snapshot }
+            if snapshot.task_id == task_id
+                && snapshot.url == fresh_url
+                && snapshot.source_page_url == "https://origin.test/new-page"
+                && snapshot.error_code.is_none()
+                && snapshot.error_message.is_none()
+                && snapshot.http_status.is_none()
+    )));
+
+    // Only one task exists; spec carries refreshed URL and credential/replay refs.
+    assert_eq!(coordinator.tasks().unwrap().len(), 1);
+    let refreshed_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&task_id)
+        .cloned()
+        .unwrap();
+    assert_eq!(refreshed_spec.url, fresh_url);
+    assert_eq!(
+        refreshed_spec.credential_ref.as_deref(),
+        Some(cred_ref.as_str())
+    );
+    assert_eq!(
+        refreshed_spec.replay_context_ref.as_deref(),
+        Some("replay-ctx-2")
+    );
+    assert_eq!(
+        refreshed_spec.source_page_url,
+        "https://origin.test/new-page"
+    );
+
+    // Durable handoff row is recorded as accepted with the armed task_id.
+    let handoff_row = coordinator
+        .query_handoffs(Some("handoff-refresh-1"), None, false)
+        .unwrap()
+        .pop()
+        .expect("durable handoff row must exist");
+    let row_json: serde_json::Value = serde_json::from_str(&handoff_row).unwrap();
+    assert_eq!(row_json["status"], "accepted");
+    assert_eq!(row_json["task_id"], task_id);
+
+    // Wait for the auto-resumed task to finish downloading from /fresh.bin.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let task = coordinator
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.task_id == task_id)
+            .unwrap();
+        if matches!(task.status.as_str(), "completed" | "done") {
+            break;
+        }
+        assert!(
+            task.status != "failed",
+            "refreshed task failed: {:?}",
+            task.error_message
+        );
+        assert!(
+            Instant::now() < deadline,
+            "refreshed task did not finish: {task:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(fs::read(download_dir.join("fresh.bin")).unwrap(), payload);
+    assert_eq!(seen_cookie.lock().unwrap().as_str(), "sid=fresh");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn arm_task_refresh_consumes_durable_admit_handoff_and_marks_row_accepted() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/old.bin".into(),
+                filename: "old.bin".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = created
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+
+    let handoff = crate::contract::BrowserHandoff {
+        id: "handoff-admit-refresh".into(),
+        offer: crate::ResourceOffer {
+            url: "https://cdn.example.test/new.bin?sig=fresh".into(),
+            source_page_url: "https://site.example.test/download".into(),
+            credential_ref: Some("cred-browser-99".into()),
+            replay_context_ref: Some("replay-browser-99".into()),
+            request_method: "GET".into(),
+            handoff_id: "handoff-admit-refresh".into(),
+            filename: "old.bin".into(),
+            ..Default::default()
+        },
+        filename: "old.bin".into(),
+        title: "old.bin".into(),
+        mime_type: "application/octet-stream".into(),
+        size: 1024,
+        status: "pending".into(),
+        presentation: "queued".into(),
+        task_id: None,
+        created_at_ms: 1_700_000_000_000,
+        request_id: "req-admit-refresh-1".into(),
+        suppression: None,
+    };
+    let encoded = serde_json::to_string(&handoff).unwrap();
+    let seq_before = coordinator.latest_sequence().unwrap();
+    let receipt_json = coordinator.admit_handoff(&encoded).unwrap();
+    let receipt: crate::contract::BrowserHandoff = serde_json::from_str(&receipt_json).unwrap();
+    assert_eq!(receipt.status, "accepted");
+    assert_eq!(receipt.task_id.as_deref(), Some(task_id.as_str()));
+    assert_eq!(
+        receipt.offer.credential_ref.as_deref(),
+        Some("cred-browser-99")
+    );
+    // No pending handoff row was created for the Confirm dialog.
+    assert!(coordinator
+        .query_handoffs(None, None, true)
+        .unwrap()
+        .is_empty());
+    let events = coordinator.events_after(seq_before, 64).unwrap();
+    assert!(!events
+        .iter()
+        .any(|envelope| matches!(envelope.event, CoreEvent::HandoffOffered { .. })));
+    assert!(events.iter().any(|envelope| matches!(
+        &envelope.event,
+        CoreEvent::HandoffResolved { handoff_id, task_id: Some(resolved) }
+            if handoff_id == "handoff-admit-refresh" && resolved == &task_id
+    )));
+    // Idempotent retry returns the same accepted receipt.
+    let retry_json = coordinator.admit_handoff(&encoded).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&retry_json).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&receipt_json).unwrap()
+    );
+
+    // Pause/cancel worker cleanly before dropping coordinator.
+    let _ = coordinator.dispatch(CoreCommand::TaskAction {
+        task_id: task_id.clone(),
+        action: "cancel".into(),
+    });
+    let _ = coordinator.wait_for_worker_stop(&task_id);
+}
+
+#[test]
+fn arm_task_refresh_expired_or_disarmed_falls_back_to_normal_handoff() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    assert!(coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: "task-missing".into(),
+        })
+        .is_err());
+
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/original.bin".into(),
+                filename: "original.bin".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = created
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    // Arm then explicitly disarm with empty task_id.
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+    assert!(coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: String::new(),
+        })
+        .unwrap()
+        .is_empty());
+
+    let disarmed_events = coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.example.test/other.bin".into(),
+                handoff_id: "handoff-disarmed".into(),
+                filename: "other.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(disarmed_events
+        .iter()
+        .any(|envelope| matches!(envelope.event, CoreEvent::HandoffOffered { .. })));
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().url,
+        "https://cdn.example.test/original.bin"
+    );
+
+    // Arm then expire TTL -> OfferResource must fall back to normal HandoffOffered.
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+    coordinator.expire_armed_refresh_for_test();
+    let expired_events = coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.example.test/expired-fallback.bin".into(),
+                handoff_id: "handoff-expired".into(),
+                filename: "expired-fallback.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(expired_events
+        .iter()
+        .any(|envelope| matches!(envelope.event, CoreEvent::HandoffOffered { .. })));
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().url,
+        "https://cdn.example.test/original.bin"
+    );
+}
+
+#[test]
+fn task_throttle_context_respects_speed_limit_enabled_toggle() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    let task_spec = spec();
+    coordinator
+        .set_setting("download_speed_limit_kib", serde_json::json!(640))
+        .unwrap();
+    let ctx_on = task_throttle_context(&coordinator.core(), "task-1", &task_spec).unwrap();
+    assert_eq!(ctx_on.global_limit_kib, 640);
+
+    coordinator
+        .set_setting("download_speed_limit_enabled", serde_json::json!(false))
+        .unwrap();
+    let ctx_off = task_throttle_context(&coordinator.core(), "task-1", &task_spec).unwrap();
+    assert_eq!(ctx_off.global_limit_kib, 0);
+    assert_eq!(coordinator.settings().unwrap().speed_limit_kib, 640);
+
+    coordinator
+        .set_setting("download_speed_limit_enabled", serde_json::json!(true))
+        .unwrap();
+    let ctx_restored = task_throttle_context(&coordinator.core(), "task-1", &task_spec).unwrap();
+    assert_eq!(ctx_restored.global_limit_kib, 640);
+
+    coordinator
+        .set_setting("download_speed_limit_kib", serde_json::json!(0))
+        .unwrap();
+}

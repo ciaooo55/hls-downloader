@@ -29,6 +29,10 @@ const DURABLE_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RANGE_ATTEMPTS: u32 = 5;
 const MAX_RANGE_RETRY_AFTER: Duration = Duration::from_secs(300);
 const ADAPTIVE_INITIAL_CONNECTIONS: usize = 2;
+const ADAPTIVE_RAMP_SUCCESSES: usize = 2;
+const ADAPTIVE_RAMP_STEP: usize = 2;
+const WAF_CURL_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const WAF_CURL_CACHE_MAX_ENTRIES: usize = 256;
 // The connection pool is used only by the Windows WinHTTP transport (and tests).
 #[cfg_attr(not(windows), allow(dead_code))]
 const CONNECT_POOL_PER_KEY: usize = 8;
@@ -802,6 +806,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
             attempt.replay_json = replay;
         }
         let mut initial_response = None;
+        let mut session_accept_ranges = false;
         if probe_allowed
             && !attempt.sequential
             && (attempt.total == 0
@@ -842,6 +847,8 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                     }
                     if !probe.accept_ranges || attempt.total == 0 {
                         attempt.sequential = true;
+                    } else if response.accept_ranges {
+                        session_accept_ranges = true;
                     }
                     // A 200 already owns the complete entity. Do not consume a
                     // one-use URL again merely because its server ignores Range.
@@ -863,7 +870,7 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                 }
             }
         }
-        match run_job_once(&attempt, initial_response) {
+        match run_job_once(&attempt, initial_response, session_accept_ranges) {
             Ok(()) => {
                 if index > 0 {
                     let report = &mut reports[index - 1];
@@ -898,7 +905,11 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     Err(last)
 }
 
-fn run_job_once(job: &Job, initial_response: Option<FetchResult>) -> Result<(), EngineError> {
+fn run_job_once(
+    job: &Job,
+    initial_response: Option<FetchResult>,
+    session_accept_ranges: bool,
+) -> Result<(), EngineError> {
     if job.url.trim().is_empty() {
         return Err(EngineError::Failed("job url missing".into()));
     }
@@ -926,7 +937,7 @@ fn run_job_once(job: &Job, initial_response: Option<FetchResult>) -> Result<(), 
         remove_active_ranges(&job.progress);
         download_sequential(job, initial_response)
     } else {
-        download_ranges(job)
+        download_ranges(job, session_accept_ranges)
     }
 }
 
@@ -1600,7 +1611,7 @@ fn download_sequential(
     Ok(())
 }
 
-fn download_ranges(job: &Job) -> Result<(), EngineError> {
+fn download_ranges(job: &Job, session_accept_ranges: bool) -> Result<(), EngineError> {
     remove_active_ranges(&job.progress);
     let total = job.total;
     if total == 0 {
@@ -1665,8 +1676,11 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     // 续传偏移也为 0，整包 body 可以安全地作为完整资源使用。
     // 失效检查点的残留文件不会复用，也属于从零开始；文件存在本身不代表有效断点。
     let fresh_start = loaded.is_empty() && job.resume_from == 0;
-    let split_minimum =
-        active_split_minimum(job, std::env::var("HLS_HTTP_ACTIVE_SPLIT").ok().as_deref());
+    let split_minimum = active_split_minimum_for_session(
+        job,
+        session_accept_ranges,
+        std::env::var("HLS_HTTP_ACTIVE_SPLIT").ok().as_deref(),
+    );
     let max_useful_workers = if let Some(minimum) = split_minimum {
         pending
             .iter()
@@ -1795,12 +1809,25 @@ fn download_ranges(job: &Job) -> Result<(), EngineError> {
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn active_split_minimum(job: &Job, setting: Option<&str>) -> Option<u64> {
+    active_split_minimum_for_session(job, false, setting)
+}
+
+fn active_split_minimum_for_session(
+    job: &Job,
+    session_accept_ranges: bool,
+    setting: Option<&str>,
+) -> Option<u64> {
     let enabled = !matches!(
         setting.map(str::trim),
         Some("0" | "false" | "FALSE" | "off" | "OFF")
     );
-    (enabled && !range_validator(job).is_empty()).then_some(256 * 1024)
+    let validator_safe = (job.etag.trim().is_empty() || header_token_ok(job.etag.trim()))
+        && (job.last_modified.trim().is_empty() || header_token_ok(job.last_modified.trim()));
+    let can_split = !range_validator(job).is_empty()
+        || (session_accept_ranges && job.total > 0 && validator_safe);
+    (enabled && can_split).then_some(256 * 1024)
 }
 
 fn range_chunk_size(total: u64, workers: usize, requested: u64) -> u64 {
@@ -1909,12 +1936,13 @@ impl AdaptiveConnectionController {
             return false;
         }
         let successes = self.successful_ranges.fetch_add(1, Ordering::AcqRel) + 1;
-        if successes < desired.max(2) {
+        if successes < ADAPTIVE_RAMP_SUCCESSES {
             return false;
         }
+        let next = desired.saturating_add(ADAPTIVE_RAMP_STEP).min(self.maximum);
         if self
             .desired
-            .compare_exchange(desired, desired + 1, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(desired, next, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             self.successful_ranges.store(0, Ordering::Release);
@@ -3172,15 +3200,113 @@ pub(crate) fn with_media_response<R>(
     })
 }
 
+#[derive(Default)]
+struct WafCurlCache {
+    entries: HashMap<String, Instant>,
+}
+
+impl WafCurlCache {
+    fn contains_at(&mut self, origin: &str, now: Instant) -> bool {
+        if origin.is_empty() {
+            return false;
+        }
+        let Some(&recorded) = self.entries.get(origin) else {
+            return false;
+        };
+        if now.saturating_duration_since(recorded) >= WAF_CURL_CACHE_TTL {
+            self.entries.remove(origin);
+            return false;
+        }
+        true
+    }
+
+    fn record_at(&mut self, origin: String, now: Instant) {
+        if origin.is_empty() {
+            return;
+        }
+        self.entries
+            .retain(|_, recorded| now.saturating_duration_since(*recorded) < WAF_CURL_CACHE_TTL);
+        if !self.entries.contains_key(&origin) && self.entries.len() >= WAF_CURL_CACHE_MAX_ENTRIES {
+            if let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, recorded)| **recorded)
+                .map(|(key, _)| key.clone())
+            {
+                self.entries.remove(&oldest_key);
+            }
+        }
+        self.entries.insert(origin, now);
+    }
+
+    fn invalidate(&mut self, origin: &str) {
+        if !origin.is_empty() {
+            self.entries.remove(origin);
+        }
+    }
+}
+
+fn waf_curl_cache() -> &'static Mutex<WafCurlCache> {
+    static CACHE: std::sync::OnceLock<Mutex<WafCurlCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(WafCurlCache::default()))
+}
+
+fn waf_curl_cache_hit(origin: &str) -> bool {
+    waf_curl_cache()
+        .lock()
+        .ok()
+        .is_some_and(|mut cache| cache.contains_at(origin, Instant::now()))
+}
+
+fn waf_curl_cache_record(origin: String) {
+    if let Ok(mut cache) = waf_curl_cache().lock() {
+        cache.record_at(origin, Instant::now());
+    }
+}
+
+fn waf_curl_cache_invalidate(origin: &str) {
+    if let Ok(mut cache) = waf_curl_cache().lock() {
+        cache.invalidate(origin);
+    }
+}
+
+fn curl_low_speed_args(throttled: bool) -> &'static [&'static str] {
+    if throttled {
+        &[]
+    } else {
+        &["--speed-time", "30", "--speed-limit", "1024"]
+    }
+}
+
 fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let mut prepared = job.clone();
     apply_browser_profile(&mut prepared.headers);
+    let origin = http_origin(&job.url).unwrap_or_default();
+    if !proxy_needs_curl(&job.proxy) && !origin.is_empty() && waf_curl_cache_hit(&origin) {
+        match fetch_curl_follow(&prepared, range) {
+            Some(Ok(fetched)) => {
+                if !(200..400).contains(&fetched.status) {
+                    waf_curl_cache_invalidate(&origin);
+                }
+                return Ok(fetched);
+            }
+            Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => return Err(error),
+            Some(Err(_)) | None => {
+                waf_curl_cache_invalidate(&origin);
+            }
+        }
+    }
     let first = fetch_follow(&prepared, range)?;
     if first.status != 403 || proxy_needs_curl(&job.proxy) {
         return Ok(first);
     }
     if let Some(via_curl) = fetch_curl_follow(&prepared, range) {
+        if let Ok(ref fetched) = via_curl {
+            if (200..400).contains(&fetched.status) && !origin.is_empty() {
+                waf_curl_cache_record(origin);
+            }
+        }
         return via_curl;
     }
     Ok(first)
@@ -3911,10 +4037,9 @@ fn fetch_via_curl_impersonate(
             .arg("-sS")
             .arg("--connect-timeout")
             .arg("15")
-            .arg("--speed-time")
-            .arg("30")
-            .arg("--speed-limit")
-            .arg("1024")
+            .args(curl_low_speed_args(
+                crate::net_policy::throttle_or_quota_active(),
+            ))
             .arg("--dump-header")
             .arg(&header_path)
             .arg("--suppress-connect-headers")
@@ -4111,6 +4236,7 @@ fn fetch_via_curl_impersonate(
         } else {
             None
         };
+        let accept_ranges = meta.accept_ranges || meta.content_range.is_some();
         Ok(FetchResult {
             final_url: job.url.clone(),
             status,
@@ -4122,7 +4248,7 @@ fn fetch_via_curl_impersonate(
             retry_after: meta.retry_after,
             etag: meta.etag,
             last_modified: meta.last_modified,
-            accept_ranges: meta.accept_ranges,
+            accept_ranges,
             body: Body::Curl(Box::new(body)),
         })
     })();
@@ -4858,7 +4984,8 @@ mod winhttp {
         WINHTTP_CALLBACK_STATUS_REQUEST_ERROR, WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE,
         WINHTTP_DISABLE_COOKIES, WINHTTP_FLAG_ASYNC, WINHTTP_FLAG_SECURE,
         WINHTTP_OPTION_CONTEXT_VALUE, WINHTTP_OPTION_DISABLE_FEATURE,
-        WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER,
+        WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, WINHTTP_OPTION_REDIRECT_POLICY,
+        WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_PROTOCOL_FLAG_HTTP2,
         WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_QUERY_STATUS_CODE,
     };
 
@@ -5070,6 +5197,13 @@ mod winhttp {
                 )));
             }
             let _ = WinHttpSetTimeouts(session, 15_000, 15_000, 30_000, 60_000);
+            let mut http2 = WINHTTP_PROTOCOL_FLAG_HTTP2;
+            let _ = WinHttpSetOption(
+                session,
+                WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL,
+                &mut http2 as *mut u32 as *mut _,
+                std::mem::size_of_val(&http2) as u32,
+            );
             map.insert(proxy.to_string(), session as usize);
             Ok(session)
         }
@@ -5251,6 +5385,13 @@ mod winhttp {
                     "WinHttpSetOption redirect {err}"
                 )));
             }
+            let mut http2 = WINHTTP_PROTOCOL_FLAG_HTTP2;
+            let _ = WinHttpSetOption(
+                request,
+                WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL,
+                &mut http2 as *mut u32 as *mut _,
+                std::mem::size_of_val(&http2) as u32,
+            );
             let mut extra = String::from("Accept-Encoding: identity\r\n");
             if let Some(range) = range {
                 extra.push_str(&format!("Range: {range}\r\n"));
@@ -5978,25 +6119,29 @@ mod tests {
 
     #[test]
     fn adaptive_connections_ramp_gradually_and_back_off_immediately() {
-        let controller = AdaptiveConnectionController::new(8);
+        let controller = AdaptiveConnectionController::new(12);
         assert_eq!(controller.desired(), 2);
 
-        controller.note_success();
-        assert_eq!(controller.desired(), 2);
-        controller.note_success();
-        assert_eq!(controller.desired(), 3);
-
-        for _ in 0..3 {
-            controller.note_success();
+        // Healthy transfers ramp +2 every 2 successes and reach 12 in 10 completed ranges.
+        for expected in [4, 6, 8, 10, 12] {
+            assert!(!controller.note_success());
+            assert!(controller.note_success());
+            assert_eq!(controller.desired(), expected);
         }
-        assert_eq!(controller.desired(), 4);
+        assert!(!controller.note_success());
+        assert_eq!(controller.desired(), 12);
 
+        // Congestion halves immediately (div_ceil(2).max(1)) and resets success count.
+        controller.note_congestion();
+        assert_eq!(controller.desired(), 6);
+        controller.note_congestion();
+        assert_eq!(controller.desired(), 3);
         controller.note_congestion();
         assert_eq!(controller.desired(), 2);
         controller.note_success();
         assert_eq!(controller.desired(), 2);
         controller.note_success();
-        assert_eq!(controller.desired(), 3);
+        assert_eq!(controller.desired(), 4);
     }
 
     #[test]
@@ -6031,7 +6176,7 @@ mod tests {
         scheduler.note_success();
         scheduler.complete(second.id);
         scheduler.note_success();
-        assert_eq!(scheduler.connections.desired(), 3);
+        assert_eq!(scheduler.connections.desired(), 4);
 
         let third = scheduler
             .claim(2)
@@ -10207,5 +10352,315 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .retain(|(item, _)| item != &prefix);
+    }
+
+    #[test]
+    fn active_split_allows_same_session_splitting_when_server_accepts_ranges_without_etag() {
+        let (mut job, dir) = temp_job("http://127.0.0.1/", false, 1024 * 1024, 4);
+        for (etag, modified, expected) in [
+            ("", "", true),
+            ("W/\"weak-v1\"", "", true),
+            ("\"strong-v1\"", "", true),
+            ("\"poisoned\"\r\nInjected: 1", "", false),
+            ("", "bad\nmodified", false),
+        ] {
+            job.etag = etag.into();
+            job.last_modified = modified.into();
+            assert_eq!(
+                active_split_minimum_for_session(&job, true, None),
+                expected.then_some(256 * 1024),
+                "etag={etag:?}, modified={modified:?}"
+            );
+            assert_eq!(
+                active_split_minimum_for_session(&job, true, Some("0")),
+                None
+            );
+        }
+        job.etag.clear();
+        job.last_modified.clear();
+        job.total = 0;
+        assert_eq!(active_split_minimum_for_session(&job, true, None), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn same_session_tail_split_without_etag_completes_exact_body() {
+        let total_len = 1024 * 1024usize;
+        let body: &'static [u8] = Box::leak(
+            (0..total_len)
+                .map(|index| ((index * 31 + 7) % 251) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let range_requests = Arc::new(Mutex::new(Vec::<(usize, usize)>::new()));
+        let recorded = Arc::clone(&range_requests);
+        let tail_split_seen = Arc::new(AtomicBool::new(false));
+        let server_split_seen = Arc::clone(&tail_split_seen);
+
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let recorded = Arc::clone(&recorded);
+                let split_seen = Arc::clone(&server_split_seen);
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let mut range = None;
+                    let mut saw_if_range = false;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        let lower = line.to_ascii_lowercase();
+                        if let Some(value) = lower.strip_prefix("range:") {
+                            range = Some(value.trim().to_string());
+                        }
+                        if lower.starts_with("if-range:") {
+                            saw_if_range = true;
+                        }
+                    }
+                    assert!(
+                        !saw_if_range,
+                        "empty validator must not synthesize an If-Range header"
+                    );
+                    let mut stream = reader.into_inner();
+                    let Some(spec) =
+                        range.and_then(|v| v.strip_prefix("bytes=").map(str::to_string))
+                    else {
+                        return;
+                    };
+                    let (start_s, end_s) = spec.split_once('-').unwrap();
+                    let start: usize = start_s.parse().unwrap();
+                    let end: usize = end_s.parse::<usize>().unwrap().min(body.len() - 1);
+                    recorded.lock().unwrap().push((start, end));
+                    if start > 0 && end == body.len() - 1 {
+                        split_seen.store(true, Ordering::SeqCst);
+                    }
+                    let slice = &body[start..=end];
+                    // Explicitly advertise Accept-Ranges: bytes + Content-Length, NO ETag / Last-Modified.
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len(),
+                        slice.len()
+                    );
+                    if stream.write_all(header.as_bytes()).is_err() {
+                        return;
+                    }
+                    // Pace the first full-file chunk briefly so worker 1 can tail-split it.
+                    if start == 0 && end == body.len() - 1 {
+                        let mut offset = 0;
+                        while offset < slice.len() {
+                            let step = (64 * 1024).min(slice.len() - offset);
+                            if stream.write_all(&slice[offset..offset + step]).is_err() {
+                                return;
+                            }
+                            offset += step;
+                            if !split_seen.load(Ordering::SeqCst) {
+                                thread::sleep(Duration::from_millis(15));
+                            }
+                        }
+                    } else {
+                        let _ = stream.write_all(slice);
+                    }
+                });
+            }
+        });
+
+        let url = format!("http://{addr}/no-etag.bin");
+        let (mut job, dir) = temp_job(&url, false, 0, 2);
+        job.etag.clear();
+        job.last_modified.clear();
+        // Force a single initial pending chunk so worker 1 MUST use dynamic tail-splitting.
+        job.chunk_bytes = total_len as u64;
+        run_job(&job).unwrap();
+
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        assert!(
+            tail_split_seen.load(Ordering::SeqCst),
+            "expected dynamic tail-split without ETag, requests={:?}",
+            range_requests.lock().unwrap()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn curl_low_speed_args_omits_speed_limit_when_throttled() {
+        assert_eq!(
+            curl_low_speed_args(false),
+            &["--speed-time", "30", "--speed-limit", "1024"]
+        );
+        assert!(curl_low_speed_args(true).is_empty());
+    }
+
+    #[test]
+    fn waf_curl_cache_hits_expires_and_bounds_capacity() {
+        let start = Instant::now();
+        let mut cache = WafCurlCache::default();
+        assert!(!cache.contains_at("https://cdn.example.test:443", start));
+
+        cache.record_at("https://cdn.example.test:443".into(), start);
+        assert!(cache.contains_at(
+            "https://cdn.example.test:443",
+            start + Duration::from_secs(60)
+        ));
+        assert!(!cache.contains_at("https://cdn.example.test:443", start + WAF_CURL_CACHE_TTL));
+        // Entry was pruned upon expiry.
+        assert!(cache.entries.is_empty());
+
+        // Bounded at WAF_CURL_CACHE_MAX_ENTRIES (256), evicting oldest entries.
+        for index in 0..(WAF_CURL_CACHE_MAX_ENTRIES + 8) {
+            cache.record_at(
+                format!("https://host-{index}.example.test:443"),
+                start + Duration::from_millis(index as u64),
+            );
+        }
+        assert_eq!(cache.entries.len(), WAF_CURL_CACHE_MAX_ENTRIES);
+        assert!(!cache.contains_at(
+            "https://host-0.example.test:443",
+            start + Duration::from_secs(1)
+        ));
+        assert!(cache.contains_at(
+            &format!(
+                "https://host-{}.example.test:443",
+                WAF_CURL_CACHE_MAX_ENTRIES + 7
+            ),
+            start + Duration::from_secs(1)
+        ));
+
+        let newest = format!(
+            "https://host-{}.example.test:443",
+            WAF_CURL_CACHE_MAX_ENTRIES + 7
+        );
+        cache.invalidate(&newest);
+        assert!(!cache.contains_at(&newest, start + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn waf_curl_cache_skips_repeat_native_403_round_trip() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let native_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&native_hits);
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = reader.into_inner().write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        let origin_url = format!("http://{addr}/");
+        let case_dir = std::env::temp_dir().join(format!(
+            "hls-waf-cache-test-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_JOB_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&case_dir).unwrap();
+        fs::write(
+            case_dir.join("head"),
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
+        )
+        .unwrap();
+        fs::write(case_dir.join("body"), b"ok!!").unwrap();
+
+        #[cfg(windows)]
+        let script = {
+            let path = case_dir.join("fake-curl.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 set \"dir=%~dp0\"\r\n\
+                 :loop\r\n\
+                 if \"%~1\"==\"\" exit /b 1\r\n\
+                 if \"%~1\"==\"--dump-header\" (\r\n\
+                   type \"%dir%head\" > \"%~2\"\r\n\
+                   type \"%dir%body\"\r\n\
+                   exit /b 0\r\n\
+                 )\r\n\
+                 shift /1\r\n\
+                 goto loop\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = case_dir.join("fake-curl.sh");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 h=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; done\n\
+                 d=\"$(dirname \"$0\")\"\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 cat \"$d/body\"\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((origin_url.clone(), script));
+
+        let url = format!("{origin_url}chunk.bin");
+        let origin_key = http_origin(&url).unwrap();
+        waf_curl_cache_invalidate(&origin_key);
+        let (job, dir) = temp_job(&url, true, 0, 1);
+
+        // First fetch hits native HTTP (gets 403), falls back to curl (200), and caches origin.
+        let mut first = fetch(&job, None).unwrap();
+        assert_eq!(first.status, 200);
+        let mut body1 = Vec::new();
+        first.body.read_to_end(&mut body1).unwrap();
+        assert_eq!(body1, b"ok!!");
+        assert_eq!(native_hits.load(Ordering::SeqCst), 1);
+        assert!(waf_curl_cache_hit(&origin_key));
+
+        // Second fetch to the same origin skips native 403 completely and goes straight to curl.
+        let mut second = fetch(&job, None).unwrap();
+        assert_eq!(second.status, 200);
+        let mut body2 = Vec::new();
+        second.body.read_to_end(&mut body2).unwrap();
+        assert_eq!(body2, b"ok!!");
+        assert_eq!(
+            native_hits.load(Ordering::SeqCst),
+            1,
+            "second fetch must skip wasted native 403 round-trip"
+        );
+
+        // After cache invalidation, fetch probes native again.
+        waf_curl_cache_invalidate(&origin_key);
+        let mut third = fetch(&job, None).unwrap();
+        assert_eq!(third.status, 200);
+        let mut body3 = Vec::new();
+        third.body.read_to_end(&mut body3).unwrap();
+        assert_eq!(body3, b"ok!!");
+        assert_eq!(native_hits.load(Ordering::SeqCst), 2);
+
+        waf_curl_cache_invalidate(&origin_key);
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &origin_url);
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(case_dir);
     }
 }
