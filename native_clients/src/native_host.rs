@@ -292,7 +292,7 @@ impl HostCore {
 impl NativeHostSession {
     fn open_existing() -> Result<Self, String> {
         Ok(Self::from_backend(HostCore::Remote(connect_existing_core(
-            Duration::from_millis(50),
+            Duration::from_millis(25),
         )?)))
     }
 
@@ -1007,6 +1007,11 @@ fn connect_or_start_core() -> Result<CoreIpcClient, String> {
             }
             let root = crate::install_root()
                 .ok_or_else(|| format!("v7 Core unavailable: {first_error}"))?;
+            // Reaching here means the current request is explicitly allowed to
+            // start Core (e.g. activate/offer/download/media_push, or a cold
+            // ping when not tray-quit). Clear any stale user-shutdown marker
+            // before spawning so the new resident Core session starts clean.
+            hls_client::clear_user_shutdown();
             crate::spawn_core(&root).map_err(|error| {
                 format!("v7 Core unavailable: {first_error}; start failed: {error}")
             })?;
@@ -1078,16 +1083,13 @@ pub fn run() -> i32 {
     if profile {
         eprintln!("native_host_startup stage=entry elapsed_us=0");
     }
-    // Core 不可达时不再直接退出，也不在启动或被动探活时拉起下载引擎：
-    // 用户通过托盘“退出下载引擎”后，浏览器仍保持宿主端口，不能由心跳或状态查询复活 Core。
-    // 仅显式启动/下载/投送请求允许冷启动，其余请求仅复用已运行的 Core，离线时返回 core_unreachable。
-    let mut session = match NativeHostSession::open_existing() {
-        Ok(session) => Some(session),
-        Err(error) => {
-            eprintln!("v7 Core not running at Native Host startup: {error}");
-            None
-        }
-    };
+    // 延迟到首条消息再按策略连接 Core：
+    // 1. 宿主进程刚拉起尚未收到消息时，不额外阻塞探测或拉起引擎；
+    // 2. 用户点击托盘“退出下载引擎”写下 user-shutdown.marker 后，浏览器心跳 `ping` 与
+    //    各类后台状态查询仅走 ExistingOnly，离线时返回 core_unreachable，绝不复活 Core；
+    // 3. 首次冷启动或非用户主动退出状态下，`ping` 仍允许冷启动 Core（保持扩展与验收契约）；
+    // 4. 显式操作（activate / offer / download / media_push）始终允许冷启动并清除退出标记。
+    let mut session: Option<NativeHostSession> = None;
     if profile {
         eprintln!(
             "native_host_startup stage=session_ready elapsed_us={}",
@@ -1131,15 +1133,21 @@ enum CoreConnectPolicy {
 }
 
 fn core_connect_policy(message: &Value) -> CoreConnectPolicy {
-    // Only explicit user-initiated launch/action operations may cold-start
-    // HLSDownloaderEngine. Passive heartbeats (`ping`), status polling
-    // (`handoff_status`, `media_push_status`, `workbench_status`), background
-    // sync (`set_takeover_settings`, `offer_local_file`, `recover_offer`),
-    // passive subtitle queries, and handoff decisions must connect only to an
-    // already-running Core so an explicit tray Shutdown is never undone by an
-    // open browser.
+    core_connect_policy_with(message, hls_client::is_user_shutdown_active())
+}
+
+fn core_connect_policy_with(message: &Value, user_shutdown_active: bool) -> CoreConnectPolicy {
+    // Explicit user-initiated launch/action operations may always cold-start
+    // HLSDownloaderEngine (clearing any prior tray-quit marker on spawn).
+    // `ping` may cold-start Core only when the user has NOT explicitly quit
+    // the engine from the system tray (`user-shutdown.marker` absent),
+    // preserving fresh-profile cold-start contracts while ensuring Tray
+    // "退出下载引擎" is never undone by Chrome's 30s heartbeat or MV3 wake-up
+    // pings. All other passive/polling/background ops connect only to an
+    // already-running Core.
     match message.get("op").and_then(Value::as_str).unwrap_or("") {
         "activate" | "offer" | "download" | "media_push" => CoreConnectPolicy::AllowAutostart,
+        "ping" if !user_shutdown_active => CoreConnectPolicy::AllowAutostart,
         _ => CoreConnectPolicy::ExistingOnly,
     }
 }
@@ -1184,12 +1192,25 @@ fn is_safe_to_retry_after_transport_error(message: &Value) -> bool {
 fn dispatch_session_message<S>(
     session: &mut Option<S>,
     message: &Value,
+    open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
+    dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
+) -> Value {
+    dispatch_session_message_with_policy(session, message, core_connect_policy, open, dispatch)
+}
+
+fn dispatch_session_message_with_policy<S>(
+    session: &mut Option<S>,
+    message: &Value,
+    mut policy_for: impl FnMut(&Value) -> CoreConnectPolicy,
     mut open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
-    let policy = core_connect_policy(message);
     for attempt in 0..2 {
         if session.is_none() {
+            // Evaluate policy right before reconnecting so a tray quit written
+            // while an earlier in-flight request was hitting the closing pipe
+            // still blocks autostart on retry.
+            let policy = policy_for(message);
             match open(policy) {
                 Ok(connected) => *session = Some(connected),
                 Err(error) => {
@@ -2573,9 +2594,10 @@ mod tests {
         let mut observed_policies = Vec::new();
         // Read-only op auto-retries once on Core IPC close / broken pipe, using
         // ExistingOnly so a clean shutdown never respawns Core.
-        let response = dispatch_session_message(
+        let response = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "handoff_status"}),
+            |msg| core_connect_policy_with(msg, false),
             |policy| {
                 observed_policies.push(policy);
                 opened += 1;
@@ -2597,9 +2619,10 @@ mod tests {
         // Mutating ops must NOT auto-replay even on pipe write failure (multi-RPC
         // operations may have already committed an earlier step).
         let mut dispatches = 0usize;
-        let write_fail = dispatch_session_message(
+        let write_fail = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "media_push"}),
+            |msg| core_connect_policy_with(msg, false),
             |policy| {
                 observed_policies.push(policy);
                 opened += 1;
@@ -2614,10 +2637,12 @@ mod tests {
         assert_eq!(write_fail["code"], "core_unreachable");
         assert_eq!(session, None);
 
-        // Next request reconnects cleanly (without autostart for `ping`).
-        let recovered = dispatch_session_message(
+        // Next `ping` reconnects with ExistingOnly when user-shutdown is active,
+        // and AllowAutostart when no user-shutdown marker is present.
+        let recovered = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "ping"}),
+            |msg| core_connect_policy_with(msg, true),
             |policy| {
                 observed_policies.push(policy);
                 opened += 1;
@@ -2640,9 +2665,10 @@ mod tests {
     #[test]
     fn transport_error_response_clears_cached_session() {
         let mut session = Some(1u32);
-        let response = dispatch_session_message(
+        let response = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "offer"}),
+            |msg| core_connect_policy_with(msg, false),
             |_| Ok(2u32),
             |_, _| Ok(json!({"ok": false, "transport_error": true, "error": "pipe closed"})),
         );
@@ -2650,9 +2676,10 @@ mod tests {
         assert_eq!(session, None);
 
         let mut session = Some(1u32);
-        let response = dispatch_session_message(
+        let response = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "workbench_status"}),
+            |msg| core_connect_policy_with(msg, false),
             |_| Ok(2u32),
             |_, _| Ok(json!({"ok": false, "code": "core_unreachable", "error": "eof"})),
         );
@@ -2662,22 +2689,42 @@ mod tests {
 
     #[test]
     fn core_connect_policy_classifies_passive_and_explicit_ops() {
+        // Explicit user launch/action ops always allow autostart, even after tray quit.
         for message in [
             json!({"op": "activate"}),
             json!({"op": "offer"}),
             json!({"op": "download"}),
             json!({"op": "media_push"}),
         ] {
-            assert_eq!(
-                core_connect_policy(&message),
-                CoreConnectPolicy::AllowAutostart,
-                "expected autostart for {message}"
-            );
+            for user_shutdown in [false, true] {
+                assert_eq!(
+                    core_connect_policy_with(&message, user_shutdown),
+                    CoreConnectPolicy::AllowAutostart,
+                    "expected autostart for {message} (user_shutdown={user_shutdown})"
+                );
+            }
         }
 
+        // `ping` cold-starts Core on fresh/normal startup, but MUST NOT autostart
+        // once the user has explicitly quit from the tray.
         for message in [
             json!({"op": "ping"}),
             json!({"op": "ping", "interactive": true}),
+        ] {
+            assert_eq!(
+                core_connect_policy_with(&message, false),
+                CoreConnectPolicy::AllowAutostart,
+                "cold-start ping must autostart when user has not tray-quit: {message}"
+            );
+            assert_eq!(
+                core_connect_policy_with(&message, true),
+                CoreConnectPolicy::ExistingOnly,
+                "ping must never respawn Core after tray quit: {message}"
+            );
+        }
+
+        // Passive/polling/background ops NEVER autostart Core in either state.
+        for message in [
             json!({"op": "handoff_status", "handoff_id": "h-1"}),
             json!({"op": "media_push_status", "request_id": "m-1"}),
             json!({"op": "workbench_status", "launch_id": "l-1", "since_sequence": 0}),
@@ -2693,16 +2740,39 @@ mod tests {
             json!({"op": "unknown_op"}),
             json!({}),
         ] {
-            assert_eq!(
-                core_connect_policy(&message),
-                CoreConnectPolicy::ExistingOnly,
-                "passive/background op must never autostart Core: {message}"
-            );
+            for user_shutdown in [false, true] {
+                assert_eq!(
+                    core_connect_policy_with(&message, user_shutdown),
+                    CoreConnectPolicy::ExistingOnly,
+                    "passive/background op must never autostart Core: {message} (user_shutdown={user_shutdown})"
+                );
+            }
         }
     }
 
     #[test]
     fn passive_ops_when_core_absent_never_autostart_and_return_core_unreachable() {
+        // 1. Fresh/cold profile (no tray-quit marker): `ping` cold-starts Core.
+        let mut cold_session: Option<NativeHostSession> = None;
+        let mut cold_autostarts = 0usize;
+        let cold_ping = dispatch_session_message_with_policy(
+            &mut cold_session,
+            &json!({"op": "ping"}),
+            |msg| core_connect_policy_with(msg, false),
+            |policy| {
+                assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                cold_autostarts += 1;
+                NativeHostSession::in_memory()
+            },
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(cold_ping["ok"], true, "cold_ping={cold_ping}");
+        assert_eq!(cold_ping["protocol_version"], V7_PROTOCOL_VERSION);
+        assert_eq!(cold_autostarts, 1);
+        assert!(cold_session.is_some());
+
+        // 2. After tray quit (`user_shutdown_active = true`), `ping` AND all
+        // passive/background ops must fail with `core_unreachable` and zero autostart.
         let mut session: Option<NativeHostSession> = None;
         let mut autostart_calls = 0usize;
         let mut existing_only_calls = 0usize;
@@ -2721,9 +2791,10 @@ mod tests {
             json!({"op": "get_settings"}),
             json!({"op": "poll_refresh_requests"}),
         ] {
-            let response = dispatch_session_message(
+            let response = dispatch_session_message_with_policy(
                 &mut session,
                 &message,
+                |msg| core_connect_policy_with(msg, true),
                 |policy| match policy {
                     CoreConnectPolicy::ExistingOnly => {
                         existing_only_calls += 1;
@@ -2764,6 +2835,7 @@ mod tests {
         let worker = server.serve(listener);
         let client = CoreIpcClient::connect_addr(addr).unwrap();
         let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client)));
+        let user_shutdown = std::sync::atomic::AtomicBool::new(false);
 
         let autostart_calls = std::sync::atomic::AtomicUsize::new(0);
         let mut open = |policy| match policy {
@@ -2778,16 +2850,18 @@ mod tests {
         };
 
         // Live Core answers ping normally.
-        let live_ping = dispatch_session_message(
+        let live_ping = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "ping"}),
+            |msg| core_connect_policy_with(msg, user_shutdown.load(Ordering::SeqCst)),
             &mut open,
             |active, msg| active.dispatch(msg),
         );
         assert_eq!(live_ping["ok"], true);
         assert_eq!(autostart_calls.load(Ordering::SeqCst), 0);
 
-        // Simulate Tray "退出下载引擎" (`CoreCommand::Shutdown`).
+        // Simulate Tray "退出下载引擎" (record user-shutdown marker + `CoreCommand::Shutdown`).
+        user_shutdown.store(true, Ordering::SeqCst);
         let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
         shutdown_client.command(CoreCommand::Shutdown).unwrap();
         drop(shutdown_client);
@@ -2803,10 +2877,13 @@ mod tests {
             json!({"op": "set_takeover_settings", "enabled": false}),
             json!({"op": "subtitle", "request": {"action": "configuration"}}),
         ] {
-            let response =
-                dispatch_session_message(&mut session, &message, &mut open, |active, msg| {
-                    active.dispatch(msg)
-                });
+            let response = dispatch_session_message_with_policy(
+                &mut session,
+                &message,
+                |msg| core_connect_policy_with(msg, user_shutdown.load(Ordering::SeqCst)),
+                &mut open,
+                |active, msg| active.dispatch(msg),
+            );
             assert_eq!(
                 response["ok"], false,
                 "message={message} response={response}"
@@ -2823,7 +2900,8 @@ mod tests {
 
     #[test]
     fn explicit_launch_and_action_ops_autostart_core_when_absent_or_after_shutdown() {
-        // 1. Cold start (session == None) for explicit user-initiated ops.
+        // 1. Cold start (session == None) for explicit user-initiated ops, even
+        // when the user-shutdown marker is active from an earlier tray quit.
         for (message, check_field) in [
             (json!({"op": "activate"}), "activated"),
             (
@@ -2863,9 +2941,10 @@ mod tests {
         ] {
             let mut session: Option<NativeHostSession> = None;
             let mut autostart_calls = 0usize;
-            let response = dispatch_session_message(
+            let response = dispatch_session_message_with_policy(
                 &mut session,
                 &message,
+                |msg| core_connect_policy_with(msg, true),
                 |policy| {
                     assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
                     autostart_calls += 1;
@@ -2885,9 +2964,9 @@ mod tests {
             assert!(session.is_some());
         }
 
-        // 2. Stale session immediately after `CoreCommand::Shutdown`: clicking
-        // "主程序" (`activate`) must drop the dead pipe, autostart Core, and
-        // succeed on the first request without failing with `core_unreachable`.
+        // 2. Stale session immediately after Tray quit (`CoreCommand::Shutdown`
+        // + user-shutdown marker): clicking "主程序" (`activate`) must drop the
+        // dead pipe, autostart Core, and succeed on the first request.
         let server = crate::CoreServer::in_memory().unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2901,9 +2980,10 @@ mod tests {
         worker.join().unwrap().unwrap();
 
         let mut autostart_calls = 0usize;
-        let activated = dispatch_session_message(
+        let activated = dispatch_session_message_with_policy(
             &mut session,
             &json!({"op": "activate"}),
+            |msg| core_connect_policy_with(msg, true),
             |policy| {
                 assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
                 autostart_calls += 1;
