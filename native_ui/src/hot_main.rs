@@ -23,6 +23,7 @@ mod table_layout;
 mod target_check;
 mod task_list;
 mod theme;
+mod wildcard;
 #[cfg(test)]
 mod wiring_tests;
 mod workbench;
@@ -139,6 +140,50 @@ struct PresenterSettings {
     category_other: String,
     queue_profiles: Vec<hls_client::QueueProfile>,
     recent_dirs: Vec<String>,
+    legal_accepted: bool,
+    speed_limit_kib: u64,
+    speed_limit_enabled: bool,
+    quick_download_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QuickDownloadPlan {
+    handoff_id: String,
+    filename: String,
+    download_dir: String,
+    queue_id: String,
+}
+
+fn evaluate_quick_download(
+    offer: &ResourceOffer,
+    settings: &PresenterSettings,
+    known_tasks: &[TaskSnapshot],
+    known_task_variants: &HashMap<String, VariantSelection>,
+) -> Option<QuickDownloadPlan> {
+    if !settings.quick_download_enabled || !settings.legal_accepted {
+        return None;
+    }
+    if offer.handoff_id.trim().is_empty() {
+        return None;
+    }
+    if find_duplicate_task(known_tasks, known_task_variants, offer).is_some() {
+        return None;
+    }
+    let raw_filename = if offer.filename.trim().is_empty() {
+        filename_from_url(&offer.url)
+    } else {
+        offer.filename.clone()
+    };
+    let filename = confirmed_filename(&raw_filename).ok()?.to_owned();
+    let category = download_category(&filename, "", offer.resource_kind);
+    let download_dir = settings.directory_for(category);
+    target_check::check_target(&download_dir, &filename, false).ok()?;
+    Some(QuickDownloadPlan {
+        handoff_id: offer.handoff_id.clone(),
+        filename,
+        download_dir,
+        queue_id: hls_client::DEFAULT_QUEUE_ID.into(),
+    })
 }
 
 struct ClipboardOfferFilter {
@@ -268,6 +313,10 @@ impl PresenterSettings {
             category_dir_archive,
             category_dir_other,
             queue_profiles,
+            legal_accepted,
+            speed_limit_kib,
+            speed_limit_enabled,
+            quick_download_enabled,
             ..
         }) = response
         else {
@@ -284,6 +333,10 @@ impl PresenterSettings {
             category_other: category_dir_other.clone(),
             queue_profiles: queue_editor::ordered_profiles(queue_profiles),
             recent_dirs: Vec::new(),
+            legal_accepted: *legal_accepted,
+            speed_limit_kib: *speed_limit_kib,
+            speed_limit_enabled: *speed_limit_enabled,
+            quick_download_enabled: *quick_download_enabled,
         }
     }
 
@@ -724,6 +777,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
+    let quick_failed = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let offer_state = EventLoopState {
+        pending: Arc::clone(&pending),
+        active_handoff: Arc::clone(&active_handoff),
+        presenter_settings: Arc::clone(&presenter_settings),
+        known_tasks: Arc::clone(&known_tasks),
+        known_task_variants: Arc::clone(&known_task_variants),
+        quick_failed: Arc::clone(&quick_failed),
+    };
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
 
@@ -798,7 +860,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let active_handoff = Arc::clone(&active_handoff);
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
-        let known_task_variants = Arc::clone(&known_task_variants);
+        let offer_state = offer_state.clone();
         let workbench = Rc::clone(&workbench);
         let window = confirm.as_weak();
         move |command| {
@@ -1152,14 +1214,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 _ => return,
             }
-            show_next_offer(
-                &window,
-                &pending,
-                &active_handoff,
-                &presenter_settings,
-                &known_tasks,
-                &known_task_variants,
-            );
+            show_next_offer(&window, &offer_state);
         }
     });
     confirm.window().on_close_requested({
@@ -1249,25 +1304,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::sync_channel::<Vec<EventEnvelope>>(8);
     thread::spawn({
         let confirm = confirm.as_weak();
-        let pending = Arc::clone(&pending);
-        let active_handoff = Arc::clone(&active_handoff);
-        let presenter_settings = Arc::clone(&presenter_settings);
-        let known_tasks = Arc::clone(&known_tasks);
-        let known_task_variants = Arc::clone(&known_task_variants);
-        move || {
-            event_loop(
-                tx,
-                initial_sequence,
-                confirm,
-                EventLoopState {
-                    pending,
-                    active_handoff,
-                    presenter_settings,
-                    known_tasks,
-                    known_task_variants,
-                },
-            )
-        }
+        let event_state = offer_state.clone();
+        move || event_loop(tx, initial_sequence, confirm, event_state)
     });
     let clipboard_filter = Rc::new(RefCell::new(ClipboardOfferFilter::default()));
     // IPC 线程只在收到事件后唤醒界面；空闲时不再每秒轮询 250 次。
@@ -1482,14 +1520,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    show_next_offer(
-        &confirm.as_weak(),
-        &pending,
-        &active_handoff,
-        &presenter_settings,
-        &known_tasks,
-        &known_task_variants,
-    );
+    show_next_offer(&confirm.as_weak(), &offer_state);
     if args.iter().any(|arg| arg == "--workbench") {
         confirm.invoke_open_workbench(
             true,
@@ -1813,6 +1844,7 @@ struct EventLoopState {
     presenter_settings: Arc<Mutex<PresenterSettings>>,
     known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
     known_task_variants: Arc<Mutex<HashMap<String, VariantSelection>>>,
+    quick_failed: Arc<Mutex<HashSet<String>>>,
 }
 
 fn event_loop(
@@ -1821,13 +1853,6 @@ fn event_loop(
     confirm: slint::Weak<ConfirmWindow>,
     state: EventLoopState,
 ) {
-    let EventLoopState {
-        pending,
-        active_handoff,
-        presenter_settings,
-        known_tasks,
-        known_task_variants,
-    } = state;
     loop {
         let Ok(mut client) = CoreIpcClient::connect() else {
             thread::sleep(Duration::from_millis(200));
@@ -1837,7 +1862,7 @@ fn event_loop(
             thread::sleep(Duration::from_millis(50));
             continue;
         };
-        if let Ok(mut known_tasks) = known_tasks.lock() {
+        if let Ok(mut known_tasks) = state.known_tasks.lock() {
             *known_tasks = tasks.clone();
         }
         if confirm
@@ -1866,27 +1891,21 @@ fn event_loop(
             return;
         }
         let (restored, restored_variants) = load_handoff_state(&mut client);
-        let resync_pending = Arc::clone(&pending);
-        let resync_active_handoff = Arc::clone(&active_handoff);
-        let resync_settings = Arc::clone(&presenter_settings);
-        let resync_tasks = Arc::clone(&known_tasks);
-        let resync_variants = Arc::clone(&known_task_variants);
+        let resync_state = state.clone();
         if confirm
             .upgrade_in_event_loop(move |item| {
-                if let Ok(mut items) = resync_pending.lock() {
+                if let Ok(mut failed) = resync_state.quick_failed.lock() {
+                    let active_ids: HashSet<&str> =
+                        restored.iter().map(|o| o.handoff_id.as_str()).collect();
+                    failed.retain(|id| active_ids.contains(id.as_str()));
+                }
+                if let Ok(mut items) = resync_state.pending.lock() {
                     *items = restored;
                 }
-                if let Ok(mut variants) = resync_variants.lock() {
+                if let Ok(mut variants) = resync_state.known_task_variants.lock() {
                     *variants = restored_variants;
                 }
-                show_next_offer(
-                    &item.as_weak(),
-                    &resync_pending,
-                    &resync_active_handoff,
-                    &resync_settings,
-                    &resync_tasks,
-                    &resync_variants,
-                );
+                show_next_offer(&item.as_weak(), &resync_state);
             })
             .is_err()
         {
@@ -1914,14 +1933,10 @@ fn event_loop(
             for envelope in events {
                 match envelope.event {
                     CoreEvent::HandoffOffered { offer } => {
-                        let pending = Arc::clone(&pending);
-                        let active_handoff = Arc::clone(&active_handoff);
-                        let presenter_settings = Arc::clone(&presenter_settings);
-                        let known_tasks = Arc::clone(&known_tasks);
-                        let known_task_variants = Arc::clone(&known_task_variants);
+                        let offer_state = state.clone();
                         if confirm
                             .upgrade_in_event_loop(move |item| {
-                                if let Ok(mut items) = pending.lock() {
+                                if let Ok(mut items) = offer_state.pending.lock() {
                                     if !items
                                         .iter()
                                         .any(|entry| entry.handoff_id == offer.handoff_id)
@@ -1929,14 +1944,7 @@ fn event_loop(
                                         items.push_back(offer);
                                     }
                                 }
-                                show_next_offer(
-                                    &item.as_weak(),
-                                    &pending,
-                                    &active_handoff,
-                                    &presenter_settings,
-                                    &known_tasks,
-                                    &known_task_variants,
-                                );
+                                show_next_offer(&item.as_weak(), &offer_state);
                             })
                             .is_err()
                         {
@@ -1948,35 +1956,29 @@ fn event_loop(
                         task_id,
                         ..
                     } => {
-                        let pending = Arc::clone(&pending);
-                        let active_handoff = Arc::clone(&active_handoff);
-                        let presenter_settings = Arc::clone(&presenter_settings);
-                        let known_tasks = Arc::clone(&known_tasks);
-                        let known_task_variants = Arc::clone(&known_task_variants);
+                        let offer_state = state.clone();
                         if confirm
                             .upgrade_in_event_loop(move |item| {
-                                let resolved_variant = pending.lock().ok().and_then(|mut items| {
-                                    let variant = items
-                                        .iter()
-                                        .find(|entry| entry.handoff_id == handoff_id)
-                                        .map(VariantSelection::from_offer);
-                                    items.retain(|entry| entry.handoff_id != handoff_id);
-                                    variant
-                                });
+                                if let Ok(mut failed) = offer_state.quick_failed.lock() {
+                                    failed.remove(&handoff_id);
+                                }
+                                let resolved_variant =
+                                    offer_state.pending.lock().ok().and_then(|mut items| {
+                                        let variant = items
+                                            .iter()
+                                            .find(|entry| entry.handoff_id == handoff_id)
+                                            .map(VariantSelection::from_offer);
+                                        items.retain(|entry| entry.handoff_id != handoff_id);
+                                        variant
+                                    });
                                 if let (Some(task_id), Some(variant)) = (task_id, resolved_variant)
                                 {
-                                    if let Ok(mut variants) = known_task_variants.lock() {
+                                    if let Ok(mut variants) = offer_state.known_task_variants.lock()
+                                    {
                                         variants.insert(task_id, variant);
                                     }
                                 }
-                                show_next_offer(
-                                    &item.as_weak(),
-                                    &pending,
-                                    &active_handoff,
-                                    &presenter_settings,
-                                    &known_tasks,
-                                    &known_task_variants,
-                                );
+                                show_next_offer(&item.as_weak(), &offer_state);
                             })
                             .is_err()
                         {
@@ -1988,11 +1990,11 @@ fn event_loop(
                             shutting_down = true;
                         }
                         if let CoreEvent::TaskDeleted { ref task_id } = event {
-                            if let Ok(mut variants) = known_task_variants.lock() {
+                            if let Ok(mut variants) = state.known_task_variants.lock() {
                                 variants.remove(task_id);
                             }
                         }
-                        update_known_tasks(&known_tasks, &event);
+                        update_known_tasks(&state.known_tasks, &event);
                         batched.push(EventEnvelope {
                             sequence: envelope.sequence,
                             event,
@@ -2016,7 +2018,11 @@ fn event_loop(
                 return;
             }
             if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
-                let active = active_handoff.lock().ok().and_then(|value| value.clone());
+                let active = state
+                    .active_handoff
+                    .lock()
+                    .ok()
+                    .and_then(|value| value.clone());
                 if let Some(handoff_id) = active {
                     if client
                         .command(CoreCommand::PresentHandoff {
@@ -2026,7 +2032,7 @@ fn event_loop(
                         })
                         .is_err()
                     {
-                        if let Ok(mut value) = active_handoff.lock() {
+                        if let Ok(mut value) = state.active_handoff.lock() {
                             *value = None;
                         }
                         let _ = confirm.upgrade_in_event_loop(|item| {
@@ -2034,25 +2040,15 @@ fn event_loop(
                         });
                         break;
                     }
-                } else if pending
+                } else if state
+                    .pending
                     .lock()
                     .map(|items| !items.is_empty())
                     .unwrap_or(false)
                 {
-                    let pending = Arc::clone(&pending);
-                    let active_handoff = Arc::clone(&active_handoff);
-                    let presenter_settings = Arc::clone(&presenter_settings);
-                    let known_tasks = Arc::clone(&known_tasks);
-                    let known_task_variants = Arc::clone(&known_task_variants);
+                    let offer_state = state.clone();
                     let _ = confirm.upgrade_in_event_loop(move |item| {
-                        show_next_offer(
-                            &item.as_weak(),
-                            &pending,
-                            &active_handoff,
-                            &presenter_settings,
-                            &known_tasks,
-                            &known_task_variants,
-                        );
+                        show_next_offer(&item.as_weak(), &offer_state);
                     });
                 }
                 last_lease_renewal = std::time::Instant::now();
@@ -2206,30 +2202,115 @@ fn sync_confirm_selectors(
     item.set_recent_dir_index(recent_index);
 }
 
-fn show_next_offer(
-    window: &slint::Weak<ConfirmWindow>,
-    pending: &Arc<Mutex<VecDeque<ResourceOffer>>>,
-    active_handoff: &Arc<Mutex<Option<String>>>,
-    presenter_settings: &Arc<Mutex<PresenterSettings>>,
-    known_tasks: &Arc<Mutex<Vec<TaskSnapshot>>>,
-    known_task_variants: &Arc<Mutex<HashMap<String, VariantSelection>>>,
-) {
+fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) {
     let Some(item) = window.upgrade() else {
         return;
     };
-    let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned()) else {
-        if let Ok(mut active) = active_handoff.lock() {
+    let Some(offer) = state
+        .pending
+        .lock()
+        .ok()
+        .and_then(|items| items.front().cloned())
+    else {
+        if let Ok(mut active) = state.active_handoff.lock() {
             *active = None;
         }
         let _ = item.hide();
         return;
     };
-    if active_handoff
+    if state
+        .active_handoff
         .lock()
         .map(|active| active.as_deref() == Some(offer.handoff_id.as_str()))
         .unwrap_or(false)
     {
         return;
+    }
+    let settings_snapshot = state
+        .presenter_settings
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default();
+    let variants_snapshot = state
+        .known_task_variants
+        .lock()
+        .map(|variants| variants.clone())
+        .unwrap_or_default();
+    let tasks_snapshot = state
+        .known_tasks
+        .lock()
+        .map(|tasks| tasks.clone())
+        .unwrap_or_default();
+    let already_failed_quick = state
+        .quick_failed
+        .lock()
+        .map(|failed| failed.contains(&offer.handoff_id))
+        .unwrap_or(false);
+    if !already_failed_quick {
+        if let Some(plan) = evaluate_quick_download(
+            &offer,
+            &settings_snapshot,
+            &tasks_snapshot,
+            &variants_snapshot,
+        ) {
+            trace(&format!(
+                "quick download auto-accepting handoff {} ({})",
+                plan.handoff_id, plan.filename
+            ));
+            if let Ok(mut active) = state.active_handoff.lock() {
+                *active = Some(plan.handoff_id.clone());
+            }
+            let _ = item.hide();
+            let weak = item.as_weak();
+            let offer_state = state.clone();
+            thread::spawn(move || {
+                let result = CoreIpcClient::connect().and_then(|mut client| {
+                    let events = client.command(CoreCommand::AcceptHandoff {
+                        handoff_id: plan.handoff_id.clone(),
+                        filename: plan.filename.clone(),
+                        download_dir: plan.download_dir.clone(),
+                        allow_duplicate: false,
+                        trusted_ui: true,
+                        start_paused: false,
+                        queue_id: plan.queue_id.clone(),
+                    })?;
+                    if events
+                        .iter()
+                        .any(|e| matches!(e.event, CoreEvent::DuplicateOffered { .. }))
+                    {
+                        return Err("duplicate task detected".into());
+                    }
+                    core_feedback::command_result(events)
+                });
+                match result {
+                    Ok(()) => {
+                        if !plan.download_dir.is_empty() {
+                            if let Ok(mut settings) = offer_state.presenter_settings.lock() {
+                                settings.record_recent_dir(&plan.download_dir);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        trace(&format!(
+                            "quick download failed for {}: {error}; falling back to confirm window",
+                            plan.handoff_id
+                        ));
+                        if let Ok(mut failed) = offer_state.quick_failed.lock() {
+                            failed.insert(plan.handoff_id.clone());
+                        }
+                        if let Ok(mut active) = offer_state.active_handoff.lock() {
+                            if active.as_deref() == Some(plan.handoff_id.as_str()) {
+                                *active = None;
+                            }
+                        }
+                        let _ = weak.upgrade_in_event_loop(move |ui| {
+                            show_next_offer(&ui.as_weak(), &offer_state);
+                        });
+                    }
+                }
+            });
+            return;
+        }
     }
     trace(&format!("showing handoff {}", offer.handoff_id));
     let filename = if offer.filename.trim().is_empty() {
@@ -2238,20 +2319,10 @@ fn show_next_offer(
         offer.filename.clone()
     };
     let category = download_category(&filename, "", offer.resource_kind);
-    let settings_snapshot = presenter_settings
-        .lock()
-        .map(|settings| settings.clone())
-        .unwrap_or_default();
     let download_dir = settings_snapshot.directory_for(category);
-    let variants_snapshot = known_task_variants
-        .lock()
-        .map(|variants| variants.clone())
-        .unwrap_or_default();
-    let (duplicate_text, duplicate_task_id) = known_tasks
-        .lock()
-        .ok()
-        .and_then(|tasks| {
-            find_duplicate_task(&tasks, &variants_snapshot, &offer).map(|task| {
+    let (duplicate_text, duplicate_task_id) =
+        find_duplicate_task(&tasks_snapshot, &variants_snapshot, &offer)
+            .map(|task| {
                 (
                     format!(
                         "已有同一地址的任务：{}（{}）",
@@ -2261,8 +2332,7 @@ fn show_next_offer(
                     task.task_id.clone(),
                 )
             })
-        })
-        .unwrap_or_default();
+            .unwrap_or_default();
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
     item.set_category(category.into());
@@ -2295,7 +2365,8 @@ fn show_next_offer(
     item.set_busy(false);
     item.set_busy_action("".into());
     clear_confirm_issue(&item);
-    let remaining = pending
+    let remaining = state
+        .pending
         .lock()
         .map(|items| items.len().saturating_sub(1))
         .unwrap_or_default();
@@ -2314,14 +2385,14 @@ fn show_next_offer(
     if claimed.is_err() {
         if let Ok(mut client) = CoreIpcClient::connect() {
             let (restored, restored_variants) = load_handoff_state(&mut client);
-            if let Ok(mut items) = pending.lock() {
+            if let Ok(mut items) = state.pending.lock() {
                 *items = restored;
             }
-            if let Ok(mut variants) = known_task_variants.lock() {
+            if let Ok(mut variants) = state.known_task_variants.lock() {
                 *variants = restored_variants;
             }
         }
-        if let Ok(mut active) = active_handoff.lock() {
+        if let Ok(mut active) = state.active_handoff.lock() {
             *active = None;
         }
         let _ = item.hide();
@@ -2329,13 +2400,13 @@ fn show_next_offer(
     }
     let shown = item.show().is_ok();
     if shown {
-        if let Ok(mut active) = active_handoff.lock() {
+        if let Ok(mut active) = state.active_handoff.lock() {
             *active = Some(offer.handoff_id.clone());
         }
         native_window::prepare_dialog(&item, false, false, None);
         fit_confirm_window(&item);
         native_window::prepare_dialog(&item, false, true, None);
-    } else if let Ok(mut active) = active_handoff.lock() {
+    } else if let Ok(mut active) = state.active_handoff.lock() {
         *active = None;
     }
     let reported = CoreIpcClient::connect()
@@ -2348,7 +2419,7 @@ fn show_next_offer(
         })
         .is_ok();
     if !shown && reported {
-        if let Ok(mut items) = pending.lock() {
+        if let Ok(mut items) = state.pending.lock() {
             items.retain(|item| item.handoff_id != offer.handoff_id);
         }
         item.invoke_open_workbench(true, "".into());
@@ -3776,7 +3847,10 @@ mod tests {
             preferred_bandwidth: 2_500_000,
             ..Default::default()
         };
-        assert!(find_duplicate_task(&[existing.clone()], &variants, &same_variant).is_some());
+        assert!(
+            find_duplicate_task(std::slice::from_ref(&existing), &variants, &same_variant)
+                .is_some()
+        );
 
         let different_height = ResourceOffer {
             preferred_variant_id: "v1080".into(),
@@ -3784,16 +3858,23 @@ mod tests {
             preferred_bandwidth: 5_000_000,
             ..same_variant.clone()
         };
-        assert!(find_duplicate_task(&[existing.clone()], &variants, &different_height).is_none());
+        assert!(find_duplicate_task(
+            std::slice::from_ref(&existing),
+            &variants,
+            &different_height
+        )
+        .is_none());
 
         let different_variant_id_only = ResourceOffer {
             preferred_variant_id: "v720-alt".into(),
             ..same_variant.clone()
         };
-        assert!(
-            find_duplicate_task(&[existing.clone()], &variants, &different_variant_id_only)
-                .is_none()
-        );
+        assert!(find_duplicate_task(
+            std::slice::from_ref(&existing),
+            &variants,
+            &different_variant_id_only
+        )
+        .is_none());
 
         // Even without recorded handoff variant history, an explicit adaptive variant
         // does not falsely warn against a master-URL task.
@@ -3957,5 +4038,100 @@ mod tests {
             vec![r"F:\Custom", r"D:\Downloads", r"D:\Media"]
         );
         assert_eq!(confirm.get_recent_dir_index(), 2);
+    }
+
+    #[test]
+    fn presenter_settings_parses_quick_download_and_speed_limit_flags() {
+        let response: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_kib": 512,
+            "speed_limit_enabled": true,
+            "quick_download_enabled": true,
+            "download_dir": "D:\\Downloads"
+        }))
+        .unwrap();
+        let parsed = PresenterSettings::from_response(Some(&response));
+        assert!(parsed.legal_accepted);
+        assert_eq!(parsed.speed_limit_kib, 512);
+        assert!(parsed.speed_limit_enabled);
+        assert!(parsed.quick_download_enabled);
+
+        let disabled = settings_response("D:\\Downloads");
+        let parsed_disabled = PresenterSettings::from_response(Some(&disabled));
+        assert!(!parsed_disabled.speed_limit_enabled);
+        assert!(!parsed_disabled.quick_download_enabled);
+    }
+
+    #[test]
+    fn quick_download_auto_accept_gates_on_settings_legal_duplicates_and_valid_target() {
+        use super::{evaluate_quick_download, QuickDownloadPlan};
+        use std::collections::HashMap;
+
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        let mut settings = PresenterSettings {
+            download_dir: dir.clone(),
+            legal_accepted: true,
+            quick_download_enabled: true,
+            ..Default::default()
+        };
+        let offer = ResourceOffer {
+            handoff_id: "h-quick-1".into(),
+            url: "https://cdn.example.test/archive.zip".into(),
+            filename: "archive.zip".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            evaluate_quick_download(&offer, &settings, &[], &HashMap::new()),
+            Some(QuickDownloadPlan {
+                handoff_id: "h-quick-1".into(),
+                filename: "archive.zip".into(),
+                download_dir: dir.clone(),
+                queue_id: "default".into(),
+            })
+        );
+
+        // Duplicate task falls back to ConfirmWindow.
+        let existing = TaskSnapshot {
+            task_id: "t-1".into(),
+            url: offer.url.clone(),
+            filename: "archive.zip".into(),
+            status: "downloading".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate_quick_download(&offer, &settings, &[existing], &HashMap::new()),
+            None
+        );
+
+        // Invalid filename falls back to ConfirmWindow.
+        let bad_name = ResourceOffer {
+            filename: "CON.zip".into(),
+            ..offer.clone()
+        };
+        assert_eq!(
+            evaluate_quick_download(&bad_name, &settings, &[], &HashMap::new()),
+            None
+        );
+
+        // Legal terms not accepted falls back to ConfirmWindow.
+        settings.legal_accepted = false;
+        assert_eq!(
+            evaluate_quick_download(&offer, &settings, &[], &HashMap::new()),
+            None
+        );
+
+        // Quick download disabled falls back to ConfirmWindow.
+        settings.legal_accepted = true;
+        settings.quick_download_enabled = false;
+        assert_eq!(
+            evaluate_quick_download(&offer, &settings, &[], &HashMap::new()),
+            None
+        );
     }
 }

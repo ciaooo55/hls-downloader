@@ -384,8 +384,7 @@ pub fn open(target: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(any(windows, test))]
-fn safe_open_target(target: &str) -> bool {
+pub fn is_safe_web_url(target: &str) -> bool {
     if target.is_empty() || target != target.trim() || target.chars().any(char::is_control) {
         return false;
     }
@@ -395,8 +394,99 @@ fn safe_open_target(target: &str) -> bool {
             && !rest.is_empty()
             && !rest.contains('\\');
     }
+    false
+}
+
+#[cfg(any(windows, test))]
+fn safe_open_target(target: &str) -> bool {
+    if is_safe_web_url(target) {
+        return true;
+    }
+    if target.is_empty() || target != target.trim() || target.chars().any(char::is_control) {
+        return false;
+    }
     let path = std::path::Path::new(target);
     path.is_absolute() && path.is_dir()
+}
+
+pub fn write_clipboard_text(text: &str) -> Result<(), String> {
+    if text.is_empty() {
+        return Err("没有可复制的文本".into());
+    }
+    if text.contains('\0') {
+        return Err("文本包含无效字符".into());
+    }
+    if text.len() > 2 * 1024 * 1024 {
+        return Err("复制内容过长".into());
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::{
+            Foundation::GlobalFree,
+            System::{DataExchange::*, Memory::*},
+            UI::{Input::KeyboardAndMouse::GetActiveWindow, WindowsAndMessaging::*},
+        };
+        let mut wide: Vec<u16> = text.encode_utf16().collect();
+        wide.push(0);
+        let bytes = wide.len() * 2;
+        let active = GetActiveWindow();
+        let owner = if active.is_null() {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        } else {
+            active
+        };
+        if owner.is_null() {
+            return Err("无法创建剪贴板窗口".into());
+        }
+        let result = (|| {
+            let handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if handle.is_null() {
+                return Err("无法分配剪贴板内存".into());
+            }
+            let pointer = GlobalLock(handle) as *mut u16;
+            if pointer.is_null() {
+                GlobalFree(handle);
+                return Err("无法锁定剪贴板内存".into());
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, wide.len());
+            GlobalUnlock(handle);
+            if OpenClipboard(owner) == 0 {
+                GlobalFree(handle);
+                return Err("剪贴板正被其他程序使用，请稍后重试".into());
+            }
+            let written = EmptyClipboard() != 0 && !SetClipboardData(13, handle).is_null();
+            CloseClipboard();
+            if written {
+                Ok(())
+            } else {
+                GlobalFree(handle);
+                Err("无法复制文本到剪贴板".into())
+            }
+        })();
+        if active.is_null() {
+            DestroyWindow(owner);
+        }
+        result
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+        Err("当前系统不支持写入剪贴板".into())
+    }
 }
 
 pub fn write_export(path: &std::path::Path, data: &str) -> std::io::Result<()> {
@@ -444,6 +534,17 @@ mod tests {
         }
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert!(!safe_open_target(source.to_str().unwrap()));
+    }
+
+    #[test]
+    fn web_url_check_and_clipboard_validation_reject_unsafe_inputs() {
+        assert!(is_safe_web_url("https://example.test/page?a=1"));
+        assert!(is_safe_web_url("http://127.0.0.1:8080/index.html"));
+        assert!(!is_safe_web_url("file:///C:/test.txt"));
+        assert!(!is_safe_web_url(env!("CARGO_MANIFEST_DIR")));
+        assert!(!is_safe_web_url(" https://example.test "));
+        assert!(write_clipboard_text("").is_err());
+        assert!(write_clipboard_text("bad\0text").is_err());
     }
 
     #[test]

@@ -17,6 +17,14 @@ export component DetailsWindow inherits Window {
     in property <float> progress;
     in property <[SegmentBlock]> segments;
     in property <string> connections;
+    in property <string> bt-telemetry;
+    in property <string> mirror-telemetry;
+    in property <string> checksum-badge;
+    in property <string> checksum-tone;
+    in property <string> av-badge;
+    in property <string> av-tone;
+    in property <string> av-detail;
+    in property <string> source-page-url;
     in property <string> diagnostic;
     in property <string> logs;
     in property <[float]> speed-history;
@@ -90,6 +98,47 @@ export component DetailsWindow inherits Window {
                     segments: root.segments;
                 }
                 Text { text: root.connections; color: Tokens.muted; font-size: 12px; wrap: word-wrap; }
+                if root.bt-telemetry != "" || root.mirror-telemetry != "" || root.checksum-badge != "" || root.av-badge != "": HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    if root.bt-telemetry != "": Rectangle {
+                        height: 24px;
+                        width: bt-lbl.preferred-width + 16px;
+                        border-radius: 12px;
+                        background: Tokens.info-surface;
+                        border-width: 1px;
+                        border-color: Tokens.accent-border;
+                        bt-lbl := Text { text: root.bt-telemetry; color: Tokens.accent; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    if root.mirror-telemetry != "": Rectangle {
+                        height: 24px;
+                        width: mirror-lbl.preferred-width + 16px;
+                        border-radius: 12px;
+                        background: Tokens.surface-2;
+                        border-width: 1px;
+                        border-color: Tokens.line;
+                        mirror-lbl := Text { text: root.mirror-telemetry; color: Tokens.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    if root.checksum-badge != "": Rectangle {
+                        height: 24px;
+                        width: chk-lbl.preferred-width + 16px;
+                        border-radius: 12px;
+                        background: root.checksum-tone == "success" ? Tokens.success-surface : Tokens.fail-surface;
+                        border-width: 1px;
+                        border-color: (root.checksum-tone == "success" ? Tokens.done : Tokens.fail).with-alpha(Tokens.dark ? 0.38 : 0.28);
+                        chk-lbl := Text { text: root.checksum-badge; color: root.checksum-tone == "success" ? Tokens.done : Tokens.fail; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    if root.av-badge != "": Rectangle {
+                        height: 24px;
+                        width: av-lbl.preferred-width + 16px;
+                        border-radius: 12px;
+                        background: root.av-tone == "success" ? Tokens.success-surface : root.av-tone == "fail" ? Tokens.fail-surface : root.av-tone == "warn" ? Tokens.warn-surface : Tokens.surface-2;
+                        border-width: 1px;
+                        border-color: (root.av-tone == "success" ? Tokens.done : root.av-tone == "fail" ? Tokens.fail : root.av-tone == "warn" ? Tokens.warn : Tokens.line).with-alpha(Tokens.dark ? 0.42 : 0.32);
+                        av-lbl := Text { text: root.av-badge; color: root.av-tone == "success" ? Tokens.done : root.av-tone == "fail" ? Tokens.fail : root.av-tone == "warn" ? Tokens.warn : Tokens.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                if root.av-detail != "": Text { text: "扫描详情：" + root.av-detail; color: Tokens.faint; font-size: 11px; wrap: word-wrap; }
             }
         }
         // 诊断信息与确认窗的重名提示一致：琥珀底色横幅 + 左侧色条 + 图标。
@@ -108,6 +157,13 @@ export component DetailsWindow inherits Window {
             VerticalLayout {
                 padding: 14px; spacing: 10px;
                 HorizontalLayout { spacing: 8px; FieldLabel { label: "下载地址"; width: 80px; } LineEdit { text <=> root.url; height: Tokens.control-height; accessible-label: "下载地址"; } }
+                if root.source-page-url != "": HorizontalLayout {
+                    spacing: 8px;
+                    FieldLabel { label: "来源页面"; width: 80px; }
+                    LineEdit { text: root.source-page-url; read-only: true; height: Tokens.control-height; accessible-label: "来源页面"; }
+                    HotButton { label: "打开"; icon: "network"; width: 76px; clicked => { root.action("open_source_page"); } }
+                    HotButton { label: "复制"; icon: "link"; width: 76px; clicked => { root.action("copy_source_page"); } }
+                }
                 HorizontalLayout { spacing: 8px; FieldLabel { label: "请求身份"; width: 80px; } LineEdit { text <=> root.cookie; height: Tokens.control-height; input-type: password; placeholder-text: "新 Cookie（可选）"; accessible-label: "新 Cookie"; } HotButton { label: "更新并继续"; icon: "retry"; width: 116px; clicked => { root.action("refresh_url"); } } }
                 HorizontalLayout { spacing: 8px; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; minimum: 0; maximum: 1000000; height: Tokens.control-height; } HotButton { label: "应用"; icon: "check"; width: 116px; clicked => { root.action("speed"); } } }
             }
