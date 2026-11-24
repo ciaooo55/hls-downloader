@@ -6,16 +6,18 @@ use crate::{
     V7_PROTOCOL_VERSION,
 };
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct CoreServer {
     coordinator: CoreCoordinator,
     notify: Arc<(Mutex<u64>, Condvar)>,
     stop: Arc<AtomicBool>,
     torrent_probe_active: Arc<AtomicBool>,
+    event_subscribers: Arc<AtomicUsize>,
     subtitles: Arc<crate::subtitle_translate::SubtitleService>,
 }
 
@@ -64,6 +66,7 @@ impl CoreServer {
             notify,
             stop,
             torrent_probe_active: Arc::new(AtomicBool::new(false)),
+            event_subscribers: Arc::new(AtomicUsize::new(0)),
             subtitles: Arc::new(crate::subtitle_translate::SubtitleService::default()),
         })
     }
@@ -74,6 +77,19 @@ impl CoreServer {
 
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+
+    pub fn has_event_subscribers(&self) -> bool {
+        self.event_subscribers.load(Ordering::Acquire) > 0
+    }
+
+    pub fn emit_ui_show(&self, surface: &str) -> Result<(), String> {
+        self.coordinator
+            .lock()?
+            .emit(CoreEvent::UiShow {
+                surface: surface.to_string(),
+            })
+            .map(|_| ())
     }
 
     pub fn shutdown(&self) {
@@ -184,6 +200,7 @@ impl CoreServer {
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
         let torrent_probe_active = Arc::clone(&self.torrent_probe_active);
+        let event_subscribers = Arc::clone(&self.event_subscribers);
         let subtitles = Arc::clone(&self.subtitles);
         Arc::new(move |request| {
             if matches!(
@@ -207,8 +224,30 @@ impl CoreServer {
                         .unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})),
                 };
             }
-            dispatch(&coordinator, &notify, &stop, &torrent_probe_active, request)
+            dispatch(
+                &coordinator,
+                &notify,
+                &stop,
+                &torrent_probe_active,
+                &event_subscribers,
+                request,
+            )
         })
+    }
+}
+
+struct EventSubscriberGuard(Arc<AtomicUsize>);
+
+impl EventSubscriberGuard {
+    fn enter(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(Arc::clone(counter))
+    }
+}
+
+impl Drop for EventSubscriberGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -257,6 +296,7 @@ fn dispatch(
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &Arc<AtomicBool>,
     torrent_probe_active: &Arc<AtomicBool>,
+    event_subscribers: &Arc<AtomicUsize>,
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
@@ -410,7 +450,7 @@ fn dispatch(
             );
             let should_shutdown = matches!(&command, CoreCommand::Shutdown);
             match coordinator.dispatch(command) {
-                Ok(events) => {
+                Ok(mut events) => {
                     if should_shutdown {
                         if let Err(message) = coordinator
                             .lock()
@@ -421,6 +461,24 @@ fn dispatch(
                                 code: "shutdown_flush_failed".into(),
                                 message,
                             };
+                        }
+                        let had_subscribers = event_subscribers.load(Ordering::Acquire) > 0;
+                        if let Ok(shutdown_events) = coordinator
+                            .lock()
+                            .and_then(|mut core| core.emit(CoreEvent::Shutdown))
+                        {
+                            events.extend(shutdown_events);
+                        }
+                        if had_subscribers {
+                            // Give attached presenters a brief flush window to receive
+                            // CoreEvent::Shutdown before stopping the IPC listener.
+                            let deadline = std::time::Instant::now() + Duration::from_millis(60);
+                            while event_subscribers.load(Ordering::Acquire) > 0
+                                && std::time::Instant::now() < deadline
+                            {
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                            thread::sleep(Duration::from_millis(25));
                         }
                     }
                     if events
@@ -466,7 +524,14 @@ fn dispatch(
             request_id,
             after_sequence,
             timeout_ms,
-        } => match wait_events(coordinator, notify, stop, after_sequence, timeout_ms) {
+        } => match wait_events(
+            coordinator,
+            notify,
+            stop,
+            event_subscribers,
+            after_sequence,
+            timeout_ms,
+        ) {
             Ok(batch) => CorePipeResponse::EventBatch { request_id, batch },
             Err(message) => CorePipeResponse::Error {
                 request_id: Some(request_id),
@@ -561,7 +626,14 @@ fn dispatch(
             request_id,
             after_sequence,
             timeout_ms,
-        } => match wait_events(coordinator, notify, stop, after_sequence, timeout_ms) {
+        } => match wait_events(
+            coordinator,
+            notify,
+            stop,
+            event_subscribers,
+            after_sequence,
+            timeout_ms,
+        ) {
             Ok(batch) if batch.resync_required => CorePipeResponse::Error {
                 request_id: Some(request_id),
                 code: "resync_required".into(),
@@ -834,9 +906,11 @@ fn wait_events(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &AtomicBool,
+    event_subscribers: &Arc<AtomicUsize>,
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Result<hls_protocol::EventBatch, String> {
+    let _subscriber = EventSubscriberGuard::enter(event_subscribers);
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
         // 不能持有通知锁读取 Core：提交事件的锁顺序是 Core → 通知锁。
@@ -872,16 +946,10 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
         let mut watch = crate::torrent_engine::TorrentWatch::default();
         let mut primed_dir = String::new();
         while !stop.load(Ordering::SeqCst) {
-            let enabled = coordinator
-                .lock()
-                .ok()
-                .and_then(|core| core.store().setting_bool("watch_torrents", false).ok())
-                .unwrap_or(false);
-            let dir = coordinator
-                .lock()
-                .ok()
-                .and_then(|core| core.store().setting_string("torrent_watch_dir", "").ok())
-                .unwrap_or_default();
+            let (enabled, dir) = coordinator
+                .settings()
+                .map(|settings| (settings.torrent_watch_enabled, settings.torrent_watch))
+                .unwrap_or((false, String::new()));
             let dir = if dir.trim().is_empty() {
                 std::env::var("HLS_V7_TORRENT_WATCH").unwrap_or_default()
             } else {
@@ -951,7 +1019,7 @@ fn spawn_clipboard_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                 if let Some(text) = crate::read_clipboard() {
                     if text != previous {
                         previous = text.clone();
-                        let urls = crate::clipboard_all_urls(&text);
+                        let urls = crate::clipboard_download_urls(&text);
                         if !urls.is_empty() {
                             let _ = coordinator
                                 .lock()
@@ -972,33 +1040,50 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
         let mut last_start = String::new();
         let mut last_stop = String::new();
         while !stop.load(Ordering::SeqCst) {
-            let settings = coordinator.settings().ok();
-            if let Some(settings) = settings {
-                // 每秒复用暂停控制，保存独立任务和定时队列失去窗口时的断点。
-                let _ = coordinator.pause_tasks_outside_schedule();
-                let stamp = crate::net_policy::local_hhmm();
-                if settings.queue_auto_stop_enabled
-                    && !settings.queue_auto_stop_time.is_empty()
-                    && stamp == settings.queue_auto_stop_time
-                    && last_stop != stamp
-                {
-                    last_stop = stamp.clone();
-                    let _ = coordinator.pause_active_tasks();
+            if let Ok(settings) = coordinator.settings() {
+                let any_queue_schedule = settings
+                    .queue_profiles
+                    .iter()
+                    .any(|profile| profile.schedule_enabled);
+                let any_global_schedule =
+                    settings.queue_auto_start_enabled || settings.queue_auto_stop_enabled;
+                let (has_active, has_queued) =
+                    coordinator.scheduler_task_flags().unwrap_or((false, false));
+                if has_active || has_queued || any_global_schedule || any_queue_schedule {
+                    if has_active {
+                        // 每秒复用暂停控制，保存独立任务和定时队列失去窗口时的断点。
+                        let _ = coordinator.pause_tasks_outside_schedule();
+                    }
+                    if any_global_schedule || has_queued {
+                        let stamp = if any_global_schedule {
+                            crate::net_policy::local_hhmm()
+                        } else {
+                            String::new()
+                        };
+                        if settings.queue_auto_stop_enabled
+                            && !settings.queue_auto_stop_time.is_empty()
+                            && stamp == settings.queue_auto_stop_time
+                            && last_stop != stamp
+                        {
+                            last_stop = stamp.clone();
+                            if has_active || has_queued {
+                                let _ = coordinator.pause_active_tasks();
+                            }
+                        }
+                        let global_start_due = settings.queue_auto_start_enabled
+                            && !settings.queue_auto_start_time.is_empty()
+                            && stamp == settings.queue_auto_start_time
+                            && last_start != stamp;
+                        if global_start_due {
+                            last_start = stamp;
+                        }
+                        if has_queued {
+                            let queue_start_due = global_start_due || any_queue_schedule;
+                            // 独立任务的开始时间不依赖队列定时开关；仅释放已设开始时间的任务。
+                            let _ = coordinator.start_next_queued(!queue_start_due);
+                        }
+                    }
                 }
-                let global_start_due = settings.queue_auto_start_enabled
-                    && !settings.queue_auto_start_time.is_empty()
-                    && stamp == settings.queue_auto_start_time
-                    && last_start != stamp;
-                if global_start_due {
-                    last_start = stamp.clone();
-                }
-                let queue_start_due = global_start_due
-                    || settings
-                        .queue_profiles
-                        .iter()
-                        .any(|profile| profile.schedule_enabled);
-                // 独立任务的开始时间不依赖队列定时开关；仅释放已设开始时间的任务。
-                let _ = coordinator.start_next_queued(!queue_start_due);
             }
             thread::sleep(Duration::from_secs(1));
         }
@@ -1730,5 +1815,54 @@ mod tests {
             }
             other => panic!("expected Capabilities response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn shutdown_emits_shutdown_event_to_connected_subscribers_and_tracks_count() {
+        let server = CoreServer::in_memory().unwrap();
+        assert!(!server.has_event_subscribers());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+
+        let mut subscriber = CoreIpcClient::connect_addr(addr).unwrap();
+        let seq = server.coordinator().latest_sequence().unwrap();
+        let sub_thread = thread::spawn(move || {
+            subscriber.request(&CorePipeRequest::WaitEventBatch {
+                request_id: 1,
+                after_sequence: seq,
+                timeout_ms: 5_000,
+            })
+        });
+
+        // Wait until the subscriber enters wait_events.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !server.has_event_subscribers() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(server.has_event_subscribers());
+
+        // Emit direct UiShow while subscriber is connected, then verify Shutdown delivery.
+        let mut controller = CoreIpcClient::connect_addr(addr).unwrap();
+        let shutdown_events = controller.command(CoreCommand::Shutdown).unwrap();
+        assert!(shutdown_events
+            .iter()
+            .any(|env| matches!(env.event, CoreEvent::Shutdown)));
+
+        let response = sub_thread.join().unwrap().unwrap();
+        match response {
+            CorePipeResponse::EventBatch { batch, .. } => {
+                assert!(
+                    batch
+                        .events
+                        .iter()
+                        .any(|env| matches!(env.event, CoreEvent::Shutdown)),
+                    "connected subscriber must receive CoreEvent::Shutdown before IPC closes: {batch:?}"
+                );
+            }
+            other => panic!("expected EventBatch, got {other:?}"),
+        }
+        assert!(worker.join().unwrap().is_ok());
+        assert!(!server.has_event_subscribers());
     }
 }

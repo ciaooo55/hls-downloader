@@ -38,6 +38,10 @@ pub struct PersistentCore {
     /// Off-lock writer for periodic same-state progress rows (file-backed
     /// stores only; see `progress_writer`).
     progress_writer: Option<crate::progress_writer::ProgressWriter>,
+    /// Per-queue task IDs that failed or were canceled during the current active
+    /// batch (reset when the queue starts a fresh run from idle). Historical
+    /// failed/canceled tasks loaded from disk are never placed here.
+    batch_disrupted: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl PersistentCore {
@@ -130,10 +134,13 @@ impl PersistentCore {
             status,
         } = &command
         {
-            let state_changed = self
-                .runtime
-                .snapshot(task_id)
+            let before_snapshot = self.runtime.snapshot(task_id).cloned();
+            let state_changed = before_snapshot
+                .as_ref()
                 .is_some_and(|previous| previous.stage != *stage || previous.status != *status);
+            let queue_was_idle = before_snapshot
+                .as_ref()
+                .is_some_and(|previous| !self.runtime.queue_has_live_work(&previous.queue_id));
             let event = self.runtime.progress_event(
                 task_id,
                 *downloaded_bytes,
@@ -161,6 +168,11 @@ impl PersistentCore {
                     self.reserved_sequence = reserved;
                 }
                 self.runtime.commit_progress(events[0].event.clone());
+                self.update_batch_disrupted_for_events(
+                    &events,
+                    before_snapshot.as_ref(),
+                    queue_was_idle,
+                );
                 self.volatile_tasks.insert(task_id.clone());
                 if deferred {
                     if let (Some(writer), crate::CoreEvent::TaskProgress { snapshot }) =
@@ -187,6 +199,11 @@ impl PersistentCore {
             // 失败时运行态和事件环尚未改变；成功后才发布同一序号并唤醒订阅者。
             self.store.apply_events(&events)?;
             self.runtime.commit_progress(events[0].event.clone());
+            self.update_batch_disrupted_for_events(
+                &events,
+                before_snapshot.as_ref(),
+                queue_was_idle,
+            );
             self.committed(&events);
             if state_changed {
                 crate::record_runtime_log(
@@ -288,6 +305,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -324,6 +342,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -347,6 +366,113 @@ impl PersistentCore {
 
     pub fn tasks(&self) -> Vec<TaskSnapshot> {
         self.runtime.list_tasks()
+    }
+
+    pub(crate) fn scheduler_task_flags(&self) -> (bool, bool) {
+        self.runtime.scheduler_task_flags()
+    }
+
+    pub(crate) fn transfer_summary(&self) -> (usize, u64) {
+        self.runtime.transfer_summary()
+    }
+
+    pub(crate) fn batch_disrupted_for_queue(&self, queue_id: &str) -> Option<&BTreeSet<String>> {
+        self.batch_disrupted.get(queue_id)
+    }
+
+    fn is_live_task_status(status: &str) -> bool {
+        matches!(
+            status,
+            "queued"
+                | "downloading"
+                | "recording"
+                | "merging"
+                | "checking"
+                | "parsing"
+                | "processing"
+        )
+    }
+
+    fn clear_task_from_disrupted(&mut self, task_id: &str) {
+        self.batch_disrupted.retain(|_, tasks| {
+            tasks.remove(task_id);
+            !tasks.is_empty()
+        });
+    }
+
+    fn update_batch_disrupted_for_events(
+        &mut self,
+        events: &[EventEnvelope],
+        before_snapshot: Option<&TaskSnapshot>,
+        queue_was_idle: bool,
+    ) {
+        for envelope in events {
+            match &envelope.event {
+                crate::CoreEvent::TaskProgress { snapshot }
+                | crate::CoreEvent::TaskUpdated { snapshot } => {
+                    if matches!(
+                        snapshot.status.as_str(),
+                        "failed" | "canceled" | "cancelled"
+                    ) {
+                        self.batch_disrupted
+                            .entry(snapshot.queue_id.clone())
+                            .or_default()
+                            .insert(snapshot.task_id.clone());
+                    } else if Self::is_live_task_status(&snapshot.status) {
+                        let was_live = before_snapshot
+                            .is_some_and(|prev| Self::is_live_task_status(&prev.status));
+                        self.clear_task_from_disrupted(&snapshot.task_id);
+                        if queue_was_idle && !was_live {
+                            self.batch_disrupted.remove(&snapshot.queue_id);
+                        }
+                    }
+                }
+                crate::CoreEvent::TaskDeleted { task_id } => {
+                    self.clear_task_from_disrupted(task_id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn update_batch_disrupted_against(&mut self, before: &CoreRuntime, events: &[EventEnvelope]) {
+        for envelope in events {
+            match &envelope.event {
+                crate::CoreEvent::TaskCreated { snapshot } => {
+                    if Self::is_live_task_status(&snapshot.status)
+                        && !before.queue_has_live_work(&snapshot.queue_id)
+                    {
+                        self.batch_disrupted.remove(&snapshot.queue_id);
+                    }
+                }
+                crate::CoreEvent::TaskUpdated { snapshot }
+                | crate::CoreEvent::TaskProgress { snapshot } => {
+                    let prev = before.snapshot(&snapshot.task_id);
+                    if prev.is_some_and(|p| p.queue_id != snapshot.queue_id) {
+                        self.clear_task_from_disrupted(&snapshot.task_id);
+                    }
+                    if matches!(
+                        snapshot.status.as_str(),
+                        "failed" | "canceled" | "cancelled"
+                    ) {
+                        self.batch_disrupted
+                            .entry(snapshot.queue_id.clone())
+                            .or_default()
+                            .insert(snapshot.task_id.clone());
+                    } else if Self::is_live_task_status(&snapshot.status) {
+                        let was_live = prev.is_some_and(|p| Self::is_live_task_status(&p.status));
+                        self.clear_task_from_disrupted(&snapshot.task_id);
+                        if !was_live && !before.queue_has_live_work(&snapshot.queue_id) {
+                            self.batch_disrupted.remove(&snapshot.queue_id);
+                        }
+                    }
+                }
+                crate::CoreEvent::TaskDeleted { task_id } => {
+                    self.clear_task_from_disrupted(task_id);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn task_page(
@@ -384,6 +510,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -404,6 +531,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -436,6 +564,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -691,6 +820,7 @@ impl PersistentCore {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(events)
     }
@@ -737,6 +867,7 @@ impl PersistentCore {
             store,
             persisted_progress: HashMap::new(),
             volatile_tasks: BTreeSet::new(),
+            batch_disrupted: BTreeMap::new(),
         })
     }
     pub fn flush_for_shutdown(&mut self) -> Result<(), String> {

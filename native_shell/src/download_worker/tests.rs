@@ -7596,3 +7596,346 @@ fn coordinator_startup_syncs_persisted_ffmpeg_and_task_defaults_do_not_clobber_i
     drop(coordinator);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn apply_defaults_allows_work_dir_in_settings_download_dir_when_temp_dir_empty_but_rejects_escapes()
+{
+    let root = std::env::temp_dir().join(format!(
+        "hls-v7-work-dir-fallback-{}-{}",
+        std::process::id(),
+        handoff_now_ms()
+    ));
+    let nested = root.join("sub").join("updates");
+    fs::create_dir_all(&nested).unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("download_dir", serde_json::json!(root))
+        .unwrap();
+    coordinator
+        .set_setting("temp_dir", serde_json::json!(""))
+        .unwrap();
+
+    let allowed = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.test/a.bin".into(),
+            filename: "a.bin".into(),
+            download_dir: nested.to_string_lossy().into_owned(),
+            work_dir: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(Path::new(&allowed.work_dir), root);
+
+    // Path traversal and outside-root work_dir must still be rejected strictly.
+    assert!(coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.test/a.bin".into(),
+            filename: "a.bin".into(),
+            download_dir: nested.to_string_lossy().into_owned(),
+            work_dir: format!("{}/../outside", root.display()),
+            ..Default::default()
+        })
+        .is_err());
+    let outside = root.parent().unwrap().join("hls-outside-work-dir");
+    assert!(coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.test/a.bin".into(),
+            filename: "a.bin".into(),
+            download_dir: nested.to_string_lossy().into_owned(),
+            work_dir: outside.to_string_lossy().into_owned(),
+            ..Default::default()
+        })
+        .is_err());
+
+    drop(coordinator);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn queue_drain_ignores_paused_and_historical_failures_while_blocking_active_batch_failures() {
+    let profile = QueueProfile {
+        id: "q".into(),
+        name: "测试队列".into(),
+        completion_action: "sleep".into(),
+        ..QueueProfile::default()
+    };
+    let task_spec = TaskSpec {
+        queue_id: "q".into(),
+        ..spec()
+    };
+    let tasks_with_paused = vec![
+        crate::TaskSnapshot {
+            task_id: "t-done".into(),
+            status: "completed".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+        crate::TaskSnapshot {
+            task_id: "t-paused".into(),
+            status: "paused".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+    ];
+    assert!(queue_is_successfully_drained(&tasks_with_paused, "q"));
+    assert_eq!(
+        queue_completion_decision(
+            &tasks_with_paused,
+            std::slice::from_ref(&profile),
+            &task_spec
+        ),
+        Some(("sleep".into(), "队列：测试队列".into()))
+    );
+    // Paused-only queue (no completed task) must not trigger completion power action.
+    assert!(!queue_is_successfully_drained(&tasks_with_paused[1..], "q"));
+
+    // Historical unrelated failed/canceled/paused tasks must not block a fresh batch completion.
+    let tasks_with_history = vec![
+        crate::TaskSnapshot {
+            task_id: "old-failed".into(),
+            status: "failed".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+        crate::TaskSnapshot {
+            task_id: "old-canceled".into(),
+            status: "canceled".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+        crate::TaskSnapshot {
+            task_id: "old-paused".into(),
+            status: "paused".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+        crate::TaskSnapshot {
+            task_id: "fresh-done".into(),
+            status: "completed".into(),
+            queue_id: "q".into(),
+            ..Default::default()
+        },
+    ];
+    assert_eq!(
+        queue_completion_decision_for_batch(
+            &tasks_with_history,
+            std::slice::from_ref(&profile),
+            &task_spec,
+            None,
+        ),
+        Some(("sleep".into(), "队列：测试队列".into()))
+    );
+
+    // An active-batch failure MUST still block the completion power action.
+    let disrupted = std::collections::BTreeSet::from(["old-failed".to_string()]);
+    assert!(queue_completion_decision_for_batch(
+        &tasks_with_history,
+        std::slice::from_ref(&profile),
+        &task_spec,
+        Some(&disrupted),
+    )
+    .is_none());
+
+    // End-to-end PersistentCore tracking: historical failed task loaded from disk does not block,
+    // while a failure in the active batch does block until a fresh run starts from idle.
+    let root = audit_test_root("batch-power-history");
+    let db = root.join("core.db");
+    {
+        let mut core = PersistentCore::open(&db).unwrap();
+        core.handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.test/old.bin".into(),
+                filename: "old.bin".into(),
+                queue_id: "default".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        core.report_failure(
+            "task-1",
+            crate::TaskFailure {
+                code: "DOWNLOAD_FAILED".into(),
+                message: "boom".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let mut reopened = PersistentCore::open(&db).unwrap();
+    assert!(reopened.batch_disrupted_for_queue("default").is_none());
+    reopened
+        .handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.test/new1.bin".into(),
+                filename: "new1.bin".into(),
+                queue_id: "default".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    reopened
+        .handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.test/new2.bin".into(),
+                filename: "new2.bin".into(),
+                queue_id: "default".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    // task-2 fails while task-3 is still queued -> active batch is disrupted.
+    reopened
+        .report_failure(
+            "task-2",
+            crate::TaskFailure {
+                code: "DOWNLOAD_FAILED".into(),
+                message: "batch fail".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    reopened
+        .handle(CoreCommand::UpdateProgress {
+            task_id: "task-3".into(),
+            downloaded_bytes: 10,
+            total_bytes: Some(10),
+            speed_bytes_per_sec: 0,
+            stage: "finished".into(),
+            status: "completed".into(),
+        })
+        .unwrap();
+    assert!(reopened
+        .batch_disrupted_for_queue("default")
+        .is_some_and(|set| set.contains("task-2")));
+    let default_profile = QueueProfile {
+        id: "default".into(),
+        name: "默认队列".into(),
+        completion_action: "sleep".into(),
+        ..QueueProfile::default()
+    };
+    let default_spec = TaskSpec {
+        queue_id: "default".into(),
+        ..spec()
+    };
+    assert!(queue_completion_decision_for_batch(
+        &reopened.tasks(),
+        std::slice::from_ref(&default_profile),
+        &default_spec,
+        reopened.batch_disrupted_for_queue("default"),
+    )
+    .is_none());
+
+    // Starting a new task from idle clears stale batch_disrupted so the new batch can trigger power action.
+    reopened
+        .handle(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.test/new3.bin".into(),
+                filename: "new3.bin".into(),
+                queue_id: "default".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    reopened
+        .handle(CoreCommand::UpdateProgress {
+            task_id: "task-4".into(),
+            downloaded_bytes: 10,
+            total_bytes: Some(10),
+            speed_bytes_per_sec: 0,
+            stage: "finished".into(),
+            status: "completed".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        queue_completion_decision_for_batch(
+            &reopened.tasks(),
+            std::slice::from_ref(&default_profile),
+            &default_spec,
+            reopened.batch_disrupted_for_queue("default"),
+        ),
+        Some(("sleep".into(), "队列：默认队列".into()))
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn accept_handoff_honors_start_paused_and_custom_queue_id() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([
+                QueueProfile {
+                    id: "default".into(),
+                    name: "默认队列".into(),
+                    ..Default::default()
+                },
+                QueueProfile {
+                    id: "night-media".into(),
+                    name: "夜间媒体".into(),
+                    ..Default::default()
+                }
+            ]),
+        )
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.test/later.mp4".into(),
+                handoff_id: "handoff-later".into(),
+                filename: "later.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    // Unknown queue_id must be rejected without consuming the pending handoff.
+    assert!(coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "handoff-later".into(),
+            filename: "later.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: "missing-queue".into(),
+        })
+        .is_err());
+
+    let events = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "handoff-later".into(),
+            filename: "later.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: "night-media".into(),
+        })
+        .unwrap();
+    let created = events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.clone()),
+            _ => None,
+        })
+        .expect("AcceptHandoff should create a task");
+    assert_eq!(created.status, "paused");
+    assert_eq!(created.queue_id, "night-media");
+    assert!(
+        !coordinator.worker_is_active(&created.task_id).unwrap(),
+        "start_paused handoff must not spawn a transfer worker"
+    );
+    let stored_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&created.task_id)
+        .cloned()
+        .unwrap();
+    assert!(stored_spec.start_paused);
+    assert_eq!(stored_spec.queue_id, "night-media");
+}

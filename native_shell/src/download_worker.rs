@@ -17,7 +17,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -306,6 +306,8 @@ pub struct CoreCoordinator {
     active: Arc<Mutex<HashSet<String>>>,
     retries: Arc<Mutex<HashMap<String, u32>>>,
     update_shutdown: Arc<AtomicBool>,
+    settings_cache: Arc<RwLock<Option<settings::CachedSettings>>>,
+    settings_version: Arc<AtomicU64>,
     #[cfg(test)]
     worker_wait_started: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
@@ -326,13 +328,22 @@ fn sync_configured_ffmpeg(store: &crate::CoreStore) {
 impl CoreCoordinator {
     pub fn new(core: PersistentCore) -> Self {
         sync_configured_ffmpeg(core.store());
+        let settings_version = core.store().settings_version();
         Self {
             core: Arc::new(Mutex::new(core)),
             active: Arc::new(Mutex::new(HashSet::new())),
             retries: Arc::new(Mutex::new(HashMap::new())),
             update_shutdown: Arc::new(AtomicBool::new(false)),
+            settings_cache: Arc::new(RwLock::new(None)),
+            settings_version,
             #[cfg(test)]
             worker_wait_started: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn invalidate_settings_cache(&self) {
+        if let Ok(mut guard) = self.settings_cache.write() {
+            *guard = None;
         }
     }
 
@@ -471,6 +482,7 @@ impl CoreCoordinator {
                 serde_json::json!(crate::format_site_rules(&rules)),
             )]),
         )?;
+        self.invalidate_settings_cache();
         // `set_setting` used to announce the change; going straight to the store
         // must not silence it, or the UI keeps showing the credential it thought
         // it just saved.
@@ -602,6 +614,14 @@ impl CoreCoordinator {
 
     pub(crate) fn raw_tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
         Ok(self.lock()?.tasks())
+    }
+
+    pub(crate) fn scheduler_task_flags(&self) -> Result<(bool, bool), String> {
+        Ok(self.lock()?.scheduler_task_flags())
+    }
+
+    pub fn transfer_summary(&self) -> Result<(usize, u64), String> {
+        Ok(self.lock()?.transfer_summary())
     }
 
     pub fn tasks(&self) -> Result<Vec<crate::TaskSnapshot>, String> {
@@ -958,8 +978,8 @@ impl CoreCoordinator {
             download_dir,
             trusted_ui,
             allow_duplicate,
-            start_paused: _,
-            queue_id: _,
+            start_paused,
+            queue_id,
         } = command
         {
             return self.accept_handoff_command(
@@ -968,6 +988,8 @@ impl CoreCoordinator {
                 download_dir,
                 trusted_ui,
                 allow_duplicate,
+                start_paused,
+                queue_id,
             );
         }
         if let CoreCommand::RejectHandoff {
@@ -1657,6 +1679,35 @@ impl CoreCoordinator {
         self.pause_tasks(true).map(|_| ())
     }
 
+    pub fn resume_paused_tasks(&self) -> Result<(), String> {
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let paused_ids: Vec<String> = self
+            .lock()?
+            .tasks()
+            .into_iter()
+            .filter(|task| task.status == "paused")
+            .map(|task| task.task_id)
+            .collect();
+        let mut first_error = None;
+        for task_id in paused_ids {
+            if let Err(error) = self.dispatch_inner(CoreCommand::TaskAction {
+                task_id,
+                action: "resume".into(),
+            }) {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Err(error) = self.start_next_queued(false) {
+            first_error.get_or_insert(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     // 先暂停 queued，再向 worker 发控制，避免退出回调把尚未暂停的队列任务补位。
     // core -> active 是唯一嵌套锁顺序；启动路径在持有 active 时不获取 core。
     fn pause_tasks(&self, include_queued: bool) -> Result<Vec<String>, String> {
@@ -1843,12 +1894,17 @@ impl CoreCoordinator {
                 settings.temp_dir.clone()
             };
         } else if !trust_download_dir {
-            let work_root = if settings.temp_dir.trim().is_empty() {
-                &spec.download_dir
+            if settings.temp_dir.trim().is_empty() {
+                spec.work_dir =
+                    constrain_untrusted_download_dir(&spec.work_dir, &spec.download_dir).or_else(
+                        |_| {
+                            constrain_untrusted_download_dir(&spec.work_dir, &settings.download_dir)
+                        },
+                    )?;
             } else {
-                &settings.temp_dir
-            };
-            spec.work_dir = constrain_untrusted_download_dir(&spec.work_dir, work_root)?;
+                spec.work_dir =
+                    constrain_untrusted_download_dir(&spec.work_dir, &settings.temp_dir)?;
+            }
         }
         reject_path_escape(&spec.work_dir)?;
         if !spec.body_path.trim().is_empty() {
@@ -2060,6 +2116,8 @@ impl CoreCoordinator {
         download_dir: String,
         trusted_ui: bool,
         allow_duplicate: bool,
+        start_paused: bool,
+        queue_id: String,
     ) -> Result<Vec<EventEnvelope>, String> {
         self.require_legal()?;
         let download_dir = download_dir.trim().to_string();
@@ -2087,6 +2145,7 @@ impl CoreCoordinator {
         } else {
             filename
         };
+        let queue_id = queue_id.trim().to_string();
         let spec = self.apply_defaults_to_spec_inner(
             TaskSpec {
                 url: offer.url.clone(),
@@ -2099,6 +2158,12 @@ impl CoreCoordinator {
                 },
                 filename,
                 download_dir,
+                start_paused,
+                queue_id: if queue_id.is_empty() {
+                    crate::DEFAULT_QUEUE_ID.into()
+                } else {
+                    queue_id
+                },
                 allow_duplicate: trusted_ui && allow_duplicate,
                 preserve_existing_output: trusted_ui && allow_duplicate,
                 request_method: offer.request_method.clone(),
@@ -2304,6 +2369,7 @@ impl CoreCoordinator {
             let task_id = value.get("task_id").and_then(Value::as_str);
             core.store_mut()
                 .save_handoff(handoff_id, &json, status, task_id, created)?;
+            self.invalidate_settings_cache();
             return Ok(());
         }
         Err("接管请求持久记录不存在".into())
@@ -4129,7 +4195,10 @@ fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> R
             .lock()
             .map_err(|_| "v7 Core mutex poisoned".to_string())?;
         let profiles = load_queue_profiles(guard.store())?;
-        let Some(decision) = queue_completion_decision(&guard.tasks(), &profiles, spec) else {
+        let disrupted = guard.batch_disrupted_for_queue(&spec.queue_id);
+        let Some(decision) =
+            queue_completion_decision_for_batch(&guard.tasks(), &profiles, spec, disrupted)
+        else {
             return Ok(());
         };
         decision
@@ -4149,6 +4218,7 @@ fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> R
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn queue_completion_decision(
     tasks: &[crate::TaskSnapshot],
     profiles: &[QueueProfile],
@@ -4167,13 +4237,65 @@ fn queue_completion_decision(
     })
 }
 
+fn queue_completion_decision_for_batch(
+    tasks: &[crate::TaskSnapshot],
+    profiles: &[QueueProfile],
+    spec: &TaskSpec,
+    batch_disrupted: Option<&std::collections::BTreeSet<String>>,
+) -> Option<(String, String)> {
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.id == spec.queue_id)?;
+    (crate::power_action::is_armed(&profile.completion_action)
+        && queue_is_successfully_drained_for_batch(tasks, &profile.id, batch_disrupted))
+    .then(|| {
+        (
+            profile.completion_action.clone(),
+            format!("队列：{}", profile.name),
+        )
+    })
+}
+
+/// Stateless queue drain check: requires at least one completed/done task and
+/// no pending, active, failed, or canceled tasks in the queue. Manually paused
+/// tasks (`status == "paused"`) do not block completion power actions.
+#[cfg_attr(not(test), allow(dead_code))]
 fn queue_is_successfully_drained(tasks: &[crate::TaskSnapshot], queue_id: &str) -> bool {
-    let mut matching = tasks.iter().filter(|task| task.queue_id == queue_id);
-    let Some(first) = matching.next() else {
-        return false;
-    };
-    matches!(first.status.as_str(), "completed" | "done")
-        && matching.all(|task| matches!(task.status.as_str(), "completed" | "done"))
+    let mut has_completed = false;
+    for task in tasks.iter().filter(|task| task.queue_id == queue_id) {
+        match task.status.as_str() {
+            "completed" | "done" => has_completed = true,
+            "paused" => {}
+            _ => return false,
+        }
+    }
+    has_completed
+}
+
+/// Batch-aware queue drain check used at runtime by `maybe_schedule_power`:
+/// requires at least one completed/done task and zero active/queued tasks, and
+/// blocks if any task in the current run (`batch_disrupted`) is still failed or
+/// canceled. Historical unrelated `paused`, `failed`, or `canceled` tasks from
+/// earlier runs do not silently block completion power actions.
+fn queue_is_successfully_drained_for_batch(
+    tasks: &[crate::TaskSnapshot],
+    queue_id: &str,
+    batch_disrupted: Option<&std::collections::BTreeSet<String>>,
+) -> bool {
+    let mut has_completed = false;
+    for task in tasks.iter().filter(|task| task.queue_id == queue_id) {
+        match task.status.as_str() {
+            "completed" | "done" => has_completed = true,
+            "paused" => {}
+            "failed" | "canceled" | "cancelled" => {
+                if batch_disrupted.is_some_and(|ids| ids.contains(&task.task_id)) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    has_completed
 }
 
 fn poll_media_progress<T, F>(

@@ -39,19 +39,145 @@ fn open_workbench() -> Result<(), String> {
         .map_err(|error| format!("open workbench: {error}"))
 }
 
+fn format_tray_tooltip(active_count: usize, total_speed_bps: u64) -> String {
+    if active_count == 0 {
+        return "HLS Downloader · 待机".to_string();
+    }
+    let speed = if total_speed_bps >= 1024 * 1024 * 1024 {
+        format!(
+            "{:.2} GB/s",
+            total_speed_bps as f64 / (1024.0 * 1024.0 * 1024.0)
+        )
+    } else if total_speed_bps >= 1024 * 1024 {
+        format!("{:.1} MB/s", total_speed_bps as f64 / (1024.0 * 1024.0))
+    } else if total_speed_bps >= 1024 {
+        format!("{:.0} KB/s", total_speed_bps as f64 / 1024.0)
+    } else {
+        format!("{total_speed_bps} B/s")
+    };
+    format!("HLS Downloader · {active_count} 下载中 · {speed}")
+}
+
+fn current_tray_snapshot(
+    server: &hls_native_shell::CoreServer,
+) -> Option<(String, hls_native_shell::TrayMenuState)> {
+    let settings = server.coordinator().settings().ok()?;
+    let (active_count, total_speed_bps) = server.coordinator().transfer_summary().ok()?;
+    let tooltip = format_tray_tooltip(active_count, total_speed_bps);
+    let state = hls_native_shell::TrayMenuState {
+        speed_limited: settings.speed_limit_kib > 0,
+        takeover_enabled: settings.takeover_enabled,
+        clipboard_watch: settings.clipboard_watch,
+    };
+    Some((tooltip, state))
+}
+
+fn sync_tray_state_if_changed(
+    server: &hls_native_shell::CoreServer,
+    last_tooltip: &mut String,
+    last_state: &mut Option<hls_native_shell::TrayMenuState>,
+) {
+    let Some((tooltip, state)) = current_tray_snapshot(server) else {
+        return;
+    };
+    if tooltip != *last_tooltip || *last_state != Some(state) {
+        hls_native_shell::update_tray_state(&tooltip, state);
+        *last_tooltip = tooltip;
+        *last_state = Some(state);
+    }
+}
+
+fn wake_or_open_workbench(server: &hls_native_shell::CoreServer, surface: &str) {
+    if server.has_event_subscribers() {
+        match server.emit_ui_show(surface) {
+            Ok(()) => return,
+            Err(error) => eprintln!("tray ui show ({surface}) failed: {error}"),
+        }
+    }
+    if let Err(error) = open_workbench() {
+        eprintln!("tray action failed: {error}");
+    }
+}
+
 fn start_resident_tray(server: &hls_native_shell::CoreServer) {
     let (sender, receiver) = std::sync::mpsc::channel();
     hls_native_shell::spawn_tray(sender);
     let handler = server.handler();
+    let action_server = server.clone();
     std::thread::Builder::new()
         .name("v7-tray-actions".into())
         .spawn(move || {
+            let mut remembered_speed_limit_kib: u64 = 1024;
             while let Ok(action) = receiver.recv() {
                 match action {
                     hls_native_shell::TrayAction::ShowMain => {
                         eprintln!("tray action: show workbench");
-                        if let Err(error) = open_workbench() {
-                            eprintln!("tray action failed: {error}");
+                        wake_or_open_workbench(&action_server, "main");
+                    }
+                    hls_native_shell::TrayAction::NewDownload => {
+                        eprintln!("tray action: new download");
+                        wake_or_open_workbench(&action_server, "new_download");
+                    }
+                    hls_native_shell::TrayAction::PauseAll => {
+                        eprintln!("tray action: pause all");
+                        if let Err(error) = action_server.coordinator().pause_active_tasks() {
+                            eprintln!("tray pause all failed: {error}");
+                        }
+                    }
+                    hls_native_shell::TrayAction::ResumeAll => {
+                        eprintln!("tray action: resume all");
+                        if let Err(error) = action_server.coordinator().resume_paused_tasks() {
+                            eprintln!("tray resume all failed: {error}");
+                        }
+                    }
+                    hls_native_shell::TrayAction::ToggleSpeedLimit => {
+                        if let Ok(settings) = action_server.coordinator().settings() {
+                            let next = if settings.speed_limit_kib > 0 {
+                                remembered_speed_limit_kib = settings.speed_limit_kib;
+                                0
+                            } else {
+                                remembered_speed_limit_kib.max(1)
+                            };
+                            if let Err(error) = action_server
+                                .coordinator()
+                                .set_setting("download_speed_limit_kib", serde_json::json!(next))
+                            {
+                                eprintln!("tray toggle speed limit failed: {error}");
+                            } else if let Some((tooltip, state)) =
+                                current_tray_snapshot(&action_server)
+                            {
+                                hls_native_shell::update_tray_state(&tooltip, state);
+                            }
+                        }
+                    }
+                    hls_native_shell::TrayAction::ToggleTakeover => {
+                        if let Ok(settings) = action_server.coordinator().settings() {
+                            let next = !settings.takeover_enabled;
+                            if let Err(error) = action_server
+                                .coordinator()
+                                .set_setting("browser_takeover_enabled", serde_json::json!(next))
+                            {
+                                eprintln!("tray toggle takeover failed: {error}");
+                            } else if let Some((tooltip, state)) =
+                                current_tray_snapshot(&action_server)
+                            {
+                                hls_native_shell::update_tray_state(&tooltip, state);
+                            }
+                        }
+                    }
+                    hls_native_shell::TrayAction::ToggleClipboardWatch => {
+                        if let Ok(settings) = action_server.coordinator().settings() {
+                            let next = !settings.clipboard_watch;
+                            if let Err(error) = action_server
+                                .coordinator()
+                                .set_setting("clipboard_watch", serde_json::json!(next))
+                            {
+                                eprintln!("tray toggle clipboard watch failed: {error}");
+                            } else if let Some((tooltip, state)) =
+                                current_tray_snapshot(&action_server)
+                            {
+                                hls_native_shell::update_tray_state(&tooltip, state);
+                            }
                         }
                     }
                     hls_native_shell::TrayAction::Quit => {
@@ -70,6 +196,25 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
                             }
                         }
                     }
+                }
+            }
+        })
+        .ok();
+
+    let status_server = server.clone();
+    let stop = server.stop_handle();
+    std::thread::Builder::new()
+        .name("v7-tray-status".into())
+        .spawn(move || {
+            let mut last_tooltip = String::new();
+            let mut last_state = None;
+            while !stop.load(std::sync::atomic::Ordering::Acquire) {
+                sync_tray_state_if_changed(&status_server, &mut last_tooltip, &mut last_state);
+                for _ in 0..5 {
+                    if stop.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                 }
             }
         })
@@ -376,5 +521,22 @@ mod tests {
         assert!(source.contains("--prepare-native-host-manifests"));
         assert!(source.contains("register_packaged_native_host"));
         assert!(source.contains("--unregister-native-host"));
+    }
+
+    #[test]
+    fn tray_tooltip_formats_idle_and_active_transfer_rates() {
+        assert_eq!(super::format_tray_tooltip(0, 0), "HLS Downloader · 待机");
+        assert_eq!(
+            super::format_tray_tooltip(1, 512),
+            "HLS Downloader · 1 下载中 · 512 B/s"
+        );
+        assert_eq!(
+            super::format_tray_tooltip(2, 500 * 1024),
+            "HLS Downloader · 2 下载中 · 500 KB/s"
+        );
+        assert_eq!(
+            super::format_tray_tooltip(3, 5 * 1024 * 1024 + 512 * 1024),
+            "HLS Downloader · 3 下载中 · 5.5 MB/s"
+        );
     }
 }

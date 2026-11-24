@@ -1,13 +1,57 @@
 //! Win32 tray icon for the resident v7 Core. This is not a second UI toolkit.
 
+use std::sync::atomic::{AtomicIsize, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Mutex, OnceLock};
 
 const TRAY_THREAD_NAME: &str = "v7-tray";
+const DEFAULT_TRAY_TOOLTIP: &str = "HLS Downloader";
+
+const FLAG_SPEED_LIMITED: u8 = 1 << 0;
+const FLAG_TAKEOVER_ENABLED: u8 = 1 << 1;
+const FLAG_CLIPBOARD_WATCH: u8 = 1 << 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
     ShowMain,
+    NewDownload,
+    PauseAll,
+    ResumeAll,
+    ToggleSpeedLimit,
+    ToggleTakeover,
+    ToggleClipboardWatch,
     Quit,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrayMenuState {
+    pub speed_limited: bool,
+    pub takeover_enabled: bool,
+    pub clipboard_watch: bool,
+}
+
+impl TrayMenuState {
+    fn to_bits(self) -> u8 {
+        let mut bits = 0u8;
+        if self.speed_limited {
+            bits |= FLAG_SPEED_LIMITED;
+        }
+        if self.takeover_enabled {
+            bits |= FLAG_TAKEOVER_ENABLED;
+        }
+        if self.clipboard_watch {
+            bits |= FLAG_CLIPBOARD_WATCH;
+        }
+        bits
+    }
+
+    fn from_bits(bits: u8) -> Self {
+        Self {
+            speed_limited: (bits & FLAG_SPEED_LIMITED) != 0,
+            takeover_enabled: (bits & FLAG_TAKEOVER_ENABLED) != 0,
+            clipboard_watch: (bits & FLAG_CLIPBOARD_WATCH) != 0,
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -28,7 +72,52 @@ pub fn completion_sound() {
     }
 }
 
-static TRAY_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
+static TRAY_MENU_STATE: AtomicU8 = AtomicU8::new(FLAG_TAKEOVER_ENABLED);
+static TRAY_TOOLTIP: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn tray_tooltip_store() -> &'static Mutex<String> {
+    TRAY_TOOLTIP.get_or_init(|| Mutex::new(DEFAULT_TRAY_TOOLTIP.to_string()))
+}
+
+fn current_menu_state() -> TrayMenuState {
+    TrayMenuState::from_bits(TRAY_MENU_STATE.load(Ordering::Acquire))
+}
+
+fn current_tooltip() -> String {
+    let tip = tray_tooltip_store()
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    if tip.trim().is_empty() {
+        DEFAULT_TRAY_TOOLTIP.to_string()
+    } else {
+        tip
+    }
+}
+
+pub fn update_tray_state(tooltip: &str, state: TrayMenuState) {
+    TRAY_MENU_STATE.store(state.to_bits(), Ordering::Release);
+    let next_tip = if tooltip.trim().is_empty() {
+        DEFAULT_TRAY_TOOLTIP
+    } else {
+        tooltip
+    };
+    if let Ok(mut guard) = tray_tooltip_store().lock() {
+        guard.clear();
+        guard.push_str(next_tip);
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIM_MODIFY};
+        let hwnd = TRAY_HWND.load(Ordering::SeqCst);
+        if hwnd == 0 {
+            return;
+        }
+        let data = build_tooltip_data(hwnd, next_tip);
+        Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
 #[cfg(windows)]
 struct TrayIcon {
     handle: windows_sys::Win32::UI::WindowsAndMessaging::HICON,
@@ -134,6 +223,23 @@ fn build_notification_data(
 }
 
 #[cfg(windows)]
+fn build_tooltip_data(
+    hwnd: isize,
+    tooltip: &str,
+) -> windows_sys::Win32::UI::Shell::NOTIFYICONDATAW {
+    use windows_sys::Win32::UI::Shell::{NIF_TIP, NOTIFYICONDATAW};
+    // Only modify NIF_TIP; never set NIF_MESSAGE or NIF_ICON here so callback
+    // routing and the loaded product icon are never clobbered.
+    let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
+    data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    data.hWnd = hwnd as _;
+    data.uID = 1;
+    data.uFlags = NIF_TIP;
+    copy_utf16(&mut data.szTip, tooltip);
+    data
+}
+
+#[cfg(windows)]
 fn copy_utf16(dest: &mut [u16], text: &str) {
     if dest.is_empty() {
         return;
@@ -230,7 +336,8 @@ unsafe fn tray_loop(tx: Sender<TrayAction>) {
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_TRAY;
     data.hIcon = window.icon.handle;
-    copy_utf16(&mut data.szTip, "HLS Downloader");
+    let tip = current_tooltip();
+    copy_utf16(&mut data.szTip, &tip);
     Shell_NotifyIconW(NIM_ADD, &data);
 
     let mut msg = std::mem::zeroed();
@@ -254,14 +361,20 @@ unsafe extern "system" fn tray_wnd_proc(
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DefWindowProcW, DestroyMenu, GetCursorPos, GetWindowLongPtrW,
-        PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu, GWLP_USERDATA,
-        MF_STRING, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-        WM_NULL, WM_RBUTTONUP,
+        PostMessageW, PostQuitMessage, SetForegroundWindow, SetMenuDefaultItem, TrackPopupMenu,
+        GWLP_USERDATA, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_LEFTALIGN,
+        TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
     };
 
     const WM_TRAY: u32 = WM_APP + 32;
     const ID_SHOW: usize = 1;
+    const ID_NEW: usize = 2;
+    const ID_PAUSE_ALL: usize = 3;
     const ID_QUIT: usize = 4;
+    const ID_RESUME_ALL: usize = 5;
+    const ID_SPEED_LIMIT: usize = 6;
+    const ID_TAKEOVER: usize = 7;
+    const ID_CLIPBOARD: usize = 8;
 
     let window = (GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const TrayWindow).as_ref();
     let taskbar_created = TASKBAR_CREATED_MESSAGE.load(std::sync::atomic::Ordering::Acquire);
@@ -277,7 +390,8 @@ unsafe extern "system" fn tray_wnd_proc(
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = WM_TRAY;
         data.hIcon = window.icon.handle;
-        copy_utf16(&mut data.szTip, "HLS Downloader");
+        let tip = current_tooltip();
+        copy_utf16(&mut data.szTip, &tip);
         Shell_NotifyIconW(NIM_ADD, &data);
         return 0;
     }
@@ -291,10 +405,28 @@ unsafe extern "system" fn tray_wnd_proc(
             let mut point = POINT { x: 0, y: 0 };
             GetCursorPos(&mut point);
             let menu = CreatePopupMenu();
-            let show: Vec<u16> = "打开工作台\0".encode_utf16().collect();
-            let quit: Vec<u16> = "退出下载引擎\0".encode_utf16().collect();
-            AppendMenuW(menu, MF_STRING, ID_SHOW, show.as_ptr());
-            AppendMenuW(menu, MF_STRING, ID_QUIT, quit.as_ptr());
+            let state = current_menu_state();
+            let append_item = |id: usize, label: &str, checked: Option<bool>| {
+                let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let flags = match checked {
+                    Some(true) => MF_STRING | MF_CHECKED,
+                    Some(false) => MF_STRING | MF_UNCHECKED,
+                    None => MF_STRING,
+                };
+                AppendMenuW(menu, flags, id, wide.as_ptr());
+            };
+            append_item(ID_SHOW, "打开工作台", None);
+            SetMenuDefaultItem(menu, ID_SHOW as u32, 0);
+            append_item(ID_NEW, "新建下载", None);
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            append_item(ID_PAUSE_ALL, "全部暂停", None);
+            append_item(ID_RESUME_ALL, "全部开始", None);
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            append_item(ID_SPEED_LIMIT, "速度限制", Some(state.speed_limited));
+            append_item(ID_TAKEOVER, "浏览器接管", Some(state.takeover_enabled));
+            append_item(ID_CLIPBOARD, "监视剪贴板", Some(state.clipboard_watch));
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            append_item(ID_QUIT, "退出下载引擎", None);
             SetForegroundWindow(hwnd);
             TrackPopupMenu(
                 menu,
@@ -313,6 +445,12 @@ unsafe extern "system" fn tray_wnd_proc(
     if msg == WM_COMMAND {
         match wparam & 0xffff {
             ID_SHOW => send_action(window, TrayAction::ShowMain),
+            ID_NEW => send_action(window, TrayAction::NewDownload),
+            ID_PAUSE_ALL => send_action(window, TrayAction::PauseAll),
+            ID_RESUME_ALL => send_action(window, TrayAction::ResumeAll),
+            ID_SPEED_LIMIT => send_action(window, TrayAction::ToggleSpeedLimit),
+            ID_TAKEOVER => send_action(window, TrayAction::ToggleTakeover),
+            ID_CLIPBOARD => send_action(window, TrayAction::ToggleClipboardWatch),
             // Keep the tray available if Core cannot save its exit checkpoint.
             ID_QUIT => send_action(window, TrayAction::Quit),
             _ => {}
@@ -379,5 +517,39 @@ mod tests {
         // '🚀' needs 2 units; must not leave an unpaired high surrogate at index 1.
         assert_eq!(tiny[0], 'a' as u16);
         assert_eq!(tiny[1], 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tooltip_update_sets_only_nif_tip_and_nul_terminates() {
+        use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP};
+        let long_tip = "HLS Downloader · 下载中 🚀".repeat(20);
+        let data = super::build_tooltip_data(5678, &long_tip);
+        assert_eq!(data.uFlags, NIF_TIP);
+        assert_eq!(data.uFlags & (NIF_MESSAGE | NIF_ICON | NIF_INFO), 0);
+        assert_eq!(*data.szTip.last().unwrap(), 0);
+    }
+
+    #[test]
+    fn tray_menu_state_and_tooltip_update_atomically() {
+        let state = super::TrayMenuState {
+            speed_limited: true,
+            takeover_enabled: false,
+            clipboard_watch: true,
+        };
+        super::update_tray_state("HLS Downloader · 2 下载中 · 5.4 MB/s", state);
+        assert_eq!(super::current_menu_state(), state);
+        assert_eq!(
+            super::current_tooltip(),
+            "HLS Downloader · 2 下载中 · 5.4 MB/s"
+        );
+        let idle = super::TrayMenuState {
+            speed_limited: false,
+            takeover_enabled: true,
+            clipboard_watch: false,
+        };
+        super::update_tray_state("", idle);
+        assert_eq!(super::current_menu_state(), idle);
+        assert_eq!(super::current_tooltip(), super::DEFAULT_TRAY_TOOLTIP);
     }
 }

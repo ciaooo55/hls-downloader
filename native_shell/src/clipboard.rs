@@ -34,6 +34,208 @@ pub fn all_urls(text: &str) -> Vec<String> {
     urls
 }
 
+/// Filters clipboard URLs for automatic background clipboard monitoring.
+/// Keeps magnet/FTP/SFTP, playlist/torrent links, and HTTP(S) URLs whose path
+/// ends in a recognized downloadable file extension while ignoring normal web
+/// pages (`.html`, `.php`, `.aspx`, bare paths, etc.).
+pub fn download_urls(text: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut urls = Vec::new();
+    for raw in text.split(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'')) {
+        let line = raw.trim_matches(|ch: char| matches!(ch, '(' | ')' | ',' | ';' | '.' | '。'));
+        if !looks_like_download_url(line) || !is_auto_watch_download_url(line) {
+            continue;
+        }
+        let key = line.to_string();
+        if seen.insert(key) {
+            urls.push(line.to_string());
+        }
+        if urls.len() >= 100 {
+            break;
+        }
+    }
+    urls
+}
+
+fn is_auto_watch_download_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("magnet:")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("ftps://")
+        || lower.starts_with("sftp://")
+    {
+        return true;
+    }
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return false;
+    }
+    let Some((_, after_scheme)) = lower.split_once("://") else {
+        return false;
+    };
+    let Some(path_start) = after_scheme.find('/') else {
+        return false;
+    };
+    let path_and_query = &after_scheme[path_start..];
+    let path = path_and_query.split(['?', '#']).next().unwrap_or("");
+    if path.is_empty() || path.ends_with('/') {
+        return false;
+    }
+    let filename = path.rsplit('/').next().unwrap_or("");
+    let Some((stem, ext)) = filename.rsplit_once('.') else {
+        return false;
+    };
+    if stem.is_empty() || ext.is_empty() {
+        return false;
+    }
+    matches!(
+        ext,
+        // Playlists / streams / torrents / metalink
+        "m3u8"
+            | "mpd"
+            | "m3u"
+            | "torrent"
+            | "meta4"
+            | "metalink"
+            // Video & audio
+            | "mp4"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "m4v"
+            | "ts"
+            | "m2ts"
+            | "flv"
+            | "wmv"
+            | "3gp"
+            | "mpeg"
+            | "mpg"
+            | "rmvb"
+            | "rm"
+            | "vob"
+            | "ogv"
+            | "mp3"
+            | "m4a"
+            | "aac"
+            | "flac"
+            | "wav"
+            | "ogg"
+            | "oga"
+            | "opus"
+            | "wma"
+            | "ac3"
+            | "mka"
+            | "aiff"
+            | "ape"
+            // Archives & disk images
+            | "zip"
+            | "7z"
+            | "rar"
+            | "tar"
+            | "gz"
+            | "tgz"
+            | "bz2"
+            | "tbz2"
+            | "xz"
+            | "txz"
+            | "zst"
+            | "lz"
+            | "lzma"
+            | "cab"
+            | "iso"
+            | "img"
+            | "vhd"
+            | "vhdx"
+            | "wim"
+            // Installers, packages & binaries
+            | "exe"
+            | "msi"
+            | "msp"
+            | "msix"
+            | "msixbundle"
+            | "appx"
+            | "appxbundle"
+            | "dmg"
+            | "pkg"
+            | "apk"
+            | "xapk"
+            | "ipa"
+            | "deb"
+            | "rpm"
+            | "appimage"
+            | "flatpak"
+            | "snap"
+            | "whl"
+            | "jar"
+            | "war"
+            | "vsix"
+            | "xpi"
+            | "crx"
+            | "nupkg"
+            | "bin"
+            | "dll"
+            | "so"
+            | "dylib"
+            | "wasm"
+            // Documents & ebooks
+            | "pdf"
+            | "epub"
+            | "mobi"
+            | "azw3"
+            | "djvu"
+            | "doc"
+            | "docx"
+            | "xls"
+            | "xlsx"
+            | "ppt"
+            | "pptx"
+            | "odt"
+            | "ods"
+            | "odp"
+            | "rtf"
+            | "csv"
+            | "txt"
+            | "md"
+            | "chm"
+            | "cbz"
+            | "cbr"
+            // Images
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "avif"
+            | "heic"
+            | "heif"
+            | "bmp"
+            | "tiff"
+            | "tif"
+            | "ico"
+            | "svg"
+            | "psd"
+            | "raw"
+            | "cr2"
+            | "nef"
+            | "arw"
+            | "dng"
+            // Fonts / ML / data packages
+            | "ttf"
+            | "otf"
+            | "woff"
+            | "woff2"
+            | "gguf"
+            | "safetensors"
+            | "onnx"
+            | "ckpt"
+            | "pt"
+            | "pth"
+            | "parquet"
+            | "sqlite"
+            | "db"
+    )
+}
+
 fn nul_terminated_len(units: &[u16]) -> Option<usize> {
     units.iter().position(|unit| *unit == 0)
 }
@@ -227,5 +429,59 @@ mod tests {
     fn bounded_clipboard_text_requires_nul_termination() {
         assert_eq!(nul_terminated_len(&[b'a' as u16, 0, b'b' as u16]), Some(1));
         assert_eq!(nul_terminated_len(&[b'a' as u16, b'b' as u16]), None);
+    }
+
+    #[test]
+    fn download_urls_filters_web_pages_and_keeps_downloadable_resources() {
+        let sample = "\
+            https://example.com/\n\
+            https://example.com\n\
+            https://site.test/article/123\n\
+            https://site.test/page.html\n\
+            https://site.test/index.htm\n\
+            https://site.test/view.php?file=movie.mp4\n\
+            https://site.test/legacy.asp\n\
+            https://site.test/legacy.aspx\n\
+            https://site.test/portal.jsp\n\
+            https://my.zip\n\
+            javascript:alert(1)\n\
+            file:///C:/a.zip\n\
+            https://cdn.test/live/master.m3u8?token=abc\n\
+            https://cdn.test/stream/manifest.mpd\n\
+            https://cdn.test/list.m3u\n\
+            https://cdn.test/release.torrent\n\
+            https://cdn.test/archive.tar.gz\n\
+            https://cdn.test/setup.EXE\n\
+            https://cdn.test/video.MP4#t=10\n\
+            https://cdn.test/book.pdf\n\
+            https://cdn.test/photo.png\n\
+            https://cdn.test/firmware.bin\n\
+            magnet:?xt=urn:btih:0123456789abcdef\n\
+            ftp://mirror.test/pub/file\n\
+            ftps://mirror.test/pub/file\n\
+            sftp://mirror.test/pub/file\n";
+        let matched = download_urls(sample);
+        assert_eq!(
+            matched,
+            vec![
+                "https://cdn.test/live/master.m3u8?token=abc",
+                "https://cdn.test/stream/manifest.mpd",
+                "https://cdn.test/list.m3u",
+                "https://cdn.test/release.torrent",
+                "https://cdn.test/archive.tar.gz",
+                "https://cdn.test/setup.EXE",
+                "https://cdn.test/video.MP4#t=10",
+                "https://cdn.test/book.pdf",
+                "https://cdn.test/photo.png",
+                "https://cdn.test/firmware.bin",
+                "magnet:?xt=urn:btih:0123456789abcdef",
+                "ftp://mirror.test/pub/file",
+                "ftps://mirror.test/pub/file",
+                "sftp://mirror.test/pub/file",
+            ]
+        );
+        // Existing manual Paste Links helper stays permissive for ordinary HTTP(S) URLs.
+        assert!(all_urls("https://example.com/").contains(&"https://example.com/".to_string()));
+        assert!(looks_like_download_url("https://site.test/article/123"));
     }
 }

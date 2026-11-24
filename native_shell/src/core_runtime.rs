@@ -129,8 +129,16 @@ impl CoreRuntime {
                 handoff_id,
                 filename,
                 download_dir,
+                start_paused,
+                queue_id,
                 ..
-            } => self.accept_handoff(&handoff_id, &filename, &download_dir),
+            } => self.accept_handoff(
+                &handoff_id,
+                &filename,
+                &download_dir,
+                start_paused,
+                &queue_id,
+            ),
             CoreCommand::RejectHandoff {
                 handoff_id,
                 suppress_site_kind: _,
@@ -285,6 +293,57 @@ impl CoreRuntime {
             .collect();
         tasks.sort_by_key(|item| (item.queue_index, item.task_id.clone()));
         tasks
+    }
+
+    pub(crate) fn scheduler_task_flags(&self) -> (bool, bool) {
+        let mut has_active = false;
+        let mut has_queued = false;
+        for task in self.tasks.values() {
+            match task.status.as_str() {
+                "downloading" | "recording" | "merging" | "checking" | "parsing" => {
+                    has_active = true;
+                }
+                "queued" => {
+                    has_queued = true;
+                }
+                _ => {}
+            }
+            if has_active && has_queued {
+                break;
+            }
+        }
+        (has_active, has_queued)
+    }
+
+    pub(crate) fn transfer_summary(&self) -> (usize, u64) {
+        let mut active_count = 0usize;
+        let mut total_speed = 0u64;
+        for task in self.tasks.values() {
+            if matches!(
+                task.status.as_str(),
+                "downloading" | "recording" | "merging" | "checking" | "parsing"
+            ) {
+                active_count += 1;
+                total_speed = total_speed.saturating_add(task.speed_bytes_per_sec);
+            }
+        }
+        (active_count, total_speed)
+    }
+
+    pub(crate) fn queue_has_live_work(&self, queue_id: &str) -> bool {
+        self.tasks.values().any(|task| {
+            task.queue_id == queue_id
+                && matches!(
+                    task.status.as_str(),
+                    "queued"
+                        | "downloading"
+                        | "recording"
+                        | "merging"
+                        | "checking"
+                        | "parsing"
+                        | "processing"
+                )
+        })
     }
 
     pub fn events_after(&self, sequence: u64, limit: usize) -> Vec<EventEnvelope> {
@@ -475,7 +534,14 @@ impl CoreRuntime {
         snapshot
     }
 
-    fn accept_handoff(&mut self, handoff_id: &str, filename: &str, download_dir: &str) {
+    fn accept_handoff(
+        &mut self,
+        handoff_id: &str,
+        filename: &str,
+        download_dir: &str,
+        start_paused: bool,
+        queue_id: &str,
+    ) {
         let Some(offer) = self.pending_handoffs.remove(handoff_id) else {
             self.publish(CoreEvent::Error {
                 code: "handoff_not_found".into(),
@@ -500,6 +566,7 @@ impl CoreRuntime {
         } else {
             filename.to_string()
         };
+        let queue_id = queue_id.trim();
         let spec = TaskSpec {
             url: offer.url,
             resource_kind: offer.resource_kind,
@@ -511,6 +578,12 @@ impl CoreRuntime {
             filename,
             mime_type: offer.mime_type,
             download_dir: download_dir.to_string(),
+            start_paused,
+            queue_id: if queue_id.is_empty() {
+                crate::DEFAULT_QUEUE_ID.into()
+            } else {
+                queue_id.to_string()
+            },
             request_method: offer.request_method,
             credential_ref: offer.credential_ref,
             replay_context_ref: offer.replay_context_ref,

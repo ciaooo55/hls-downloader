@@ -671,6 +671,7 @@ fn sync_resource(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(
             .join(&hash(url)[..32])
             .to_string_lossy()
             .into_owned();
+        spec.work_dir.clear();
         spec.filename = resource.local_name;
         spec.allow_duplicate = true;
         spec.crawl_resource_key = key;
@@ -1235,5 +1236,154 @@ mod tests {
         for r in refs {
             assert!(text.get(r.start..r.end).is_some());
         }
+    }
+
+    #[test]
+    fn sync_resource_succeeds_with_empty_temp_dir_and_nested_update_download_dir() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let server_stop_thread = Arc::clone(&server_stop);
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let page = b"<html><body><a href=\"/asset.bin\">asset</a></body></html>";
+            let payload = b"crawl-sync-payload";
+            while !server_stop_thread.load(Ordering::Acquire) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut first_line = String::new();
+                if reader.read_line(&mut first_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut parts = first_line.split_whitespace();
+                let method = parts.next().unwrap_or("GET");
+                let path = parts.next().unwrap_or("/");
+                if path == "/index.html" {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        page.len()
+                    );
+                    if method != "HEAD" {
+                        let _ = stream.write_all(page);
+                    }
+                } else if path == "/asset.bin" {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nETag: \"crawl-v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    if method != "HEAD" {
+                        let _ = stream.write_all(payload);
+                    }
+                } else {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-crawl-workdir-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("temp_dir", serde_json::json!(""))
+            .unwrap();
+        coordinator
+            .set_setting("proxy_mode", serde_json::json!("direct"))
+            .unwrap();
+
+        let created = dispatch(
+            &coordinator,
+            CrawlRequest::Create {
+                spec: CrawlSpec {
+                    entry_url: format!("http://{addr}/index.html"),
+                    output_dir: String::new(),
+                    max_depth: 1,
+                    max_pages: 5,
+                    page_concurrency: 1,
+                    same_origin: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        let project_id = created[0].id.clone();
+        let stop = AtomicBool::new(false);
+
+        // Tick 1: discover /index.html -> finds /asset.bin.
+        tick(&coordinator, &project_id, &stop).unwrap();
+        let project = dispatch(
+            &coordinator,
+            CrawlRequest::Enqueue {
+                project_id: project_id.clone(),
+                urls: Vec::new(),
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(project.resources.len(), 1);
+        assert!(project.resources[0].selected);
+
+        // Tick 2: HEAD /asset.bin -> marks sync.pending = true.
+        tick(&coordinator, &project_id, &stop).unwrap();
+        // Tick 3: sync_resource dispatches CoreCommand::CreateTask with nested .updates/<hash>
+        // download_dir and cleared work_dir (must not fail work_dir boundary check).
+        tick(&coordinator, &project_id, &stop).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut saved = false;
+        while std::time::Instant::now() < deadline {
+            tick(&coordinator, &project_id, &stop).unwrap();
+            let current = load(&coordinator, &project_id).unwrap();
+            let resource = &current.project.resources[0];
+            assert!(
+                resource.error.is_empty(),
+                "sync_resource must not fail boundary validation: {}",
+                resource.error
+            );
+            if resource.saved {
+                let target = Path::new(&current.project.spec.output_dir).join(&resource.local_name);
+                assert_eq!(std::fs::read(&target).unwrap(), b"crawl-sync-payload");
+                saved = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(saved, "crawl resource should complete and publish cleanly");
+
+        server_stop.store(true, Ordering::Release);
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
