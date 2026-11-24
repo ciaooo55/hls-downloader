@@ -4,7 +4,7 @@ import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwner
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import type { MediaResource } from '../lib/resources'
-import { SITE_RESPONSE_LIMIT, shouldInspectSiteResponse, siteManifestCandidates } from '../lib/siteManifest'
+import { SITE_RESPONSE_LIMIT, bilibiliPlayinfoCandidates, shouldInspectSiteResponse, siteManifestCandidates } from '../lib/siteManifest'
 import { responseIdentity } from '../lib/requestChain'
 
 export default defineContentScript({
@@ -50,11 +50,18 @@ export default defineContentScript({
     const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>, siteVideoId?: string, pageUrl = sourcePageUrl(), identity?: Record<string, string>) => {
       if (pageUrl !== sourcePageUrl()) return
       if (typeof url !== 'string') return
-      if (!shouldReportMediaResponse(url, mimeType)) return
-      const detail = { url, mimeType, inspection, siteVideoId, sourcePageUrl: pageUrl, ...(identity ? { responseIdentity: identity } : {}) }
+      if (!siteVideoId && !shouldReportMediaResponse(url, mimeType)) return
+      const detail = {
+        url,
+        mimeType,
+        ...(inspection !== undefined ? { inspection } : {}),
+        ...(siteVideoId !== undefined ? { siteVideoId } : {}),
+        sourcePageUrl: pageUrl,
+        ...(identity ? { responseIdentity: identity } : {}),
+      }
       const previous = pendingResources.findIndex(item => item.url === url)
       if (previous >= 0) {
-        if (pendingResources[previous].sourcePageUrl === pageUrl) {
+        if (pendingResources[previous].sourcePageUrl === pageUrl && pendingResources[previous].inspection) {
           detail.inspection ||= pendingResources[previous].inspection
         }
         pendingResources.splice(previous, 1)
@@ -88,8 +95,18 @@ export default defineContentScript({
     const reportSiteManifests = (url: string, body: unknown, pageUrl: string) => {
       if (pageUrl !== sourcePageUrl()) return
       for (const candidate of siteManifestCandidates(url, pageUrl, body)) {
-        report(candidate.url, candidate.mimeType, undefined, candidate.videoId, pageUrl)
+        report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, pageUrl)
       }
+    }
+    const scanPageSiteMetadata = () => {
+      const pageUrl = sourcePageUrl()
+      try {
+        const playinfo = (window as unknown as { __playinfo__?: unknown }).__playinfo__
+        if (!playinfo) return
+        for (const candidate of bilibiliPlayinfoCandidates(pageUrl, playinfo)) {
+          report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, pageUrl)
+        }
+      } catch {}
     }
     const inspectManifestResponse = async (response: Response, mimeType: string, pageUrl: string, observation: BodyObservation) => {
       const siteResponse = shouldInspectSiteResponse(response.url, pageUrl, mimeType)
@@ -262,13 +279,21 @@ export default defineContentScript({
       // Frozen URL.createObjectURL only disables blob: download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
+      scanPageSiteMetadata()
       pendingResources.filter(event => event.sourcePageUrl === sourcePageUrl())
         .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
       pendingMse.filter(event => event.sourcePageUrl === sourcePageUrl())
         .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
     })
+    if (typeof document !== 'undefined') {
+      document.addEventListener('DOMContentLoaded', scanPageSiteMetadata)
+      scanPageSiteMetadata()
+    }
     for (const event of ['__hls_downloader_navigation__', 'popstate', 'hashchange']) {
-      window.addEventListener(event, cancelObsoleteInspections)
+      window.addEventListener(event, () => {
+        cancelObsoleteInspections()
+        scanPageSiteMetadata()
+      })
     }
     window.addEventListener('pagehide', () => {
       for (const cancel of pendingInspections.keys()) cancel()

@@ -388,3 +388,75 @@ it.each(['pushState', 'replaceState', 'popstate', 'pagehide', 'fragment'] as con
     expect(events.filter(event => event.inspection?.inspected)).toHaveLength(navigation === 'fragment' ? 1 : 0)
   },
 )
+
+it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without blocking responses', async () => {
+  const pageUrl = 'https://www.bilibili.com/en/video/BV1xx411c7mD/'
+  const playurl = 'https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1xx411c7mD&cid=123'
+  const video1080 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+  const video720 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.m4s?deadline=1900000000'
+  const audio192 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+  const playinfo = {
+    code: 0,
+    data: {
+      dash: {
+        duration: 185,
+        video: [
+          { id: 80, baseUrl: video1080, width: 1920, height: 1080, bandwidth: 3_200_000, codecs: 'avc1.640032' },
+          { id: 64, baseUrl: video720, width: 1280, height: 720, bandwidth: 1_500_000, codecs: 'avc1.64001f' },
+        ],
+        audio: [{ id: 30280, baseUrl: audio192, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+      },
+    },
+  }
+  const response = new Response(JSON.stringify(playinfo), { headers: { 'content-type': 'application/json' } })
+  Object.defineProperty(response, 'url', { value: playurl })
+  const clone = response.clone.bind(response)
+  Object.defineProperty(response, 'clone', {
+    value: () => {
+      const copy = clone()
+      Object.defineProperty(copy, 'url', { value: playurl })
+      return copy
+    },
+  })
+  const windowStub = new EventTarget() as EventTarget & { fetch: typeof fetch; __playinfo__?: unknown }
+  windowStub.fetch = vi.fn(async () => response)
+  windowStub.__playinfo__ = playinfo
+  const locationStub = { href: pageUrl }
+  vi.stubGlobal('defineContentScript', (config: unknown) => config)
+  vi.stubGlobal('window', windowStub)
+  vi.stubGlobal('location', locationStub)
+  vi.stubGlobal('XMLHttpRequest', class extends EventTarget { open() {} })
+  vi.stubGlobal('history', { pushState() {}, replaceState() {} })
+  vi.stubGlobal('Element', class { attachShadow() {} })
+  vi.stubGlobal('CustomEvent', class extends Event {
+    detail: unknown
+    constructor(type: string, init: { detail: unknown }) { super(type); this.detail = init.detail }
+  })
+  const events: any[] = []
+  windowStub.addEventListener('__hls_downloader_resource__', event => {
+    events.push(JSON.parse((event as CustomEvent).detail))
+  })
+  const hook = await import('../entrypoints/hooks.content')
+  ;(hook.default as any).main()
+
+  // Replay emits SSR window.__playinfo__ immediately.
+  windowStub.dispatchEvent(new Event('__hls_downloader_replay__'))
+  expect(events.some(event => event.url === video1080 && event.siteVideoId === 'BV1xx411c7mD' && event.inspection?.inspected === true)).toBe(true)
+
+  // Fetch of Bilibili playurl API also reports without consuming the original response.
+  const fetched = await windowStub.fetch(playurl)
+  expect(fetched.bodyUsed).toBe(false)
+  expect(await fetched.json()).toEqual(playinfo)
+  expect(events.at(-1)).toMatchObject({
+    url: video1080,
+    mimeType: 'video/mp4',
+    siteVideoId: 'BV1xx411c7mD',
+    sourcePageUrl: pageUrl,
+    inspection: {
+      inspected: true,
+      duration: 185,
+      height: 1080,
+      quality: '1080p',
+    },
+  })
+})

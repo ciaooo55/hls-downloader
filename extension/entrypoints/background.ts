@@ -212,6 +212,7 @@ async function preserveBrowserDownload(
   chain?: RequestChain,
   config?: { minimumBytes: number, authorizedCookieHosts: string[] },
 ): Promise<PreserveBrowserDownloadResult> {
+  if (intent?.altBypass) return { preserved: false }
   // HLS/DASH 下载的是完整媒体，不能用浏览器保存的单个清单替代。
   if (resource.kind !== 'file' && resource.kind !== 'media') return { preserved: false }
   const [current] = await browser.downloads.search({ id: item.id })
@@ -1033,9 +1034,12 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
   if (!nativeBridge) return Promise.reject(new Error('插件连接尚未初始化'))
   const identity = extensionIdentity()
   const operation = String(message.op || '')
-  const retryCount = new Set([
-    'ping', 'offer', 'recover_offer', 'offer_local_file', 'handoff_status', 'media_push_status',
-  ]).has(operation) ? 1 : 0
+  // Passive background pings must not retry-spam when Core is stopped/offline.
+  const retryCount = (operation === 'ping' && message.interactive === true)
+    || new Set([
+      'offer', 'recover_offer', 'offer_local_file', 'handoff_status', 'media_push_status',
+    ]).has(operation)
+    ? 1 : 0
   const payload = {
     ...message,
     version: identity.version,
@@ -1046,9 +1050,11 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
 }
 
 async function pingDesktop(): Promise<any> {
+  const raw = await native({ op: 'ping' })
+  if (raw?.ok !== true) return raw
   const response = takeoverSettingsSync
-    ? await takeoverSettingsSync.applyPing(await native({ op: 'ping' }))
-    : await native({ op: 'ping' })
+    ? await takeoverSettingsSync.applyPing(raw)
+    : raw
   if (response?.ok) lastDesktopPingAt = Date.now()
   return response
 }
@@ -1774,11 +1780,18 @@ async function waitForClickIntent(
   chain?: RequestChain,
   attempts = 12,
   downloadAttributeOnly = false,
+  options?: { tabId?: number, frameId?: number, keepAltBypass?: boolean },
 ): Promise<DownloadClickIntent | undefined> {
   // The trusted pointerdown message normally precedes the network request.
   // Keep only a short MV3 wake-up grace period: a classified DownloadItem is
   // already strong evidence, so waiting seconds for a missing optional intent
   // merely delays the desktop prompt.
+  const tabId = validDownloadIdentity(chain?.tabId)
+    ? chain.tabId
+    : (validDownloadIdentity(options?.tabId) ? options.tabId : undefined)
+  const frameId = validDownloadIdentity(chain?.frameId)
+    ? chain.frameId
+    : (validDownloadIdentity(options?.frameId) ? options.frameId : undefined)
   const polls = Math.max(1, Math.min(12, Math.floor(attempts)))
   for (let attempt = 0; attempt < polls; attempt += 1) {
     const intent = await clickIntentStore.consume({
@@ -1786,32 +1799,42 @@ async function waitForClickIntent(
       finalUrl,
       referrer: referrer || chain?.pageUrl || '',
       chainUrls: chain?.urls,
-      tabId: chain?.tabId,
-      frameId: chain?.frameId,
+      tabId,
+      frameId,
       downloadAttributeOnly,
-    })
+    }, { keepAltBypass: options?.keepAltBypass })
     if (intent) return intent
     if (attempt + 1 < polls) await new Promise(resolve => setTimeout(resolve, 25))
   }
   return undefined
 }
 
+let contextMenuInstallInFlight: Promise<void> | null = null
+
 async function installContextMenus(attempt = 0): Promise<void> {
-  try {
-    await browser.contextMenus.removeAll()
-    await Promise.all([
-      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadLink, title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
-      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.castLink, title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
-      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.pushTvboxLink, title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
-      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadSelection, title: '批量发送选中的链接', contexts: ['selection'] }),
-      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadPageLinks, title: '使用 HLS Downloader 下载页面全部链接', contexts: ['page'] }),
-    ])
-  } catch (error) {
-    // Browser updates can briefly keep the old menu registry locked. Retry
-    // once after the registry is released instead of silently losing all items.
-    console.warn('HLS Downloader context menu install delayed', error)
-    if (attempt < 3) setTimeout(() => { void installContextMenus(attempt + 1) }, 250 * (attempt + 1))
+  if (attempt === 0 && contextMenuInstallInFlight) return contextMenuInstallInFlight
+  const run = (async () => {
+    try {
+      await browser.contextMenus.removeAll()
+      await Promise.all([
+        browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadLink, title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
+        browser.contextMenus.create({ id: CONTEXT_MENU_IDS.castLink, title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
+        browser.contextMenus.create({ id: CONTEXT_MENU_IDS.pushTvboxLink, title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
+        browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadSelection, title: '批量发送选中的链接', contexts: ['selection'] }),
+        browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadPageLinks, title: '使用 HLS Downloader 下载页面全部链接', contexts: ['page'] }),
+      ])
+    } catch (error) {
+      // Browser updates can briefly keep the old menu registry locked. Retry
+      // once after the registry is released instead of silently losing all items.
+      console.warn('HLS Downloader context menu install delayed', error)
+      if (attempt < 3) setTimeout(() => { void installContextMenus(attempt + 1) }, 250 * (attempt + 1))
+    }
+  })()
+  if (attempt === 0) {
+    contextMenuInstallInFlight = run.finally(() => { contextMenuInstallInFlight = null })
+    return contextMenuInstallInFlight
   }
+  return run
 }
 
 function observedResponse(details: any, chain?: RequestChain) {
@@ -1912,6 +1935,11 @@ async function prepareEarlyBrowserTakeover(details: any, chain: RequestChain | u
       chain,
       clickIntentPollsForKind(resource.kind),
       requiresDownloadAttribute,
+      {
+        tabId: Number(details.tabId),
+        frameId: Number(details.frameId),
+        keepAltBypass: Boolean(import.meta.env.CHROME),
+      },
     )
     // 同源 download 属性即使响应标记 inline 也会触发下载，普通预览导航仍交给浏览器。
     if (requiresDownloadAttribute && !intent) return null
@@ -2354,7 +2382,17 @@ export default defineBackground(() => {
       if (earlyTakeover || restored) {
         const earlyResult = await earlyTakeover?.promise
         if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
-        if (earlyResult?.bypass) return
+        if (earlyResult?.bypass || earlyResult?.intent?.altBypass) {
+          void clickIntentStore.consume({
+            url: originalRequest.url,
+            finalUrl: originalRequest.finalUrl,
+            referrer: originalRequest.referrer || provisionalChain?.pageUrl || '',
+            chainUrls: provisionalChain?.urls,
+            tabId: validDownloadIdentity(provisionalChain?.tabId) ? provisionalChain.tabId : downloadIdentity(item).tabId,
+            frameId: validDownloadIdentity(provisionalChain?.frameId) ? provisionalChain.frameId : downloadIdentity(item).frameId,
+          }).catch(() => undefined)
+          return
+        }
         if (earlyResult || restored) {
           let acceleratedOptions: Pick<ResourceRequestOptions, 'desktopReady' | 'resourceCookies'> = {}
           if (!restored && earlyResult && !earlyResult.offerAttempted) {
@@ -2429,12 +2467,15 @@ export default defineBackground(() => {
         if (!canContinueTakeover(actualBrowser.state, paused)) return
       }
       if (!classified.kind) return
+      const browserIdentity = downloadIdentity(actualBrowser)
       let intent = await waitForClickIntent(
         classified.actual.url,
         classified.actual.finalUrl,
         classified.actual.referrer || provisionalChain?.pageUrl || '',
         provisionalChain,
         clickIntentPollsForKind(classified.kind),
+        false,
+        { tabId: browserIdentity.tabId, frameId: browserIdentity.frameId },
       )
       // 新标签页下载的点击属于父标签页，不能覆盖已确认的请求来源。
       let chain = provisionalChain ?? (intent?.tabId === undefined
@@ -2536,8 +2577,14 @@ export default defineBackground(() => {
       if (tab?.id !== undefined) {
         const pageUrl = String((info as { pageUrl?: string }).pageUrl || tab.url || '')
         if (!canHarvestPageLinks(pageUrl)) return
-        void browser.tabs.sendMessage(tab.id, { type: 'collect-page-links' },
-          Number.isInteger(frameId) && frameId >= 0 ? { frameId } : { frameId: 0 })
+        const targetFrameId = Number.isInteger(frameId) && frameId >= 0 ? frameId : 0
+        void browser.tabs.sendMessage(tab.id, { type: 'collect-page-links' }, { frameId: targetFrameId })
+          .catch(error => {
+            if (targetFrameId > 0) {
+              return browser.tabs.sendMessage(tab.id!, { type: 'collect-page-links' }, { frameId: 0 })
+            }
+            throw error
+          })
           .catch(error => reportDownloadError(tab.id!, `无法扫描页面全部链接：${errorText(error)}`))
       }
       return

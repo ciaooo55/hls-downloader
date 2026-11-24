@@ -145,11 +145,13 @@ export function isLikelyDownloadUrl(value?: string): boolean {
 export function shouldTrackDownloadIntent(input: {
   directHref?: string
   hintedHref?: string
+  altBypass?: boolean
   ctrlForce?: boolean
   explicitDownloadTarget?: boolean
   hints?: Array<string | null | undefined>
 }): boolean {
   if (isAuthenticationNavigation(input.directHref) || isAuthenticationNavigation(input.hintedHref)) return false
+  if (input.altBypass) return true
   if (input.ctrlForce) return true
   if (input.explicitDownloadTarget) return true
   const hints = input.hints || []

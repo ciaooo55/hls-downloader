@@ -21,7 +21,7 @@ const MAX_INTENTS = 20
 function optionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined
   const result = Number(value)
-  return Number.isFinite(result) ? result : undefined
+  return Number.isInteger(result) && result >= 0 ? result : undefined
 }
 
 function freshIntent(intent: Pick<DownloadClickIntent, 'at'>, now: number): boolean {
@@ -108,18 +108,31 @@ export class ClickIntentStore {
 
   async remember(intent: DownloadClickIntent): Promise<void> {
     await this.hydrate()
-    this.intents = normalizeIntents([intent, ...this.intents], this.now())
+    const normalized: DownloadClickIntent = {
+      ...intent,
+      tabId: optionalNumber(intent.tabId),
+      frameId: optionalNumber(intent.frameId),
+    }
+    this.intents = normalizeIntents([normalized, ...this.intents], this.now())
     if (this.hydrated) await this.persist()
   }
 
-  async consume(download: IntentDownload): Promise<DownloadClickIntent | undefined> {
+  async consume(
+    download: IntentDownload,
+    options?: { keepAltBypass?: boolean },
+  ): Promise<DownloadClickIntent | undefined> {
     await this.hydrate()
     const now = this.now()
     const previousCount = this.intents.length
     this.intents = normalizeIntents(this.intents, now)
+    const normalizedDownload: IntentDownload = {
+      ...download,
+      tabId: optionalNumber(download.tabId),
+      frameId: optionalNumber(download.frameId),
+    }
     const matches = this.intents.filter(intent => {
-      if (!matchesDownloadClick(intent, download, now)) return false
-      if (!download.downloadAttributeOnly) return true
+      if (!matchesDownloadClick(intent, normalizedDownload, now)) return false
+      if (!normalizedDownload.downloadAttributeOnly) return true
       // 跨域 download 属性会被浏览器忽略，不能据此在响应到达前认定为下载。
       try {
         return intent.downloadAttribute === true
@@ -136,6 +149,10 @@ export class ClickIntentStore {
       // still unavailable, leave the unknown durable queue untouched.
       if (this.hydrated && this.intents.length !== previousCount) void this.persist()
       return undefined
+    }
+    if (options?.keepAltBypass && matched.altBypass) {
+      if (this.hydrated && this.intents.length !== previousCount) void this.persist()
+      return matched
     }
     this.intents.splice(this.intents.indexOf(matched), 1)
     if (this.hydrated) await this.persist()

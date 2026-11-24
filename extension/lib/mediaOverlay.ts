@@ -89,8 +89,12 @@ export function mediaElementAtPoint<T extends HTMLElement>(elements: readonly T[
     const transparentBackground = style.backgroundColor === 'transparent'
       || /^rgba\([^)]*,\s*0(?:\.0+)?%?\s*\)$/.test(style.backgroundColor)
       || /\/\s*0(?:\.0+)?%?\s*\)$/.test(style.backgroundColor)
-    if (!transparentBackground || style.backgroundImage !== 'none'
-      || /^(VIDEO|IFRAME|IMG|CANVAS|OBJECT|EMBED)$/.test(element.tagName)) return null
+    const imageCover = style.backgroundImage !== 'none'
+      && (/\burl\s*\(/i.test(style.backgroundImage) || !/gradient\s*\(/i.test(style.backgroundImage))
+    const blockingCanvas = element.tagName === 'CANVAS' && style.pointerEvents !== 'none'
+    if (!transparentBackground || imageCover
+      || blockingCanvas
+      || /^(VIDEO|IFRAME|IMG|OBJECT|EMBED)$/.test(element.tagName)) return null
   }
   return null
 }

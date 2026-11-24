@@ -154,6 +154,7 @@ export default defineContentScript({
       if (!shouldTrackDownloadIntent({
         directHref,
         hintedHref: downloadHref || hintedHref,
+        altBypass,
         ctrlForce,
         explicitDownloadTarget,
         hints: controlHints,
@@ -161,12 +162,11 @@ export default defineContentScript({
       const href = downloadHref || directHref || hintedHref
       const intentKey = [href, location.href, altBypass ? 1 : 0, ctrlForce ? 1 : 0, downloadHint ? 1 : 0].join('|')
       const now = Date.now()
-      // A pointerdown followed by click describes one user action. Keeping two
-      // entries is dangerous: the first can be consumed by the intended file
-      // while the second remains eligible for an unrelated download in the
-      // same tab. Keyboard activation has no pointerdown and still reaches the
-      // click listener normally.
-      if (lastIntent.key === intentKey && now - lastIntent.at < 1_500) return
+      // A pointerdown followed by click describes one user action. Deduplicate
+      // only the paired click so a fresh pointerdown (e.g. a second Alt+Click
+      // on the same link) always records its own intent. Keyboard activation
+      // has no pointerdown and still reaches the click listener normally.
+      if (event.type === 'click' && lastIntent.key === intentKey && now - lastIntent.at < 1_500) return
       lastIntent = { key: intentKey, at: now }
       const targetValue = htmlLink && typeof htmlLink.target === 'string'
         ? htmlLink.target
