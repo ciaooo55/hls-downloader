@@ -403,6 +403,27 @@ pub enum CorePipeResponse {
     },
 }
 
+impl CorePipeResponse {
+    pub fn request_id(&self) -> Option<u64> {
+        match self {
+            Self::TaskPage { request_id, .. }
+            | Self::EventBatch { request_id, .. }
+            | Self::Crawl { request_id, .. }
+            | Self::ZipPreview { request_id, .. }
+            | Self::Events { request_id, .. }
+            | Self::Snapshot { request_id, .. }
+            | Self::Capabilities { request_id, .. }
+            | Self::Settings { request_id, .. }
+            | Self::Credential { request_id, .. }
+            | Self::Handoffs { request_id, .. }
+            | Self::Subtitle { request_id, .. }
+            | Self::PlayerThumbnail { request_id, .. } => Some(*request_id),
+            Self::Error { request_id, .. } => *request_id,
+            Self::Hello { .. } => None,
+        }
+    }
+}
+
 impl std::fmt::Debug for CorePipeResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Payloads may carry credentials, signed URLs or serialized handoffs.
