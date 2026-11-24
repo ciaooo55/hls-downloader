@@ -8,7 +8,7 @@ import { withDeadline } from '../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../lib/downloadConfirmation'
 import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../lib/downloadSendState'
 import { mediaPushTerminalResult } from '../lib/mediaPush'
-import { selectedDownloadUrls } from '../lib/selectionLinks'
+import { pageDownloadUrls, selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBitrate, formatBytes, formatDuration } from '../lib/format'
 import { installSubtitleContent } from '../lib/subtitleContent'
 import { youtubePageVideoId } from '../lib/siteManifest'
@@ -136,7 +136,7 @@ export default defineContentScript({
     }
     const earlyRuntimeListener = (message: any, _sender?: unknown, sendResponse?: (value?: unknown) => void) => {
       const kind = String(message?.type || '')
-      if (contentReady || !['captured-resource', 'collect-selection', 'open-media-panel', 'download-error', 'rescan-media'].includes(kind)) return
+      if (contentReady || !['captured-resource', 'collect-selection', 'collect-page-links', 'open-media-panel', 'download-error', 'rescan-media'].includes(kind)) return
       if (kind === 'captured-resource' && !message.resource?.url) return
       earlyRuntimeMessages.push({ message, sendResponse: kind === 'rescan-media' ? sendResponse : undefined })
       if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
@@ -240,6 +240,7 @@ export default defineContentScript({
     let activeVideo: HTMLVideoElement | null = null
     let selectionMode = false
     let selectionResourceIds: Set<string> | null = null
+    let selectionEmptyMessage = '选中的内容里没有可下载链接'
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
@@ -1455,7 +1456,7 @@ export default defineContentScript({
       const entries = selectionMode && !activePlayback
         ? compactResources(selectionResources, 40).slice(0, 20)
         : matched.length ? matched : visiblePlaybackResources([...resources.values()], activePlayback, 8)
-      const signature = JSON.stringify([selectionMode, selectionResourceIds?.size, entries.map(resource => [
+      const signature = JSON.stringify([selectionMode, selectionResourceIds?.size, selectionEmptyMessage, entries.map(resource => [
         resource.id, resource.url, resource.title, resource.filename, resource.kind,
         resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
         resource.quality, resource.duration, resource.isLive, resource.variants,
@@ -1469,7 +1470,7 @@ export default defineContentScript({
         result.hidden = false
         result.classList.add('error')
         result.dataset.source = 'selection'
-        setTextIfChanged(result, '选中的内容里没有可下载链接')
+        setTextIfChanged(result, selectionEmptyMessage)
       } else if (result?.dataset.source === 'selection') {
         result.hidden = true
         result.classList.remove('error')
@@ -1987,6 +1988,7 @@ export default defineContentScript({
           selection.toString(),
           document.baseURI || location.href,
         )
+        selectionEmptyMessage = '选中的内容里没有可下载链接'
         selectionMode = true
         selectionResourceIds = new Set<string>()
         activePlayback = null
@@ -1999,6 +2001,56 @@ export default defineContentScript({
           const resource: MediaResource = {
             id: resourceId(url), url, kind, pageUrl: location.href, title: filename || url,
             filename, seenAt: Date.now(), evidence: ['text_selection'], owner: 'selection', confidence: 0.99,
+          }
+          addResource(resource)
+          selectionResourceIds?.add(resourceFingerprint(resource))
+        })
+        setOpen(true)
+        render()
+        return
+      }
+      if (message?.type === 'collect-page-links') {
+        const anchorCandidates = [...document.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href], area[href]')]
+          .map(anchor => ({
+            href: anchor.getAttribute('href') || '',
+            download: anchor.hasAttribute('download'),
+          }))
+        const dataDownloadCandidates = [...document.querySelectorAll<HTMLElement>('[data-download-url], [data-file-url], [data-export-url]')]
+          .map(element => ({
+            href: element.getAttribute('data-download-url')
+              || element.getAttribute('data-file-url')
+              || element.getAttribute('data-export-url')
+              || '',
+            download: true,
+          }))
+        const mediaSrcs = [
+          ...[...document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video, audio')]
+            .flatMap(media => mediaElementSources(media).map(source => source.url)),
+          ...[...document.querySelectorAll<HTMLSourceElement>('source')].map(source => explicitElementSource(source)),
+        ].filter(Boolean)
+        const urls = pageDownloadUrls(
+          [...anchorCandidates, ...dataDownloadCandidates],
+          mediaSrcs,
+          document.baseURI || location.href,
+        )
+        selectionEmptyMessage = '当前页面没有发现可下载链接'
+        selectionMode = true
+        selectionResourceIds = new Set<string>()
+        activePlayback = null
+        activeVideo = null
+        for (const existing of resources.values()) {
+          if (['hls', 'dash', 'media'].includes(existing.kind)) {
+            selectionResourceIds.add(resourceFingerprint(existing))
+          }
+        }
+        urls.forEach(url => {
+          const kind = classifyResource(url) || (/^(?:https?|magnet):/i.test(url) ? 'file' : null)
+          if (!kind) return
+          let filename = ''
+          try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+          const resource: MediaResource = {
+            id: resourceId(url), url, kind, pageUrl: location.href, title: filename || url,
+            filename, seenAt: Date.now(), evidence: ['page_links_harvest'], owner: 'page-harvest', confidence: 0.95,
           }
           addResource(resource)
           selectionResourceIds?.add(resourceFingerprint(resource))

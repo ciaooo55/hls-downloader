@@ -1589,4 +1589,217 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
     expect(mocks.browser.downloads.erase).not.toHaveBeenCalled()
   })
+
+  function largeResumableResponse(options: {
+    early?: boolean
+    method?: string
+    size?: number
+    acceptRanges?: string
+    etag?: string
+    lastModified?: string
+    cacheControl?: string
+    cookieHeader?: string
+  } = {}) {
+    const {
+      early = true,
+      method = 'GET',
+      size = 50 * 1024 * 1024,
+      acceptRanges = 'bytes',
+      etag = '"large-v1"',
+      lastModified,
+      cacheControl,
+      cookieHeader,
+    } = options
+    const request = {
+      requestId: 'accel-request',
+      url: item.url,
+      method,
+      tabId: 7,
+      frameId: 0,
+      type: 'main_frame',
+      documentUrl: item.referrer,
+      timeStamp: Date.now(),
+    }
+    listener(mocks.browser.webRequest.onBeforeRequest)({
+      ...request,
+      ...(method === 'POST' ? { requestBody: { formData: { export: ['once'] } } } : {}),
+    })
+    listener(mocks.browser.webRequest.onSendHeaders)({
+      ...request,
+      requestHeaders: [
+        ...(cookieHeader ? [{ name: 'Cookie', value: cookieHeader }] : []),
+        { name: 'Referer', value: item.referrer },
+      ],
+    })
+    const responseHeaders = [
+      { name: 'Content-Type', value: 'application/octet-stream' },
+      ...(early ? [{ name: 'Content-Disposition', value: 'attachment; filename="ubuntu.iso"' }] : []),
+      ...(acceptRanges ? [{ name: 'Accept-Ranges', value: acceptRanges }] : []),
+      { name: 'Content-Length', value: String(size) },
+      ...(etag ? [{ name: 'ETag', value: etag }] : []),
+      ...(lastModified ? [{ name: 'Last-Modified', value: lastModified }] : []),
+      ...(cacheControl ? [{ name: 'Cache-Control', value: cacheControl }] : []),
+    ]
+    return listener(mocks.browser.webRequest.onHeadersReceived)({
+      ...request,
+      statusCode: 200,
+      responseHeaders,
+    })
+  }
+
+  it.each([true, false])('accelerates a large resumable GET in Core via offer instead of local copy (early=%s)', async early => {
+    item.url = item.finalUrl = 'https://cdn.test/releases/ubuntu.iso'
+    item.filename = 'C:\\Downloads\\ubuntu.iso'
+    item.state = 'in_progress'
+    item.canResume = false
+    item.totalBytes = 50 * 1024 * 1024
+    item.fileSize = 50 * 1024 * 1024
+    mocks.browser.downloads.cancel.mockImplementation(async () => { item.state = 'interrupted' })
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'offer') {
+        expect(item.paused).toBe(true)
+        return { ok: true, handoff: { id: 'accel-handoff', status: 'pending' } }
+      }
+      return { ok: message.op === 'ping' }
+    })
+
+    largeResumableResponse({ early })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+    await flush()
+
+    const offers = mocks.native.mock.calls.filter(([message]) => message.op === 'offer')
+    expect(offers).toHaveLength(1)
+    expect(offers[0][0].resource.url).toBe('https://cdn.test/releases/ubuntu.iso')
+    expect(offers[0][0].resource.size).toBe(50 * 1024 * 1024)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.pause).toHaveBeenCalledWith(42)
+    expect(mocks.browser.downloads.cancel).toHaveBeenCalledWith(42)
+    expect(mocks.browser.downloads.erase).toHaveBeenCalledWith({ id: 42 })
+  })
+
+  it.each([
+    { label: 'no Accept-Ranges', overrides: { acceptRanges: '' } },
+    { label: 'Accept-Ranges: none', overrides: { acceptRanges: 'none' } },
+    { label: 'no-store without validator', overrides: { etag: '', cacheControl: 'private, no-store' } },
+    { label: 'small file under 1 MiB', overrides: { size: 512 * 1024 } },
+    { label: 'POST method', overrides: { method: 'POST' } },
+    { label: 'unauthorized request cookies', overrides: { cookieHeader: 'sid=secret' } },
+  ])('falls back to preserveBrowserDownload (offer_local_file) for $label', async ({ overrides }) => {
+    item.url = item.finalUrl = 'https://cdn.test/releases/ubuntu.iso'
+    item.filename = 'C:\\Downloads\\ubuntu.iso'
+    item.state = 'in_progress'
+    item.totalBytes = overrides.size ?? 50 * 1024 * 1024
+    item.fileSize = item.totalBytes
+
+    largeResumableResponse({ early: true, ...overrides })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.browser.downloads.pause).not.toHaveBeenCalled()
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+
+    item.state = 'complete'
+    listener(mocks.browser.downloads.onChanged)({ id: 42, state: { current: 'complete' } })
+    await flush()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(true)
+  })
+
+  it('accelerates an authenticated large resumable GET when authorized cookies match exactly', async () => {
+    local.authorizedCookieHosts = ['cdn.test']
+    mocks.browser.cookies.getAll.mockResolvedValue([{
+      name: 'sid', value: 'auth-ok', domain: 'cdn.test', path: '/', hostOnly: true, secure: true,
+    }])
+    item.url = item.finalUrl = 'https://cdn.test/releases/ubuntu.iso'
+    item.filename = 'C:\\Downloads\\ubuntu.iso'
+    item.state = 'in_progress'
+    item.totalBytes = 50 * 1024 * 1024
+    item.fileSize = 50 * 1024 * 1024
+    mocks.browser.downloads.cancel.mockImplementation(async () => { item.state = 'interrupted' })
+
+    largeResumableResponse({ early: true, cookieHeader: 'sid=auth-ok' })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+
+    const offered = mocks.native.mock.calls.find(([message]) => message.op === 'offer')?.[0]
+    expect(offered).toBeDefined()
+    expect(offered.resource.cookie).toBe('sid=auth-ok')
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.cancel).toHaveBeenCalledWith(42)
+  })
+
+  it('accelerates large resumable files in Firefox onHeadersReceived even when minimumBytes > 0', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    local.minimumBytes = 1 * 1024 * 1024
+    item.url = item.finalUrl = 'https://cdn.test/releases/ubuntu.iso'
+    item.state = 'in_progress'
+
+    const largeBlocked = largeResumableResponse({ early: true, size: 50 * 1024 * 1024 })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(await largeBlocked).toEqual({ cancel: true })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+
+    mocks.native.mockClear()
+    item.url = item.finalUrl = 'https://cdn.test/releases/tiny.zip'
+    const smallBlocked = largeResumableResponse({ early: true, size: 512 * 1024 })
+    await vi.advanceTimersByTimeAsync(500)
+    expect(await smallBlocked).toBeUndefined()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+  })
+
+  it('registers and dispatches the page-links harvest context menu only for http(s) tabs', async () => {
+    expect(mocks.browser.contextMenus.create).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'hls-download-page-links',
+      title: '使用 HLS Downloader 下载页面全部链接',
+      contexts: ['page'],
+    }))
+    mocks.browser.tabs.sendMessage.mockClear()
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-download-page-links', pageUrl: 'https://files.test/index.html', frameId: 0 },
+      { id: 7, url: 'https://files.test/index.html' },
+    )
+    expect(mocks.browser.tabs.sendMessage).toHaveBeenCalledWith(7, { type: 'collect-page-links' }, { frameId: 0 })
+
+    mocks.browser.tabs.sendMessage.mockClear()
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-download-page-links', pageUrl: 'chrome://extensions', frameId: 0 },
+      { id: 7, url: 'chrome://extensions' },
+    )
+    expect(mocks.browser.tabs.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('syncs quickDownloadEnabled and speedLimitEnabled through set-takeover-settings', async () => {
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'set_takeover_settings') {
+        return {
+          ok: true,
+          takeover_enabled: true,
+          takeover_minimum_bytes: 0,
+          quick_download_enabled: Boolean(message.quick_download_enabled),
+          speed_limit_enabled: Boolean(message.speed_limit_enabled),
+          speed_limit_kib: 256,
+        }
+      }
+      return { ok: true }
+    })
+    const reply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'set-takeover-settings', quickDownloadEnabled: true, speedLimitEnabled: true },
+      {},
+      resolve,
+    ))
+    await flush()
+    expect(reply).toMatchObject({ ok: true, quick_download_enabled: true, speed_limit_enabled: true })
+    expect(mocks.native).toHaveBeenCalledWith(expect.objectContaining({
+      op: 'set_takeover_settings',
+      quick_download_enabled: true,
+      speed_limit_enabled: true,
+    }), undefined, 0)
+    expect(local.quickDownloadEnabled).toBe(true)
+    expect(local.speedLimitEnabled).toBe(true)
+    expect(local.speedLimitKib).toBe(256)
+  })
 })

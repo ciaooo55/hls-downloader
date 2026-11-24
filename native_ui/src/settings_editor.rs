@@ -36,6 +36,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ("通用", "complete_popup_enabled", "完成通知"),
     ("下载", "default_concurrency", "默认并发连接数"),
     ("下载", "queue_max", "最大同时任务数"),
+    ("下载", "speed_limit_enabled", "启用全局限速"),
     ("下载", "speed_limit_kib", "全局限速 KiB/s（0 不限制）"),
     (
         "下载",
@@ -89,6 +90,11 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ("安全", "av_scan_fail_on_threat", "发现威胁时阻止打开"),
     ("浏览器", "takeover_enabled", "启用浏览器接管"),
     ("浏览器", "takeover_minimum_bytes", "自动接管最小字节数"),
+    (
+        "浏览器",
+        "quick_download_enabled",
+        "浏览器接管静默直下（不弹确认框）",
+    ),
     ("外观", "theme_mode", "主题 / Theme"),
     ("外观", "reduce_motion", "减少动态效果"),
     ("外观", "task_sort", "任务排序"),
@@ -478,7 +484,9 @@ fn storage_changes(
         let storage_key = match key.as_str() {
             "takeover_enabled" => "browser_takeover_enabled",
             "takeover_minimum_bytes" => "browser_takeover_minimum_bytes",
+            "quick_download_enabled" => "browser_quick_download_enabled",
             "legal_accepted" => "legal_terms_accepted",
+            "speed_limit_enabled" => "download_speed_limit_enabled",
             "speed_limit_kib" => "download_speed_limit_kib",
             "hourly_quota_mib" => "download_hourly_quota_mib",
             "schedule_enabled" => "download_speed_schedule_enabled",
@@ -585,5 +593,28 @@ mod tests {
         assert_eq!(result["download_speed_limit_kib"], 400);
         assert!(!result.contains_key("category_dir_media"));
         assert!(!result.contains_key("speed_limit_kib"));
+    }
+
+    #[test]
+    fn speed_limit_toggle_and_quick_download_map_to_core_storage_keys() {
+        let values = BTreeMap::from([
+            ("speed_limit_enabled".into(), Value::from(false)),
+            ("quick_download_enabled".into(), Value::from(false)),
+        ]);
+        let dirty = BTreeMap::from([
+            ("speed_limit_enabled".into(), Value::from(true)),
+            ("quick_download_enabled".into(), Value::from(true)),
+        ]);
+        let result = storage_changes(&values, &dirty);
+        assert_eq!(result["download_speed_limit_enabled"], Value::from(true));
+        assert_eq!(result["browser_quick_download_enabled"], Value::from(true));
+        assert!(!result.contains_key("speed_limit_enabled"));
+        assert!(!result.contains_key("quick_download_enabled"));
+        assert!(FIELDS
+            .iter()
+            .any(|(group, key, _)| *group == "下载" && *key == "speed_limit_enabled"));
+        assert!(FIELDS
+            .iter()
+            .any(|(group, key, _)| *group == "浏览器" && *key == "quick_download_enabled"));
     }
 }

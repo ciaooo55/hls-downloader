@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { clickIntentPollsForKind, earlyTakeoverRequiresClick, isOrdinaryFileKind, ordinaryFileResponseIdentified } from './fileTakeover'
+import {
+  ACCELERATED_TAKEOVER_MIN_BYTES,
+  canAccelerateBrowserDownload,
+  clickIntentPollsForKind,
+  earlyTakeoverRequiresClick,
+  isOrdinaryFileKind,
+  ordinaryFileResponseIdentified,
+} from './fileTakeover'
 
 describe('ordinary file takeover', () => {
   it('does not wait for a click before offering zip/exe/pdf navigations', () => {
@@ -37,5 +44,110 @@ describe('ordinary file takeover', () => {
       expect(earlyTakeoverRequiresClick(kind, 'inline; filename="export.dat"')).toBe(true)
       expect(earlyTakeoverRequiresClick(kind)).toBe(true)
     }
+  })
+})
+
+describe('accelerated multi-connection takeover eligibility', () => {
+  const resumableLargeGet = () => ({
+    kind: 'file' as const,
+    url: 'https://cdn.test/releases/app-installer.iso',
+    method: 'GET',
+    statusCode: 200,
+    itemState: 'in_progress',
+    responseHeaders: {
+      'accept-ranges': 'bytes',
+      'content-length': String(50 * 1024 * 1024),
+      etag: '"iso-v1"',
+    },
+    cookieParityOk: true,
+  })
+
+  it('accelerates large resumable HTTP(S) GET file and media transfers with validators', () => {
+    expect(ACCELERATED_TAKEOVER_MIN_BYTES).toBe(1 * 1024 * 1024)
+    expect(canAccelerateBrowserDownload(resumableLargeGet())).toBe(true)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      kind: 'media',
+      url: 'http://mirror.test/movie.mp4',
+      // Chrome reports canResume: false while a download is actively in_progress;
+      // a strong validator still proves range resumability.
+      canResume: false,
+      responseHeaders: {
+        'Accept-Ranges': 'BYTES',
+        'Content-Length': String(2 * 1024 * 1024),
+        'Last-Modified': 'Wed, 21 Oct 2026 07:28:00 GMT',
+      },
+    })).toBe(true)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      statusCode: 206,
+      responseHeaders: {
+        'accept-ranges': 'bytes',
+        'content-range': 'bytes 0-1048575/10485760',
+        etag: '"range-v1"',
+      },
+    })).toBe(true)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: {
+        'accept-ranges': 'bytes',
+        etag: '"item-size-fallback"',
+      },
+      itemTotalBytes: 5 * 1024 * 1024,
+    })).toBe(true)
+  })
+
+  it('preserves small, unknown-size, non-GET, non-HTTP, completed, and non-range transfers', () => {
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: { 'accept-ranges': 'bytes', 'content-length': String(1024 * 1024 - 1), etag: '"small"' },
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: { 'accept-ranges': 'bytes', etag: '"unknown-size"' },
+      itemTotalBytes: -1,
+      itemFileSize: -1,
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), method: 'POST' })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), url: 'blob:https://site.test/abc' })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), url: 'data:application/octet-stream,abc' })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), itemState: 'complete' })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), kind: 'hls' })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), responseHeaders: undefined })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: { 'content-length': String(50 * 1024 * 1024), etag: '"no-range"' },
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: { 'accept-ranges': 'none', 'content-length': String(50 * 1024 * 1024), etag: '"none-range"' },
+    })).toBe(false)
+  })
+
+  it('rejects likely one-use transfers, cookie mismatches, and sizes below configured minimumBytes', () => {
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: {
+        'accept-ranges': 'bytes',
+        'content-length': String(50 * 1024 * 1024),
+        'cache-control': 'private, no-store',
+      },
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      canResume: false,
+      responseHeaders: {
+        'accept-ranges': 'bytes',
+        'content-length': String(50 * 1024 * 1024),
+      },
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      cookieParityOk: false,
+    })).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      minimumBytes: 100 * 1024 * 1024,
+    })).toBe(false)
   })
 })

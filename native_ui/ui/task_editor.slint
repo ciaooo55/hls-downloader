@@ -35,6 +35,9 @@ export component TaskEditorWindow inherits Window {
     in-out property <bool> start-paused: false;
     in-out property <bool> allow-duplicate: false;
     in-out property <bool> legal-accepted: false;
+    in property <string> batch-preview: "支持通配符：[001-050]、[1-100:2]、[a-z]";
+    in property <bool> batch-preview-active: false;
+    in property <bool> batch-preview-warning: false;
     in-out property <string> result;
     // 页脚状态语气：info / success / warning / error，由 Rust 随状态文字一起设置。
     in property <string> result-tone: "warning";
@@ -44,6 +47,7 @@ export component TaskEditorWindow inherits Window {
     private property <bool> show-advanced: root.advanced-expanded;
     callback action(string);
     callback queue-selected(int);
+    callback url-edited(string);
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.title; description: root.mode == "batch" ? "每行一个链接，批量添加到下载队列" : root.mode == "curl" ? "粘贴浏览器复制的 cURL 命令" : "粘贴下载地址，选择保存位置与下载选项"; icon: root.mode == "new" ? "new" : root.mode == "curl" ? "import" : "batch"; }
@@ -61,7 +65,47 @@ export component TaskEditorWindow inherits Window {
                         if root.mode != "new": HorizontalLayout {
                             spacing: Tokens.control-gap;
                             FieldLabel { label: root.mode == "curl" ? "cURL 命令" : "下载地址"; width: 80px; height: Tokens.control-height; vertical-alignment: center; y: 0px; }
-                            TextEdit { text <=> root.url; accessible-label: "下载地址"; min-height: 132px; preferred-height: 132px; }
+                            VerticalLayout {
+                                spacing: 6px;
+                                TextEdit {
+                                    text <=> root.url;
+                                    accessible-label: "下载地址";
+                                    min-height: 132px;
+                                    preferred-height: 132px;
+                                    edited(value) => { root.url-edited(value); }
+                                }
+                                if root.mode == "batch": Rectangle {
+                                    min-height: 26px;
+                                    border-radius: Tokens.control-radius;
+                                    background: root.batch-preview-warning ? Tokens.warn-surface : root.batch-preview-active ? Tokens.info-surface : Tokens.surface-2;
+                                    border-width: 1px;
+                                    border-color: root.batch-preview-warning ? Tokens.warn.with-alpha(Tokens.dark ? 0.38 : 0.28) : root.batch-preview-active ? Tokens.accent-border : Tokens.hairline;
+                                    animate background, border-color { duration: Tokens.motion-fast; }
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        padding-top: 4px;
+                                        padding-bottom: 4px;
+                                        spacing: 6px;
+                                        WorkbenchIcon {
+                                            name: root.batch-preview-warning ? "failed" : root.batch-preview-active ? "batch" : "info";
+                                            ink: root.batch-preview-warning ? Tokens.warn : root.batch-preview-active ? Tokens.accent : Tokens.faint;
+                                            width: 13px;
+                                            height: 13px;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+                                        Text {
+                                            text: root.batch-preview;
+                                            color: root.batch-preview-warning ? Tokens.warn : root.batch-preview-active ? Tokens.accent : Tokens.faint;
+                                            font-size: 11px;
+                                            font-weight: root.batch-preview-active || root.batch-preview-warning ? 600 : 400;
+                                            vertical-alignment: center;
+                                            wrap: word-wrap;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         HorizontalLayout {
                             spacing: Tokens.control-gap;

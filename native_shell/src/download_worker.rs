@@ -32,6 +32,13 @@ pub use settings::{CoreSettings, PUBLIC_SETTING_KEYS};
 const DEFAULT_COOKIE_CREDENTIAL_REF: &str = "settings:default-cookie";
 const MAX_REPLAY_BODY_BYTES: usize = 128 * 1024;
 const HANDOFF_PRESENTER_LEASE_MS: u64 = 15_000;
+const ARMED_TASK_REFRESH_TTL: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Clone, Debug)]
+struct ArmedTaskRefresh {
+    task_id: String,
+    expires_at: Instant,
+}
 
 fn handoff_now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -308,6 +315,7 @@ pub struct CoreCoordinator {
     update_shutdown: Arc<AtomicBool>,
     settings_cache: Arc<RwLock<Option<settings::CachedSettings>>>,
     settings_version: Arc<AtomicU64>,
+    armed_refresh: Arc<Mutex<Option<ArmedTaskRefresh>>>,
     #[cfg(test)]
     worker_wait_started: Arc<Mutex<Option<mpsc::Sender<()>>>>,
 }
@@ -336,6 +344,7 @@ impl CoreCoordinator {
             update_shutdown: Arc::new(AtomicBool::new(false)),
             settings_cache: Arc::new(RwLock::new(None)),
             settings_version,
+            armed_refresh: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             worker_wait_started: Arc::new(Mutex::new(None)),
         }
@@ -492,8 +501,253 @@ impl CoreCoordinator {
         Ok(())
     }
 
+    fn offer_eligible_for_armed_refresh(offer: &crate::ResourceOffer) -> bool {
+        let url = offer.url.trim();
+        offer.local_source_path.is_none()
+            && !url.is_empty()
+            && crate::http_engine::remote_resource_url_allowed(url)
+    }
+
+    fn build_refreshed_spec(current: &TaskSpec, offer: &crate::ResourceOffer) -> TaskSpec {
+        let mut spec = current.clone();
+        let new_url = offer.url.trim().to_string();
+        drop_cross_origin_task_secrets(&mut spec, &current.url, &new_url);
+        spec.url = new_url;
+        spec.credential_ref = offer.credential_ref.clone();
+        spec.replay_context_ref = offer.replay_context_ref.clone();
+        if !offer.source_page_url.trim().is_empty() {
+            spec.source_page_url = offer.source_page_url.trim().to_string();
+        }
+        if !offer.request_method.trim().is_empty() {
+            spec.request_method = crate::http_engine::sanitize_http_method(&offer.request_method);
+        }
+        spec
+    }
+
+    fn arm_task_refresh(&self, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            if let Ok(mut guard) = self.armed_refresh.lock() {
+                *guard = None;
+            }
+            return Ok(Vec::new());
+        }
+        let mut core = self.lock()?;
+        if core.task_spec(task_id).is_none() || core.snapshot(task_id).is_none() {
+            return Err(format!("unknown task {task_id}"));
+        }
+        if let Ok(mut guard) = self.armed_refresh.lock() {
+            *guard = Some(ArmedTaskRefresh {
+                task_id: task_id.to_string(),
+                expires_at: Instant::now() + ARMED_TASK_REFRESH_TTL,
+            });
+        }
+        core.emit(CoreEvent::Toast {
+            level: "info".into(),
+            message: "已进入刷新地址模式：请在浏览器重新点击该下载链接".into(),
+        })
+    }
+
+    fn clear_armed_refresh_for_task(&self, task_id: &str) {
+        if let Ok(mut guard) = self.armed_refresh.lock() {
+            if guard.as_ref().is_some_and(|armed| armed.task_id == task_id) {
+                *guard = None;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn expire_armed_refresh_for_test(&self) {
+        if let Ok(mut guard) = self.armed_refresh.lock() {
+            if let Some(armed) = guard.as_mut() {
+                armed.expires_at = Instant::now() - Duration::from_secs(1);
+            }
+        }
+    }
+
+    fn auto_resume_refreshed_task(&self, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
+        let mut events = Vec::new();
+        if self.worker_is_active(task_id)? {
+            events.extend(self.dispatch_inner(CoreCommand::TaskAction {
+                task_id: task_id.to_string(),
+                action: "pause".into(),
+            })?);
+            self.wait_for_worker_stop(task_id)?;
+        }
+        let next_action = self.lock()?.snapshot(task_id).cloned().and_then(|task| {
+            ["resume", "retry", "start"]
+                .into_iter()
+                .find(|candidate| task.available_actions.iter().any(|item| item == candidate))
+        });
+        if let Some(action) = next_action {
+            events.extend(self.dispatch_inner(CoreCommand::TaskAction {
+                task_id: task_id.to_string(),
+                action: action.into(),
+            })?);
+        }
+        Ok(events)
+    }
+
+    fn try_consume_armed_refresh_offer(
+        &self,
+        offer: &crate::ResourceOffer,
+    ) -> Result<Option<Vec<EventEnvelope>>, String> {
+        if !Self::offer_eligible_for_armed_refresh(offer) {
+            return Ok(None);
+        }
+        let committed = {
+            let mut core = self.lock()?;
+            let armed_task_id = {
+                let mut guard = self
+                    .armed_refresh
+                    .lock()
+                    .map_err(|_| "armed refresh mutex poisoned".to_string())?;
+                match guard.as_ref() {
+                    Some(armed) if Instant::now() < armed.expires_at => {
+                        let task_id = armed.task_id.clone();
+                        if core.task_spec(&task_id).is_none() || core.snapshot(&task_id).is_none() {
+                            *guard = None;
+                            None
+                        } else {
+                            Some(task_id)
+                        }
+                    }
+                    Some(_) => {
+                        *guard = None;
+                        None
+                    }
+                    None => None,
+                }
+            };
+            let Some(armed_task_id) = armed_task_id else {
+                return Ok(None);
+            };
+            let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
+            if !crate::net_policy::url_allowed(offer.url.trim(), &allowed_hosts) {
+                return Err("地址不在允许的域名白名单中".into());
+            }
+            let current = core
+                .task_spec(&armed_task_id)
+                .cloned()
+                .ok_or_else(|| format!("unknown task {armed_task_id}"))?;
+            let spec = Self::build_refreshed_spec(&current, offer);
+            let events =
+                core.apply_armed_refresh(&armed_task_id, spec, offer.handoff_id.clone(), None)?;
+            if let Ok(mut guard) = self.armed_refresh.lock() {
+                if guard
+                    .as_ref()
+                    .is_some_and(|armed| armed.task_id == armed_task_id)
+                {
+                    *guard = None;
+                }
+            }
+            (armed_task_id, events)
+        };
+        let (armed_task_id, mut events) = committed;
+        if let Ok(resumed) = self.auto_resume_refreshed_task(&armed_task_id) {
+            events.extend(resumed);
+        }
+        Ok(Some(events))
+    }
+
     pub(crate) fn admit_handoff(&self, handoff_json: &str) -> Result<String, String> {
-        self.lock()?.admit_handoff(handoff_json)
+        let has_armed = self
+            .armed_refresh
+            .lock()
+            .ok()
+            .is_some_and(|guard| guard.is_some());
+        if !has_armed {
+            return self.lock()?.admit_handoff(handoff_json);
+        }
+        let mut original: crate::contract::BrowserHandoff = serde_json::from_str(handoff_json)
+            .map_err(|error| format!("decode browser handoff: {error}"))?;
+        let mut handoff = crate::url_credentials::redact_urls(original.clone())?;
+        if handoff.id.trim().is_empty()
+            || handoff.offer.handoff_id != handoff.id
+            || handoff.status != "pending"
+            || handoff.presentation != "queued"
+            || handoff.task_id.is_some()
+        {
+            return Err("浏览器交接初始状态无效".into());
+        }
+        let (armed_task_id, encoded) = {
+            let mut core = self.lock()?;
+            if !handoff.request_id.is_empty() {
+                if let Some(existing) = core
+                    .store()
+                    .query_handoffs(None, Some(&handoff.request_id), false)?
+                    .pop()
+                {
+                    return Ok(existing);
+                }
+            }
+            if !core
+                .store()
+                .query_handoffs(Some(&handoff.id), None, false)?
+                .is_empty()
+            {
+                return Err("交接编号已属于另一请求".into());
+            }
+            let armed_task_id = if Self::offer_eligible_for_armed_refresh(&original.offer) {
+                let mut guard = self
+                    .armed_refresh
+                    .lock()
+                    .map_err(|_| "armed refresh mutex poisoned".to_string())?;
+                match guard.as_ref() {
+                    Some(armed) if Instant::now() < armed.expires_at => {
+                        let task_id = armed.task_id.clone();
+                        if core.task_spec(&task_id).is_none() || core.snapshot(&task_id).is_none() {
+                            *guard = None;
+                            None
+                        } else {
+                            Some(task_id)
+                        }
+                    }
+                    Some(_) => {
+                        *guard = None;
+                        None
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let Some(armed_task_id) = armed_task_id else {
+                return core.admit_handoff(handoff_json);
+            };
+            let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
+            if !crate::net_policy::url_allowed(original.offer.url.trim(), &allowed_hosts) {
+                return Err("地址不在允许的域名白名单中".into());
+            }
+            let current = core
+                .task_spec(&armed_task_id)
+                .cloned()
+                .ok_or_else(|| format!("unknown task {armed_task_id}"))?;
+            let spec = Self::build_refreshed_spec(&current, &original.offer);
+            original.status = "accepted".into();
+            original.task_id = Some(armed_task_id.clone());
+            handoff.status = "accepted".into();
+            handoff.task_id = Some(armed_task_id.clone());
+            let encoded = serde_json::to_string(&handoff)
+                .map_err(|error| format!("encode browser handoff: {error}"))?;
+            core.apply_armed_refresh(&armed_task_id, spec, handoff.id.clone(), Some(original))?;
+            if let Ok(mut guard) = self.armed_refresh.lock() {
+                if guard
+                    .as_ref()
+                    .is_some_and(|armed| armed.task_id == armed_task_id)
+                {
+                    *guard = None;
+                }
+            }
+            (armed_task_id, encoded)
+        };
+        if let Err(error) = self.auto_resume_refreshed_task(&armed_task_id) {
+            crate::record_runtime_log(
+                "armed_refresh_resume_failed",
+                serde_json::json!({"task_id": armed_task_id, "error": error}),
+            );
+        }
+        Ok(encoded)
     }
 
     pub fn save_handoff(
@@ -956,6 +1210,15 @@ impl CoreCoordinator {
         {
             return refresh_task_request(self, &task_id, &url, &cookie, auto_resume);
         }
+        if let CoreCommand::ArmTaskRefresh { task_id } = command {
+            return self.arm_task_refresh(&task_id);
+        }
+        if let CoreCommand::OfferResource { offer } = command {
+            if let Some(events) = self.try_consume_armed_refresh_offer(&offer)? {
+                return Ok(events);
+            }
+            return self.dispatch_inner(CoreCommand::OfferResource { offer });
+        }
         if let CoreCommand::ProbeTorrent { source } = command {
             return probe_torrent_command(self, &source);
         }
@@ -1390,6 +1653,7 @@ impl CoreCoordinator {
                 });
             }
             if action == "delete_files" {
+                self.clear_armed_refresh_for_task(task_id);
                 self.cancel_and_wait(task_id)?;
                 self.delete_task_files(task_id)?;
                 crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
@@ -1398,6 +1662,7 @@ impl CoreCoordinator {
                 }
             }
             if action == "delete" {
+                self.clear_armed_refresh_for_task(task_id);
                 self.cancel_and_wait(task_id)?;
                 self.cleanup_task_cache(task_id)?;
                 crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
@@ -2175,6 +2440,7 @@ impl CoreCoordinator {
                 preferred_bandwidth: offer.preferred_bandwidth,
                 preferred_height: offer.preferred_height,
                 preferred_variant_id: offer.preferred_variant_id.clone(),
+                source_page_url: offer.source_page_url.clone(),
                 ..Default::default()
             },
             trust_download_dir,
@@ -2857,11 +3123,20 @@ fn run_task_with_throttle(
             let bandwidth = spec.preferred_bandwidth;
             let height = spec.preferred_height;
             let variant_id = spec.preferred_variant_id.clone();
-            let download_subtitles = core
-                .lock()
-                .map_err(|_| "v7 Core mutex poisoned".to_string())?
-                .store()
-                .setting_bool("download_subtitles", true)?;
+            let (download_subtitles, default_concurrency) = {
+                let guard = core
+                    .lock()
+                    .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+                (
+                    guard.store().setting_bool("download_subtitles", true)?,
+                    guard.store().setting_u64("default_concurrency", 12)?,
+                )
+            };
+            let concurrency = if spec.concurrency > 0 {
+                (spec.concurrency as usize).clamp(1, 16)
+            } else {
+                (default_concurrency as usize).clamp(1, 16)
+            };
             let audio_name = spec.preferred_audio.clone();
             let replay_json = replay_json.clone();
             let merged = poll_media_progress(&core, task_id, &progress, false, move || {
@@ -2877,6 +3152,7 @@ fn run_task_with_throttle(
                         &variant_id,
                         download_subtitles,
                         &audio_name,
+                        concurrency,
                     )
                 })
             })?;
@@ -4435,7 +4711,12 @@ pub(crate) fn task_throttle_context(
     let core = core
         .lock()
         .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-    let global = core.store().setting_u64("download_speed_limit_kib", 0)?;
+    let configured_global = core.store().setting_u64("download_speed_limit_kib", 0)?;
+    let speed_limit_enabled = core
+        .store()
+        .setting_bool("download_speed_limit_enabled", configured_global > 0)?;
+    let global =
+        crate::net_policy::effective_global_speed_limit_kib(configured_global, speed_limit_enabled);
     let schedule_enabled = core
         .store()
         .setting_bool("download_speed_schedule_enabled", false)?;

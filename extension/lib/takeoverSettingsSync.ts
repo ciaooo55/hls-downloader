@@ -9,6 +9,8 @@ export interface TakeoverSettingsStorageArea {
 export interface TakeoverSettingsUpdate {
   enabled?: boolean
   minimumBytes?: number
+  quickDownloadEnabled?: boolean
+  speedLimitEnabled?: boolean
 }
 
 interface PendingTakeoverSettings extends TakeoverSettingsUpdate {
@@ -24,6 +26,14 @@ function normalizedBytes(value: unknown): number | undefined {
   return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(result)))
 }
 
+function readDesktopBool(response: any, ...keys: string[]): boolean | undefined {
+  if (!response || typeof response !== 'object') return undefined
+  for (const key of keys) {
+    if (typeof response[key] === 'boolean') return response[key]
+  }
+  return undefined
+}
+
 function normalizePending(value: unknown): PendingTakeoverSettings | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Partial<PendingTakeoverSettings>
@@ -33,6 +43,8 @@ function normalizePending(value: unknown): PendingTakeoverSettings | null {
   if (typeof raw.enabled === 'boolean') pending.enabled = raw.enabled
   const minimumBytes = normalizedBytes(raw.minimumBytes)
   if (minimumBytes !== undefined) pending.minimumBytes = minimumBytes
+  if (typeof raw.quickDownloadEnabled === 'boolean') pending.quickDownloadEnabled = raw.quickDownloadEnabled
+  if (typeof raw.speedLimitEnabled === 'boolean') pending.speedLimitEnabled = raw.speedLimitEnabled
   return pending
 }
 
@@ -58,27 +70,52 @@ export class TakeoverSettingsSync {
 
   async queue(update: TakeoverSettingsUpdate): Promise<Record<string, unknown>> {
     const response = await this.withStorageWrite(async () => {
-      const stored = await this.storage.get([PENDING_TAKEOVER_SETTINGS_KEY, 'enabled', 'minimumBytes'])
+      const stored = await this.storage.get([
+        PENDING_TAKEOVER_SETTINGS_KEY,
+        'enabled',
+        'minimumBytes',
+        'quickDownloadEnabled',
+        'speedLimitEnabled',
+        'speedLimitKib',
+      ])
       const previous = normalizePending(stored[PENDING_TAKEOVER_SETTINGS_KEY])
       const enabled = typeof update.enabled === 'boolean'
         ? update.enabled
         : previous?.enabled
       const minimumBytes = normalizedBytes(update.minimumBytes) ?? previous?.minimumBytes
+      const quickDownloadEnabled = typeof update.quickDownloadEnabled === 'boolean'
+        ? update.quickDownloadEnabled
+        : previous?.quickDownloadEnabled
+      const speedLimitEnabled = typeof update.speedLimitEnabled === 'boolean'
+        ? update.speedLimitEnabled
+        : previous?.speedLimitEnabled
       const pending: PendingTakeoverSettings = {
         id: this.createId(),
         ...(typeof enabled === 'boolean' ? { enabled } : {}),
         ...(minimumBytes !== undefined ? { minimumBytes } : {}),
+        ...(typeof quickDownloadEnabled === 'boolean' ? { quickDownloadEnabled } : {}),
+        ...(typeof speedLimitEnabled === 'boolean' ? { speedLimitEnabled } : {}),
       }
       const local: Record<string, unknown> = { [PENDING_TAKEOVER_SETTINGS_KEY]: pending }
       if (typeof update.enabled === 'boolean') local.enabled = update.enabled
       const localMinimum = normalizedBytes(update.minimumBytes)
       if (localMinimum !== undefined) local.minimumBytes = localMinimum
+      if (typeof update.quickDownloadEnabled === 'boolean') local.quickDownloadEnabled = update.quickDownloadEnabled
+      if (typeof update.speedLimitEnabled === 'boolean') local.speedLimitEnabled = update.speedLimitEnabled
       await this.storage.set(local)
+      const speedLimitKib = normalizedBytes(stored.speedLimitKib)
       return {
         ok: true,
         queued: true,
         takeover_enabled: typeof enabled === 'boolean' ? enabled : stored.enabled !== false,
         takeover_minimum_bytes: minimumBytes ?? normalizedBytes(stored.minimumBytes) ?? 0,
+        quick_download_enabled: typeof quickDownloadEnabled === 'boolean'
+          ? quickDownloadEnabled
+          : stored.quickDownloadEnabled === true,
+        speed_limit_enabled: typeof speedLimitEnabled === 'boolean'
+          ? speedLimitEnabled
+          : stored.speedLimitEnabled === true,
+        ...(speedLimitKib !== undefined ? { speed_limit_kib: speedLimitKib } : {}),
       }
     })
     this.triggerSync()
@@ -134,6 +171,8 @@ export class TakeoverSettingsSync {
           op: 'set_takeover_settings',
           ...(typeof pending.enabled === 'boolean' ? { enabled: pending.enabled } : {}),
           ...(pending.minimumBytes !== undefined ? { minimum_bytes: pending.minimumBytes } : {}),
+          ...(typeof pending.quickDownloadEnabled === 'boolean' ? { quick_download_enabled: pending.quickDownloadEnabled } : {}),
+          ...(typeof pending.speedLimitEnabled === 'boolean' ? { speed_limit_enabled: pending.speedLimitEnabled } : {}),
         })
       } catch {
         // The durable pending value is retried by the next heartbeat/popup ping.
@@ -166,15 +205,24 @@ export class TakeoverSettingsSync {
       ...response,
       ...(typeof pending.enabled === 'boolean' ? { takeover_enabled: pending.enabled } : {}),
       ...(pending.minimumBytes !== undefined ? { takeover_minimum_bytes: pending.minimumBytes } : {}),
+      ...(typeof pending.quickDownloadEnabled === 'boolean' ? { quick_download_enabled: pending.quickDownloadEnabled } : {}),
+      ...(typeof pending.speedLimitEnabled === 'boolean' ? { speed_limit_enabled: pending.speedLimitEnabled } : {}),
       takeover_settings_pending: true,
     }
   }
 
   private async applyDesktopResponse(response: any): Promise<void> {
     const values: Record<string, unknown> = {}
-    if (typeof response?.takeover_enabled === 'boolean') values.enabled = response.takeover_enabled
+    const takeoverEnabled = readDesktopBool(response, 'takeover_enabled', 'browser_takeover_enabled')
+    if (takeoverEnabled !== undefined) values.enabled = takeoverEnabled
     const minimumBytes = normalizedBytes(response?.takeover_minimum_bytes)
     if (minimumBytes !== undefined) values.minimumBytes = minimumBytes
+    const quickDownloadEnabled = readDesktopBool(response, 'quick_download_enabled', 'browser_quick_download_enabled')
+    if (quickDownloadEnabled !== undefined) values.quickDownloadEnabled = quickDownloadEnabled
+    const speedLimitEnabled = readDesktopBool(response, 'speed_limit_enabled', 'download_speed_limit_enabled')
+    if (speedLimitEnabled !== undefined) values.speedLimitEnabled = speedLimitEnabled
+    const speedLimitKib = normalizedBytes(response?.speed_limit_kib ?? response?.download_speed_limit_kib)
+    if (speedLimitKib !== undefined) values.speedLimitKib = speedLimitKib
     if (Object.keys(values).length) await this.storage.set(values)
   }
 

@@ -199,4 +199,48 @@ describe('offline-safe takeover settings', () => {
       takeover_settings_pending: true,
     })
   })
+
+  it('syncs quick_download_enabled and speed_limit_enabled alongside takeover settings', async () => {
+    const storage = new MemoryStorage()
+    const desktop = vi.fn().mockResolvedValue({
+      ok: true,
+      takeover_enabled: true,
+      takeover_minimum_bytes: 0,
+      quick_download_enabled: true,
+      speed_limit_enabled: true,
+      speed_limit_kib: 512,
+    })
+    let sequence = 0
+    const sync = new TakeoverSettingsSync(storage, desktop, () => `quick-${++sequence}`)
+
+    await expect(sync.queue({ quickDownloadEnabled: true, speedLimitEnabled: true })).resolves.toMatchObject({
+      ok: true,
+      queued: true,
+      quick_download_enabled: true,
+      speed_limit_enabled: true,
+    })
+    await sync.sync()
+
+    expect(desktop).toHaveBeenLastCalledWith({
+      op: 'set_takeover_settings',
+      quick_download_enabled: true,
+      speed_limit_enabled: true,
+    })
+    expect(storage.values.quickDownloadEnabled).toBe(true)
+    expect(storage.values.speedLimitEnabled).toBe(true)
+    expect(storage.values.speedLimitKib).toBe(512)
+    expect(storage.values[PENDING_TAKEOVER_SETTINGS_KEY]).toBeUndefined()
+
+    await sync.applyPing({
+      ok: true,
+      takeover_enabled: true,
+      takeover_minimum_bytes: 0,
+      browser_quick_download_enabled: false,
+      speed_limit_enabled: false,
+      speed_limit_kib: 0,
+    })
+    expect(storage.values.quickDownloadEnabled).toBe(false)
+    expect(storage.values.speedLimitEnabled).toBe(false)
+    expect(storage.values.speedLimitKib).toBe(0)
+  })
 })

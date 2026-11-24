@@ -1,8 +1,8 @@
 //! Native DASH downloader. Compatible tracks are stitched in Period order.
 
 use crate::http_engine::{
-    entry_network_scope, fetch_manifest_bytes, public_entry, run_job, set_media_network_scope,
-    validate_media_target, Job,
+    entry_network_scope, fetch_manifest_bytes, media_network_scope, public_entry, run_job,
+    set_media_network_scope, validate_media_target, Job,
 };
 use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
@@ -774,6 +774,7 @@ pub fn download_dash_selected(
     preferred_variant_id: &str,
     download_subtitles: bool,
     preferred_audio: &str,
+    concurrency: usize,
 ) -> Result<PathBuf, String> {
     let _network = set_media_network_scope(Some(entry_network_scope(url, proxy)));
     super::with_media_headers(url, headers, || {
@@ -788,6 +789,7 @@ pub fn download_dash_selected(
             preferred_variant_id,
             download_subtitles,
             preferred_audio,
+            concurrency,
         )
     })
 }
@@ -820,6 +822,7 @@ fn download_dash_scoped(
     preferred_variant_id: &str,
     download_subtitles: bool,
     preferred_audio: &str,
+    concurrency: usize,
 ) -> Result<PathBuf, String> {
     let (manifest, xml) = load_mpd(url, headers, proxy)?;
     let mut vod = DashCheckpoint::load(task_dir);
@@ -909,6 +912,7 @@ fn download_dash_scoped(
         &mut vod,
         audio.as_ref().filter(|_| video.is_some()),
         total,
+        concurrency,
     )?;
     write_dash_playlist(task_dir, &files)?;
     finish_dash(
@@ -1946,6 +1950,7 @@ fn download_dash_primary(
     vod: &mut DashCheckpoint,
     audio: Option<&Representation>,
     total: u64,
+    concurrency: usize,
 ) -> Result<(Vec<PathBuf>, Option<PathBuf>), String> {
     let mut files = Vec::new();
     if let Some(init) = &track.init {
@@ -2081,77 +2086,199 @@ fn download_dash_primary(
                 .unwrap_or(1.0)
         })
         .collect();
-    let mut pending: std::collections::VecDeque<_> =
-        super::preview::segment_order(&durations, &audio_durations).into();
-    std::thread::scope(|scope| {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(0);
-        let writer = scope.spawn(move || commit_vod_segments(receiver, task_dir, vod));
-        let transfer = (|| -> Result<(), String> {
-            while !pending.is_empty() {
-                if read_control(control) != "run" {
-                    return Err(control_stop_error(control));
-                }
-                if let Some(priority) = super::preview::priority_file(task_dir) {
-                    if let Some(position) = pending.iter().position(|(is_audio, index)| {
-                        (if *is_audio {
-                            &audio_planned[*index]
-                        } else {
-                            &planned[*index]
-                        }) == &priority
-                    }) {
-                        pending.rotate_left(position);
-                    }
-                }
-                let (is_audio, index) = pending.pop_front().unwrap();
-                let (rep, path) = if is_audio {
-                    (audio.unwrap(), &audio_planned[index])
+    let work_queue: std::collections::VecDeque<(bool, usize, String)> =
+        super::preview::segment_order(&durations, &audio_durations)
+            .into_iter()
+            .filter_map(|(is_audio, index)| {
+                let path = if is_audio {
+                    &audio_planned[index]
                 } else {
-                    (track, &planned[index])
+                    &planned[index]
                 };
-                if let Some(identity) = missing.remove(path) {
-                    let init = rep.init_markers.contains(&index);
-                    save_dash_segment_with_retry(
-                        &rep.media[index],
-                        headers,
-                        proxy,
-                        path,
-                        control,
-                        rep.media_ranges[index].map(|range| (range.start, range.length)),
-                        init,
-                    )?;
-                    let size = path.metadata().map_err(|e| e.to_string())?.len();
-                    sender
-                        .send(LandedSegment {
-                            path: path.clone(),
-                            identity,
-                            size,
-                            init,
-                        })
-                        .map_err(|_| "DASH segment checkpoint worker stopped".to_owned())?;
-                    super::preview::mark_ready(task_dir, path)?;
-                    downloaded_bytes = downloaded_bytes.saturating_add(size);
-                    completed_segments = completed_segments.saturating_add(1);
-                    report_dash_tracks_progress(
-                        task_dir,
-                        downloaded_bytes,
-                        completed_segments,
-                        total,
-                        false,
-                    );
-                }
-                if preview && !preview_master_written && first_segments_ready(task_dir) {
-                    write_dash_preview_master(task_dir, audio.is_some())?;
-                    preview_master_written = true;
+                missing
+                    .remove(path)
+                    .map(|identity| (is_audio, index, identity))
+            })
+            .collect();
+    if !work_queue.is_empty() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Mutex;
+
+        let worker_count = concurrency.clamp(1, 16).min(work_queue.len()).max(1);
+        let pending = Mutex::new(work_queue);
+        let failed = AtomicBool::new(false);
+        let first_error: Mutex<Option<String>> = Mutex::new(None);
+        let downloaded_bytes = AtomicU64::new(downloaded_bytes);
+        let completed_segments = AtomicU64::new(completed_segments);
+        let progress_lock = Mutex::new(());
+        let preview_written = Mutex::new(preview_master_written);
+        let network_scope = media_network_scope();
+        let replay = crate::credentials::scoped_replay_json();
+        let throttle = crate::net_policy::current_throttle_context();
+
+        std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(worker_count * 2);
+            let writer = scope.spawn(move || commit_vod_segments(receiver, task_dir, vod));
+            let mut workers = Vec::with_capacity(worker_count);
+            for _ in 0..worker_count {
+                let worker_sender = sender.clone();
+                let network_scope = network_scope.clone();
+                let replay = replay.clone();
+                let throttle = throttle.clone();
+                let pending = &pending;
+                let failed = &failed;
+                let first_error = &first_error;
+                let downloaded_bytes = &downloaded_bytes;
+                let completed_segments = &completed_segments;
+                let progress_lock = &progress_lock;
+                let preview_written = &preview_written;
+                let planned = &planned;
+                let audio_planned = &audio_planned;
+                let first_segments_ready = &first_segments_ready;
+                workers.push(scope.spawn(move || {
+                    let _network = set_media_network_scope(network_scope);
+                    crate::net_policy::with_throttle_context(throttle, || {
+                        crate::with_replay_json(&replay, || {
+                            let record_error = |error: String| {
+                                failed.store(true, Ordering::Release);
+                                if let Ok(mut queue) = pending.lock() {
+                                    queue.clear();
+                                }
+                                if let Ok(mut slot) = first_error.lock() {
+                                    if slot.is_none() {
+                                        *slot = Some(error);
+                                    }
+                                }
+                            };
+                            loop {
+                                if failed.load(Ordering::Acquire) {
+                                    break;
+                                }
+                                if read_control(control) != "run" {
+                                    record_error(control_stop_error(control));
+                                    break;
+                                }
+                                let next = {
+                                    let Ok(mut queue) = pending.lock() else {
+                                        record_error("DASH segment queue lock poisoned".into());
+                                        break;
+                                    };
+                                    if failed.load(Ordering::Acquire) {
+                                        break;
+                                    }
+                                    if let Some(priority) = super::preview::priority_file(task_dir)
+                                    {
+                                        if let Some(position) =
+                                            queue.iter().position(|(is_audio, index, _)| {
+                                                (if *is_audio {
+                                                    &audio_planned[*index]
+                                                } else {
+                                                    &planned[*index]
+                                                }) == &priority
+                                            })
+                                        {
+                                            queue.rotate_left(position);
+                                        }
+                                    }
+                                    queue.pop_front()
+                                };
+                                let Some((is_audio, index, identity)) = next else {
+                                    break;
+                                };
+                                let (rep, path) = if is_audio {
+                                    (audio.unwrap(), &audio_planned[index])
+                                } else {
+                                    (track, &planned[index])
+                                };
+                                let init = rep.init_markers.contains(&index);
+                                if let Err(error) = save_dash_segment_with_retry(
+                                    &rep.media[index],
+                                    headers,
+                                    proxy,
+                                    path,
+                                    control,
+                                    rep.media_ranges[index]
+                                        .map(|range| (range.start, range.length)),
+                                    init,
+                                ) {
+                                    record_error(error);
+                                    break;
+                                }
+                                let size = match path.metadata() {
+                                    Ok(meta) => meta.len(),
+                                    Err(error) => {
+                                        record_error(error.to_string());
+                                        break;
+                                    }
+                                };
+                                if worker_sender
+                                    .send(LandedSegment {
+                                        path: path.clone(),
+                                        identity,
+                                        size,
+                                        init,
+                                    })
+                                    .is_err()
+                                {
+                                    record_error("DASH segment checkpoint worker stopped".into());
+                                    break;
+                                }
+                                if let Err(error) = super::preview::mark_ready(task_dir, path) {
+                                    record_error(error);
+                                    break;
+                                }
+                                downloaded_bytes.fetch_add(size, Ordering::AcqRel);
+                                completed_segments.fetch_add(1, Ordering::AcqRel);
+                                if let Ok(_guard) = progress_lock.lock() {
+                                    report_dash_tracks_progress(
+                                        task_dir,
+                                        downloaded_bytes.load(Ordering::Acquire),
+                                        completed_segments.load(Ordering::Acquire),
+                                        total,
+                                        false,
+                                    );
+                                }
+                                if preview {
+                                    if let Ok(mut written) = preview_written.lock() {
+                                        if !*written && first_segments_ready(task_dir) {
+                                            if let Err(error) =
+                                                write_dash_preview_master(task_dir, audio.is_some())
+                                            {
+                                                record_error(error);
+                                                break;
+                                            }
+                                            *written = true;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }));
+            }
+            drop(sender);
+            let mut worker_panicked = false;
+            for worker in workers {
+                if worker.join().is_err() {
+                    worker_panicked = true;
                 }
             }
+            writer
+                .join()
+                .map_err(|_| "DASH segment checkpoint worker panicked".to_owned())??;
+            if worker_panicked {
+                return Err("DASH segment worker panicked".into());
+            }
+            if let Some(error) = first_error
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+            {
+                return Err(error);
+            }
             Ok(())
-        })();
-        drop(sender);
-        writer
-            .join()
-            .map_err(|_| "DASH segment checkpoint worker panicked")??;
-        transfer
-    })?;
+        })?;
+    }
     // 下载优先级不改变最终拼接顺序。
     let merged_audio = if audio.is_some() {
         write_dash_playlist(&audio_dir, &all_audio)?;
@@ -4029,6 +4156,7 @@ mod tests {
             &mut DashCheckpoint::load(&root),
             None,
             1,
+            1,
         )
         .unwrap();
         assert_eq!(files.len(), 1);
@@ -4071,6 +4199,7 @@ mod tests {
             &mut DashCheckpoint::load(&root),
             None,
             5,
+            4,
         )
         .unwrap();
         assert_eq!(
@@ -4220,6 +4349,7 @@ mod tests {
                 "",
                 false,
                 "",
+                4,
             )
             .unwrap();
             assert_eq!(server.join().unwrap().len(), requests);
@@ -4291,6 +4421,7 @@ mod tests {
                 "",
                 false,
                 "",
+                4,
             )
             .unwrap();
             assert_eq!(manifest_hits.load(std::sync::atomic::Ordering::Relaxed), 5);
@@ -4357,6 +4488,7 @@ mod tests {
                 &mut DashCheckpoint::load(&root),
                 None,
                 3,
+                1,
             )
             .unwrap();
             assert_eq!(
@@ -4447,6 +4579,7 @@ mod tests {
             &mut DashCheckpoint::load(&root),
             None,
             3,
+            1,
         )
         .unwrap();
         assert!(audio.is_none());
@@ -4467,6 +4600,7 @@ mod tests {
             &mut DashCheckpoint::load(&root),
             None,
             3,
+            1,
         )
         .unwrap();
         track.media_ranges[1] = Some(ByteRange {
@@ -4483,6 +4617,7 @@ mod tests {
             &mut DashCheckpoint::load(&root),
             None,
             3,
+            1,
         )
         .unwrap();
         assert_eq!(fs::read(&files[2]).unwrap(), b"CCCC");
@@ -4656,6 +4791,7 @@ mod tests {
                 &mut DashCheckpoint::load(&root),
                 None,
                 1,
+                1,
             )
         };
         fetch(0).unwrap();
@@ -4827,13 +4963,13 @@ mod tests {
         ]);
         let url = format!("{base}/manifest.mpd");
         let output = download_dash_selected(
-            &url, &headers, "", &task, &control, 0, 0, "", false, "audio",
+            &url, &headers, "", &task, &control, 0, 0, "", false, "audio", 4,
         )
         .unwrap();
         // A restart rechecks indices but reuses persisted media. A malformed
         // optional subtitle index must not fail an otherwise complete AV task.
         assert_eq!(
-            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, "", true, "audio")
+            download_dash_selected(&url, &headers, "", &task, &control, 0, 0, "", true, "audio", 4)
                 .unwrap(),
             output
         );
@@ -5003,6 +5139,7 @@ mod tests {
             &mut vod,
             None,
             3,
+            2,
         )
         .unwrap();
         server.join().unwrap();
@@ -5094,6 +5231,7 @@ mod tests {
             "",
             false,
             "",
+            1,
         )
         .unwrap_err();
         assert_eq!(error, "paused");
@@ -6738,6 +6876,7 @@ mod tests {
             &mut vod,
             None,
             1,
+            1,
         )
         .unwrap();
         server.join().unwrap();
@@ -6766,6 +6905,7 @@ mod tests {
             &control,
             &mut vod_404,
             None,
+            1,
             1,
         )
         .unwrap_err();
@@ -6854,6 +6994,7 @@ mod tests {
             &mut vod,
             None,
             3,
+            4,
         )
         .unwrap();
         server.join().unwrap();
@@ -6866,6 +7007,160 @@ mod tests {
         assert_eq!(progress["downloaded"].as_u64(), Some(10 + 12 + 5));
         assert_eq!(progress["completed_segments"].as_u64(), Some(3));
         assert_eq!(progress["total_segments"].as_u64(), Some(3));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dash_vod_downloads_segments_concurrently_and_preserves_exact_order() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Condvar, Mutex,
+        };
+        use std::time::{Duration, Instant};
+
+        let root = std::env::temp_dir().join(format!(
+            "dash-vod-concurrent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let gate = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let server_gate = Arc::clone(&gate);
+        let server_active = Arc::clone(&active);
+        let server_max = Arc::clone(&max_active);
+
+        let payloads: HashMap<String, Vec<u8>> = HashMap::from([
+            ("/seg-0.m4s".into(), b"SEG-ZERO-0000".to_vec()),
+            ("/seg-1.m4s".into(), b"SEG-ONE-11111".to_vec()),
+            ("/seg-2.m4s".into(), b"SEG-TWO-22222".to_vec()),
+            ("/seg-3.m4s".into(), b"SEG-THREE-333".to_vec()),
+        ]);
+        let expected_concat: Vec<u8> = [
+            b"SEG-ZERO-0000".as_slice(),
+            b"SEG-ONE-11111".as_slice(),
+            b"SEG-TWO-22222".as_slice(),
+            b"SEG-THREE-333".as_slice(),
+        ]
+        .concat();
+        let server_payloads = Arc::new(payloads);
+
+        let server = std::thread::spawn(move || {
+            let mut handlers = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let gate = Arc::clone(&server_gate);
+                let active = Arc::clone(&server_active);
+                let max_active = Arc::clone(&server_max);
+                let payloads = Arc::clone(&server_payloads);
+                handlers.push(std::thread::spawn(move || {
+                    let mut buf = [0u8; 1024];
+                    let n = stream.read(&mut buf).unwrap();
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("")
+                        .to_string();
+
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+
+                    // Hold until at least 2 segment requests are simultaneously in flight.
+                    let (lock, cvar) = &*gate;
+                    let mut arrived = lock.lock().unwrap();
+                    *arrived += 1;
+                    if *arrived >= 2 {
+                        cvar.notify_all();
+                    } else {
+                        let deadline = Instant::now() + Duration::from_secs(5);
+                        while *arrived < 2 {
+                            let rem = deadline.saturating_duration_since(Instant::now());
+                            if rem.is_zero() {
+                                break;
+                            }
+                            let (next, _) = cvar.wait_timeout(arrived, rem).unwrap();
+                            arrived = next;
+                        }
+                    }
+                    drop(arrived);
+
+                    let body = payloads.get(&path).expect("known segment path");
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(header.as_bytes()).unwrap();
+                    stream.write_all(body).unwrap();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }));
+            }
+            for handler in handlers {
+                handler.join().unwrap();
+            }
+        });
+
+        let track = Representation {
+            id: "v0".into(),
+            mime: "video/mp4".into(),
+            media: (0..4)
+                .map(|i| format!("http://{addr}/seg-{i}.m4s"))
+                .collect(),
+            media_ranges: vec![None; 4],
+            media_durations: vec![4.0; 4],
+            ..Default::default()
+        };
+        let mut vod = DashCheckpoint::load(&root);
+        let (files, merged_audio) = download_dash_primary(
+            &track,
+            true,
+            &root,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut vod,
+            None,
+            4,
+            4,
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert!(merged_audio.is_none());
+        assert!(
+            max_active.load(Ordering::SeqCst) >= 2,
+            "expected >= 2 simultaneous in-flight DASH VOD segments, saw {}",
+            max_active.load(Ordering::SeqCst)
+        );
+        assert_eq!(files.len(), 4);
+        let actual_concat: Vec<u8> = files
+            .iter()
+            .flat_map(|path| fs::read(path).unwrap())
+            .collect();
+        assert_eq!(actual_concat, expected_concat);
+        assert!(root.join("preview.m3u8").is_file());
+        let saved = DashCheckpoint::load(&root);
+        assert_eq!(saved.records.len(), 4);
+        let progress: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("progress.json")).unwrap()).unwrap();
+        assert_eq!(
+            progress["downloaded"].as_u64(),
+            Some(expected_concat.len() as u64)
+        );
+        assert_eq!(progress["completed_segments"].as_u64(), Some(4));
+        assert_eq!(progress["total_segments"].as_u64(), Some(4));
         let _ = fs::remove_dir_all(root);
     }
 }

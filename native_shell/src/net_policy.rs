@@ -689,6 +689,83 @@ pub fn consume<E>(nbytes: usize, mut check: impl FnMut() -> Result<(), E>) -> Re
     Ok(())
 }
 
+pub fn effective_global_speed_limit_kib(limit_kib: u64, enabled: bool) -> u64 {
+    if enabled {
+        limit_kib
+    } else {
+        0
+    }
+}
+
+/// Returns true when any speed limit (global, scheduled, queue, task) or hourly
+/// quota is currently active for this transfer context. Used by curl-impersonate
+/// to avoid self-aborting on `--speed-limit` when the user intentionally throttles.
+pub fn throttle_or_quota_active() -> bool {
+    let hints = ACTIVE_THROTTLE_HINTS.load(Ordering::Acquire);
+    let ctx = current_throttle_context();
+    if let Some(ref context) = ctx {
+        if context.global_limit_kib > 0
+            || context.schedule_enabled
+            || context.hourly_quota_mib > 0
+            || context.queue_limit_kib > 0
+            || context.task_limit_kib > 0
+        {
+            return true;
+        }
+    }
+    if hints == 0 {
+        return false;
+    }
+    let Ok(mut state) = throttle().lock() else {
+        return false;
+    };
+    if state.hourly.limit_bytes > 0 {
+        return true;
+    }
+    if state.global_schedule.enabled {
+        refresh_global_limit_at(&mut state, chrono_minutes_now());
+    }
+    if state.global_schedule.global_limit_kib > 0
+        || state
+            .scoped
+            .get("global")
+            .is_some_and(|bucket| bucket.limit_bps > 0.0)
+    {
+        return true;
+    }
+    if let Some(context) = ctx {
+        if !context.queue_id.is_empty()
+            && state
+                .scoped
+                .get(&format!("queue:{}", context.queue_id))
+                .is_some_and(|bucket| bucket.limit_bps > 0.0)
+        {
+            return true;
+        }
+        if !context.task_id.is_empty()
+            && state
+                .scoped
+                .get(&format!("task:{}", context.task_id))
+                .is_some_and(|bucket| bucket.limit_bps > 0.0)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+pub(crate) fn active_global_limit_bps() -> f64 {
+    let Ok(mut state) = throttle().lock() else {
+        return 0.0;
+    };
+    refresh_global_limit_at(&mut state, chrono_minutes_now());
+    state
+        .scoped
+        .get("global")
+        .map_or(0.0, |bucket| bucket.limit_bps)
+}
+
 pub fn schedule_window_active(start: &str, end: &str) -> bool {
     in_window(start, end)
 }
@@ -1394,5 +1471,46 @@ mod tests {
             assert_eq!(consume(64 * 1024, || Err("throttled")), Err("throttled"));
         });
         clear_scoped_limit(scope);
+    }
+
+    #[test]
+    fn effective_global_speed_limit_respects_enabled_toggle() {
+        assert_eq!(effective_global_speed_limit_kib(2048, true), 2048);
+        assert_eq!(effective_global_speed_limit_kib(2048, false), 0);
+        assert_eq!(effective_global_speed_limit_kib(0, true), 0);
+        assert_eq!(effective_global_speed_limit_kib(0, false), 0);
+    }
+
+    #[test]
+    fn throttle_or_quota_active_reflects_context_and_scoped_limits() {
+        let task_id = "curl-low-speed-check-task";
+        let scope = format!("task:{task_id}");
+        let ctx_with_task_limit = ThrottleContext {
+            task_id: task_id.into(),
+            task_limit_kib: 64,
+            ..ThrottleContext::default()
+        };
+        with_throttle_context(Some(ctx_with_task_limit), || {
+            assert!(throttle_or_quota_active());
+        });
+
+        let ctx_with_hourly = ThrottleContext {
+            task_id: task_id.into(),
+            hourly_quota_mib: 100,
+            ..ThrottleContext::default()
+        };
+        with_throttle_context(Some(ctx_with_hourly), || {
+            assert!(throttle_or_quota_active());
+        });
+
+        let ctx_dynamic = ThrottleContext {
+            task_id: task_id.into(),
+            ..ThrottleContext::default()
+        };
+        configure_scoped_limit(&scope, 32);
+        with_throttle_context(Some(ctx_dynamic), || {
+            assert!(throttle_or_quota_active());
+        });
+        clear_scoped_limit(&scope);
     }
 }

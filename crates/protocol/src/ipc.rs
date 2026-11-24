@@ -252,6 +252,10 @@ pub enum CorePipeResponse {
         legal_accepted: bool,
         speed_limit_kib: u64,
         #[serde(default)]
+        speed_limit_enabled: bool,
+        #[serde(default)]
+        quick_download_enabled: bool,
+        #[serde(default)]
         hourly_quota_mib: u64,
         #[serde(default)]
         schedule_enabled: bool,

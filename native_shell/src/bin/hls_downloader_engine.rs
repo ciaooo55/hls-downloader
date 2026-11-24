@@ -65,11 +65,32 @@ fn current_tray_snapshot(
     let (active_count, total_speed_bps) = server.coordinator().transfer_summary().ok()?;
     let tooltip = format_tray_tooltip(active_count, total_speed_bps);
     let state = hls_native_shell::TrayMenuState {
-        speed_limited: settings.speed_limit_kib > 0,
+        speed_limited: settings.speed_limit_enabled && settings.speed_limit_kib > 0,
         takeover_enabled: settings.takeover_enabled,
         clipboard_watch: settings.clipboard_watch,
     };
     Some((tooltip, state))
+}
+
+fn toggle_speed_limit_updates(
+    settings: &hls_native_shell::CoreSettings,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let mut updates = std::collections::BTreeMap::new();
+    if settings.speed_limit_enabled && settings.speed_limit_kib > 0 {
+        updates.insert(
+            "download_speed_limit_enabled".into(),
+            serde_json::json!(false),
+        );
+    } else {
+        updates.insert(
+            "download_speed_limit_enabled".into(),
+            serde_json::json!(true),
+        );
+        if settings.speed_limit_kib == 0 {
+            updates.insert("download_speed_limit_kib".into(), serde_json::json!(1024));
+        }
+    }
+    updates
 }
 
 fn sync_tray_state_if_changed(
@@ -107,7 +128,6 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
     std::thread::Builder::new()
         .name("v7-tray-actions".into())
         .spawn(move || {
-            let mut remembered_speed_limit_kib: u64 = 1024;
             while let Ok(action) = receiver.recv() {
                 match action {
                     hls_native_shell::TrayAction::ShowMain => {
@@ -132,16 +152,8 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
                     }
                     hls_native_shell::TrayAction::ToggleSpeedLimit => {
                         if let Ok(settings) = action_server.coordinator().settings() {
-                            let next = if settings.speed_limit_kib > 0 {
-                                remembered_speed_limit_kib = settings.speed_limit_kib;
-                                0
-                            } else {
-                                remembered_speed_limit_kib.max(1)
-                            };
-                            if let Err(error) = action_server
-                                .coordinator()
-                                .set_setting("download_speed_limit_kib", serde_json::json!(next))
-                            {
+                            let updates = toggle_speed_limit_updates(&settings);
+                            if let Err(error) = action_server.coordinator().set_settings(updates) {
                                 eprintln!("tray toggle speed limit failed: {error}");
                             } else if let Some((tooltip, state)) =
                                 current_tray_snapshot(&action_server)
@@ -538,5 +550,65 @@ mod tests {
             super::format_tray_tooltip(3, 5 * 1024 * 1024 + 512 * 1024),
             "HLS Downloader · 3 下载中 · 5.5 MB/s"
         );
+    }
+
+    #[test]
+    fn tray_speed_limit_toggle_preserves_saved_kib_and_defaults_zero_to_1024() {
+        let server = hls_native_shell::CoreServer::in_memory().unwrap();
+        let coordinator = server.coordinator();
+
+        // Initially 0 KiB / disabled -> enabling defaults speed_limit_kib to 1024.
+        let (_, state) = super::current_tray_snapshot(&server).unwrap();
+        assert!(!state.speed_limited);
+        let initial = coordinator.settings().unwrap();
+        coordinator
+            .set_settings(super::toggle_speed_limit_updates(&initial))
+            .unwrap();
+        let enabled = coordinator.settings().unwrap();
+        assert!(enabled.speed_limit_enabled);
+        assert_eq!(enabled.speed_limit_kib, 1024);
+        assert!(
+            super::current_tray_snapshot(&server)
+                .unwrap()
+                .1
+                .speed_limited
+        );
+
+        // User configures 768 KiB/s -> tray toggle off disables without zeroing 768.
+        coordinator
+            .set_setting("download_speed_limit_kib", serde_json::json!(768))
+            .unwrap();
+        let configured = coordinator.settings().unwrap();
+        coordinator
+            .set_settings(super::toggle_speed_limit_updates(&configured))
+            .unwrap();
+        let paused = coordinator.settings().unwrap();
+        assert!(!paused.speed_limit_enabled);
+        assert_eq!(paused.speed_limit_kib, 768);
+        assert!(
+            !super::current_tray_snapshot(&server)
+                .unwrap()
+                .1
+                .speed_limited
+        );
+
+        // Tray toggle back on restores exact 768 KiB/s.
+        coordinator
+            .set_settings(super::toggle_speed_limit_updates(&paused))
+            .unwrap();
+        let restored = coordinator.settings().unwrap();
+        assert!(restored.speed_limit_enabled);
+        assert_eq!(restored.speed_limit_kib, 768);
+        assert!(
+            super::current_tray_snapshot(&server)
+                .unwrap()
+                .1
+                .speed_limited
+        );
+
+        // Clean up global throttle state.
+        coordinator
+            .set_setting("download_speed_limit_kib", serde_json::json!(0))
+            .unwrap();
     }
 }

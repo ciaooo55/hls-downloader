@@ -66,6 +66,9 @@ impl CoreRuntime {
             if let Some(snapshot) = runtime.tasks.get_mut(&task_id).map(Arc::make_mut) {
                 spec.queue_id = snapshot.queue_id.clone();
                 snapshot.speed_limit_kib = spec.speed_limit_kib;
+                if snapshot.source_page_url.is_empty() && !spec.source_page_url.is_empty() {
+                    snapshot.source_page_url = spec.source_page_url.clone();
+                }
             }
             runtime.specs.insert(task_id, Arc::new(spec));
         }
@@ -216,6 +219,7 @@ impl CoreRuntime {
             | CoreCommand::InstallUpdate { .. }
             | CoreCommand::ProbeUrl { .. }
             | CoreCommand::RefreshTaskRequest { .. }
+            | CoreCommand::ArmTaskRefresh { .. }
             | CoreCommand::ProbeTorrent { .. }
             | CoreCommand::SelectTorrentFiles { .. }
             | CoreCommand::GetTaskTorrentFiles { .. }
@@ -246,20 +250,44 @@ impl CoreRuntime {
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) {
+        self.replace_spec_inner(task_id, spec, false);
+    }
+
+    pub fn replace_spec_clearing_error(&mut self, task_id: &str, spec: TaskSpec) {
+        self.replace_spec_inner(task_id, spec, true);
+    }
+
+    fn replace_spec_inner(&mut self, task_id: &str, spec: TaskSpec, clear_error: bool) {
         let updated = self
             .tasks
             .get_mut(task_id)
             .map(Arc::make_mut)
             .map(|snapshot| {
                 snapshot.url = spec.url.clone();
+                snapshot.request_method = spec.request_method.clone();
+                snapshot.source_page_url = spec.source_page_url.clone();
                 snapshot.speed_limit_kib = spec.speed_limit_kib;
                 snapshot.mirror_status = pending_mirror_status(&spec.mirrors);
+                if clear_error {
+                    snapshot.error_code = None;
+                    snapshot.error_message = None;
+                    snapshot.error_stage.clear();
+                    snapshot.error_url.clear();
+                    snapshot.error_hint.clear();
+                    snapshot.http_status = None;
+                    snapshot.error_attempt = 0;
+                }
                 snapshot.clone()
             });
         self.specs.insert(task_id.to_string(), Arc::new(spec));
         if let Some(snapshot) = updated {
             self.publish(CoreEvent::TaskUpdated { snapshot });
         }
+    }
+
+    pub(crate) fn allocate_handoff_id(&mut self) -> String {
+        self.next_handoff += 1;
+        format!("handoff-{}", self.next_handoff)
     }
 
     pub fn pending_handoff(&self, handoff_id: &str) -> Option<&ResourceOffer> {
@@ -525,6 +553,7 @@ impl CoreRuntime {
             mirrors: spec.mirrors.clone(),
             scheduled_start_at: spec.scheduled_start_at.clone(),
             scheduled_stop_at: spec.scheduled_stop_at.clone(),
+            source_page_url: spec.source_page_url.clone(),
         };
         self.specs.insert(snapshot.task_id.clone(), Arc::new(spec));
         let mut snapshot = snapshot;
@@ -591,6 +620,7 @@ impl CoreRuntime {
             preferred_bandwidth: offer.preferred_bandwidth,
             preferred_height: offer.preferred_height,
             preferred_variant_id: offer.preferred_variant_id.clone(),
+            source_page_url: offer.source_page_url,
             ..Default::default()
         };
         let snapshot = self.create_task(spec);

@@ -647,6 +647,46 @@ impl PersistentCore {
         Ok(())
     }
 
+    pub(crate) fn apply_armed_refresh(
+        &mut self,
+        task_id: &str,
+        spec: TaskSpec,
+        handoff_id: String,
+        handoff: Option<crate::contract::BrowserHandoff>,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        crate::download_worker::validate_filename(&spec.filename)?;
+        if self.runtime.snapshot(task_id).is_none() {
+            return Err(format!("unknown task {task_id}"));
+        }
+        let clean = redact_urls(spec.clone())?;
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        let resolved_handoff_id = if handoff_id.trim().is_empty() {
+            self.runtime.allocate_handoff_id()
+        } else {
+            handoff_id
+        };
+        self.runtime.replace_spec_clearing_error(task_id, clean);
+        let _ = self.runtime.emit(crate::CoreEvent::HandoffResolved {
+            handoff_id: resolved_handoff_id,
+            task_id: Some(task_id.to_string()),
+        });
+        let _ = self.runtime.emit(crate::CoreEvent::Toast {
+            level: "info".into(),
+            message: "下载地址与凭据已刷新，正在断点续传".into(),
+        });
+        let events = self.runtime.events_after(sequence, 16);
+        if let Err(error) =
+            self.store
+                .apply_events_spec_and_handoff(&events, Some(&spec), handoff.as_ref())
+        {
+            self.runtime = before;
+            return Err(error);
+        }
+        self.committed(&events);
+        Ok(events)
+    }
+
     pub fn pending_handoff(&self, handoff_id: &str) -> Option<crate::ResourceOffer> {
         self.runtime.pending_handoff(handoff_id).cloned()
     }

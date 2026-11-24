@@ -222,3 +222,24 @@ export function resolveFormDownloadUrl(formActionAttribute: string, submitFormAc
 export function linkOpensNewTab(target = ''): boolean {
   return String(target || '').trim().toLowerCase() === '_blank'
 }
+
+/** True when a KeyboardEvent corresponds to the Insert key (IDM-style force-takeover hotkey). */
+export function isForceTakeoverKey(event: { key?: string; code?: string }): boolean {
+  return event.key === 'Insert' || event.code === 'Insert'
+}
+
+/**
+ * Resolve click modifiers for download takeover intent.
+ *
+ * Force-takeover uses the tracked `Insert` key rather than `Ctrl+Click` so the
+ * browser's built-in "Open in new tab" shortcut is never hijacked. `Alt+Click`
+ * remains the bypass modifier and takes precedence if both are held.
+ */
+export function resolveTakeoverClickModifiers(input: {
+  altKey?: boolean
+  insertHeld?: boolean
+}): { altBypass: boolean; ctrlForce: boolean } {
+  const altBypass = Boolean(input.altKey)
+  const ctrlForce = !altBypass && Boolean(input.insertHeld)
+  return { altBypass, ctrlForce }
+}
