@@ -78,7 +78,8 @@ enum HostCore {
 
 impl HostCore {
     fn open_workbench(&mut self) -> Result<(), String> {
-        self.handle(CoreCommand::OpenMain { launch_id: None })?;
+        self.handle(CoreCommand::OpenMain { launch_id: None })
+            .map_err(|error| format!("core:{error}"))?;
         // In-process protocol fixtures must not launch a cached real desktop
         // binary. Packaged integration tests exercise the remote Core path.
         #[cfg(test)]
@@ -87,7 +88,7 @@ impl HostCore {
         }
         if let Some(root) = crate::install_root() {
             if !crate::spawn_desktop_ui(&root, None) {
-                return Err("无法启动桌面工作台".into());
+                return Err("spawn:无法启动桌面工作台".into());
             }
         }
         Ok(())
@@ -289,10 +290,23 @@ impl HostCore {
 }
 
 impl NativeHostSession {
-    fn open_default() -> Result<Self, String> {
+    fn open_existing() -> Result<Self, String> {
+        Ok(Self::from_backend(HostCore::Remote(connect_existing_core(
+            Duration::from_millis(50),
+        )?)))
+    }
+
+    fn open_or_start() -> Result<Self, String> {
         Ok(Self::from_backend(HostCore::Remote(
             connect_or_start_core()?
         )))
+    }
+
+    fn open_for_policy(policy: CoreConnectPolicy) -> Result<Self, String> {
+        match policy {
+            CoreConnectPolicy::ExistingOnly => Self::open_existing(),
+            CoreConnectPolicy::AllowAutostart => Self::open_or_start(),
+        }
     }
 
     #[cfg(test)]
@@ -387,6 +401,11 @@ impl NativeHostSession {
                 "verifiable": false,
             })),
             Err(error) => {
+                if let Some(("core", detail)) = error.split_once(':') {
+                    if is_pipe_transport_error(detail) {
+                        return Err(detail.to_string());
+                    }
+                }
                 let (code, detail) = match error.split_once(':') {
                     Some(("core", detail)) => ("core_unreachable", detail.to_string()),
                     Some(("spawn", detail)) => ("workbench_spawn_failed", detail.to_string()),
@@ -470,10 +489,6 @@ impl NativeHostSession {
     fn offer(&mut self, message: &Value, allow_local_file: bool) -> Result<Value, String> {
         let payload = resource_payload(message)?;
         let mut offer = parse_offer(payload, allow_local_file)?;
-        if matches!(&self.core, HostCore::Remote(_)) {
-            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
-            crate::core_spawn::ensure_presenter(&root)?;
-        }
         let request_id = payload
             .get("client_request_id")
             .and_then(Value::as_str)
@@ -489,6 +504,14 @@ impl NativeHostSession {
             {
                 return Ok(json!({"ok": true, "handoff": public_handoff(&existing, None)}));
             }
+        } else if matches!(&self.core, HostCore::Remote(_)) {
+            // Confirm the Core pipe is still live before launching Presenter,
+            // so a stale session after tray Shutdown cannot spawn an orphan UI.
+            self.core.handle(CoreCommand::Ping)?;
+        }
+        if matches!(&self.core, HostCore::Remote(_)) {
+            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
+            crate::core_spawn::ensure_presenter(&root)?;
         }
 
         let owned_credential_ref = self.persist_browser_context(payload)?;
@@ -965,17 +988,21 @@ impl NativeHostSession {
     }
 }
 
-/// Native Messaging may be the first product process after sign-in. Start the
-/// packaged Core only after the normal pipe connection has failed.
+fn connect_existing_core(timeout: Duration) -> Result<CoreIpcClient, String> {
+    CoreIpcClient::connect_existing(timeout)
+}
+
+/// Start the packaged Core only for explicit user-initiated operations after
+/// probing an already-running Core fails.
 fn connect_or_start_core() -> Result<CoreIpcClient, String> {
     // 未运行时尽快启动；首次启动协调持续到 IPC 就绪，启动后的完整重试仍保留。
-    match CoreIpcClient::connect_existing(Duration::from_millis(10)) {
+    match connect_existing_core(Duration::from_millis(10)) {
         Ok(client) => Ok(client),
         Err(first_error) => {
             #[cfg(windows)]
             let _launch = crate::instance::lock_core_launch()?;
             // 等待启动锁时，另一个 Host 可能已经使 Core 就绪。
-            if let Ok(client) = CoreIpcClient::connect_existing(Duration::from_millis(10)) {
+            if let Ok(client) = connect_existing_core(Duration::from_millis(10)) {
                 return Ok(client);
             }
             let root = crate::install_root()
@@ -1051,12 +1078,13 @@ pub fn run() -> i32 {
     if profile {
         eprintln!("native_host_startup stage=entry elapsed_us=0");
     }
-    // Core 不可达时不再直接退出：浏览器只会看到“宿主已退出”，无法与“宿主未注册”
-    // 区分。保持端口，按请求重试连接，并以 core_unreachable 明确回复。
-    let mut session = match NativeHostSession::open_default() {
+    // Core 不可达时不再直接退出，也不在启动或被动探活时拉起下载引擎：
+    // 用户通过托盘“退出下载引擎”后，浏览器仍保持宿主端口，不能由心跳或状态查询复活 Core。
+    // 仅显式启动/下载/投送请求允许冷启动，其余请求仅复用已运行的 Core，离线时返回 core_unreachable。
+    let mut session = match NativeHostSession::open_existing() {
         Ok(session) => Some(session),
         Err(error) => {
-            eprintln!("v7 Core startup failed: {error}");
+            eprintln!("v7 Core not running at Native Host startup: {error}");
             None
         }
     };
@@ -1085,7 +1113,7 @@ pub fn run() -> i32 {
         let response = dispatch_session_message(
             &mut session,
             &message,
-            NativeHostSession::open_default,
+            NativeHostSession::open_for_policy,
             |active, msg| active.dispatch(msg),
         );
         let response = attach_request_id(response, request_id);
@@ -1096,11 +1124,32 @@ pub fn run() -> i32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoreConnectPolicy {
+    ExistingOnly,
+    AllowAutostart,
+}
+
+fn core_connect_policy(message: &Value) -> CoreConnectPolicy {
+    // Only explicit user-initiated launch/action operations may cold-start
+    // HLSDownloaderEngine. Passive heartbeats (`ping`), status polling
+    // (`handoff_status`, `media_push_status`, `workbench_status`), background
+    // sync (`set_takeover_settings`, `offer_local_file`, `recover_offer`),
+    // passive subtitle queries, and handoff decisions must connect only to an
+    // already-running Core so an explicit tray Shutdown is never undone by an
+    // open browser.
+    match message.get("op").and_then(Value::as_str).unwrap_or("") {
+        "activate" | "offer" | "download" | "media_push" => CoreConnectPolicy::AllowAutostart,
+        _ => CoreConnectPolicy::ExistingOnly,
+    }
+}
+
 fn is_pipe_transport_error(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
     error.starts_with("Core pipe ")
         || error.starts_with("Core TCP ")
         || error.starts_with("Core IPC ")
+        || error.starts_with("Core stream ")
         || lower.contains("broken pipe")
         || lower.contains("pipe has been ended")
         || lower.contains("os error 109")
@@ -1111,14 +1160,16 @@ fn is_pipe_transport_error(error: &str) -> bool {
 }
 
 fn is_safe_to_retry_after_transport_error(message: &Value) -> bool {
-    // Only strictly read-only / idempotent operations may auto-retry after a
-    // transport drop. Multi-RPC mutating ops (`download`, `media_push`,
-    // `accept_handoff`, `reject_handoff`, etc.) can fail on a follow-up write
-    // after step 1 already committed, so they must fail closed and drop the
-    // dead session instead of replaying.
+    // Only strictly read-only / idempotent operations (and `activate`, which
+    // only propagates a pipe transport error from its pre-spawn `Ping` probe)
+    // may auto-retry after a transport drop. Multi-RPC mutating ops (`download`,
+    // `media_push`, `accept_handoff`, `reject_handoff`, etc.) can fail on a
+    // follow-up write after step 1 already committed, so they must fail closed
+    // and drop the dead session instead of replaying.
     matches!(
         message.get("op").and_then(Value::as_str).unwrap_or(""),
         "ping"
+            | "activate"
             | "version"
             | "status"
             | "list_tasks"
@@ -1133,12 +1184,13 @@ fn is_safe_to_retry_after_transport_error(message: &Value) -> bool {
 fn dispatch_session_message<S>(
     session: &mut Option<S>,
     message: &Value,
-    mut open: impl FnMut() -> Result<S, String>,
+    mut open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
+    let policy = core_connect_policy(message);
     for attempt in 0..2 {
         if session.is_none() {
-            match open() {
+            match open(policy) {
                 Ok(connected) => *session = Some(connected),
                 Err(error) => {
                     eprintln!("v7 Core still unavailable: {error}");
@@ -2518,11 +2570,14 @@ mod tests {
     fn broken_pipe_drops_session_and_reconnects_on_retry_or_next_request() {
         let mut session = Some(1u32);
         let mut opened = 1u32;
-        // Read-only op auto-retries once on Core IPC close / broken pipe.
+        let mut observed_policies = Vec::new();
+        // Read-only op auto-retries once on Core IPC close / broken pipe, using
+        // ExistingOnly so a clean shutdown never respawns Core.
         let response = dispatch_session_message(
             &mut session,
             &json!({"op": "handoff_status"}),
-            || {
+            |policy| {
+                observed_policies.push(policy);
                 opened += 1;
                 Ok(opened)
             },
@@ -2537,6 +2592,7 @@ mod tests {
         assert_eq!(response["ok"], true);
         assert_eq!(response["session"], 2);
         assert_eq!(session, Some(2));
+        assert_eq!(observed_policies, vec![CoreConnectPolicy::ExistingOnly]);
 
         // Mutating ops must NOT auto-replay even on pipe write failure (multi-RPC
         // operations may have already committed an earlier step).
@@ -2544,7 +2600,8 @@ mod tests {
         let write_fail = dispatch_session_message(
             &mut session,
             &json!({"op": "media_push"}),
-            || {
+            |policy| {
+                observed_policies.push(policy);
                 opened += 1;
                 Ok(opened)
             },
@@ -2557,11 +2614,12 @@ mod tests {
         assert_eq!(write_fail["code"], "core_unreachable");
         assert_eq!(session, None);
 
-        // Next request reconnects cleanly.
+        // Next request reconnects cleanly (without autostart for `ping`).
         let recovered = dispatch_session_message(
             &mut session,
             &json!({"op": "ping"}),
-            || {
+            |policy| {
+                observed_policies.push(policy);
                 opened += 1;
                 Ok(opened)
             },
@@ -2570,6 +2628,13 @@ mod tests {
         assert_eq!(recovered["ok"], true);
         assert_eq!(recovered["session"], 3);
         assert_eq!(session, Some(3));
+        assert_eq!(
+            observed_policies,
+            vec![
+                CoreConnectPolicy::ExistingOnly,
+                CoreConnectPolicy::ExistingOnly
+            ]
+        );
     }
 
     #[test]
@@ -2578,7 +2643,7 @@ mod tests {
         let response = dispatch_session_message(
             &mut session,
             &json!({"op": "offer"}),
-            || Ok(2u32),
+            |_| Ok(2u32),
             |_, _| Ok(json!({"ok": false, "transport_error": true, "error": "pipe closed"})),
         );
         assert_eq!(response["transport_error"], true);
@@ -2588,10 +2653,268 @@ mod tests {
         let response = dispatch_session_message(
             &mut session,
             &json!({"op": "workbench_status"}),
-            || Ok(2u32),
+            |_| Ok(2u32),
             |_, _| Ok(json!({"ok": false, "code": "core_unreachable", "error": "eof"})),
         );
         assert_eq!(response["code"], "core_unreachable");
         assert_eq!(session, None);
+    }
+
+    #[test]
+    fn core_connect_policy_classifies_passive_and_explicit_ops() {
+        for message in [
+            json!({"op": "activate"}),
+            json!({"op": "offer"}),
+            json!({"op": "download"}),
+            json!({"op": "media_push"}),
+        ] {
+            assert_eq!(
+                core_connect_policy(&message),
+                CoreConnectPolicy::AllowAutostart,
+                "expected autostart for {message}"
+            );
+        }
+
+        for message in [
+            json!({"op": "ping"}),
+            json!({"op": "ping", "interactive": true}),
+            json!({"op": "handoff_status", "handoff_id": "h-1"}),
+            json!({"op": "media_push_status", "request_id": "m-1"}),
+            json!({"op": "workbench_status", "launch_id": "l-1", "since_sequence": 0}),
+            json!({"op": "set_takeover_settings", "enabled": false}),
+            json!({"op": "offer_local_file"}),
+            json!({"op": "recover_offer"}),
+            json!({"op": "subtitle", "request": {"action": "configuration"}}),
+            json!({"op": "accept_handoff", "handoff_id": "h-1"}),
+            json!({"op": "reject_handoff", "handoff_id": "h-1"}),
+            json!({"op": "list_tasks"}),
+            json!({"op": "get_settings"}),
+            json!({"op": "poll_refresh_requests"}),
+            json!({"op": "unknown_op"}),
+            json!({}),
+        ] {
+            assert_eq!(
+                core_connect_policy(&message),
+                CoreConnectPolicy::ExistingOnly,
+                "passive/background op must never autostart Core: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn passive_ops_when_core_absent_never_autostart_and_return_core_unreachable() {
+        let mut session: Option<NativeHostSession> = None;
+        let mut autostart_calls = 0usize;
+        let mut existing_only_calls = 0usize;
+
+        for message in [
+            json!({"op": "ping"}),
+            json!({"op": "ping", "interactive": true}),
+            json!({"op": "handoff_status", "handoff_id": "handoff-1"}),
+            json!({"op": "media_push_status", "request_id": "media-push-1"}),
+            json!({"op": "workbench_status", "launch_id": "launch-1", "since_sequence": 0}),
+            json!({"op": "set_takeover_settings", "enabled": true}),
+            json!({"op": "offer_local_file", "resource": {"url": "blob:https://site.test/x"}}),
+            json!({"op": "recover_offer", "resource": {"url": "https://cdn.test/a.bin", "client_request_id": "r-1"}}),
+            json!({"op": "subtitle", "request": {"action": "configuration"}}),
+            json!({"op": "list_tasks"}),
+            json!({"op": "get_settings"}),
+            json!({"op": "poll_refresh_requests"}),
+        ] {
+            let response = dispatch_session_message(
+                &mut session,
+                &message,
+                |policy| match policy {
+                    CoreConnectPolicy::ExistingOnly => {
+                        existing_only_calls += 1;
+                        Err("Core not running".into())
+                    }
+                    CoreConnectPolicy::AllowAutostart => {
+                        autostart_calls += 1;
+                        NativeHostSession::in_memory()
+                    }
+                },
+                |active, msg| active.dispatch(msg),
+            );
+            assert_eq!(
+                response["ok"], false,
+                "message={message} response={response}"
+            );
+            assert_eq!(
+                response["code"], "core_unreachable",
+                "message={message} response={response}"
+            );
+            assert_eq!(response["stage"], "core");
+            assert!(
+                !response["error"].as_str().unwrap_or("").is_empty(),
+                "message={message} response={response}"
+            );
+            assert!(session.is_none());
+        }
+
+        assert_eq!(autostart_calls, 0);
+        assert_eq!(existing_only_calls, 12);
+    }
+
+    #[test]
+    fn passive_ops_after_core_shutdown_do_not_respawn_core() {
+        let server = crate::CoreServer::in_memory().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client)));
+
+        let autostart_calls = std::sync::atomic::AtomicUsize::new(0);
+        let mut open = |policy| match policy {
+            CoreConnectPolicy::ExistingOnly => {
+                CoreIpcClient::connect_addr_timeout(addr, Duration::from_millis(25))
+                    .map(|client| NativeHostSession::from_backend(HostCore::Remote(client)))
+            }
+            CoreConnectPolicy::AllowAutostart => {
+                autostart_calls.fetch_add(1, Ordering::SeqCst);
+                NativeHostSession::in_memory()
+            }
+        };
+
+        // Live Core answers ping normally.
+        let live_ping = dispatch_session_message(
+            &mut session,
+            &json!({"op": "ping"}),
+            &mut open,
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(live_ping["ok"], true);
+        assert_eq!(autostart_calls.load(Ordering::SeqCst), 0);
+
+        // Simulate Tray "退出下载引擎" (`CoreCommand::Shutdown`).
+        let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
+        shutdown_client.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown_client);
+        worker.join().unwrap().unwrap();
+
+        // Passive heartbeats & background ops must drop the dead session,
+        // return `core_unreachable`, and never request autostart.
+        for message in [
+            json!({"op": "ping"}),
+            json!({"op": "ping", "interactive": true}),
+            json!({"op": "handoff_status", "handoff_id": "handoff-1"}),
+            json!({"op": "media_push_status", "request_id": "media-push-1"}),
+            json!({"op": "set_takeover_settings", "enabled": false}),
+            json!({"op": "subtitle", "request": {"action": "configuration"}}),
+        ] {
+            let response =
+                dispatch_session_message(&mut session, &message, &mut open, |active, msg| {
+                    active.dispatch(msg)
+                });
+            assert_eq!(
+                response["ok"], false,
+                "message={message} response={response}"
+            );
+            assert_eq!(
+                response["code"], "core_unreachable",
+                "message={message} response={response}"
+            );
+            assert_eq!(response["stage"], "core");
+            assert!(session.is_none());
+        }
+        assert_eq!(autostart_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn explicit_launch_and_action_ops_autostart_core_when_absent_or_after_shutdown() {
+        // 1. Cold start (session == None) for explicit user-initiated ops.
+        for (message, check_field) in [
+            (json!({"op": "activate"}), "activated"),
+            (
+                json!({
+                    "op": "offer",
+                    "resource": {
+                        "url": "https://cdn.test/video.mp4",
+                        "filename": "video.mp4",
+                        "resource_kind": "file",
+                        "client_request_id": "explicit-offer-1"
+                    }
+                }),
+                "handoff",
+            ),
+            (
+                json!({
+                    "op": "download",
+                    "resource": {
+                        "url": "https://cdn.test/movie.m3u8",
+                        "filename": "movie.mp4",
+                        "resource_kind": "hls"
+                    }
+                }),
+                "task",
+            ),
+            (
+                json!({
+                    "op": "media_push",
+                    "kind": "tvbox",
+                    "resource": {
+                        "url": "https://cdn.test/live.m3u8",
+                        "title": "Live"
+                    }
+                }),
+                "id",
+            ),
+        ] {
+            let mut session: Option<NativeHostSession> = None;
+            let mut autostart_calls = 0usize;
+            let response = dispatch_session_message(
+                &mut session,
+                &message,
+                |policy| {
+                    assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                    autostart_calls += 1;
+                    NativeHostSession::in_memory()
+                },
+                |active, msg| active.dispatch(msg),
+            );
+            assert_eq!(
+                response["ok"], true,
+                "message={message} response={response}"
+            );
+            assert!(
+                !response[check_field].is_null(),
+                "message={message} response={response}"
+            );
+            assert_eq!(autostart_calls, 1);
+            assert!(session.is_some());
+        }
+
+        // 2. Stale session immediately after `CoreCommand::Shutdown`: clicking
+        // "主程序" (`activate`) must drop the dead pipe, autostart Core, and
+        // succeed on the first request without failing with `core_unreachable`.
+        let server = crate::CoreServer::in_memory().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client)));
+
+        let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
+        shutdown_client.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown_client);
+        worker.join().unwrap().unwrap();
+
+        let mut autostart_calls = 0usize;
+        let activated = dispatch_session_message(
+            &mut session,
+            &json!({"op": "activate"}),
+            |policy| {
+                assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                autostart_calls += 1;
+                NativeHostSession::in_memory()
+            },
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(activated["ok"], true, "activated={activated}");
+        assert_eq!(activated["activated"], true);
+        assert_eq!(activated["stage"], "launching");
+        assert_eq!(autostart_calls, 1);
+        assert!(session.is_some());
     }
 }
