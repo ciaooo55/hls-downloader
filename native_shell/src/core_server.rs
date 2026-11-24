@@ -826,6 +826,8 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
             takeover_minimum_bytes: settings.takeover_minimum_bytes,
             legal_accepted: settings.legal_accepted,
             speed_limit_kib: settings.speed_limit_kib,
+            speed_limit_enabled: settings.speed_limit_enabled,
+            quick_download_enabled: settings.quick_download_enabled,
             hourly_quota_mib: settings.hourly_quota_mib,
             schedule_enabled: settings.schedule_enabled,
             schedule_start: settings.schedule_start,

@@ -216,6 +216,7 @@ impl CoreRuntime {
             | CoreCommand::InstallUpdate { .. }
             | CoreCommand::ProbeUrl { .. }
             | CoreCommand::RefreshTaskRequest { .. }
+            | CoreCommand::ArmTaskRefresh { .. }
             | CoreCommand::ProbeTorrent { .. }
             | CoreCommand::SelectTorrentFiles { .. }
             | CoreCommand::GetTaskTorrentFiles { .. }
@@ -525,6 +526,7 @@ impl CoreRuntime {
             mirrors: spec.mirrors.clone(),
             scheduled_start_at: spec.scheduled_start_at.clone(),
             scheduled_stop_at: spec.scheduled_stop_at.clone(),
+            source_page_url: spec.source_page_url.clone(),
         };
         self.specs.insert(snapshot.task_id.clone(), Arc::new(spec));
         let mut snapshot = snapshot;

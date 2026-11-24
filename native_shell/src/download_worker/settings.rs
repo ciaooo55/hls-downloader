@@ -26,6 +26,8 @@ pub struct CoreSettings {
     pub takeover_minimum_bytes: u64,
     pub legal_accepted: bool,
     pub speed_limit_kib: u64,
+    pub speed_limit_enabled: bool,
+    pub quick_download_enabled: bool,
     pub hourly_quota_mib: u64,
     pub schedule_enabled: bool,
     pub schedule_start: String,
@@ -123,6 +125,13 @@ impl CoreCoordinator {
                 .to_string_lossy()
                 .into_owned()
         };
+        let speed_limit_kib = core.store().setting_u64("download_speed_limit_kib", 0)?;
+        let speed_limit_enabled = core
+            .store()
+            .setting_bool("download_speed_limit_enabled", speed_limit_kib > 0)?;
+        let quick_download_enabled = core
+            .store()
+            .setting_bool("browser_quick_download_enabled", false)?;
         let loaded = CoreSettings {
             takeover_enabled: core
                 .store()
@@ -131,7 +140,9 @@ impl CoreCoordinator {
                 .store()
                 .setting_u64("browser_takeover_minimum_bytes", 0)?,
             legal_accepted: core.store().setting_bool("legal_terms_accepted", false)?,
-            speed_limit_kib: core.store().setting_u64("download_speed_limit_kib", 0)?,
+            speed_limit_kib,
+            speed_limit_enabled,
+            quick_download_enabled,
             hourly_quota_mib: core.store().setting_u64("download_hourly_quota_mib", 0)?,
             schedule_enabled: core
                 .store()

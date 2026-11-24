@@ -218,6 +218,8 @@ pub struct TaskSnapshot {
     pub scheduled_start_at: String,
     #[serde(default)]
     pub scheduled_stop_at: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_page_url: String,
 }
 
 impl Default for TaskSnapshot {
@@ -272,6 +274,7 @@ impl Default for TaskSnapshot {
             mirrors: Vec::new(),
             scheduled_start_at: String::new(),
             scheduled_stop_at: String::new(),
+            source_page_url: String::new(),
         }
     }
 }
@@ -406,6 +409,8 @@ pub struct TaskSpec {
     pub torrent_selection: Vec<TorrentFileSelection>,
     #[serde(default)]
     pub torrent_piece_count: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_page_url: String,
 }
 
 impl std::fmt::Debug for TaskSpec {
@@ -458,6 +463,7 @@ impl Default for TaskSpec {
             queue_id: default_queue_id(),
             torrent_selection: Vec::new(),
             torrent_piece_count: 0,
+            source_page_url: String::new(),
         }
     }
 }
@@ -663,6 +669,12 @@ pub enum CoreCommand {
         #[serde(default)]
         auto_resume: bool,
     },
+    /// Arm (or disarm when `task_id` is empty) browser-assisted address refresh:
+    /// the next matching browser `OfferResource` updates this task's URL/credentials
+    /// and resumes from existing checkpoints instead of creating a duplicate task.
+    ArmTaskRefresh {
+        task_id: String,
+    },
     ProbeTorrent {
         source: String,
     },
@@ -774,6 +786,7 @@ impl std::fmt::Debug for CoreCommand {
             Self::InstallUpdate { .. } => "InstallUpdate",
             Self::ProbeUrl { .. } => "ProbeUrl",
             Self::RefreshTaskRequest { .. } => "RefreshTaskRequest",
+            Self::ArmTaskRefresh { .. } => "ArmTaskRefresh",
             Self::ProbeTorrent { .. } => "ProbeTorrent",
             Self::SelectTorrentFiles { .. } => "SelectTorrentFiles",
             Self::GetTaskTorrentFiles { .. } => "GetTaskTorrentFiles",
@@ -1138,6 +1151,7 @@ mod tests {
                 mirrors: Vec::new(),
                 scheduled_start_at: String::new(),
                 scheduled_stop_at: String::new(),
+                source_page_url: String::new(),
             },
         };
         // 与下面那些测试保持同一种序列化方式：直接 to_value，不给 CoreEvent 另造一个
