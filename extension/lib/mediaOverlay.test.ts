@@ -130,6 +130,15 @@ describe('media hover hit testing', () => {
       setStack([cover, video])
       expect(mediaElementAtPoint([video], { x: 200, y: 100 })).toBeNull()
     }
+    // Translucent player gradient scrims and pointer-events:none danmaku canvases
+    // (as used by Bilibili bpx-player) must not occlude video hover detection.
+    const gradientScrim = node('DIV', { backgroundImage: 'linear-gradient(rgba(0, 0, 0, 0.5), transparent)' })
+    const danmakuCanvas = node('CANVAS', { pointerEvents: 'none' })
+    setStack([gradientScrim, danmakuCanvas, video])
+    expect(mediaElementAtPoint([video], { x: 200, y: 100 })).toBe(video)
+    // An interactive canvas cover still blocks hover.
+    setStack([node('CANVAS', { pointerEvents: 'auto' }), video])
+    expect(mediaElementAtPoint([video], { x: 200, y: 100 })).toBeNull()
   })
 
   it('ignores covers hidden by their own visibility or ancestor opacity', () => {

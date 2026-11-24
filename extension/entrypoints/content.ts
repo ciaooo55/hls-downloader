@@ -11,7 +11,7 @@ import { mediaPushTerminalResult } from '../lib/mediaPush'
 import { pageDownloadUrls, selectedDownloadUrls } from '../lib/selectionLinks'
 import { formatBitrate, formatBytes, formatDuration } from '../lib/format'
 import { installSubtitleContent } from '../lib/subtitleContent'
-import { youtubePageVideoId } from '../lib/siteManifest'
+import { isBilibiliFullTrackMseUrl, sitePageVideoId } from '../lib/siteManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -104,7 +104,7 @@ export default defineContentScript({
       if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
       if (typeof detail.url === 'string') {
         earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType, inspection: detail.inspection, siteVideoId: detail.siteVideoId, sourcePageUrl: detail.sourcePageUrl, responseIdentity: detail.responseIdentity })
-        if (classifyResource(detail.url, detail.mimeType)) requestActivation()
+        if (classifyResource(detail.url, detail.mimeType) || detail.siteVideoId) requestActivation()
       }
       if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
     }
@@ -138,10 +138,11 @@ export default defineContentScript({
       const kind = String(message?.type || '')
       if (contentReady || !['captured-resource', 'collect-selection', 'collect-page-links', 'open-media-panel', 'download-error', 'rescan-media'].includes(kind)) return
       if (kind === 'captured-resource' && !message.resource?.url) return
-      earlyRuntimeMessages.push({ message, sendResponse: kind === 'rescan-media' ? sendResponse : undefined })
+      const expectsResponse = kind !== 'captured-resource'
+      earlyRuntimeMessages.push({ message, sendResponse: expectsResponse ? sendResponse : undefined })
       if (earlyRuntimeMessages.length > 100) earlyRuntimeMessages.splice(0, earlyRuntimeMessages.length - 100)
       requestActivation()
-      if (kind === 'rescan-media') return true
+      if (expectsResponse) return true
     }
     const srcdocPartitionContextListener = (message: any, _sender: any, sendResponse?: (response?: unknown) => void) => {
       if (message?.type !== 'srcdoc-partition-context') return
@@ -172,7 +173,7 @@ export default defineContentScript({
       const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT)
       let visited = 0
       let current = walker.nextNode() as Element | null
-      while (current && visited < 512) {
+      while (current && visited < 4096) {
         inspect(current)
         visited += 1
         current = walker.nextNode() as Element | null
@@ -197,6 +198,7 @@ export default defineContentScript({
           for (const node of mutation.addedNodes) {
             if (!(node instanceof Element)) continue
             if (node.shadowRoot) observeActivationRoot(node.shadowRoot)
+            else if (node.tagName.includes('-')) discoverActivationShadowRoots(node)
             if (node.matches('video,audio,source[src]') || node.querySelector('video,audio,source[src]')) {
               requestActivation()
               return
@@ -304,7 +306,7 @@ export default defineContentScript({
       return metadata.find(value => value?.trim())?.trim().replace(/^\(\d+\)\s*/, '') || ''
     }
     const ui = await createShadowRootUi(ctx, {
-      name: 'hls-downloader-media-panel', position: 'inline', anchor: 'body',
+      name: 'hls-downloader-media-panel', position: 'inline', anchor: () => document.body || document.documentElement,
       onMount(container) {
         const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
           const node = document.createElement(tag)
@@ -319,7 +321,7 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}[hidden]{display:none!important}button{font:13px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;letter-spacing:0}
           ${THEME_TOKENS_CSS}
           ${THEME_BASE_CSS}
-          .wrap{position:fixed;z-index:var(--z-extension-overlay);color:var(--text);pointer-events:none;visibility:hidden;transition:visibility 0s linear .18s}.wrap.open{pointer-events:auto;visibility:visible;transition-delay:0s}
+          .wrap{position:fixed;top:16px;right:16px;z-index:var(--z-extension-overlay);color:var(--text);pointer-events:none;visibility:hidden;transition:visibility 0s linear .18s}.wrap.open{pointer-events:auto;visibility:visible;transition-delay:0s}
           .panel{width:min(352px,calc(100vw - 20px));max-height:min(528px,calc(100vh - 20px));background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);overflow:hidden;opacity:0;transform:translateY(6px) scale(.985);transform-origin:top right;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.wrap.open .panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
           header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface-2) 86%,transparent);color:var(--text);font:650 12.5px "Segoe UI Variable Text","Segoe UI",system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:7px}.title img{width:18px;height:18px;border-radius:5px;box-shadow:var(--shadow-sm)}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:27px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);cursor:pointer}.pin{padding:0 9px;font:600 11px "Segoe UI Variable Text","Segoe UI",system-ui}.pin.active{border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green-ink)}.close{display:grid;place-items:center;width:27px;font:600 17px/1 system-ui}.pin:hover,.close:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(528px,calc(100vh - 20px)) - 80px);overflow-y:auto;overscroll-behavior:contain}.list::-webkit-scrollbar{width:7px}.list::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:color-mix(in srgb,var(--faint) 55%,transparent);background-clip:content-box}.list::-webkit-scrollbar-track{background:transparent}
@@ -353,8 +355,9 @@ export default defineContentScript({
         const panelWrap = element('div', 'wrap')
         const panel = element('div', 'panel')
         const header = element('header')
-        const title = element('span', 'title', '当前视频')
-        title.prepend(image())
+        const title = element('span', 'title')
+        const titleText = element('span', 'title-text', '当前视频')
+        title.append(image(), titleText)
         const headActions = element('div', 'head-actions')
         const pin = element('button', 'pin', '固定') as HTMLButtonElement
         pin.type = 'button'
@@ -490,6 +493,10 @@ export default defineContentScript({
       }
     }
     const panelEl = ui.shadow.querySelector<HTMLElement>('.panel')
+    const panelTitleEl = ui.shadow.querySelector<HTMLElement>('.title-text')
+    const setPanelTitle = (label: string) => {
+      if (panelTitleEl) setTextIfChanged(panelTitleEl, label)
+    }
     wrap?.setAttribute('aria-hidden', 'true')
     if (panelEl && 'inert' in panelEl) (panelEl as HTMLElement & { inert: boolean }).inert = true
     const setOpen = (open: boolean) => {
@@ -501,6 +508,15 @@ export default defineContentScript({
       wrap?.setAttribute('aria-hidden', String(!open))
       if (panelEl && 'inert' in panelEl) (panelEl as HTMLElement & { inert: boolean }).inert = !open
       if (open) fitPanel()
+    }
+    const openFloatingPanel = () => {
+      if (wrap && !panelPosition) {
+        wrap.style.left = ''
+        wrap.style.top = '16px'
+        wrap.style.right = '16px'
+      }
+      render()
+      setOpen(true)
     }
     const pinButton = ui.shadow.querySelector<HTMLButtonElement>('.pin')
     const setPinned = (value: boolean) => {
@@ -732,6 +748,7 @@ export default defineContentScript({
 
     const openVideoPanel = (video: HTMLVideoElement, rect: OverlayRect) => {
       if (!wrap) return
+      setPanelTitle('当前视频')
       activeVideo = video
       activePlayback = playbackByVideo.get(video) || null
       selectionMode = false
@@ -1508,6 +1525,9 @@ export default defineContentScript({
     const updateHoveredPlayer = () => {
       if (videoControlDragging || pointer.inControls || ui.shadow.activeElement) return
       const candidates = currentVideos().filter(video => {
+        if (!playbackByVideo.has(video) && !video.paused && !video.ended) {
+          markVideoPlayback(video, 'sync')
+        }
         if (!playbackByVideo.has(video)) return false
         const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
         return rect && rect.width >= 180 && rect.height >= 100
@@ -1527,7 +1547,7 @@ export default defineContentScript({
         }, HOVER_DISMISS_DELAY_MS)
       }
     }
-    ctx.addEventListener(document, 'pointermove', event => {
+    ctx.addEventListener(window, 'pointermove', event => {
       pointer = { x: event.clientX, y: event.clientY, inControls: event.composedPath().includes(ui.shadow.host) }
       scheduleVideoButtons()
     }, { capture: true, passive: true })
@@ -1552,7 +1572,19 @@ export default defineContentScript({
     } catch {
       // Cross-origin parent frames keep the child viewport bounds.
     }
-    ctx.addEventListener(document, 'fullscreenchange', scheduleVideoButtons)
+    const syncOverlayHostContainer = () => {
+      const fullscreen = document.fullscreenElement
+      const targetContainer = fullscreen && fullscreen.tagName !== 'VIDEO'
+        ? fullscreen
+        : (document.body || document.documentElement)
+      if (targetContainer && ui.shadowHost.parentElement !== targetContainer) {
+        targetContainer.append(ui.shadowHost)
+      }
+    }
+    ctx.addEventListener(document, 'fullscreenchange', () => {
+      syncOverlayHostContainer()
+      scheduleVideoButtons()
+    })
 
     videoResizeObserver = typeof ResizeObserver === 'undefined'
       ? null
@@ -1626,7 +1658,14 @@ export default defineContentScript({
       inspection?: Partial<MediaResource>,
       observedIdentity?: Record<string, string>,
     ) => {
-      const kind = playbackSource ? classifyPlaybackSource(url, mimeType) : classifyResource(url, mimeType)
+      const confirmedFullTrack = evidence.includes('site_player_metadata') || evidence.includes('mse_full_track')
+      const kind = playbackSource
+        ? classifyPlaybackSource(url, mimeType)
+        : (classifyResource(url, mimeType)
+          || (confirmedFullTrack && /^https?:\/\//i.test(url)
+            && (mimeType.toLowerCase().startsWith('video/') || isBilibiliFullTrackMseUrl(url))
+            ? 'media'
+            : null))
       if (!kind) return
       let filename = ''
       try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
@@ -1729,7 +1768,7 @@ export default defineContentScript({
       if (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended) {
         const changedPlayer = activeVideo !== video
         activeVideo = video
-        if (changedPlayer) {
+        if (changedPlayer && explicitActivation) {
           selectionMode = false
           selectionResourceIds = null
         }
@@ -1778,10 +1817,12 @@ export default defineContentScript({
       })
     }
     const observedMediaRoots = new WeakSet<Document | ShadowRoot>()
+    const knownShadowRoots = new Set<ShadowRoot>()
     const mediaEvents = ['play', 'playing', 'loadedmetadata', 'loadeddata', 'timeupdate'] as const
     const registerMediaRoot = (root: Document | ShadowRoot) => {
       if (observedMediaRoots.has(root)) return
       observedMediaRoots.add(root)
+      if (root instanceof ShadowRoot) knownShadowRoots.add(root)
       const discover = (node: ParentNode | Element) => {
         discoverSubtitlePlayers(node)
         if (node instanceof HTMLVideoElement) trackVideo(node)
@@ -1797,7 +1838,7 @@ export default defineContentScript({
         const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT)
         let visited = 0
         let current = walker.nextNode() as Element | null
-        while (current && visited < 1024) {
+        while (current && visited < 4096) {
           inspect(current)
           visited += 1
           current = walker.nextNode() as Element | null
@@ -1818,7 +1859,9 @@ export default defineContentScript({
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
               if (!(node instanceof Element)) return
-              const containsMedia = node.matches('video,audio,source')
+              const hasShadowCandidate = Boolean(node.shadowRoot) || node.tagName.includes('-')
+              const containsMedia = hasShadowCandidate
+                || node.matches('video,audio,source')
                 || Boolean(node.querySelector('video,audio,source'))
                 || [...geometryTargets].some(target => node.contains(target))
               if (!containsMedia) return
@@ -1865,9 +1908,10 @@ export default defineContentScript({
       const detail = bridgeDetail(event)
       if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
       // A buffered player response may arrive after an SPA navigation.
-      if (detail.siteVideoId && detail.siteVideoId !== youtubePageVideoId(location.href)) return
-      const evidence = detail.inspection?.inspected ? ['manifest_inspection', 'page_response']
-        : detail.siteVideoId ? ['site_player_metadata', 'page_response'] : []
+      if (detail.siteVideoId && detail.siteVideoId !== sitePageVideoId(location.href)) return
+      const evidence = detail.siteVideoId
+        ? ['site_player_metadata', 'page_response']
+        : detail.inspection?.inspected ? ['manifest_inspection', 'page_response'] : []
       add(detail.url, detail.mimeType, false, evidence, '', 0, detail.inspection, detail.responseIdentity)
     }
     const handleMseEvent = (event: Event) => {
@@ -1920,13 +1964,22 @@ export default defineContentScript({
       }
       if (isNewEvidence) {
         // YouTube-style `/videoplayback` often reaches MSE without a manifest.
-        // Register that stream as the current player resource; `.m4s`/`.ts`
-        // fragments still classify as null and stay out of the overlay.
+        // Register that stream as the current player resource; ordinary `.m4s`/`.ts`
+        // fragments stay out of the overlay, while Bilibili's full byte-ranged
+        // video track `.m4s` falls back cleanly when playinfo was unavailable.
         const ownerVideo = currentVideos().find(video =>
           mediaElementSources(video).some(source => source.url === blobUrl),
         )
         const owner = ownerVideo ? mediaOwner(ownerVideo) : `mse-source-buffer:${resourceId(blobUrl)}`
-        add(mediaUrl, '', false, ['mse_source_buffer'], owner, 0.97)
+        const coveredBySiteMetadata = [...resources.values()].some(item =>
+          item.evidence?.includes('site_player_metadata')
+          && (item.url === mediaUrl || (item.playbackUrls || []).includes(mediaUrl)),
+        )
+        if (!coveredBySiteMetadata && isBilibiliFullTrackMseUrl(mediaUrl)) {
+          add(mediaUrl, 'video/mp4', false, ['mse_source_buffer', 'mse_full_track'], owner, 0.97)
+        } else {
+          add(mediaUrl, '', false, ['mse_source_buffer'], owner, 0.97)
+        }
         scheduleRender()
       }
     }
@@ -1953,8 +2006,7 @@ export default defineContentScript({
       if (message?.type === 'download-error') {
         selectionMode = true
         selectionResourceIds = null
-        setOpen(true)
-        render()
+        openFloatingPanel()
         const result = ui.shadow.querySelector<HTMLElement>('.result')
         if (result) {
           result.hidden = false
@@ -1962,6 +2014,7 @@ export default defineContentScript({
           result.dataset.source = 'download'
           result.textContent = String(message.error || '下载请求失败，请重试')
         }
+        sendResponse?.({ ok: true })
         return
       }
       if (message?.type === 'captured-resource' && message.resource?.url) {
@@ -1981,7 +2034,11 @@ export default defineContentScript({
         return
       }
       if (message?.type === 'collect-selection') {
-        const selection = window.getSelection(); if (!selection?.rangeCount) return
+        const selection = window.getSelection()
+        if (!selection?.rangeCount) {
+          sendResponse?.({ ok: true, count: 0 })
+          return
+        }
         const root = selection.getRangeAt(0).cloneContents()
         const urls = selectedDownloadUrls(
           [...root.querySelectorAll<HTMLAnchorElement>('a[href]')].map(anchor => anchor.getAttribute('href') || ''),
@@ -2005,28 +2062,38 @@ export default defineContentScript({
           addResource(resource)
           selectionResourceIds?.add(resourceFingerprint(resource))
         })
-        setOpen(true)
-        render()
+        setPanelTitle('选中的链接')
+        openFloatingPanel()
+        sendResponse?.({ ok: true, count: selectionResourceIds.size })
         return
       }
       if (message?.type === 'collect-page-links') {
-        const anchorCandidates = [...document.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href], area[href]')]
-          .map(anchor => ({
-            href: anchor.getAttribute('href') || '',
-            download: anchor.hasAttribute('download'),
-          }))
-        const dataDownloadCandidates = [...document.querySelectorAll<HTMLElement>('[data-download-url], [data-file-url], [data-export-url]')]
-          .map(element => ({
-            href: element.getAttribute('data-download-url')
-              || element.getAttribute('data-file-url')
-              || element.getAttribute('data-export-url')
-              || '',
-            download: true,
-          }))
+        for (const shadowRoot of knownShadowRoots) {
+          if (!shadowRoot.host.isConnected) knownShadowRoots.delete(shadowRoot)
+        }
+        const queryRoots: Array<Document | ShadowRoot> = [document, ...knownShadowRoots]
+        const anchorCandidates = queryRoots.flatMap(root =>
+          [...root.querySelectorAll<HTMLAnchorElement | HTMLAreaElement>('a[href], area[href]')]
+            .map(anchor => ({
+              href: anchor.getAttribute('href') || '',
+              download: anchor.hasAttribute('download'),
+            })),
+        )
+        const dataDownloadCandidates = queryRoots.flatMap(root =>
+          [...root.querySelectorAll<HTMLElement>('[data-download-url], [data-file-url], [data-export-url]')]
+            .map(element => ({
+              href: element.getAttribute('data-download-url')
+                || element.getAttribute('data-file-url')
+                || element.getAttribute('data-export-url')
+                || '',
+              download: true,
+            })),
+        )
         const mediaSrcs = [
-          ...[...document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video, audio')]
+          ...queryRoots.flatMap(root => [...root.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video, audio')])
             .flatMap(media => mediaElementSources(media).map(source => source.url)),
-          ...[...document.querySelectorAll<HTMLSourceElement>('source')].map(source => explicitElementSource(source)),
+          ...queryRoots.flatMap(root => [...root.querySelectorAll<HTMLSourceElement>('source')])
+            .map(source => explicitElementSource(source)),
         ].filter(Boolean)
         const urls = pageDownloadUrls(
           [...anchorCandidates, ...dataDownloadCandidates],
@@ -2055,8 +2122,9 @@ export default defineContentScript({
           addResource(resource)
           selectionResourceIds?.add(resourceFingerprint(resource))
         })
-        setOpen(true)
-        render()
+        setPanelTitle('页面可下载链接')
+        openFloatingPanel()
+        sendResponse?.({ ok: true, count: selectionResourceIds.size })
         return
       }
       if (message?.type === 'open-media-panel') {
@@ -2067,8 +2135,9 @@ export default defineContentScript({
           loadPageResources(location.href, 'tab')
         } else if (!activePlayback) selectionMode = true
         selectionResourceIds = null
-        setOpen(true)
-        render()
+        setPanelTitle('当前视频')
+        openFloatingPanel()
+        sendResponse?.({ ok: true })
         return
       }
       if (message?.type === 'rescan-media') {
@@ -2118,18 +2187,34 @@ export default defineContentScript({
     const syncPage = () => {
       const next = pageKey(location.href)
       if (next === currentPageUrl) return
+      const previousSiteVideoId = sitePageVideoId(currentPageUrl)
+      const nextSiteVideoId = sitePageVideoId(next)
       currentPageUrl = next
+      // Locale/tracking replaceState redirects (e.g. Bilibili /video/BV... -> /en/video/BV...)
+      // keep the same logical video playing; preserve its MSE provenance and captured streams.
+      if (previousSiteVideoId && previousSiteVideoId === nextSiteVideoId) {
+        window.dispatchEvent(new Event('__hls_downloader_replay__'))
+        syncPlayingVideos()
+        scheduleVideoButtons()
+        return
+      }
+      const activeBlobs = new Set(
+        currentVideos().flatMap(video => mediaElementSources(video).map(source => source.url).filter(url => url.startsWith('blob:'))),
+      )
       activePlayback = null
       activeVideo = null
       selectionMode = false
       selectionResourceIds = null
       playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
-      mseEvidenceByBlob.clear()
+      for (const blobUrl of [...mseEvidenceByBlob.keys()]) {
+        if (!activeBlobs.has(blobUrl)) mseEvidenceByBlob.delete(blobUrl)
+      }
       videoButtonPositions = new WeakMap<HTMLVideoElement, { x: number, y: number }>()
       panelPosition = null
       if (pinned) setPinned(false)
       setOpen(false)
       resources.clear(); render(); loadPageResources(location.href)
+      window.dispatchEvent(new Event('__hls_downloader_replay__'))
       document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
         mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true))
       })

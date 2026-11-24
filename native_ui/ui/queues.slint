@@ -19,7 +19,7 @@ component WeekdayPill inherits Rectangle {
     background: root.active
         ? (touch.pressed && root.enabled ? Tokens.accent-pressed : touch.has-hover && root.enabled ? Tokens.accent-hover : Tokens.accent)
         : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
-    opacity: root.enabled ? 1 : 0.48;
+    opacity: root.enabled ? 1 : 0.58;
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     accessible-role: checkbox;
     accessible-checkable: true;

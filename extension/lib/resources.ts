@@ -413,6 +413,8 @@ function foldCorrelatedMasterFamily(correlated: MediaResource[]): MediaResource[
       const parentHref = hrefs[j]
       const listedInParent = (parent.variants || []).some(variant => stableHref({ url: variant.url, kind: child.kind }) === childHref)
         || (parent.renditionUrls || []).some(url => stableHref({ url, kind: child.kind }) === childHref)
+        || (Boolean(parent.evidence?.includes('site_player_metadata'))
+          && (parent.playbackUrls || []).some(url => stableHref({ url, kind: child.kind }) === childHref))
       const pointsToParent = Boolean(childManifestSameKind && childManifestSameKind === parentHref)
         || Boolean(child.manifestUrl && stableHref({ url: child.manifestUrl, kind: parent.kind }) === parentHref)
       if (listedInParent || pointsToParent) {
@@ -607,7 +609,11 @@ export function isUsefulResource(resource: MediaResource): boolean {
   if (resource.kind === 'hls' || resource.kind === 'dash') return true
   let path = resource.url
   try { path = decodeURIComponent(new URL(resource.url).pathname) } catch {}
-  if (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || '')) return false
+  const confirmedFullTrack = Boolean(
+    resource.evidence?.includes('site_player_metadata')
+    || resource.evidence?.includes('mse_full_track'),
+  )
+  if (!confirmedFullTrack && (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || ''))) return false
   if (SEGMENT_PATH.test(path) && (!resource.size || resource.size < 8 * 1024 * 1024)) return false
   if (hasAdvertSignal(resource.url) && (!resource.duration || resource.duration < 60) && (!resource.size || resource.size < 20 * 1024 * 1024)) return false
   return true
@@ -1155,6 +1161,31 @@ export function capturedRequestIdentity(
   }
 }
 
+function validClickIdentity(value?: number): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+function sameOriginOnlyReferrer(pageUrl: string, referrer: string): boolean {
+  if (!pageUrl || !referrer) return false
+  try {
+    const page = new URL(pageUrl)
+    const ref = new URL(referrer)
+    if (!['http:', 'https:'].includes(page.protocol) || !['http:', 'https:'].includes(ref.protocol)) return false
+    return page.origin === ref.origin && (ref.pathname === '' || ref.pathname === '/') && !ref.search
+  } catch {
+    return false
+  }
+}
+
+function urlLeafFilename(value: string): string {
+  try {
+    const leaf = decodeURIComponent(new URL(value).pathname.split('/').pop() || '').trim().toLowerCase()
+    return leaf.includes('.') ? leaf : ''
+  } catch {
+    return ''
+  }
+}
+
 export function matchesDownloadClick(
   intent: DownloadClickIntent,
   download: { url: string; finalUrl?: string; referrer?: string; chainUrls?: string[]; tabId?: number; frameId?: number },
@@ -1164,13 +1195,18 @@ export function matchesDownloadClick(
     || [download.url, download.finalUrl, ...(download.chainUrls || [])].some(isAuthenticationNavigation)) return false
   const age = now - intent.at
   if (age < 0 || age > 7000) return false
-  const sameTab = intent.tabId !== undefined && download.tabId !== undefined && intent.tabId === download.tabId
-  if (sameTab && intent.frameId !== undefined && download.frameId !== undefined && intent.frameId !== download.frameId) return false
+  const intentTabId = validClickIdentity(intent.tabId)
+  const downloadTabId = validClickIdentity(download.tabId)
+  const intentFrameId = validClickIdentity(intent.frameId)
+  const downloadFrameId = validClickIdentity(download.frameId)
+  const sameTab = intentTabId !== undefined && downloadTabId !== undefined && intentTabId === downloadTabId
+  if (sameTab && intentFrameId !== undefined && downloadFrameId !== undefined && intentFrameId !== downloadFrameId) return false
   const permittedNewTab = Boolean(intent.opensNewTab)
-  if (intent.tabId !== undefined && download.tabId !== undefined && !sameTab && !permittedNewTab) return false
-  const tabCompatible = sameTab || permittedNewTab || intent.tabId === undefined || download.tabId === undefined
+  if (intentTabId !== undefined && downloadTabId !== undefined && !sameTab && !permittedNewTab) return false
+  const tabCompatible = sameTab || permittedNewTab || intentTabId === undefined || downloadTabId === undefined
   const samePage = Boolean(intent.pageUrl && download.referrer
     && stripHash(intent.pageUrl) === stripHash(download.referrer))
+  const originOnlyReferrer = !samePage && sameOriginOnlyReferrer(intent.pageUrl || '', download.referrer || '')
   // Positive evidence only: same page referrer, or same tab (Chrome often omits
   // DownloadItem.referrer but still exposes the initiating tab via webRequest).
   // Missing both is not enough to claim an unrelated generated download.
@@ -1187,8 +1223,8 @@ export function matchesDownloadClick(
         .filter((value): value is string => Boolean(value))
       const exact = candidates.some(value => stripHash(value) === clicked)
       // Exact gateway/CDN match: allow when tabs are compatible, even if Chrome
-      // left referrer empty.
-      if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage)) return true
+      // left referrer empty or truncated it to origin-only via Referrer-Policy / initiator.
+      if (exact && (sameTab || permittedNewTab || !intent.pageUrl || !download.referrer || samePage || originOnlyReferrer)) return true
       if (exact) return false
       // Many download buttons open a short-lived gateway URL, then the browser
       // reports only the final CDN file. Require same-tab or same-page evidence
@@ -1197,6 +1233,14 @@ export function matchesDownloadClick(
       // steal an ordinary click.
       if (linked && tabCompatible && age <= 2500
         && (intent.controlHint || isLikelyDownloadUrl(intent.href))) return true
+      // Chrome Alt+Click on a redirected mirror link (e.g. cdimage.debian.org -> mirror)
+      // can drop tabId (-1) and truncate referrer to origin-only. Preserve the user's
+      // Alt bypass when the redirected target keeps the same filename in the click window.
+      if (intent.altBypass && tabCompatible && age <= 2500
+        && (!download.referrer || samePage || originOnlyReferrer)) {
+        const clickedLeaf = urlLeafFilename(intent.href)
+        if (clickedLeaf && candidates.some(value => urlLeafFilename(value) === clickedLeaf)) return true
+      }
       return false
     }
   }

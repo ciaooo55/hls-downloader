@@ -281,4 +281,59 @@ describe('download click intent', () => {
     expect(takeoverContent).toContain("'visibilitychange'")
     expect(takeoverContent).not.toContain('ctrlForce: event.ctrlKey')
   })
+
+  it('always tracks Alt+Click bypass intents and matches Chrome downloads missing tabId or full referrer', () => {
+    // Alt+Click on any non-auth link (even extensionless checksums) must record altBypass.
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/SHA256SUMS',
+      altBypass: true,
+    })).toBe(true)
+    expect(shouldTrackDownloadIntent({
+      directHref: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=app&redirect_uri=https://site.test/cb&response_type=code',
+      altBypass: true,
+    })).toBe(false)
+
+    const altClick = intent({
+      href: 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso',
+      pageUrl: 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/',
+      tabId: 7,
+      frameId: 0,
+      altBypass: true,
+      generic: false,
+      controlHint: false,
+    })
+
+    // Chrome Alt+Click DownloadUrl produces webRequest tabId=-1, frameId=-1, empty referrer.
+    expect(matchesDownloadClick(altClick, {
+      url: altClick.href,
+      finalUrl: 'https://laotzu.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso',
+      chainUrls: [altClick.href, 'https://laotzu.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso'],
+      referrer: '',
+      tabId: -1,
+      frameId: -1,
+    }, 10_500)).toBe(true)
+
+    // Origin-only referrer from strict-origin-when-cross-origin / webRequest initiator still matches.
+    expect(matchesDownloadClick(altClick, {
+      url: altClick.href,
+      finalUrl: 'https://laotzu.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso',
+      referrer: 'https://cdimage.debian.org/',
+      tabId: -1,
+      frameId: -1,
+    }, 10_500)).toBe(true)
+
+    // Redirected mirror download whose original URL was lost still honors Alt+Click by filename + origin referrer.
+    expect(matchesDownloadClick(altClick, {
+      url: 'https://laotzu.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso',
+      referrer: 'https://cdimage.debian.org/',
+      tabId: -1,
+    }, 10_500)).toBe(true)
+
+    // Different tab must still never inherit another tab's Alt+Click.
+    expect(matchesDownloadClick(altClick, {
+      url: altClick.href,
+      referrer: 'https://cdimage.debian.org/',
+      tabId: 8,
+    }, 10_500)).toBe(false)
+  })
 })

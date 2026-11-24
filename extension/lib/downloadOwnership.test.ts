@@ -1802,4 +1802,131 @@ describe('browser download ownership through registered event listeners', () => 
     expect(local.speedLimitEnabled).toBe(true)
     expect(local.speedLimitKib).toBe(256)
   })
+
+  it('bypasses desktop takeover on Chrome Alt+Click even when webRequest tabId is -1 and mirror redirects drop referrer', async () => {
+    const pageUrl = 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/'
+    const linkUrl = `${pageUrl}debian-13.8.0-amd64-netinst.iso`
+    const mirrorUrl = 'https://laotzu.ftp.acc.umu.se/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso'
+    mocks.browser.tabs.get.mockResolvedValue({ url: pageUrl })
+    mocks.native.mockClear()
+
+    // 1. pointerdown records Alt+Click intent from tab 7.
+    await new Promise<void>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'click-intent', href: linkUrl, pageUrl, altBypass: true, ctrlForce: false, generic: false },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      () => resolve(),
+    ))
+
+    // 2. Chrome DownloadUrl initiates an 'other' request with tabId=-1, frameId=-1, redirecting to a mirror.
+    listener(mocks.browser.webRequest.onBeforeRequest)({
+      requestId: 'alt-iso', url: linkUrl, method: 'GET', tabId: -1, frameId: -1,
+      type: 'other', initiator: 'https://cdimage.debian.org', timeStamp: Date.now(),
+    })
+    listener(mocks.browser.webRequest.onBeforeRedirect)({
+      requestId: 'alt-iso', url: linkUrl, redirectUrl: mirrorUrl, method: 'GET',
+      tabId: -1, frameId: -1, type: 'other', statusCode: 302, timeStamp: Date.now(),
+    })
+    listener(mocks.browser.webRequest.onHeadersReceived)({
+      requestId: 'alt-iso', url: mirrorUrl, method: 'GET', tabId: -1, frameId: -1,
+      type: 'other', statusCode: 200, timeStamp: Date.now(),
+      responseHeaders: [
+        { name: 'Content-Type', value: 'application/x-iso9660-image' },
+        { name: 'Content-Length', value: String(650 * 1024 * 1024) },
+        { name: 'Accept-Ranges', value: 'bytes' },
+      ],
+    })
+
+    // 3. Chrome fires downloads.onCreated without tabId and with origin-only referrer.
+    item = {
+      id: 99, url: linkUrl, finalUrl: mirrorUrl, referrer: 'https://cdimage.debian.org/',
+      filename: 'C:\\Downloads\\debian-13.8.0-amd64-netinst.iso', mime: 'application/x-iso9660-image',
+      state: 'in_progress', paused: false, bytesReceived: 0, totalBytes: 650 * 1024 * 1024, fileSize: 650 * 1024 * 1024,
+      startTime: '2026-10-29T00:00:00.000Z',
+    }
+    const created = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await created
+
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.pause).not.toHaveBeenCalled()
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+  })
+
+  it('preserves Alt+Click bypass across onHeadersReceived early takeover even if request chain is lost before onCreated', async () => {
+    const pageUrl = 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/'
+    const linkUrl = `${pageUrl}debian-13.8.0-amd64-netinst.iso`
+    mocks.browser.tabs.get.mockResolvedValue({ url: pageUrl })
+    mocks.native.mockClear()
+
+    await new Promise<void>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'click-intent', href: linkUrl, pageUrl, altBypass: true, ctrlForce: false, generic: false },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      () => resolve(),
+    ))
+
+    // Early main_frame headers observe the ISO response and peek altBypass.
+    listener(mocks.browser.webRequest.onHeadersReceived)({
+      requestId: 'early-alt-iso', url: linkUrl, method: 'GET', tabId: 7, frameId: 0,
+      type: 'main_frame', documentUrl: pageUrl, statusCode: 200, timeStamp: Date.now(),
+      responseHeaders: [
+        { name: 'Content-Type', value: 'application/octet-stream' },
+        { name: 'Content-Disposition', value: 'attachment; filename="debian-13.8.0-amd64-netinst.iso"' },
+      ],
+    })
+    await flush()
+
+    // Simulate tab navigation clearing requestChains before onCreated fires (with no DownloadItem.tabId).
+    listener(mocks.browser.tabs.onUpdated)(7, { status: 'loading' })
+    item = {
+      id: 100, url: linkUrl, finalUrl: linkUrl, referrer: '',
+      filename: 'C:\\Downloads\\debian-13.8.0-amd64-netinst.iso', mime: 'application/octet-stream',
+      state: 'in_progress', paused: false, bytesReceived: 0, totalBytes: 650 * 1024 * 1024, fileSize: 650 * 1024 * 1024,
+      startTime: '2026-10-29T00:00:00.000Z',
+    }
+    const created = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await created
+
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.pause).not.toHaveBeenCalled()
+  })
+
+  it('handles offline Core ping cleanly without retry-spamming or pushing pending takeover settings', async () => {
+    local['pending-takeover-settings-v1'] = { id: 'pending-1', enabled: false }
+    mocks.native.mockClear()
+    mocks.native.mockResolvedValue({ ok: false, error: 'Core is offline' })
+
+    const reply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'ping' },
+      {},
+      resolve,
+    ))
+    await flush()
+
+    expect(reply).toEqual({ ok: false, error: 'Core is offline' })
+    expect(mocks.native).toHaveBeenCalledTimes(1)
+    // Passive ping must not request interactive/auto-start or retries.
+    expect(mocks.native.mock.calls[0][0]).toMatchObject({ op: 'ping' })
+    expect(mocks.native.mock.calls[0][0].interactive).toBeUndefined()
+    expect(mocks.native.mock.calls[0][2]).toBe(0)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'set_takeover_settings')).toBe(false)
+  })
+
+  it('falls back to top frame when collect-page-links fails in a subframe', async () => {
+    mocks.browser.tabs.sendMessage.mockClear()
+    mocks.browser.tabs.sendMessage
+      .mockRejectedValueOnce(new Error('Could not establish connection'))
+      .mockResolvedValueOnce({ ok: true, count: 3 })
+
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-download-page-links', pageUrl: 'https://cdimage.debian.org/iso-cd/', frameId: 5 },
+      { id: 7, url: 'https://cdimage.debian.org/iso-cd/' },
+    )
+    await flush()
+
+    expect(mocks.browser.tabs.sendMessage).toHaveBeenNthCalledWith(1, 7, { type: 'collect-page-links' }, { frameId: 5 })
+    expect(mocks.browser.tabs.sendMessage).toHaveBeenNthCalledWith(2, 7, { type: 'collect-page-links' }, { frameId: 0 })
+  })
 })

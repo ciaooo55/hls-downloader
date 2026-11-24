@@ -178,4 +178,34 @@ describe('persistent click-intent store', () => {
     await expect(consuming).resolves.toMatchObject({ tabId: 3 })
     expect(storage.values.intents).toEqual([])
   })
+
+  it('normalizes negative Chrome download tab/frame ids and preserves altBypass during early peeks', async () => {
+    const storage = new MemoryStorage()
+    const store = new ClickIntentStore(storage, 'intents', () => 10_300)
+    const isoUrl = 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso'
+    await store.remember(intent({
+      href: isoUrl,
+      pageUrl: 'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/',
+      tabId: 7,
+      frameId: 0,
+      altBypass: true,
+    }))
+    // Early onHeadersReceived peek keeps the altBypass intent intact for downloads.onCreated.
+    const peeked = await store.consume({
+      url: isoUrl,
+      referrer: 'https://cdimage.debian.org/',
+      tabId: -1,
+      frameId: -1,
+    }, { keepAltBypass: true })
+    expect(peeked).toMatchObject({ altBypass: true, tabId: 7 })
+    // downloads.onCreated still consumes the preserved altBypass intent even with tabId=-1.
+    const consumed = await store.consume({
+      url: isoUrl,
+      referrer: '',
+      tabId: -1,
+      frameId: -1,
+    })
+    expect(consumed).toMatchObject({ altBypass: true, tabId: 7 })
+    expect(await store.consume({ url: isoUrl, tabId: -1 })).toBeUndefined()
+  })
 })

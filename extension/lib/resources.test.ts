@@ -872,6 +872,55 @@ describe('resource rules', () => {
       startedAt: now,
     }, 6)).toEqual([])
   })
+  it('binds Bilibili site-metadata .m4s DASH tracks to MSE blob playback while filtering passive .m4s segments', () => {
+    const now = Date.now()
+    const video1080 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+    const video720 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.m4s?deadline=1900000000'
+    const audio = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+    const passiveSegment = resource({ id: 'passive', kind: 'media', url: video720, seenAt: now })
+    expect(isUsefulResource(passiveSegment)).toBe(false)
+
+    const bilibiliMeta = resource({
+      id: 'bili-meta',
+      kind: 'media',
+      url: video1080,
+      mimeType: 'video/mp4',
+      inspected: true,
+      height: 1080,
+      bandwidth: 3_200_000,
+      quality: '1080p',
+      evidence: ['site_player_metadata', 'page_response'],
+      variants: [
+        { url: video1080, height: 1080, bandwidth: 3_200_000, quality: '1080p' },
+        { url: video720, height: 720, bandwidth: 1_500_000, quality: '720p' },
+      ],
+      playbackUrls: [video1080, video720, audio],
+      seenAt: now,
+    })
+    const mseFallback = resource({
+      id: 'bili-mse',
+      kind: 'media',
+      url: video720,
+      mimeType: 'video/mp4',
+      evidence: ['mse_source_buffer', 'mse_full_track'],
+      seenAt: now + 1,
+    })
+    expect(isUsefulResource(bilibiliMeta)).toBe(true)
+    expect(isUsefulResource(mseFallback)).toBe(true)
+
+    // Both MSE-only fallback and full site_player_metadata resolve cleanly;
+    // when both exist, the single-track fallback folds into the multi-quality parent.
+    expect(playerPlaybackResources([mseFallback], {
+      sourceUrls: ['blob:https://www.bilibili.com/player-1'],
+      mseResourceUrls: [video720],
+      startedAt: now,
+    }, 6).map(item => item.id)).toEqual(['bili-mse'])
+    expect(playerPlaybackResources([bilibiliMeta, mseFallback], {
+      sourceUrls: ['blob:https://www.bilibili.com/player-1'],
+      mseResourceUrls: [video720, audio],
+      startedAt: now,
+    }, 6).map(item => item.id)).toEqual(['bili-meta'])
+  })
   it('keeps images and ambiguous dynamic documents in the browser', () => {
     expect(classifyDownload('https://cdn.test/photo.jpg', 'application/octet-stream', 'photo.jpg')).toBeNull()
     expect(classifyDownload('https://site.test/advert.php', 'application/octet-stream')).toBeNull()

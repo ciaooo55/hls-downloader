@@ -74,7 +74,7 @@ component ConfirmIconButton inherits Rectangle {
     border-color: root.active ? Tokens.accent.with-alpha(0.55) : Tokens.line;
     background: touch.pressed && root.enabled ? Tokens.control-pressed : (touch.has-hover && root.enabled) || root.active ? Tokens.control-hover : Tokens.surface;
     FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
-    opacity: root.enabled ? 1 : 0.48;
+    opacity: root.enabled ? 1 : 0.58;
     animate background { duration: Tokens.motion-fast; easing: ease-out; }
     accessible-role: button;
     accessible-label: root.label;
@@ -247,7 +247,7 @@ export component ConfirmWindow inherits Window {
                                 horizontal-stretch: 1;
                                 spacing: 3px;
                                 alignment: center;
-                                HotLineEdit { text <=> root.filename; enabled: !root.busy; accessible-label: "文件名"; placeholder-text: "文件名"; }
+                                HotLineEdit { text <=> root.filename; enabled: !root.busy; accessible-label: "文件名"; placeholder-text: "文件名"; edited => { root.command("recheck_duplicate"); } }
                                 Text { text: root.resource_meta; color: Tokens.muted; font-size: 11px; overflow: elide; }
                             }
                         }
@@ -276,7 +276,7 @@ export component ConfirmWindow inherits Window {
                         height: Tokens.control-height;
                         spacing: 8px;
                         FieldLabel { label: "保存到"; width: 42px; vertical-alignment: center; }
-                        HotLineEdit { text <=> root.download_dir; enabled: !root.busy; horizontal-stretch: 1; accessible-label: "保存位置"; }
+                        HotLineEdit { text <=> root.download_dir; enabled: !root.busy; horizontal-stretch: 1; accessible-label: "保存位置"; edited => { root.command("recheck_duplicate"); } }
                         if root.compact: ConfirmIconButton { icon: "folder"; label: "选择保存位置"; enabled: !root.busy; clicked => { root.command("browse"); } }
                         if !root.compact: HotButton { label: "选择"; icon: "folder"; min-width: 64px; enabled: !root.busy; clicked => { root.command("browse"); } }
                     }
@@ -496,7 +496,7 @@ component HudChipButton inherits Rectangle {
     background: root.active
         ? (touch.pressed && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.80) : touch.has-hover && root.enabled ? Tokens.selected.mix(Tokens.accent, 0.90) : Tokens.selected)
         : (touch.pressed && root.enabled ? Tokens.control-pressed : touch.has-hover && root.enabled ? Tokens.control-hover : Tokens.surface);
-    opacity: root.enabled ? 1 : 0.48;
+    opacity: root.enabled ? 1 : 0.58;
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     accessible-role: button;
     accessible-label: root.a11y-label;
@@ -548,8 +548,8 @@ export component ProgressWindow inherits Window {
     default-font-size: 12px;
     min-width: 380px;
     preferred-width: 380px;
-    min-height: root.expanded ? 468px : 256px;
-    preferred-height: self.min-height;
+    min-height: 256px;
+    preferred-height: root.expanded ? 468px : 256px;
     background: Tokens.surface;
     always-on-top: true;
     no-frame: true;
@@ -562,6 +562,7 @@ export component ProgressWindow inherits Window {
     in-out property <string> transferred;
     in-out property <string> remaining;
     in-out property <bool> processing: false;
+    in-out property <string> processing_badge: "合并中";
     in-out property <bool> progress_known;
     in-out property <bool> hidden_by_user: false;
     in-out property <bool> action_busy: false;
@@ -590,7 +591,7 @@ export component ProgressWindow inherits Window {
         Rectangle {
             x: 1px; y: 1px; width: parent.width - 2px; height: 2.5px;
             border-top-left-radius: Tokens.card-radius - 1px; border-top-right-radius: Tokens.card-radius - 1px;
-            background: root.action_error ? Tokens.fail : root.paused ? Tokens.warn : Tokens.accent;
+            background: root.action_error ? Tokens.fail : (root.paused || root.processing) ? Tokens.warn : Tokens.accent;
             animate background { duration: Tokens.motion-fast; }
         }
         content := FadePanel {
@@ -608,7 +609,7 @@ export component ProgressWindow inherits Window {
                         spacing: 8px;
                         Rectangle {
                             width: 12px; background: transparent;
-                            private property <color> dot-color: root.action_error ? Tokens.fail : root.paused ? Tokens.warn : Tokens.accent;
+                            private property <color> dot-color: root.action_error ? Tokens.fail : (root.paused || root.processing) ? Tokens.warn : Tokens.accent;
                             Rectangle { width: 12px; height: 12px; y: (parent.height - self.height) / 2; border-radius: 6px; background: parent.dot-color.with-alpha(0.22); }
                             Rectangle { width: 7px; height: 7px; x: 2.5px; y: (parent.height - self.height) / 2; border-radius: 3.5px; background: parent.dot-color; }
                         }
@@ -675,8 +676,8 @@ export component ProgressWindow inherits Window {
                         // 两侧文字字号不同时（合并中 / 已暂停 / 大小未知）按行中线对齐，避免一高一低。
                         Text {
                             text: root.speed;
-                            color: root.paused ? Tokens.warn : Tokens.ink;
-                            font-size: root.processing || root.paused ? 16px : 20px;
+                            color: root.paused || root.processing ? Tokens.warn : Tokens.ink;
+                            font-size: root.processing || root.paused ? 15px : 20px;
                             font-weight: 600;
                             vertical-alignment: center;
                             overflow: elide;
@@ -684,10 +685,10 @@ export component ProgressWindow inherits Window {
                             horizontal-stretch: 1;
                         }
                         Text {
-                            text: root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知";
-                            color: root.progress_known ? (root.paused ? Tokens.warn : Tokens.accent) : Tokens.muted;
-                            font-size: root.progress_known ? 20px : 12px;
-                            font-weight: root.progress_known ? 700 : 500;
+                            text: root.processing ? root.processing_badge : (root.progress_known ? "\{Math.round(root.progress * 100)}%" : "大小未知");
+                            color: root.processing ? Tokens.warn : root.progress_known ? (root.paused ? Tokens.warn : Tokens.accent) : Tokens.muted;
+                            font-size: root.processing ? 13px : (root.progress_known ? 20px : 12px);
+                            font-weight: root.processing || root.progress_known ? 700 : 500;
                             vertical-alignment: center;
                         }
                     }
@@ -699,11 +700,11 @@ export component ProgressWindow inherits Window {
                         // 不定进度的滑块限制在轨道内，避免在圆角端点外露出直角。
                         property <length> sweep-x: Tokens.reduce-motion || root.paused ? self.width * 0.35 : (self.width * 1.3) * Math.mod(animation-tick() / 1800ms, 1) - self.width * 0.3;
                         Rectangle {
-                            width: root.progress_known ? parent.width * Math.clamp(root.progress, 0, 1) : max(0px, min(parent.width, parent.sweep-x + parent.width * 0.3) - max(0px, parent.sweep-x));
-                            x: root.progress_known ? 0px : max(0px, parent.sweep-x);
+                            width: (root.progress_known && !root.processing) ? parent.width * Math.clamp(root.progress, 0, 1) : max(0px, min(parent.width, parent.sweep-x + parent.width * 0.3) - max(0px, parent.sweep-x));
+                            x: (root.progress_known && !root.processing) ? 0px : max(0px, parent.sweep-x);
                             height: parent.height;
                             border-radius: 3.5px;
-                            background: root.paused ? Tokens.warn : Tokens.accent;
+                            background: root.paused || root.processing ? Tokens.warn : Tokens.accent;
                             animate width { duration: Tokens.motion; easing: ease-out; }
                             animate background { duration: Tokens.motion-fast; }
                         }
@@ -724,12 +725,12 @@ export component ProgressWindow inherits Window {
                     width: stage-txt.preferred-width + 12px;
                     y: (parent.height - self.height) / 2;
                     border-radius: 9.5px;
-                    background: root.paused ? Tokens.warn-surface : Tokens.info-surface;
+                    background: root.paused || root.processing ? Tokens.warn-surface : Tokens.info-surface;
                     border-width: 1px;
-                    border-color: root.paused ? Tokens.warn.with-alpha(Tokens.dark ? 0.38 : 0.28) : Tokens.accent-border;
+                    border-color: root.paused || root.processing ? Tokens.warn.with-alpha(Tokens.dark ? 0.38 : 0.28) : Tokens.accent-border;
                     stage-txt := Text {
                         text: root.stage_label;
-                        color: root.paused ? Tokens.warn : Tokens.accent;
+                        color: root.paused || root.processing ? Tokens.warn : Tokens.accent;
                         font-size: 10px;
                         font-weight: 600;
                         horizontal-alignment: center;

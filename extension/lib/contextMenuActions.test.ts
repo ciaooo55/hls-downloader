@@ -84,4 +84,26 @@ describe('browser context menu capabilities', () => {
     expect(urls[0]).toBe('https://files.test/files/item-0.zip')
     expect(urls[39]).toBe('https://files.test/files/item-39.zip')
   })
+
+  it('harvests Debian Apache directory index ISO links while ignoring sort and parent links', () => {
+    const urls = pageDownloadUrls(
+      [
+        { href: '?C=N;O=D' },
+        { href: '?C=M;O=A' },
+        { href: '/debian-cd/current/amd64/' },
+        { href: 'MD5SUMS' },
+        { href: 'SHA256SUMS' },
+        { href: 'debian-13.8.0-amd64-netinst.iso' },
+        { href: 'debian-edu-13.8.0-amd64-netinst.iso' },
+        { href: 'debian-13.8.0-amd64-netinst.iso.torrent' },
+      ],
+      [],
+      'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/',
+    )
+    expect(urls).toEqual([
+      'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso',
+      'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-edu-13.8.0-amd64-netinst.iso',
+      'https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.8.0-amd64-netinst.iso.torrent',
+    ])
+  })
 })

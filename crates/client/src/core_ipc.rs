@@ -1242,6 +1242,9 @@ fn handle_pipe_stream(
             frame_timeout,
         ) {
             Ok(Some(request)) => {
+                if stop.load(Ordering::SeqCst) || stop_handle.is_signaled() {
+                    break;
+                }
                 let result = dispatch_and_reply(&mut stream, request, handler, stop);
                 if stop.load(Ordering::SeqCst) {
                     stop_handle.signal();
@@ -1610,8 +1613,16 @@ fn handle_stream(
     let _ = stream.set_nodelay(true);
     let _ = stream.set_write_timeout(Some(V7_FRAME_READ_TIMEOUT));
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         match read_server_tcp_message::<CorePipeRequest>(&mut stream) {
-            Ok(Some(request)) => dispatch_and_reply(&mut stream, request, handler, stop)?,
+            Ok(Some(request)) => {
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                dispatch_and_reply(&mut stream, request, handler, stop)?;
+            }
             Ok(None) => return Ok(()),
             Err(error) => {
                 // 读不出下一帧（超长、半截帧头、载荷不是 CorePipeRequest、读超时）

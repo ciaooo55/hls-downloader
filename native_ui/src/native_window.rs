@@ -384,6 +384,47 @@ pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
     let _ = (component, center, activate, owner);
 }
 
+pub fn set_window_logical_size(window: &Window, logical_width: f32, logical_height: f32) {
+    window.set_size(slint::LogicalSize::new(logical_width, logical_height));
+    #[cfg(windows)]
+    if let Some(handle) = hwnd(window) {
+        use slint::winit_030::{winit::dpi::PhysicalSize, WinitWindowAccessor};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+        };
+        let scale = window.scale_factor();
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let inner_width = (logical_width * scale).round().max(1.0) as u32;
+        let inner_height = (logical_height * scale).round().max(1.0) as u32;
+        let border = window
+            .with_winit_window(|native| {
+                let _ = native.request_inner_size(PhysicalSize::new(inner_width, inner_height));
+                let outer = native.outer_size();
+                let inner = native.inner_size();
+                (
+                    outer.width.saturating_sub(inner.width),
+                    outer.height.saturating_sub(inner.height),
+                )
+            })
+            .unwrap_or_default();
+        unsafe {
+            SetWindowPos(
+                handle as _,
+                std::ptr::null_mut(),
+                0,
+                0,
+                inner_width.saturating_add(border.0) as i32,
+                inner_height.saturating_add(border.1) as i32,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 pub fn fit_to_work_area(window: &Window) {
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {

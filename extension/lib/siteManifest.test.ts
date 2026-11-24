@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shouldReportMediaResponse } from './manifestSniff'
-import { SITE_RESPONSE_LIMIT, shouldInspectSiteResponse, siteManifestCandidates, youtubePageVideoId } from './siteManifest'
+import { SITE_RESPONSE_LIMIT, bilibiliPageVideoId, bilibiliPlayinfoCandidates, isBilibiliFullTrackMseUrl, shouldInspectSiteResponse, siteManifestCandidates, sitePageVideoId, youtubePageVideoId } from './siteManifest'
 
 const page = 'https://www.youtube.com/watch?v=video_1'
 const api = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
@@ -60,5 +60,74 @@ describe('scoped site player metadata', () => {
       expect(siteManifestCandidates(api, page, body)).toEqual([])
     }
     expect(siteManifestCandidates(api, page, ")]}'\n" + JSON.stringify(player({ hlsManifestUrl: hls })))).toHaveLength(1)
+  })
+
+  it('extracts Bilibili DASH and durl playback metadata across /video/ and /en/video/ pages', () => {
+    const cnPage = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const enPage = 'https://www.bilibili.com/en/video/BV1xx411c7mD/?vd_source=abc'
+    const playurlApi = 'https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1xx411c7mD&cid=123'
+    const video1080 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+    const video720 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.m4s?deadline=1900000000'
+    const audio192 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+
+    expect(bilibiliPageVideoId(cnPage)).toBe('BV1xx411c7mD')
+    expect(bilibiliPageVideoId(enPage)).toBe('BV1xx411c7mD')
+    expect(sitePageVideoId(enPage)).toBe('BV1xx411c7mD')
+    expect(shouldInspectSiteResponse(playurlApi, enPage, 'application/json; charset=utf-8')).toBe(true)
+    expect(shouldReportMediaResponse(playurlApi, 'application/json')).toBe(false)
+    expect(shouldInspectSiteResponse('https://api.bilibili.com/x/web-interface/view', enPage, 'application/json')).toBe(false)
+
+    const dashPayload = {
+      code: 0,
+      data: {
+        timelength: 185000,
+        dash: {
+          duration: 185,
+          video: [
+            { id: 64, baseUrl: video720, width: 1280, height: 720, bandwidth: 1_500_000, codecs: 'avc1.64001f' },
+            { id: 80, baseUrl: video1080, width: 1920, height: 1080, bandwidth: 3_200_000, codecs: 'avc1.640032' },
+          ],
+          audio: [
+            { id: 30280, baseUrl: audio192, bandwidth: 192_000, codecs: 'mp4a.40.2' },
+          ],
+        },
+      },
+    }
+    const extracted = siteManifestCandidates(playurlApi, enPage, dashPayload)
+    expect(extracted).toHaveLength(1)
+    expect(extracted[0]).toMatchObject({
+      url: video1080,
+      mimeType: 'video/mp4',
+      videoId: 'BV1xx411c7mD',
+      inspection: {
+        inspected: true,
+        isLive: false,
+        duration: 185,
+        width: 1920,
+        height: 1080,
+        quality: '1080p',
+      },
+    })
+    expect(extracted[0].inspection?.variants?.map(v => v.height)).toEqual([1080, 720])
+    expect(extracted[0].inspection?.playbackUrls).toEqual(expect.arrayContaining([video1080, video720, audio192]))
+    expect(bilibiliPlayinfoCandidates(cnPage, dashPayload)).toEqual(extracted)
+
+    // Progressive durl fallback (common on logged-out /en/video/ pages).
+    const mp4Url = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-16.mp4?deadline=1900000000'
+    const durlExtracted = bilibiliPlayinfoCandidates(enPage, {
+      data: { durl: [{ url: mp4Url, size: 12_345_678, length: 90_000 }] },
+    })
+    expect(durlExtracted).toHaveLength(1)
+    expect(durlExtracted[0]).toMatchObject({
+      url: mp4Url,
+      mimeType: 'video/mp4',
+      videoId: 'BV1xx411c7mD',
+      inspection: { inspected: true, duration: 90, estimatedSize: 12_345_678 },
+    })
+
+    // Full-track MSE video URL recognition excludes audio-only tracks and non-Bilibili hosts.
+    expect(isBilibiliFullTrackMseUrl(video1080)).toBe(true)
+    expect(isBilibiliFullTrackMseUrl(audio192)).toBe(false)
+    expect(isBilibiliFullTrackMseUrl('https://cdn.test/upgcxcode/1/2/3-1-30080.m4s')).toBe(false)
   })
 })

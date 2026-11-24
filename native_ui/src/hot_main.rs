@@ -115,26 +115,238 @@ impl VariantSelection {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DuplicateMatchKind {
+    SameUrl,
+    SameTargetPath,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DuplicateMatch<'a> {
+    task: &'a TaskSnapshot,
+    kind: DuplicateMatchKind,
+}
+
+fn is_cancelled_task(status: &str) -> bool {
+    matches!(status, "canceled" | "cancelled")
+}
+
+fn is_adaptive_kind(kind: ResourceKind) -> bool {
+    matches!(kind, ResourceKind::Hls | ResourceKind::Dash)
+}
+
+fn normalized_target_path_key(dir: &str, filename: &str) -> Option<String> {
+    let dir = dir.trim().replace('/', "\\");
+    let dir = dir.trim_end_matches('\\');
+    let filename = filename.trim();
+    if dir.is_empty() || filename.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}\\{}",
+        dir.to_lowercase(),
+        filename.to_lowercase()
+    ))
+}
+
+fn task_target_path_key(task: &TaskSnapshot) -> Option<String> {
+    if let Some(key) = normalized_target_path_key(&task.download_dir, &task.filename) {
+        return Some(key);
+    }
+    let output = task.output_path.trim();
+    if output.is_empty() {
+        return None;
+    }
+    let split = output.rfind(['\\', '/'])?;
+    let (dir, name) = output.split_at(split);
+    normalized_target_path_key(dir, &name[1..])
+}
+
+fn explicit_filename_from_url(url: &str) -> Option<&str> {
+    let without_tail = url.split(['?', '#']).next().unwrap_or(url).trim();
+    let path = match without_tail.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map(|(_, path)| path).unwrap_or(""),
+        None => without_tail,
+    };
+    path.rsplit('/').find(|part| !part.is_empty())
+}
+
+fn is_rotating_signing_param(key: &str) -> bool {
+    let lower = key.trim().to_ascii_lowercase();
+    if lower.starts_with("x-amz-")
+        || lower.starts_with("x-goog-")
+        || lower.starts_with("x-oss-")
+        || lower.starts_with("q-sign-")
+    {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "sig"
+            | "signature"
+            | "token"
+            | "jwt"
+            | "expires"
+            | "exp"
+            | "se"
+            | "sp"
+            | "sv"
+            | "st"
+            | "skt"
+            | "ske"
+            | "hdnts"
+            | "auth_key"
+            | "sign"
+            | "nonce"
+            | "timestamp"
+            | "awsaccesskeyid"
+            | "googleaccessid"
+            | "ossaccesskeyid"
+            | "key-pair-id"
+            | "policy"
+            | "q-key-time"
+            | "q-signature"
+            | "q-header-list"
+            | "q-url-param-list"
+            | "q-ak"
+    )
+}
+
+fn url_without_signing_params(value: &str) -> String {
+    let without_fragment = value.split('#').next().unwrap_or(value).trim();
+    let (base, query) = match without_fragment.split_once('?') {
+        Some((base, query)) => (base.trim_end_matches('/'), Some(query)),
+        None => (without_fragment.trim_end_matches('/'), None),
+    };
+    let Some(query) = query else {
+        return base.to_owned();
+    };
+    let mut kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("");
+            !is_rotating_signing_param(key)
+        })
+        .collect();
+    if kept.is_empty() {
+        return base.to_owned();
+    }
+    kept.sort_unstable();
+    format!("{base}?{}", kept.join("&"))
+}
+
+fn find_duplicate_match<'a>(
+    tasks: &'a [TaskSnapshot],
+    task_variants: &HashMap<String, VariantSelection>,
+    offer: &ResourceOffer,
+    target_dir: &str,
+    target_filename: &str,
+) -> Option<DuplicateMatch<'a>> {
+    let want_url = canonical_url(&offer.url);
+    let offer_variant = VariantSelection::from_offer(offer);
+    let is_adaptive = is_adaptive_kind(offer.resource_kind);
+    if !want_url.is_empty() {
+        if let Some(task) = tasks.iter().find(|task| {
+            if canonical_url(&task.url) != want_url {
+                return false;
+            }
+            if let Some(existing) = task_variants.get(&task.task_id) {
+                return *existing == offer_variant;
+            }
+            if is_adaptive && offer_variant.is_explicit() {
+                return false;
+            }
+            true
+        }) {
+            return Some(DuplicateMatch {
+                task,
+                kind: DuplicateMatchKind::SameUrl,
+            });
+        }
+    }
+    if is_adaptive {
+        return None;
+    }
+    let offer_name = if !target_filename.trim().is_empty() {
+        target_filename.trim()
+    } else if !offer.filename.trim().is_empty() {
+        offer.filename.trim()
+    } else {
+        explicit_filename_from_url(&offer.url).unwrap_or("")
+    };
+    let offer_name_lower = offer_name.to_lowercase();
+    let eligible = |task: &&TaskSnapshot| {
+        !is_adaptive_kind(task.resource_kind) && !is_cancelled_task(&task.status)
+    };
+
+    // 4. Same URL after stripping rotating presigned CDN query params + same filename.
+    let offer_stripped_url = url_without_signing_params(&offer.url);
+    if !offer_stripped_url.is_empty() && !offer_name_lower.is_empty() {
+        if let Some(task) = tasks.iter().filter(eligible).find(|task| {
+            task.filename.trim().to_lowercase() == offer_name_lower
+                && url_without_signing_params(&task.url) == offer_stripped_url
+        }) {
+            return Some(DuplicateMatch {
+                task,
+                kind: DuplicateMatchKind::SameUrl,
+            });
+        }
+    }
+
+    // 3. Same non-empty canonical source_page_url + same filename (e.g. GitHub Release clicks).
+    let offer_page = canonical_url(&offer.source_page_url).trim();
+    if !offer_page.is_empty() && !offer_name_lower.is_empty() {
+        if let Some(task) = tasks.iter().filter(eligible).find(|task| {
+            task.filename.trim().to_lowercase() == offer_name_lower
+                && canonical_url(&task.source_page_url).trim() == offer_page
+        }) {
+            return Some(DuplicateMatch {
+                task,
+                kind: DuplicateMatchKind::SameUrl,
+            });
+        }
+    }
+
+    // 2. Same resolved target file path (download_dir + filename, case-insensitive).
+    if let Some(want_path) = normalized_target_path_key(target_dir, offer_name) {
+        if let Some(task) = tasks
+            .iter()
+            .filter(eligible)
+            .find(|task| task_target_path_key(task).as_deref() == Some(want_path.as_str()))
+        {
+            return Some(DuplicateMatch {
+                task,
+                kind: DuplicateMatchKind::SameTargetPath,
+            });
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
 fn find_duplicate_task<'a>(
     tasks: &'a [TaskSnapshot],
     task_variants: &HashMap<String, VariantSelection>,
     offer: &ResourceOffer,
 ) -> Option<&'a TaskSnapshot> {
-    let want_url = canonical_url(&offer.url);
-    let offer_variant = VariantSelection::from_offer(offer);
-    let is_adaptive = matches!(offer.resource_kind, ResourceKind::Hls | ResourceKind::Dash);
-    tasks.iter().find(|task| {
-        if canonical_url(&task.url) != want_url {
-            return false;
-        }
-        if let Some(existing) = task_variants.get(&task.task_id) {
-            return *existing == offer_variant;
-        }
-        if is_adaptive && offer_variant.is_explicit() {
-            return false;
-        }
-        true
-    })
+    find_duplicate_match(tasks, task_variants, offer, "", "").map(|found| found.task)
+}
+
+fn format_duplicate_notice(found: DuplicateMatch<'_>) -> (String, String) {
+    let prefix = match found.kind {
+        DuplicateMatchKind::SameUrl => "已有同一地址的任务",
+        DuplicateMatchKind::SameTargetPath => "已有同一文件的任务",
+    };
+    (
+        format!(
+            "{prefix}：{}（{}）",
+            found.task.filename,
+            task_status_label(&found.task.status)
+        ),
+        found.task.task_id.clone(),
+    )
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -173,9 +385,6 @@ fn evaluate_quick_download(
     if offer.handoff_id.trim().is_empty() {
         return None;
     }
-    if find_duplicate_task(known_tasks, known_task_variants, offer).is_some() {
-        return None;
-    }
     let raw_filename = if offer.filename.trim().is_empty() {
         filename_from_url(&offer.url)
     } else {
@@ -184,6 +393,17 @@ fn evaluate_quick_download(
     let filename = confirmed_filename(&raw_filename).ok()?.to_owned();
     let category = download_category(&filename, "", offer.resource_kind);
     let download_dir = settings.directory_for(category);
+    if find_duplicate_match(
+        known_tasks,
+        known_task_variants,
+        offer,
+        &download_dir,
+        &filename,
+    )
+    .is_some()
+    {
+        return None;
+    }
     target_check::check_target(&download_dir, &filename, false).ok()?;
     Some(QuickDownloadPlan {
         handoff_id: offer.handoff_id.clone(),
@@ -729,6 +949,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let active_hud = Arc::new(Mutex::new(ActiveTaskHud::default()));
     let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
+    let processing_timer = Timer::default();
+    processing_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
+        let active_hud = Arc::clone(&active_hud);
+        let progress = progress.as_weak();
+        move || {
+            let Some(item) = progress.upgrade() else {
+                return;
+            };
+            if item.get_hidden_by_user() || !item.window().is_visible() {
+                return;
+            }
+            let update = active_hud.lock().ok().and_then(|hud| {
+                let snapshot = hud.current_snapshot()?;
+                if !is_processing_status(&snapshot.status) {
+                    return None;
+                }
+                let elapsed =
+                    hud.processing_elapsed_secs(&snapshot.task_id, std::time::Instant::now());
+                Some(format_processing_headline(&snapshot.status, elapsed))
+            });
+            if let Some(headline) = update {
+                if item.get_speed().as_str() != headline {
+                    item.set_speed(headline.into());
+                    item.window().request_redraw();
+                }
+            }
+        }
+    });
     confirm.on_core_resynced({
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
@@ -750,14 +998,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(window) = workbench.borrow().as_ref() {
                 window.replace(tasks.clone(), sequence);
             }
-            let (primary, position) = active_hud
+            let (primary, position, processing_elapsed) = active_hud
                 .lock()
                 .map(|mut hud| {
                     let primary = hud.reconcile(&tasks);
                     let pos = hud.task_position();
-                    (primary, pos)
+                    let elapsed = primary.as_ref().and_then(|task| {
+                        hud.processing_elapsed_secs(&task.task_id, std::time::Instant::now())
+                    });
+                    (primary, pos, elapsed)
                 })
-                .unwrap_or((None, (0, 0)));
+                .unwrap_or((None, (0, 0), None));
             let fallback_dir = presenter_settings
                 .lock()
                 .map(|settings| settings.download_dir.clone())
@@ -775,6 +1026,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &primary,
                         position,
                         &fallback_dir,
+                        processing_elapsed,
                     );
                 }
                 None => {
@@ -857,14 +1109,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "prev_task" | "next_task" => {
                     let delta = if action == "prev_task" { -1 } else { 1 };
-                    let (selected, position) = active_hud
+                    let (selected, position, processing_elapsed) = active_hud
                         .lock()
                         .map(|mut hud| {
                             let next = hud.cycle(delta);
                             let pos = hud.task_position();
-                            (next, pos)
+                            let elapsed = next.as_ref().and_then(|task| {
+                                hud.processing_elapsed_secs(
+                                    &task.task_id,
+                                    std::time::Instant::now(),
+                                )
+                            });
+                            (next, pos, elapsed)
                         })
-                        .unwrap_or((None, (0, 0)));
+                        .unwrap_or((None, (0, 0), None));
                     if let Some(snapshot) = selected {
                         let fallback_dir = presenter_settings
                             .lock()
@@ -881,6 +1139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             &snapshot,
                             position,
                             &fallback_dir,
+                            processing_elapsed,
                         );
                     }
                 }
@@ -1171,10 +1430,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                     );
                     item.set_busy(true);
+                    if copy {
+                        item.set_duplicate_text("".into());
+                        item.set_duplicate_task_id("".into());
+                    }
                     clear_confirm_issue(&item);
                     let pending = Arc::clone(&pending);
                     let active_handoff = Arc::clone(&active_handoff);
                     let presenter_settings = Arc::clone(&presenter_settings);
+                    let known_tasks = Arc::clone(&known_tasks);
                     let weak = item.as_weak();
                     thread::spawn(move || {
                         let map_issue = |issue: target_check::TargetIssue| {
@@ -1195,12 +1459,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             "accept"
                         };
+                        let mut renamed_filename: Option<String> = None;
                         let result = (|| {
                             let filename = confirmed_filename(&filename).map_err(map_issue)?;
                             let filename = if copy {
-                                target_check::unique_name(&download_dir, filename, &taken).map_err(
-                                    |error| (error, [("选择其他位置", "browse"), ("", "")]),
-                                )?
+                                let unique =
+                                    target_check::unique_name(&download_dir, filename, &taken)
+                                        .map_err(|error| {
+                                            (error, [("选择其他位置", "browse"), ("", "")])
+                                        })?;
+                                renamed_filename = Some(unique.clone());
+                                unique
                             } else {
                                 filename.to_owned()
                             };
@@ -1208,17 +1477,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .map_err(map_issue)?;
                             (|| {
                                 let mut client = CoreIpcClient::connect()?;
-                                client
-                                    .command(CoreCommand::AcceptHandoff {
-                                        handoff_id: offer.handoff_id.clone(),
-                                        filename,
-                                        download_dir: download_dir.clone(),
-                                        allow_duplicate: copy,
-                                        trusted_ui: true,
-                                        start_paused,
-                                        queue_id,
-                                    })
-                                    .and_then(core_feedback::command_result)?;
+                                let events = client.command(CoreCommand::AcceptHandoff {
+                                    handoff_id: offer.handoff_id.clone(),
+                                    filename,
+                                    download_dir: download_dir.clone(),
+                                    allow_duplicate: copy,
+                                    trusted_ui: true,
+                                    start_paused,
+                                    queue_id,
+                                })?;
+                                for envelope in &events {
+                                    update_known_tasks(&known_tasks, &envelope.event);
+                                }
+                                core_feedback::command_result(events)?;
                                 if !download_dir.is_empty() {
                                     if let Ok(mut settings) = presenter_settings.lock() {
                                         settings.record_recent_dir(&download_dir);
@@ -1262,6 +1533,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         })
                                     })
                                 {
+                                    if let Some(renamed) = renamed_filename {
+                                        item.set_filename(renamed.into());
+                                        item.set_duplicate_text("".into());
+                                        item.set_duplicate_task_id("".into());
+                                    }
                                     item.set_busy(false);
                                     item.set_busy_action("".into());
                                     set_confirm_issue(&item, &text, actions);
@@ -1339,6 +1615,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 sync_confirm_selectors(&item, &settings, &path, None);
                             }
                             clear_confirm_issue(&item);
+                            refresh_confirm_duplicate(&item, &offer_state);
                         }
                         Ok(None) => {}
                         Err(error) => set_confirm_issue(&item, &error, [("", ""), ("", "")]),
@@ -1348,6 +1625,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "recent_dir" => {
                     if let Some(item) = window.upgrade() {
                         clear_confirm_issue(&item);
+                        refresh_confirm_duplicate(&item, &offer_state);
+                    }
+                    return;
+                }
+                "recheck_duplicate" => {
+                    if let Some(item) = window.upgrade() {
+                        refresh_confirm_duplicate(&item, &offer_state);
                     }
                     return;
                 }
@@ -1383,6 +1667,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         _ => unreachable!(),
                     }
                     clear_confirm_issue(&item);
+                    refresh_confirm_duplicate(&item, &offer_state);
                     return;
                 }
                 "open_existing" => {
@@ -1462,6 +1747,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let dir = settings.directory_for(category);
                         item.set_download_dir(dir.clone().into());
                         sync_confirm_selectors(&item, &settings, &dir, None);
+                        refresh_confirm_duplicate(&item, &offer_state);
                     }
                     return;
                 }
@@ -1698,14 +1984,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     let _ = item.hide();
                                 }
                             }
-                            let (primary, position) = active_hud
+                            let (primary, position, processing_elapsed) = active_hud
                                 .lock()
                                 .map(|mut hud| {
                                     let primary = hud.remove(&task_id);
                                     let pos = hud.task_position();
-                                    (primary, pos)
+                                    let elapsed = primary.as_ref().and_then(|task| {
+                                        hud.processing_elapsed_secs(
+                                            &task.task_id,
+                                            std::time::Instant::now(),
+                                        )
+                                    });
+                                    (primary, pos, elapsed)
                                 })
-                                .unwrap_or((None, (0, 0)));
+                                .unwrap_or((None, (0, 0), None));
                             let fallback_dir = presenter_settings
                                 .lock()
                                 .map(|settings| settings.download_dir.clone())
@@ -1723,6 +2015,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         &primary,
                                         position,
                                         &fallback_dir,
+                                        processing_elapsed,
                                     )
                                 }
                                 None => {
@@ -1811,6 +2104,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     slint::run_event_loop_until_quit()?;
+    processing_timer.stop();
     prewarm_timer.stop();
     Ok(())
 }
@@ -2480,6 +2774,37 @@ fn sync_confirm_selectors(
     item.set_recent_dir_index(recent_index);
 }
 
+fn refresh_confirm_duplicate(item: &ConfirmWindow, state: &EventLoopState) {
+    let Some(offer) = state
+        .pending
+        .lock()
+        .ok()
+        .and_then(|items| items.front().cloned())
+    else {
+        item.set_duplicate_text("".into());
+        item.set_duplicate_task_id("".into());
+        return;
+    };
+    let tasks = state
+        .known_tasks
+        .lock()
+        .map(|tasks| tasks.clone())
+        .unwrap_or_default();
+    let variants = state
+        .known_task_variants
+        .lock()
+        .map(|variants| variants.clone())
+        .unwrap_or_default();
+    let download_dir = item.get_download_dir().to_string();
+    let filename = item.get_filename().to_string();
+    let (duplicate_text, duplicate_task_id) =
+        find_duplicate_match(&tasks, &variants, &offer, &download_dir, &filename)
+            .map(format_duplicate_notice)
+            .unwrap_or_default();
+    item.set_duplicate_text(duplicate_text.into());
+    item.set_duplicate_task_id(duplicate_task_id.into());
+}
+
 fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) {
     let Some(item) = window.upgrade() else {
         return;
@@ -2552,6 +2877,9 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
                         start_paused: false,
                         queue_id: plan.queue_id.clone(),
                     })?;
+                    for envelope in &events {
+                        update_known_tasks(&offer_state.known_tasks, &envelope.event);
+                    }
                     if events
                         .iter()
                         .any(|e| matches!(e.event, CoreEvent::DuplicateOffered { .. }))
@@ -2598,19 +2926,15 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     };
     let category = download_category(&filename, "", offer.resource_kind);
     let download_dir = settings_snapshot.directory_for(category);
-    let (duplicate_text, duplicate_task_id) =
-        find_duplicate_task(&tasks_snapshot, &variants_snapshot, &offer)
-            .map(|task| {
-                (
-                    format!(
-                        "已有同一地址的任务：{}（{}）",
-                        task.filename,
-                        task_status_label(&task.status)
-                    ),
-                    task.task_id.clone(),
-                )
-            })
-            .unwrap_or_default();
+    let (duplicate_text, duplicate_task_id) = find_duplicate_match(
+        &tasks_snapshot,
+        &variants_snapshot,
+        &offer,
+        &download_dir,
+        &filename,
+    )
+    .map(format_duplicate_notice)
+    .unwrap_or_default();
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
     item.set_category(category.into());
@@ -3061,8 +3385,50 @@ fn apply_runtime_settings(
     native_window::apply_appearance(complete, settings.dark, settings.reduce_motion);
 }
 
+fn is_processing_status(status: &str) -> bool {
+    matches!(
+        status,
+        "merging" | "checking" | "processing" | "remuxing" | "finalizing"
+    )
+}
+
 fn task_is_active(status: &str) -> bool {
-    matches!(status, "downloading" | "recording" | "merging" | "checking")
+    matches!(status, "downloading" | "recording") || is_processing_status(status)
+}
+
+fn format_elapsed_duration(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!(
+            "{}h{}m{}s",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        )
+    } else if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn processing_badge_label(status: &str) -> &'static str {
+    match status {
+        "merging" | "remuxing" => "合并中",
+        "checking" => "校验中",
+        _ => "处理中",
+    }
+}
+
+fn format_processing_headline(status: &str, elapsed_secs: Option<u64>) -> String {
+    let base = match status {
+        "merging" | "remuxing" => "合并音视频中",
+        "checking" => "校验文件中",
+        _ => "本地处理中",
+    };
+    match elapsed_secs {
+        Some(seconds) => format!("{base} · 已耗时 {}", format_elapsed_duration(seconds)),
+        None => base.to_owned(),
+    }
 }
 
 const COMPLETION_ACTION_LABELS: &[&str] = &["无操作", "打开目录", "睡眠", "休眠", "关机"];
@@ -3081,11 +3447,21 @@ fn progress_window_logical_size(expanded: bool) -> (f32, f32) {
 fn resize_progress_window(item: &ProgressWindow, expanded: bool) {
     let (width, height) = progress_window_logical_size(expanded);
     item.set_expanded(expanded);
-    item.window()
-        .set_size(slint::LogicalSize::new(width, height));
+    native_window::set_window_logical_size(item.window(), width, height);
     round_native_window(item.window());
     native_window::fit_to_work_area(item.window());
     item.window().request_redraw();
+    let weak = item.as_weak();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(item) = weak.upgrade() else {
+            return;
+        };
+        let (width, height) = progress_window_logical_size(item.get_expanded());
+        native_window::set_window_logical_size(item.window(), width, height);
+        round_native_window(item.window());
+        native_window::fit_to_work_area(item.window());
+        item.window().request_redraw();
+    });
 }
 
 fn build_speed_limit_settings(
@@ -3456,6 +3832,7 @@ struct ActiveTaskHud {
     next_activation: u64,
     selected_task_id: Option<String>,
     pinned_paused: HashSet<String>,
+    processing_started_at: HashMap<String, std::time::Instant>,
 }
 
 struct ActiveTaskEntry {
@@ -3517,15 +3894,41 @@ impl ActiveTaskHud {
         self.current_snapshot()
     }
 
+    fn sync_processing_clock(&mut self, task_id: &str, status: &str, now: std::time::Instant) {
+        if is_processing_status(status) {
+            self.processing_started_at
+                .entry(task_id.to_owned())
+                .or_insert(now);
+        } else {
+            self.processing_started_at.remove(task_id);
+        }
+    }
+
+    fn processing_elapsed_secs(&self, task_id: &str, now: std::time::Instant) -> Option<u64> {
+        self.processing_started_at
+            .get(task_id)
+            .map(|started| now.saturating_duration_since(*started).as_secs())
+    }
+
     /// Fold a task snapshot into the view and return the snapshot the HUD
     /// should display afterwards (None when no task is active or pinned anymore).
+    #[cfg(test)]
     fn observe(&mut self, snapshot: TaskSnapshot) -> Option<TaskSnapshot> {
+        self.observe_at(snapshot, std::time::Instant::now())
+    }
+
+    fn observe_at(
+        &mut self,
+        snapshot: TaskSnapshot,
+        now: std::time::Instant,
+    ) -> Option<TaskSnapshot> {
         let index = self
             .entries
             .iter()
             .position(|entry| entry.task_id == snapshot.task_id);
         if task_is_active(&snapshot.status) {
             self.pinned_paused.remove(&snapshot.task_id);
+            self.sync_processing_clock(&snapshot.task_id, &snapshot.status, now);
             match index {
                 Some(index) => self.entries[index].snapshot = snapshot,
                 None => {
@@ -3545,6 +3948,7 @@ impl ActiveTaskHud {
                 }
             }
         } else if snapshot.status == "paused" && self.pinned_paused.contains(&snapshot.task_id) {
+            self.processing_started_at.remove(&snapshot.task_id);
             if let Some(index) = index {
                 self.entries[index].snapshot = snapshot;
             } else {
@@ -3552,6 +3956,7 @@ impl ActiveTaskHud {
             }
         } else {
             self.pinned_paused.remove(&snapshot.task_id);
+            self.processing_started_at.remove(&snapshot.task_id);
             if let Some(index) = index {
                 self.entries.remove(index);
             }
@@ -3564,6 +3969,7 @@ impl ActiveTaskHud {
     /// display afterwards.
     fn remove(&mut self, task_id: &str) -> Option<TaskSnapshot> {
         self.pinned_paused.remove(task_id);
+        self.processing_started_at.remove(task_id);
         self.entries.retain(|entry| entry.task_id != task_id);
         self.sync_selection();
         self.current_snapshot()
@@ -3571,6 +3977,7 @@ impl ActiveTaskHud {
 
     /// Reconcile HUD entries against a fresh full snapshot after reconnect/resync.
     fn reconcile(&mut self, tasks: &[TaskSnapshot]) -> Option<TaskSnapshot> {
+        let now = std::time::Instant::now();
         let by_id: HashMap<&str, &TaskSnapshot> = tasks
             .iter()
             .map(|task| (task.task_id.as_str(), task))
@@ -3598,7 +4005,19 @@ impl ActiveTaskHud {
                 .iter()
                 .any(|entry| entry.task_id == snapshot.task_id)
             {
-                self.observe(snapshot.clone());
+                self.observe_at(snapshot.clone(), now);
+            }
+        }
+        self.processing_started_at.retain(|id, _| {
+            self.entries
+                .iter()
+                .any(|entry| &entry.task_id == id && is_processing_status(&entry.snapshot.status))
+        });
+        for entry in &self.entries {
+            if is_processing_status(&entry.snapshot.status) {
+                self.processing_started_at
+                    .entry(entry.task_id.clone())
+                    .or_insert(now);
             }
         }
         self.sync_selection();
@@ -3679,18 +4098,29 @@ fn update_task_windows(
     if task_is_active(&snapshot.status) {
         completed_notified.borrow_mut().remove(&snapshot.task_id);
     }
-    let (primary, position) = active_hud
+    let (primary, position, processing_elapsed) = active_hud
         .lock()
         .map(|mut hud| {
-            let primary = hud.observe(snapshot.clone());
+            let now = std::time::Instant::now();
+            let primary = hud.observe_at(snapshot.clone(), now);
             let pos = hud.task_position();
-            (primary, pos)
+            let elapsed = primary
+                .as_ref()
+                .and_then(|task| hud.processing_elapsed_secs(&task.task_id, now));
+            (primary, pos, elapsed)
         })
-        .unwrap_or((None, (0, 0)));
+        .unwrap_or((None, (0, 0), None));
     match primary {
         Some(primary) => {
             reset_progress_action_for_new_task(progress, rendered_hud_task, &primary.task_id);
-            render_progress_hud(progress, settings, &primary, position, fallback_dir)
+            render_progress_hud(
+                progress,
+                settings,
+                &primary,
+                position,
+                fallback_dir,
+                processing_elapsed,
+            )
         }
         None => {
             if let Ok(mut rendered) = rendered_hud_task.lock() {
@@ -3775,6 +4205,7 @@ fn render_progress_hud(
     snapshot: &TaskSnapshot,
     position: (usize, usize),
     fallback_dir: &str,
+    processing_elapsed: Option<u64>,
 ) {
     if !settings.show_progress {
         return;
@@ -3790,7 +4221,7 @@ fn render_progress_hud(
         snapshot.task_id, snapshot.status, snapshot.downloaded_bytes
     ));
     let paused = snapshot.status == "paused";
-    let processing = matches!(snapshot.status.as_str(), "merging" | "checking");
+    let processing = is_processing_status(&snapshot.status);
     item.set_headline(if processing {
         LOCAL_PROCESSING.into()
     } else {
@@ -3799,6 +4230,7 @@ fn render_progress_hud(
     item.set_filename(snapshot.filename.clone().into());
     item.set_paused(paused);
     item.set_processing(processing);
+    item.set_processing_badge(processing_badge_label(&snapshot.status).into());
     if (paused && item.get_action_text().as_str() == "正在暂停…")
         || (!paused && item.get_action_text().as_str() == "正在继续…")
     {
@@ -3806,14 +4238,14 @@ fn render_progress_hud(
         item.set_action_text("".into());
     }
     item.set_speed(if processing {
-        "本地处理中".into()
+        format_processing_headline(&snapshot.status, processing_elapsed).into()
     } else if paused {
         "已暂停".into()
     } else {
         format_speed(snapshot.speed_bytes_per_sec).into()
     });
     item.set_remaining(if processing {
-        "请稍候".into()
+        "传输已完成，文件尚未就绪".into()
     } else if paused {
         "点击继续恢复下载".into()
     } else if snapshot.speed_bytes_per_sec > 0 {
@@ -3836,8 +4268,9 @@ fn render_progress_hud(
     });
     item.set_stage_label(
         match snapshot.status.as_str() {
-            "merging" => "正在合并音视频",
+            "merging" | "remuxing" => "正在合并音视频",
             "checking" => "正在校验文件",
+            "processing" | "finalizing" => "正在本地处理",
             "recording" => "正在录制",
             "paused" => "已暂停",
             _ => "正在下载",
@@ -3849,13 +4282,14 @@ fn render_progress_hud(
         build_segment_blocks(snapshot),
     )));
     item.set_progress_known(
-        snapshot.total_bytes.is_some_and(|total| total > 0)
-            || (!snapshot.is_live
-                && matches!(
-                    snapshot.resource_kind,
-                    ResourceKind::Hls | ResourceKind::Dash
-                )
-                && snapshot.total_ranges > 0),
+        !processing
+            && (snapshot.total_bytes.is_some_and(|total| total > 0)
+                || (!snapshot.is_live
+                    && matches!(
+                        snapshot.resource_kind,
+                        ResourceKind::Hls | ResourceKind::Dash
+                    )
+                    && snapshot.total_ranges > 0)),
     );
     item.set_transferred(match snapshot.total_bytes.filter(|total| *total > 0) {
         Some(total) => format!(
@@ -4067,6 +4501,9 @@ fn task_status_label(status: &str) -> &str {
         "downloading" => "下载中",
         "recording" => "录制中",
         "merging" => "合并中",
+        "remuxing" => "封装中",
+        "processing" => "处理中",
+        "finalizing" => "收尾中",
         "checking" => "校验中",
         "parsing" => "解析中",
         "paused" => "已暂停",
@@ -5217,5 +5654,238 @@ mod tests {
         assert!(expanded.get_expanded());
         assert_eq!(expanded.get_connection_rows().row_count(), 6);
         assert_eq!(expanded.get_headline().as_str(), "下载进度");
+    }
+
+    #[test]
+    fn duplicate_detection_catches_rotating_github_release_urls_and_target_path_matches() {
+        use super::{
+            find_duplicate_match, format_duplicate_notice, url_without_signing_params,
+            DuplicateMatchKind,
+        };
+        use std::collections::HashMap;
+
+        let paused_github_task = TaskSnapshot {
+            task_id: "task-ytdlp-paused".into(),
+            url: "https://objects.githubusercontent.com/github-production-release-asset-2e65be/307260205/asset-1?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20261125T050000Z&X-Amz-Expires=300&X-Amz-Signature=aaaa1111&repo_id=307260205".into(),
+            source_page_url: "https://github.com/yt-dlp/yt-dlp/releases".into(),
+            download_dir: r"C:\Users\Admin\Downloads".into(),
+            filename: "yt-dlp.exe".into(),
+            resource_kind: ResourceKind::File,
+            status: "paused".into(),
+            ..Default::default()
+        };
+
+        // 1. Rotating GitHub Release signed URL (different X-Amz-Date & X-Amz-Signature).
+        let second_click = ResourceOffer {
+            url: "https://objects.githubusercontent.com/github-production-release-asset-2e65be/307260205/asset-1?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20261125T050215Z&X-Amz-Expires=300&X-Amz-Signature=bbbb2222&repo_id=307260205".into(),
+            source_page_url: "https://github.com/yt-dlp/yt-dlp/releases/".into(),
+            filename: "yt-dlp.exe".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+        assert_eq!(
+            url_without_signing_params(&paused_github_task.url),
+            url_without_signing_params(&second_click.url)
+        );
+        let found = find_duplicate_match(
+            std::slice::from_ref(&paused_github_task),
+            &HashMap::new(),
+            &second_click,
+            r"C:\Users\Admin\Downloads",
+            "yt-dlp.exe",
+        )
+        .expect("rotating GitHub Release signed URL must be detected as duplicate");
+        assert_eq!(found.task.task_id, "task-ytdlp-paused");
+        assert_eq!(found.kind, DuplicateMatchKind::SameUrl);
+        let (notice_text, dup_id) = format_duplicate_notice(found);
+        assert_eq!(notice_text, "已有同一地址的任务：yt-dlp.exe（已暂停）");
+        assert_eq!(dup_id, "task-ytdlp-paused");
+
+        // 2. Rotating CDN host/path on the same GitHub Release source page.
+        let different_cdn_host = ResourceOffer {
+            url: "https://release-assets.githubusercontent.com/other-blob/yt-dlp.exe?se=2026-11-25&sig=zzzz".into(),
+            source_page_url: "https://github.com/yt-dlp/yt-dlp/releases".into(),
+            filename: "YT-DLP.EXE".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+        let found_page = find_duplicate_match(
+            std::slice::from_ref(&paused_github_task),
+            &HashMap::new(),
+            &different_cdn_host,
+            r"D:\OtherDir",
+            "YT-DLP.EXE",
+        )
+        .expect("same source_page_url + filename should detect duplicate");
+        assert_eq!(found_page.task.task_id, "task-ytdlp-paused");
+        assert_eq!(found_page.kind, DuplicateMatchKind::SameUrl);
+
+        // 3. Different URL and no source_page_url, but exact same target folder + filename.
+        let same_target_offer = ResourceOffer {
+            url: "https://mirror.example.test/releases/yt-dlp.exe".into(),
+            source_page_url: String::new(),
+            filename: "yt-dlp.exe".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+        let found_path = find_duplicate_match(
+            std::slice::from_ref(&paused_github_task),
+            &HashMap::new(),
+            &same_target_offer,
+            "c:/users/admin/downloads/",
+            "YT-DLP.EXE",
+        )
+        .expect("same download_dir + filename must detect duplicate");
+        assert_eq!(found_path.task.task_id, "task-ytdlp-paused");
+        assert_eq!(found_path.kind, DuplicateMatchKind::SameTargetPath);
+        let (path_notice, _) = format_duplicate_notice(found_path);
+        assert_eq!(path_notice, "已有同一文件的任务：yt-dlp.exe（已暂停）");
+
+        // 4. Renaming copy to "yt-dlp (2).exe" clears duplicate match cleanly.
+        assert!(find_duplicate_match(
+            std::slice::from_ref(&paused_github_task),
+            &HashMap::new(),
+            &second_click,
+            r"C:\Users\Admin\Downloads",
+            "yt-dlp (2).exe",
+        )
+        .is_none());
+
+        // 5. Cancelled tasks do not trigger heuristic path/source/signed-URL matches.
+        let mut cancelled = paused_github_task.clone();
+        cancelled.status = "canceled".into();
+        assert!(find_duplicate_match(
+            &[cancelled],
+            &HashMap::new(),
+            &second_click,
+            r"C:\Users\Admin\Downloads",
+            "yt-dlp.exe",
+        )
+        .is_none());
+
+        // 6. Adaptive HLS/DASH streams with different variants are never falsely matched.
+        let hls_task = TaskSnapshot {
+            task_id: "hls-720".into(),
+            url: "https://cdn.example.test/live/master.m3u8?token=aaa".into(),
+            source_page_url: "https://video.example.test/watch/1".into(),
+            download_dir: r"C:\Users\Admin\Videos".into(),
+            filename: "show.mp4".into(),
+            resource_kind: ResourceKind::Hls,
+            status: "downloading".into(),
+            ..Default::default()
+        };
+        let hls_1080 = ResourceOffer {
+            url: "https://cdn.example.test/live/master.m3u8?token=bbb".into(),
+            source_page_url: "https://video.example.test/watch/1".into(),
+            filename: "show.mp4".into(),
+            resource_kind: ResourceKind::Hls,
+            preferred_height: 1080,
+            preferred_variant_id: "v1080".into(),
+            ..Default::default()
+        };
+        assert!(find_duplicate_match(
+            &[hls_task],
+            &HashMap::new(),
+            &hls_1080,
+            r"C:\Users\Admin\Videos",
+            "show.mp4",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn progress_hud_processing_state_tracks_elapsed_and_avoids_misleading_100_percent() {
+        use super::{
+            format_processing_headline, processing_badge_label, render_progress_hud,
+            resize_progress_window, PresenterRuntimeSettings, ProgressWindow,
+            PROGRESS_HUD_COMPACT_HEIGHT, PROGRESS_HUD_EXPANDED_HEIGHT,
+        };
+        use slint::ComponentHandle;
+        use std::time::{Duration, Instant};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+
+        let mut hud = ActiveTaskHud::default();
+        let t0 = Instant::now();
+        hud.observe_at(hud_snapshot("hls-1", "downloading"), t0);
+        assert_eq!(hud.processing_elapsed_secs("hls-1", t0), None);
+
+        let mut merging = TaskSnapshot {
+            task_id: "hls-1".into(),
+            filename: "episode.mp4".into(),
+            resource_kind: ResourceKind::Hls,
+            status: "merging".into(),
+            downloaded_bytes: 50 * 1024 * 1024,
+            total_bytes: Some(50 * 1024 * 1024),
+            completed_ranges: 100,
+            total_ranges: 100,
+            ..Default::default()
+        };
+        let t1 = t0 + Duration::from_secs(5);
+        hud.observe_at(merging.clone(), t1);
+        assert_eq!(hud.processing_elapsed_secs("hls-1", t1), Some(0));
+
+        // Subsequent merging snapshots preserve the original merge start timestamp.
+        let t2 = t1 + Duration::from_secs(12);
+        hud.observe_at(merging.clone(), t2);
+        assert_eq!(hud.processing_elapsed_secs("hls-1", t2), Some(12));
+        assert_eq!(
+            format_processing_headline("merging", Some(12)),
+            "合并音视频中 · 已耗时 12s"
+        );
+        assert_eq!(processing_badge_label("merging"), "合并中");
+        assert_eq!(
+            format_processing_headline("checking", Some(65)),
+            "校验文件中 · 已耗时 1m5s"
+        );
+        assert_eq!(processing_badge_label("checking"), "校验中");
+
+        let progress = ProgressWindow::new().unwrap();
+        let settings = PresenterRuntimeSettings {
+            show_progress: true,
+            ..Default::default()
+        };
+        render_progress_hud(
+            &progress.as_weak(),
+            settings,
+            &merging,
+            (1, 1),
+            "",
+            Some(12),
+        );
+        assert!(progress.get_processing());
+        assert!(!progress.get_progress_known());
+        assert_eq!(progress.get_processing_badge().as_str(), "合并中");
+        assert_eq!(progress.get_speed().as_str(), "合并音视频中 · 已耗时 12s");
+        assert_eq!(progress.get_stage_label().as_str(), "正在合并音视频");
+        assert_eq!(
+            progress.get_remaining().as_str(),
+            "传输已完成，文件尚未就绪"
+        );
+
+        // Compact <-> Expanded resize cleanly grows and shrinks back to compact height.
+        resize_progress_window(&progress, true);
+        assert!(progress.get_expanded());
+        let expanded_size = progress
+            .window()
+            .size()
+            .to_logical(progress.window().scale_factor());
+        assert!((expanded_size.height - PROGRESS_HUD_EXPANDED_HEIGHT).abs() < 1.5);
+
+        resize_progress_window(&progress, false);
+        assert!(!progress.get_expanded());
+        let compact_size = progress
+            .window()
+            .size()
+            .to_logical(progress.window().scale_factor());
+        assert!((compact_size.height - PROGRESS_HUD_COMPACT_HEIGHT).abs() < 1.5);
+
+        // Finishing the task clears the processing clock.
+        merging.status = "completed".into();
+        hud.observe_at(merging, t2 + Duration::from_secs(3));
+        assert_eq!(
+            hud.processing_elapsed_secs("hls-1", t2 + Duration::from_secs(3)),
+            None
+        );
     }
 }
