@@ -1,15 +1,37 @@
 import { classifyResource } from './resources'
+export { pageDownloadUrls, type PageLinkCandidate } from './selectionLinks'
+
+export const CONTEXT_MENU_IDS = {
+  downloadLink: 'hls-download-link',
+  castLink: 'hls-cast-link',
+  pushTvboxLink: 'hls-push-tvbox-link',
+  downloadSelection: 'hls-download-selection',
+  downloadPageLinks: 'hls-download-page-links',
+} as const
 
 export interface ContextMenuTarget {
   linkUrl?: string
   srcUrl?: string
   mediaType?: string
+  pageUrl?: string
 }
 
 export interface ContextMenuCapabilities {
   url: string
   download: boolean
   media: boolean
+}
+
+/** True when the browser page URL is an http(s) document eligible for page-link harvesting. */
+export function canHarvestPageLinks(pageUrl?: string): boolean {
+  const raw = String(pageUrl || '').trim()
+  if (!raw) return false
+  try {
+    const parsed = new URL(raw)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 export function contextMenuCapabilities(target: ContextMenuTarget): ContextMenuCapabilities {

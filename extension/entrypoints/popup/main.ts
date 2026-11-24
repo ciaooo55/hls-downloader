@@ -255,6 +255,10 @@ async function main() {
   const controls = el('div', 'controls')
   const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
   enableBtn.type = 'button'
+  const quickDownloadBtn = el('button', 'hlsd-button', '静默快速下载')
+  quickDownloadBtn.type = 'button'
+  const speedLimitBtn = el('button', 'hlsd-button', '下载限速')
+  speedLimitBtn.type = 'button'
   const cookieBtn = el('button', 'hlsd-button', '\u672c\u7ad9 Cookie')
   cookieBtn.type = 'button'
   const excludeBtn = el('button', 'hlsd-button', '\u672c\u7ad9\u63d0\u793a')
@@ -263,20 +267,27 @@ async function main() {
   // work finishes. Do not present controls as clickable until their handlers
   // and local source of truth are ready; a very fast click was otherwise lost.
   enableBtn.disabled = true
+  quickDownloadBtn.disabled = true
+  speedLimitBtn.disabled = true
   cookieBtn.disabled = true
   excludeBtn.disabled = true
   const settingsPanel = el('section', 'settings-panel')
   const settingsSite = el('p', 'panel-hint', '正在读取当前站点…')
   settingsPanel.append(el('h2', '', '下载与站点设置'), settingsSite)
+  let speedLimitDesc!: HTMLElement
   const settings = [
     [enableBtn, '自动接管', '全局设置，控制浏览器下载是否交给主程序。'],
+    [quickDownloadBtn, '静默快速下载（不弹确认框）', '全局设置，接管后直接加入下载队列，跳过确认弹窗。'],
+    [speedLimitBtn, '下载限速', '全局限速开关，与主程序限速状态保持同步。'],
     [cookieBtn, '本站 Cookie', '仅在授权后，为本站下载读取资源请求所需的 Cookie。'],
     [excludeBtn, '本站媒体提示', '控制网页上的媒体悬浮入口，不影响插件内识别。'],
   ] as const
   for (const [button, label, description] of settings) {
     const row = el('div', 'setting-item')
     const text = el('div')
-    text.append(el('strong', '', label), el('small', '', description))
+    const descEl = el('small', '', description)
+    if (button === speedLimitBtn) speedLimitDesc = descEl
+    text.append(el('strong', '', label), descEl)
     row.append(text, button)
     controls.append(row)
   }
@@ -406,6 +417,12 @@ async function main() {
     .catch(() => undefined)
 
   let enabled = true
+  let quickDownloadEnabled = false
+  let speedLimitEnabled = false
+  let speedLimitKib = 0
+  let connectionOnline = false
+  let connectionReconnecting = false
+  let connectionChecked = false
   let host = ''
   let suppressionHost = ''
   let authorizedCookieHosts: string[] = []
@@ -463,6 +480,21 @@ async function main() {
   })
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
+  const renderConnectionStatus = () => {
+    if (!connectionChecked) return
+    const base = engineConnectionLabel(connectionOnline, connectionReconnecting)
+    const speedSuffix = connectionOnline && speedLimitEnabled
+      ? (speedLimitKib > 0 ? ` · 限速 ${speedLimitKib} KiB/s` : ' · 限速中')
+      : ''
+    statusEl.textContent = `${base}${speedSuffix}`
+    statusEl.classList.toggle('online', connectionOnline)
+    const detailParts = [base]
+    if (connectionOnline && speedLimitEnabled) {
+      detailParts.push(speedLimitKib > 0 ? `全局限速已开启（${speedLimitKib} KiB/s）` : '全局限速已开启')
+    }
+    if (quickDownloadEnabled) detailParts.push('静默快速下载已开启')
+    statusEl.title = detailParts.join(' · ')
+  }
   const setError = (message = '') => {
     errorBox.hidden = !message
     errorBox.textContent = message
@@ -874,6 +906,26 @@ async function main() {
     enableBtn.title = enabled ? '全局下载接管已开启；点击关闭' : '全局下载接管已关闭；点击开启'
     enableBtn.setAttribute('aria-pressed', String(enabled))
     enableBtn.classList.toggle('active', enabled)
+    quickDownloadBtn.textContent = quickDownloadEnabled ? '已开启' : '已关闭'
+    quickDownloadBtn.setAttribute('aria-label', `静默快速下载（不弹确认框）：${quickDownloadBtn.textContent}`)
+    quickDownloadBtn.title = quickDownloadEnabled
+      ? '静默快速下载已开启：接管下载后直接开始，不弹确认框；点击关闭'
+      : '静默快速下载已关闭：接管下载后显示确认框；点击开启'
+    quickDownloadBtn.setAttribute('aria-pressed', String(quickDownloadEnabled))
+    quickDownloadBtn.classList.toggle('active', quickDownloadEnabled)
+    speedLimitBtn.textContent = speedLimitEnabled ? '已开启' : '已关闭'
+    speedLimitBtn.setAttribute('aria-label', `下载限速：${speedLimitBtn.textContent}`)
+    speedLimitBtn.title = speedLimitEnabled
+      ? (speedLimitKib > 0 ? `全局下载限速已开启（${speedLimitKib} KiB/s）；点击关闭` : '全局下载限速已开启；点击关闭')
+      : '全局下载限速已关闭；点击开启'
+    speedLimitBtn.setAttribute('aria-pressed', String(speedLimitEnabled))
+    speedLimitBtn.classList.toggle('active', speedLimitEnabled)
+    setTextIfChanged(
+      speedLimitDesc,
+      speedLimitEnabled && speedLimitKib > 0
+        ? `当前限速 ${speedLimitKib} KiB/s，与主程序实时同步。`
+        : '全局限速开关，与主程序限速状态保持同步。',
+    )
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
     cookieBtn.textContent = cookieAuthorized ? '已授权' : '未授权'
     cookieBtn.setAttribute('aria-label', `本站 Cookie：${cookieBtn.textContent}`)
@@ -895,11 +947,13 @@ async function main() {
     restorePromptsBtn.title = suppressedKinds.length
       ? `\u6062\u590d\u672c\u7ad9 ${suppressedKinds.join('\u3001')} \u8d44\u6e90\u7684\u81ea\u52a8\u63d0\u793a`
       : ''
-    for (const button of [enableBtn, cookieBtn, excludeBtn, restorePromptsBtn]) {
+    for (const button of [enableBtn, quickDownloadBtn, speedLimitBtn, cookieBtn, excludeBtn, restorePromptsBtn]) {
+      const globalSetting = button === enableBtn || button === quickDownloadBtn || button === speedLimitBtn
       button.disabled = Boolean(settingsBusy)
-        || (button === restorePromptsBtn ? (!host && !suppressionHost) : (button !== enableBtn && !host))
+        || (button === restorePromptsBtn ? (!host && !suppressionHost) : (!globalSetting && !host))
       button.setAttribute('aria-busy', String(settingsBusy === button))
     }
+    renderConnectionStatus()
   }
 
   const waitForPushResult = async (requestId: string) => {
@@ -1131,6 +1185,69 @@ async function main() {
       refreshButtons()
     }
   })
+  quickDownloadBtn.addEventListener('click', async () => {
+    if (settingsBusy) return
+    const requested = !quickDownloadEnabled
+    settingsBusy = quickDownloadBtn
+    refreshButtons()
+    setError('')
+    try {
+      const response = await withDeadline(
+        browser.runtime.sendMessage({ type: 'set-takeover-settings', quickDownloadEnabled: requested }),
+        10_000,
+        '保存快速下载设置超时，请重试',
+      )
+      if (!response?.ok) {
+        setError(response?.error || '保存快速下载设置失败')
+        return
+      }
+      if (typeof response.quick_download_enabled !== 'boolean') {
+        setError('桌面端未返回有效的快速下载设置')
+        return
+      }
+      quickDownloadEnabled = response.quick_download_enabled
+      if (quickDownloadEnabled !== requested) setError('快速下载设置已被桌面端的更新值覆盖')
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存快速下载设置失败')
+    } finally {
+      settingsBusy = undefined
+      refreshButtons()
+    }
+  })
+  speedLimitBtn.addEventListener('click', async () => {
+    if (settingsBusy) return
+    const requested = !speedLimitEnabled
+    settingsBusy = speedLimitBtn
+    refreshButtons()
+    setError('')
+    try {
+      const response = await withDeadline(
+        browser.runtime.sendMessage({ type: 'set-takeover-settings', speedLimitEnabled: requested }),
+        10_000,
+        '保存限速设置超时，请重试',
+      )
+      if (!response?.ok) {
+        setError(response?.error || '保存限速设置失败')
+        return
+      }
+      if (typeof response.speed_limit_enabled !== 'boolean') {
+        setError('桌面端未返回有效的限速设置')
+        return
+      }
+      speedLimitEnabled = response.speed_limit_enabled
+      if (Number.isFinite(Number(response.speed_limit_kib)) && Number(response.speed_limit_kib) >= 0) {
+        speedLimitKib = Math.floor(Number(response.speed_limit_kib))
+      }
+      if (speedLimitEnabled !== requested) setError('限速设置已被桌面端的更新值覆盖')
+      refreshButtons()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存限速设置失败')
+    } finally {
+      settingsBusy = undefined
+      refreshButtons()
+    }
+  })
   cookieBtn.addEventListener('click', async () => {
     if (!host || settingsBusy) return
     const next = authorizedCookieHosts.includes(host)
@@ -1211,9 +1328,26 @@ async function main() {
   }).catch(() => undefined)
   browser.storage.onChanged.addListener((changes, area) => {
     if (area === 'session' && changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
-    if (area === 'local' && changes.enabled && !settingsBusy) {
-      enabled = changes.enabled.newValue !== false
-      refreshButtons()
+    if (area === 'local' && !settingsBusy) {
+      let dirty = false
+      if (changes.enabled) {
+        enabled = changes.enabled.newValue !== false
+        dirty = true
+      }
+      if (changes.quickDownloadEnabled) {
+        quickDownloadEnabled = changes.quickDownloadEnabled.newValue === true
+        dirty = true
+      }
+      if (changes.speedLimitEnabled) {
+        speedLimitEnabled = changes.speedLimitEnabled.newValue === true
+        dirty = true
+      }
+      if (changes.speedLimitKib) {
+        const nextKib = Number(changes.speedLimitKib.newValue || 0)
+        speedLimitKib = Number.isFinite(nextKib) && nextKib > 0 ? Math.floor(nextKib) : 0
+        dirty = true
+      }
+      if (dirty) refreshButtons()
     }
   })
   canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
@@ -1259,15 +1393,22 @@ async function main() {
   // opened exactly while a page starts a download; controls must be usable even
   // if the desktop ping or resource query is temporarily slow.
   const stored = await withDeadline(browser.storage.local.get([
-    'enabled', 'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
+    'enabled', 'quickDownloadEnabled', 'speedLimitEnabled', 'speedLimitKib',
+    'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
   ]), 1_000).catch(() => ({} as Record<string, unknown>))
   enabled = stored.enabled !== false
+  quickDownloadEnabled = stored.quickDownloadEnabled === true
+  speedLimitEnabled = stored.speedLimitEnabled === true
+  const storedLimitKib = Number(stored.speedLimitKib || 0)
+  speedLimitKib = Number.isFinite(storedLimitKib) && storedLimitKib > 0 ? Math.floor(storedLimitKib) : 0
   authorizedCookieHosts = normalizeCookiePermissionHosts(stored.authorizedCookieHosts)
   excluded = Array.isArray(stored.excludedHosts)
     ? stored.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
     : []
   suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
   enableBtn.disabled = false
+  quickDownloadBtn.disabled = false
+  speedLimitBtn.disabled = false
   refreshButtons()
   const connectionRequest = browser.runtime.sendMessage({ type: 'ping' })
   const [listed, connection] = await Promise.all([
@@ -1279,13 +1420,27 @@ async function main() {
     resourceState = 'ready'
   }
   function showConnection(response: any) {
-    const online = Boolean(response?.ok)
-    statusEl.textContent = engineConnectionLabel(online, Boolean(response?.reconnecting))
-    statusEl.classList.toggle('online', online)
-    if (typeof response?.takeover_enabled === 'boolean' && !settingsBusy) {
-      enabled = response.takeover_enabled
-      refreshButtons()
+    connectionChecked = true
+    connectionOnline = Boolean(response?.ok)
+    connectionReconnecting = Boolean(response?.reconnecting)
+    if (!settingsBusy) {
+      if (typeof response?.takeover_enabled === 'boolean') enabled = response.takeover_enabled
+      const remoteQuick = typeof response?.quick_download_enabled === 'boolean'
+        ? response.quick_download_enabled
+        : typeof response?.browser_quick_download_enabled === 'boolean'
+          ? response.browser_quick_download_enabled
+          : undefined
+      if (remoteQuick !== undefined) quickDownloadEnabled = remoteQuick
+      const remoteSpeedLimit = typeof response?.speed_limit_enabled === 'boolean'
+        ? response.speed_limit_enabled
+        : typeof response?.download_speed_limit_enabled === 'boolean'
+          ? response.download_speed_limit_enabled
+          : undefined
+      if (remoteSpeedLimit !== undefined) speedLimitEnabled = remoteSpeedLimit
+      const remoteSpeedKib = Number(response?.speed_limit_kib ?? response?.download_speed_limit_kib)
+      if (Number.isFinite(remoteSpeedKib) && remoteSpeedKib >= 0) speedLimitKib = Math.floor(remoteSpeedKib)
     }
+    refreshButtons()
     const recommendedExtensionVersion = String(response?.recommended_extension_version || '')
     const extensionReleaseUrl = String(response?.extension_release_url || '')
     if (extensionNeedsUpgrade(browser.runtime.getManifest().version, recommendedExtensionVersion)) {

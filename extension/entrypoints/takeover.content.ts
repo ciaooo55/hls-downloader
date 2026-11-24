@@ -3,11 +3,13 @@ import { localDownloadIntentUrl } from '../lib/resources'
 import { isDirectDownloadLink } from '../lib/directLink'
 import { desktopAcceptedHandoff } from '../lib/takeover'
 import {
+  isForceTakeoverKey,
   isLikelyDownloadControl,
   linkOpensNewTab,
   resolveClickedLinkHref,
   resolveDownloadTarget,
   resolveFormDownloadUrl,
+  resolveTakeoverClickModifiers,
   shouldTrackDownloadIntent,
 } from '../lib/clickIntent'
 
@@ -47,11 +49,28 @@ export default defineContentScript({
       browser.storage.onChanged.addListener(onSettingsChanged)
       ctx.onInvalidated(() => browser.storage.onChanged.removeListener(onSettingsChanged))
     }
+    let insertHeld = false
+    ctx.addEventListener(window, 'keydown', (event: KeyboardEvent) => {
+      if (isForceTakeoverKey(event)) insertHeld = true
+    }, { capture: true })
+    ctx.addEventListener(window, 'keyup', (event: KeyboardEvent) => {
+      if (isForceTakeoverKey(event)) insertHeld = false
+    }, { capture: true })
+    ctx.addEventListener(window, 'blur', () => {
+      insertHeld = false
+    })
+    ctx.addEventListener(document, 'visibilitychange', () => {
+      if (document.visibilityState !== 'visible') insertHeld = false
+    })
     let lastIntent = { key: '', at: 0 }
     let lastTrustedClick = { at: 0, alt: false, ctrl: false }
     const recordIntent = (event: MouseEvent) => {
       if (event.button !== 0) return
-      if (event.isTrusted) lastTrustedClick = { at: Date.now(), alt: event.altKey, ctrl: event.ctrlKey }
+      const { altBypass, ctrlForce } = resolveTakeoverClickModifiers({
+        altKey: event.altKey,
+        insertHeld,
+      })
+      if (event.isTrusted) lastTrustedClick = { at: Date.now(), alt: altBypass, ctrl: ctrlForce }
       const path = event.composedPath()
       const link = path.find(value => isHtmlLink(value) || isSvgLink(value)) as
         | HTMLAnchorElement
@@ -135,12 +154,12 @@ export default defineContentScript({
       if (!shouldTrackDownloadIntent({
         directHref,
         hintedHref: downloadHref || hintedHref,
-        ctrlForce: event.ctrlKey,
+        ctrlForce,
         explicitDownloadTarget,
         hints: controlHints,
       })) return
       const href = downloadHref || directHref || hintedHref
-      const intentKey = [href, location.href, event.altKey ? 1 : 0, event.ctrlKey ? 1 : 0, downloadHint ? 1 : 0].join('|')
+      const intentKey = [href, location.href, altBypass ? 1 : 0, ctrlForce ? 1 : 0, downloadHint ? 1 : 0].join('|')
       const now = Date.now()
       // A pointerdown followed by click describes one user action. Keeping two
       // entries is dangerous: the first can be consumed by the intended file
@@ -156,8 +175,8 @@ export default defineContentScript({
         type: 'click-intent',
         href,
         pageUrl: location.href,
-        altBypass: event.altKey,
-        ctrlForce: event.ctrlKey,
+        altBypass,
+        ctrlForce,
         generic: !href,
         opensNewTab: linkOpensNewTab(targetValue),
         controlHint: downloadHint,
@@ -172,8 +191,13 @@ export default defineContentScript({
     ctx.addEventListener(window, 'click', recordIntent, { capture: true })
     // 在冒泡末端接管：网页可能先取消默认导航，生成附件地址或更新签名链接。
     ctx.addEventListener(window, 'click', (event: MouseEvent) => {
-      if (!interceptLinks || !event.isTrusted || !event.cancelable || event.defaultPrevented
-        || event.button !== 0 || event.altKey || event.shiftKey || event.metaKey || event.ctrlKey) return
+      const { altBypass, ctrlForce } = resolveTakeoverClickModifiers({
+        altKey: event.altKey,
+        insertHeld,
+      })
+      const allowPreempt = import.meta.env.CHROME && (interceptLinks || ctrlForce)
+      if (!allowPreempt || !event.isTrusted || !event.cancelable || event.defaultPrevented
+        || event.button !== 0 || altBypass || event.shiftKey || event.metaKey || event.ctrlKey) return
       const link = event.composedPath().find(isHtmlLink)
       if (!link || !isDirectDownloadLink(link.href, location.href, link.hasAttribute('download'))) return
       const href = link.href
@@ -205,6 +229,7 @@ export default defineContentScript({
       void browser.runtime.sendMessage({
         type: 'intercept-download-link', href, pageUrl, filename,
         downloadAttribute: filename !== null,
+        ctrlForce,
       }).then(response => {
         if (!desktopAcceptedHandoff(response) && response?.browserFallback === true) {
           return fallback(response?.preserveLocal === true)

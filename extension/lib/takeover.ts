@@ -6,7 +6,7 @@ export interface EarlyBrowserTakeover {
   urls: string[]
   tabId: number
   frameId: number
-  promise: Promise<{ resource: MediaResource, intent?: DownloadClickIntent, bypass?: boolean } | null>
+  promise: Promise<{ resource: MediaResource, intent?: DownloadClickIntent, bypass?: boolean, offerAttempted?: boolean } | null>
 }
 /**
  * Locate an early takeover when the request chain is no longer available.

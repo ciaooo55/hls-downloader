@@ -1,3 +1,6 @@
+import { isAuthenticationNavigation, isLikelyDownloadUrl } from './clickIntent'
+import { classifyPlaybackSource, classifyResource, pageIdentity } from './resources'
+
 const TEXT_URL = /(?:https?:\/\/|magnet:\?)[^\s<>"']+/gi
 const SENTENCE_PUNCTUATION = /[,.;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001]/
 const TRAILING_CLOSERS: Record<string, string> = {
@@ -72,5 +75,54 @@ export function selectedDownloadUrls(anchorHrefs: string[], selectedText: string
     if (url) unique.add(url)
     if (unique.size === 40) break
   }
+  return [...unique]
+}
+
+export interface PageLinkCandidate {
+  href: string
+  download?: boolean
+}
+
+/**
+ * Collect deduplicated downloadable/media links across an entire page in DOM
+ * order for the "Download all links on page" context-menu action.
+ */
+export function pageDownloadUrls(
+  anchors: PageLinkCandidate[],
+  mediaSrcs: string[],
+  baseUrl: string,
+  limit = 40,
+): string[] {
+  const maxItems = Math.max(1, Math.min(200, Math.floor(limit)))
+  const basePage = pageIdentity(baseUrl)
+  const unique = new Set<string>()
+  const remember = (url: string) => {
+    if (!url || isAuthenticationNavigation(url)) return
+    unique.add(url)
+  }
+
+  for (const anchor of anchors) {
+    if (unique.size >= maxItems) return [...unique]
+    const raw = String(anchor.href || '').trim()
+    if (!raw || raw.startsWith('#')) continue
+    const url = normalizeSelectedUrl(raw, baseUrl)
+    if (!url || isAuthenticationNavigation(url)) continue
+    const kind = classifyResource(url)
+    if (basePage && pageIdentity(url) === basePage && !anchor.download && !kind) continue
+    if (anchor.download || kind !== null || isLikelyDownloadUrl(url)) {
+      remember(url)
+    }
+  }
+
+  for (const src of mediaSrcs) {
+    if (unique.size >= maxItems) return [...unique]
+    const url = normalizeSelectedUrl(src, baseUrl)
+    if (!url || isAuthenticationNavigation(url)) continue
+    if (basePage && pageIdentity(url) === basePage && !classifyResource(url)) continue
+    if (classifyResource(url) !== null || classifyPlaybackSource(url) !== null) {
+      remember(url)
+    }
+  }
+
   return [...unique]
 }

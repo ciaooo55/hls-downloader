@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { isAuthenticationNavigation, isLikelyDownloadControl, isLikelyDownloadUrl, isMediaFileUrl, isPlaybackControl, linkOpensNewTab, resolveClickedLinkHref, resolveDownloadTarget, resolveFormDownloadUrl, shouldTrackDownloadIntent } from './clickIntent'
+import { isAuthenticationNavigation, isForceTakeoverKey, isLikelyDownloadControl, isLikelyDownloadUrl, isMediaFileUrl, isPlaybackControl, linkOpensNewTab, resolveClickedLinkHref, resolveDownloadTarget, resolveFormDownloadUrl, resolveTakeoverClickModifiers, shouldTrackDownloadIntent } from './clickIntent'
 import { matchesDownloadClick, type DownloadClickIntent } from './resources'
 import { isDirectDownloadLink } from './directLink'
 
@@ -251,5 +253,32 @@ describe('download click intent', () => {
     expect(matchesDownloadClick(clicked, {
       url: 'https://cdn.test/other.zip', referrer: 'https://site.test/page', tabId: 7,
     }, 13_000)).toBe(false)
+  })
+
+  it('uses Insert (not Ctrl) for IDM-style force takeover while keeping Alt bypass dominant', () => {
+    expect(isForceTakeoverKey({ key: 'Insert' })).toBe(true)
+    expect(isForceTakeoverKey({ code: 'Insert' })).toBe(true)
+    expect(isForceTakeoverKey({ key: 'Control', code: 'ControlLeft' })).toBe(false)
+    expect(isForceTakeoverKey({ key: 'Alt', code: 'AltLeft' })).toBe(false)
+
+    expect(resolveTakeoverClickModifiers({ altKey: false, insertHeld: true }))
+      .toEqual({ altBypass: false, ctrlForce: true })
+    expect(resolveTakeoverClickModifiers({ altKey: false, insertHeld: false }))
+      .toEqual({ altBypass: false, ctrlForce: false })
+    expect(resolveTakeoverClickModifiers({ altKey: true, insertHeld: false }))
+      .toEqual({ altBypass: true, ctrlForce: false })
+    expect(resolveTakeoverClickModifiers({ altKey: true, insertHeld: true }))
+      .toEqual({ altBypass: true, ctrlForce: false })
+
+    const takeoverContent = readFileSync(
+      fileURLToPath(new URL('../entrypoints/takeover.content.ts', import.meta.url)),
+      'utf8',
+    )
+    expect(takeoverContent).toContain('let insertHeld = false')
+    expect(takeoverContent).toContain("'keydown'")
+    expect(takeoverContent).toContain("'keyup'")
+    expect(takeoverContent).toContain("'blur'")
+    expect(takeoverContent).toContain("'visibilitychange'")
+    expect(takeoverContent).not.toContain('ctrlForce: event.ctrlKey')
   })
 })

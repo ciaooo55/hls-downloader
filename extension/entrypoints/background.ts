@@ -25,19 +25,19 @@ import { adaptiveInspectionKey, InspectionCache } from '../lib/inspectionCache'
 import { cookieHeaderForUrl, cookieLookupUrl, cookieMatchesUrl, cookiePartitionKeyForSrcdoc, cookiePartitionSite, cookiePermissionAllows, isCookieHostPermissionError, isSrcdocCookieHostPermissionError, normalizeCookiePermissionHosts, replayCookieIdentity, type ReplayCookie, type SrcdocFrameContext } from '../lib/browserCookies'
 import { detectBrowserFamily, stableBrowserClientId } from '../lib/browserClient'
 import { isEarlyDirectDownloadResponse, type ObservedDownloadResource } from '../lib/directResponse'
-import { clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
+import { canAccelerateBrowserDownload, clickIntentPollsForKind, earlyTakeoverRequiresClick } from '../lib/fileTakeover'
 import { isDirectDownloadLink } from '../lib/directLink'
 import { ClickIntentStore } from '../lib/clickIntentStore'
 import { TakeoverSettingsSync } from '../lib/takeoverSettingsSync'
 import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
-import { contextMenuCapabilities } from '../lib/contextMenuActions'
+import { canHarvestPageLinks, CONTEXT_MENU_IDS, contextMenuCapabilities } from '../lib/contextMenuActions'
 import { installSubtitleBackground } from '../lib/subtitleBackground'
 import { errorText } from '../lib/productCopy'
 
 const HOST = 'com.ciaooo55.hls_downloader'
 const dynamicContextMenus = browser.contextMenus as typeof browser.contextMenus & {
-  onShown?: { addListener: (listener: (info: { linkUrl?: string, srcUrl?: string, mediaType?: string }) => void) => void }
+  onShown?: { addListener: (listener: (info: { linkUrl?: string, srcUrl?: string, mediaType?: string, pageUrl?: string }) => void) => void }
   refresh?: () => Promise<void> | void
 }
 const CLICK_INTENT_STORAGE_KEY = 'click-intents'
@@ -135,26 +135,106 @@ async function findLocalBrowserDownload(record: LocalDownloadHandoff): Promise<B
   return candidates[0]
 }
 
+interface AcceleratedTakeoverDecision {
+  accelerate: boolean
+  desktopReady?: boolean
+  resourceCookies?: ReplayCookie[]
+}
+
+interface PreserveBrowserDownloadResult {
+  preserved: boolean
+  desktopReady?: boolean
+  resourceCookies?: ReplayCookie[]
+}
+
+async function checkAcceleratedDownloadCookies(
+  chain: RequestChain,
+  resource: Pick<MediaResource, 'url' | 'pageUrl' | 'tabId' | 'frameId'>,
+  authorizedCookieHosts: string[],
+): Promise<{ ok: boolean, resourceCookies?: ReplayCookie[] }> {
+  const targetUrl = chain.finalUrl || resource.url
+  const pageUrl = resource.pageUrl || chain.pageUrl || ''
+  const tabId = validDownloadIdentity(chain.tabId)
+    ? chain.tabId
+    : (validDownloadIdentity(resource.tabId) ? resource.tabId : -1)
+  const frameId = validDownloadIdentity(chain.frameId)
+    ? chain.frameId
+    : (validDownloadIdentity(resource.frameId) ? resource.frameId : 0)
+  const requestCookie = requestHeader(chain, 'cookie').trim()
+  try {
+    if (requestCookie) {
+      const cookies = await cookieRecordsFor(targetUrl, pageUrl, tabId, frameId, true)
+      if (cookieHeaderForUrl(cookies, targetUrl).trim() !== requestCookie) return { ok: false }
+      return { ok: true, resourceCookies: cookies }
+    }
+    if (!cookiePermissionAllows(targetUrl, pageUrl, authorizedCookieHosts)) {
+      if (await tabHasCookiesForUrl(targetUrl, pageUrl, tabId, frameId)) return { ok: false }
+      return { ok: true, resourceCookies: [] }
+    }
+    const cookies = await cookieRecordsFor(targetUrl, pageUrl, tabId, frameId, true)
+    return { ok: true, resourceCookies: cookies }
+  } catch {
+    return { ok: false }
+  }
+}
+
+async function evaluateAcceleratedBrowserDownload(
+  resource: Pick<MediaResource, 'kind' | 'url' | 'pageUrl' | 'tabId' | 'frameId'>,
+  chain: RequestChain | undefined,
+  config: { minimumBytes: number, authorizedCookieHosts: string[] },
+  item?: Pick<Browser.downloads.DownloadItem, 'state' | 'totalBytes' | 'fileSize' | 'canResume'>,
+): Promise<AcceleratedTakeoverDecision> {
+  if (!chain) return { accelerate: false }
+  if (!canAccelerateBrowserDownload({
+    kind: resource.kind,
+    url: chain.finalUrl || resource.url,
+    method: chain.method,
+    statusCode: chain.statusCode,
+    responseHeaders: chain.responseHeaders,
+    itemState: item?.state,
+    itemTotalBytes: item?.totalBytes,
+    itemFileSize: item?.fileSize,
+    canResume: item?.canResume,
+    minimumBytes: config.minimumBytes,
+  })) {
+    return { accelerate: false }
+  }
+  const cookies = await checkAcceleratedDownloadCookies(chain, resource, config.authorizedCookieHosts)
+  if (!cookies.ok) return { accelerate: false }
+  if (!await desktopReadyForNewHandoff()) return { accelerate: false }
+  return { accelerate: true, desktopReady: true, resourceCookies: cookies.resourceCookies }
+}
+
 async function preserveBrowserDownload(
   item: Browser.downloads.DownloadItem,
   resource: MediaResource,
   intent?: DownloadClickIntent,
-): Promise<boolean> {
+  chain?: RequestChain,
+  config?: { minimumBytes: number, authorizedCookieHosts: string[] },
+): Promise<PreserveBrowserDownloadResult> {
   // HLS/DASH 下载的是完整媒体，不能用浏览器保存的单个清单替代。
-  if (resource.kind !== 'file' && resource.kind !== 'media') return false
+  if (resource.kind !== 'file' && resource.kind !== 'media') return { preserved: false }
   const [current] = await browser.downloads.search({ id: item.id })
   if (!current || current.state === 'interrupted' && current.error === 'USER_CANCELED' && !current.canResume) {
     throw new Error('浏览器下载已取消，不再创建桌面任务')
   }
-  // 原请求已经消耗过一次性地址。让浏览器保全响应，完成后复制成功文件；
-  // 只有点击前交给 Core 的明确链接才重新由 Core 发起网络传输。
+  const effectiveConfig = config ?? await settings()
+  const accelerated = await evaluateAcceleratedBrowserDownload(resource, chain, effectiveConfig, current)
+  if (accelerated.accelerate) {
+    return {
+      preserved: false,
+      desktopReady: accelerated.desktopReady,
+      resourceCookies: accelerated.resourceCookies,
+    }
+  }
+  // 无法确认可安全重放且值得多线程加速时，让浏览器保全响应，完成后复制成功文件。
   await queueLocalBrowserDownload({
     downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
     sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
     tabId: [resource.tabId, intent?.tabId, downloadIdentity(item).tabId].find(id => id != null && id >= 0),
     importUrl: 'data:application/octet-stream,',
   })
-  return true
+  return { preserved: true }
 }
 
 async function continueLocalDownloadHandoffs(): Promise<void> {
@@ -1720,10 +1800,11 @@ async function installContextMenus(attempt = 0): Promise<void> {
   try {
     await browser.contextMenus.removeAll()
     await Promise.all([
-      browser.contextMenus.create({ id: 'hls-download-link', title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
-      browser.contextMenus.create({ id: 'hls-cast-link', title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
-      browser.contextMenus.create({ id: 'hls-push-tvbox-link', title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
-      browser.contextMenus.create({ id: 'hls-download-selection', title: '批量发送选中的链接', contexts: ['selection'] }),
+      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadLink, title: '使用 HLS Downloader 下载', contexts: ['link', 'video', 'audio'] }),
+      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.castLink, title: '使用 HLS Downloader 投屏媒体链接', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
+      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.pushTvboxLink, title: '使用 HLS Downloader 推送媒体链接到 TVBox', contexts: ['link', 'video', 'audio'], visible: !dynamicContextMenus.onShown }),
+      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadSelection, title: '批量发送选中的链接', contexts: ['selection'] }),
+      browser.contextMenus.create({ id: CONTEXT_MENU_IDS.downloadPageLinks, title: '使用 HLS Downloader 下载页面全部链接', contexts: ['page'] }),
     ])
   } catch (error) {
     // Browser updates can briefly keep the old menu registry locked. Retry
@@ -1892,21 +1973,32 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
   if (!early) return undefined
   const prepared = await early.promise
   if (!prepared || prepared.bypass) return undefined
-  // 取消一个已经成功的 GET 后，无法保证 Core 还能重放一次性响应。
-  // 文件响应继续到 onCreated，复用持久本地导入和失败保留原文件的路径。
-  if (prepared.resource.kind === 'file' || prepared.resource.kind === 'media') return undefined
-  if (!await desktopReadyForNewHandoff()) {
+  let resourceCookies: ReplayCookie[] | undefined
+  if (prepared.resource.kind === 'file' || prepared.resource.kind === 'media') {
+    const config = await settings()
+    const accelerated = await evaluateAcceleratedBrowserDownload(prepared.resource, chain, config)
+    // 取消一个已经成功的 GET 后，只有确认可分段续传、满足阈值且 Cookie 一致的响应
+    // 才交给 Core 多线程加速；一次性或不可重放响应继续走 onCreated 本地导入。
+    if (!accelerated.accelerate) return undefined
+    resourceCookies = accelerated.resourceCookies
+  } else if (!await desktopReadyForNewHandoff()) {
     early.promise = Promise.resolve({ resource: prepared.resource, bypass: true })
     return undefined
   }
   try {
-    const response = await requestDownload(prepared.resource, chain, { desktopReady: true, browserRequestId: early.requestId, browserDownload: {
-      url: chain?.initialUrl || details.url,
-      finalUrl: chain?.finalUrl || details.url,
-      tabId: details.tabId,
-      frameId: details.frameId,
-    } })
+    const response = await requestDownload(prepared.resource, chain, {
+      desktopReady: true,
+      ...(resourceCookies !== undefined ? { resourceCookies } : {}),
+      browserRequestId: early.requestId,
+      browserDownload: {
+        url: chain?.initialUrl || details.url,
+        finalUrl: chain?.finalUrl || details.url,
+        tabId: details.tabId,
+        frameId: details.frameId,
+      },
+    })
     if (response?.ownership_uncertain) {
+      early.promise = Promise.resolve({ ...prepared, offerAttempted: true })
       await reportDownloadError(prepared.resource.tabId, response.error)
       // Keep the original response. onCreated pauses its DownloadItem and
       // resolves the journaled offer by the same browser request identity.
@@ -2234,7 +2326,6 @@ export default defineBackground(() => {
     let browserOwnedByHandoff = false
     try {
       const config = await settings()
-      if (!config.enabled) return
       let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId, false, 'exact')
       // 优先使用浏览器来源或唯一请求链。Chrome 缺少来源时，也不能按时间猜标签页。
       const earlyTakeover = (provisionalChain
@@ -2245,6 +2336,13 @@ export default defineBackground(() => {
           downloadIdentity(item),
           earlyBrowserTakeovers.values(),
         )
+      if (!config.enabled) {
+        const forcedEarly = earlyTakeover ? await earlyTakeover.promise : null
+        if (!forcedEarly?.intent?.ctrlForce) {
+          if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
+          return
+        }
+      }
       // 原请求可跨过 Firefox 后台重载。按浏览器 requestId 恢复已有接管，
       // 不能在用户已拒绝后仅凭相同 URL 再弹一次确认。
       await hydrateHandoffTracker()
@@ -2258,13 +2356,26 @@ export default defineBackground(() => {
         if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
         if (earlyResult?.bypass) return
         if (earlyResult || restored) {
-          if (!restored && earlyResult
-            && await preserveBrowserDownload(item, earlyResult.resource, earlyResult.intent)) return
+          let acceleratedOptions: Pick<ResourceRequestOptions, 'desktopReady' | 'resourceCookies'> = {}
+          if (!restored && earlyResult && !earlyResult.offerAttempted) {
+            const preservation = await preserveBrowserDownload(
+              item, earlyResult.resource, earlyResult.intent, provisionalChain, config,
+            )
+            if (preservation.preserved) return
+            acceleratedOptions = {
+              ...(preservation.desktopReady ? { desktopReady: true } : {}),
+              ...(preservation.resourceCookies !== undefined ? { resourceCookies: preservation.resourceCookies } : {}),
+            }
+          }
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
-          const response = earlyResult
-            ? await requestDownload(earlyResult.resource, provisionalChain, {
+          const earlyResource = earlyResult && !earlyResult.resource.filename && item.filename
+            ? { ...earlyResult.resource, filename: item.filename.split(/[\\/]/).pop() || '' }
+            : earlyResult?.resource
+          const response = earlyResource
+            ? await requestDownload(earlyResource, provisionalChain, {
+              ...acceleratedOptions,
               browserRequestId: earlyTakeover?.requestId, browserDownload: originalRequest,
             }) : undefined
           if (response?.ownership_uncertain) {
@@ -2361,7 +2472,8 @@ export default defineBackground(() => {
       }) || (!intent?.ctrlForce && isHandoffSuppressed(config.suppressions, resource.pageUrl || '', resource.kind))) {
         return
       }
-      if (await preserveBrowserDownload(actualBrowser, resource, intent)) return
+      const preservation = await preserveBrowserDownload(actualBrowser, resource, intent, chain, config)
+      if (preservation.preserved) return
       // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
       // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
       chain = (await resourceRequest(resource, chain, { browserDownload: classified.actual })).chain
@@ -2375,13 +2487,16 @@ export default defineBackground(() => {
         })
         return
       }
-      if (!await desktopReadyForNewHandoff()) return
+      if (!preservation.desktopReady && !await desktopReadyForNewHandoff()) return
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
       console.debug('HLS Downloader offering a verified browser download')
       const response = await requestDownload(resource, chain, {
-        desktopReady: true, browserRequestId: chain.requestId, browserDownload: classified.actual,
+        desktopReady: true,
+        ...(preservation.resourceCookies !== undefined ? { resourceCookies: preservation.resourceCookies } : {}),
+        browserRequestId: chain.requestId,
+        browserDownload: classified.actual,
       })
       if (response?.ownership_uncertain) {
         browserOwnedByHandoff = true
@@ -2409,11 +2524,21 @@ export default defineBackground(() => {
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
     const frameId = Number((info as any).frameId)
-    if (info.menuItemId === 'hls-download-selection') {
+    if (info.menuItemId === CONTEXT_MENU_IDS.downloadSelection) {
       if (tab?.id !== undefined) {
         void browser.tabs.sendMessage(tab.id, { type: 'collect-selection' },
           Number.isInteger(frameId) && frameId >= 0 ? { frameId } : undefined)
           .catch(error => reportDownloadError(tab.id!, `无法读取选中的链接：${errorText(error)}`))
+      }
+      return
+    }
+    if (info.menuItemId === CONTEXT_MENU_IDS.downloadPageLinks) {
+      if (tab?.id !== undefined) {
+        const pageUrl = String((info as { pageUrl?: string }).pageUrl || tab.url || '')
+        if (!canHarvestPageLinks(pageUrl)) return
+        void browser.tabs.sendMessage(tab.id, { type: 'collect-page-links' },
+          Number.isInteger(frameId) && frameId >= 0 ? { frameId } : { frameId: 0 })
+          .catch(error => reportDownloadError(tab.id!, `无法扫描页面全部链接：${errorText(error)}`))
       }
       return
     }
@@ -2464,9 +2589,10 @@ export default defineBackground(() => {
   dynamicContextMenus.onShown?.addListener(info => {
     const capabilities = contextMenuCapabilities(info)
     void Promise.all([
-      browser.contextMenus.update('hls-download-link', { enabled: capabilities.download }),
-      browser.contextMenus.update('hls-cast-link', { visible: capabilities.media, enabled: capabilities.media }),
-      browser.contextMenus.update('hls-push-tvbox-link', { visible: capabilities.media, enabled: capabilities.media }),
+      browser.contextMenus.update(CONTEXT_MENU_IDS.downloadLink, { enabled: capabilities.download }),
+      browser.contextMenus.update(CONTEXT_MENU_IDS.castLink, { visible: capabilities.media, enabled: capabilities.media }),
+      browser.contextMenus.update(CONTEXT_MENU_IDS.pushTvboxLink, { visible: capabilities.media, enabled: capabilities.media }),
+      browser.contextMenus.update(CONTEXT_MENU_IDS.downloadPageLinks, { enabled: canHarvestPageLinks(info.pageUrl) }),
     ]).then(() => dynamicContextMenus.refresh?.()).catch(error => {
       console.warn('HLS Downloader context menu refresh failed', error)
     })
@@ -2477,15 +2603,17 @@ export default defineBackground(() => {
       const href = String(message.href || '')
       const pageUrl = String(sender.url || sender.tab?.url || '')
       const tabId = sender.tab?.id
+      const ctrlForce = Boolean(message.ctrlForce)
       void (async () => {
         const config = await settings()
         const topPageUrl = validDownloadIdentity(tabId)
           ? await topLevelPageUrl(tabId, pageUrl)
           : pageUrl
-        if (!validDownloadIdentity(tabId) || config.minimumBytes > 0
+        if (!validDownloadIdentity(tabId)
+          || (!ctrlForce && config.minimumBytes > 0)
           || !isDirectDownloadLink(href, pageUrl, Boolean(message.downloadAttribute))
-          || !shouldTakeover({ url: href, sourcePageUrl: topPageUrl, ...config, explicitClick: true })
-          || isHandoffSuppressed(config.suppressions, topPageUrl, 'file')) {
+          || !shouldTakeover({ url: href, sourcePageUrl: topPageUrl, ...config, ctrlForce, explicitClick: true })
+          || (!ctrlForce && isHandoffSuppressed(config.suppressions, topPageUrl, 'file'))) {
           return { ok: false, browserFallback: true }
         }
         // Match Firefox's cookie safety guard: if site cookies are not authorized
@@ -2691,6 +2819,8 @@ export default defineBackground(() => {
       const update = {
         ...(typeof message.enabled === 'boolean' ? { enabled: message.enabled } : {}),
         ...(Number.isFinite(Number(message.minimumBytes)) ? { minimumBytes: Number(message.minimumBytes) } : {}),
+        ...(typeof message.quickDownloadEnabled === 'boolean' ? { quickDownloadEnabled: message.quickDownloadEnabled } : {}),
+        ...(typeof message.speedLimitEnabled === 'boolean' ? { speedLimitEnabled: message.speedLimitEnabled } : {}),
       }
       void (takeoverSettingsSync
         ? takeoverSettingsSync.queue(update)
