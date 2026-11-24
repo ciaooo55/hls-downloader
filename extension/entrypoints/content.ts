@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser'
-import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect, type OverlayAction, type OverlayRect } from '../lib/mediaOverlay'
+import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayQualityOptions, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect, type OverlayAction, type OverlayQualityOption, type OverlayRect } from '../lib/mediaOverlay'
 import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../lib/domPatch'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
@@ -314,16 +315,16 @@ export default defineContentScript({
         const iconUrl = browser.runtime.getURL('/icon-32.png')
         const style = element('style')
         style.textContent = `
-          :host{all:initial}*{box-sizing:border-box}button{font:13px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;letter-spacing:0}
+          :host{all:initial}*{box-sizing:border-box}[hidden]{display:none!important}button{font:13px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;letter-spacing:0}
           ${THEME_TOKENS_CSS}
           ${THEME_BASE_CSS}
-          .wrap{display:none;position:fixed;z-index:var(--z-extension-overlay);color:var(--text)}.wrap.open{display:block}
-          .panel{display:none;width:min(352px,calc(100vw - 20px));max-height:min(528px,calc(100vh - 20px));background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);overflow:hidden}.open .panel{display:block}
+          .wrap{position:fixed;z-index:var(--z-extension-overlay);color:var(--text);pointer-events:none;visibility:hidden;transition:visibility 0s linear .18s}.wrap.open{pointer-events:auto;visibility:visible;transition-delay:0s}
+          .panel{width:min(352px,calc(100vw - 20px));max-height:min(528px,calc(100vh - 20px));background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);overflow:hidden;opacity:0;transform:translateY(6px) scale(.985);transform-origin:top right;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.wrap.open .panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
           header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface-2) 86%,transparent);color:var(--text);font:650 12.5px "Segoe UI Variable Text","Segoe UI",system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:7px}.title img{width:18px;height:18px;border-radius:5px;box-shadow:var(--shadow-sm)}.head-actions{display:flex;align-items:center;gap:5px}
           .pin,.close{height:27px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);cursor:pointer}.pin{padding:0 9px;font:600 11px "Segoe UI Variable Text","Segoe UI",system-ui}.pin.active{border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green-ink)}.close{display:grid;place-items:center;width:27px;font:600 17px/1 system-ui}.pin:hover,.close:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(528px,calc(100vh - 20px)) - 80px);overflow-y:auto;overscroll-behavior:contain}.list::-webkit-scrollbar{width:7px}.list::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:color-mix(in srgb,var(--faint) 55%,transparent);background-clip:content-box}.list::-webkit-scrollbar-track{background:transparent}
           .item{padding:10px 11px;border-bottom:1px solid var(--border);transition:background-color .14s ease}.item:last-child{border-bottom:0}.item:hover{background:color-mix(in srgb,var(--surface-2) 88%,transparent)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:11px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:5px;padding:3px 6px;border-radius:5px;background:var(--surface-2);color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{display:block;width:min(196px,100%);height:29px;margin-top:7px;font-size:11.5px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:30px;border:1px solid transparent;border-radius:var(--radius);background:var(--primary);color:var(--on-primary);padding:4px 8px;cursor:pointer;font-weight:600;font-size:11.5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.2),var(--shadow-sm)}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv,.download.cast{border-color:var(--border);background:var(--surface-2);color:var(--text);box-shadow:none}.download.push-tv:hover{border-color:transparent;background:var(--purple);color:var(--on-primary)}.download.cast:hover{border-color:transparent;background:var(--green);color:var(--on-primary)}.result{padding:8px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green-ink);font:600 11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red-ink)}
-          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:5px;pointer-events:auto}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 13px 0 10px;border:1px solid color-mix(in srgb,var(--primary) 65%,rgba(255,255,255,.28));border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 92%,transparent);backdrop-filter:blur(12px) saturate(160%);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 4px 14px var(--shadow),0 0 0 1px rgba(0,0,0,.18);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;font:650 12px "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .16s ease,transform .16s ease,box-shadow .16s ease}.video-download:active{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:var(--glass-strong);color:var(--muted);box-shadow:var(--shadow-md)}.video-download.identifying:hover{background:var(--glass-strong)}.video-download img{width:18px;height:18px;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.22)}.video-download b{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:var(--radius-pill);background:var(--on-primary);color:var(--primary);font:700 10px "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums}.video-more{display:grid;width:34px;height:34px;place-items:center;padding:0 0 1px;border:1px solid var(--overlay-border);border-radius:50%;background:var(--glass-strong);backdrop-filter:blur(12px) saturate(160%);color:var(--primary);box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--glass-rim);cursor:pointer;font:700 17px/1 system-ui}.video-more:hover{border-color:color-mix(in srgb,var(--primary) 48%,var(--overlay-border));background:var(--surface)}
-          .video-hover{position:absolute;top:40px;left:0;width:300px;padding:12px;background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);color:var(--text);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);opacity:0;visibility:hidden;transform:translateY(-3px);pointer-events:auto;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:40px;transform:translateY(3px)}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0);transition-delay:.05s,.05s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere}.hover-state{flex:none;padding:2px 7px;border:1px solid color-mix(in srgb,var(--green) 32%,transparent);border-radius:var(--radius-pill);background:color-mix(in srgb,var(--green) 14%,var(--surface-2));color:var(--green-ink);font:600 10px/1.3 system-ui;white-space:nowrap}.hover-copy{margin-top:5px;color:var(--muted);font:11px/1.45 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.hover-fact{display:inline-flex;align-items:center;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/1 system-ui;white-space:nowrap;font-variant-numeric:tabular-nums}.hover-fact:first-child{border-color:color-mix(in srgb,var(--primary) 32%,transparent);background:color-mix(in srgb,var(--primary) 13%,var(--surface-2));color:var(--primary-ink)}.hover-source{margin-top:8px;padding:4px 7px;border-radius:6px;background:var(--surface-2);overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-actions{display:flex;gap:6px;margin-top:10px}.hover-action{min-width:0;flex:1;height:29px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);cursor:pointer;font:600 11px/1 "Segoe UI Variable Text","Segoe UI",system-ui}.hover-action:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{border-color:transparent;background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),var(--shadow-sm)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}button[data-state=checking]{box-shadow:inset 0 0 0 1px var(--amber,#b7791f)}button[data-state=recoverable]{box-shadow:inset 0 0 0 1px var(--red,#c53030)}button[data-state=canceled]{opacity:.8}button[data-state=sending][disabled],button[data-state=confirming][disabled],button[data-state=queued][disabled],button[data-state=done][disabled]{opacity:1;cursor:progress}button[data-state=sending]::before{content:"";display:inline-block;width:9px;height:9px;margin-right:5px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:hlsd-overlay-spin .8s linear infinite}/* :is() 让这几条压过 .hover-action.primary 及其 :hover，进行中的按钮不再显示成普通蓝底。 */:is(.video-hover,.panel) button[data-state=confirming],:is(.video-hover,.panel) button[data-state=confirming]:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3));color:var(--primary-ink,var(--text))}:is(.video-hover,.panel) button[data-state=queued],:is(.video-hover,.panel) button[data-state=done],:is(.video-hover,.panel) button[data-state=queued]:hover,:is(.video-hover,.panel) button[data-state=done]:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface-3));color:var(--green-ink)}button[data-state=done]{cursor:default}@keyframes hlsd-overlay-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.video-hover,.video-hover *{transition:none!important;animation:none!important}}
+          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:5px;pointer-events:none;opacity:0;transform:translateY(4px) scale(.96);transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.video-action-group.visible{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}.video-action-group.dragging{transition:none}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 13px 0 10px;border:1px solid color-mix(in srgb,var(--primary) 65%,rgba(255,255,255,.28));border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 92%,transparent);backdrop-filter:blur(12px) saturate(160%);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 4px 14px var(--shadow),0 0 0 1px rgba(0,0,0,.18);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;font:650 12px "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .16s ease,transform .16s ease,box-shadow .16s ease}.video-action-group.dragging .video-download{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:var(--glass-strong);color:var(--muted);box-shadow:var(--shadow-md)}.video-download.identifying:hover{background:var(--glass-strong)}.video-download img{width:18px;height:18px;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.22)}.video-download b{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:var(--radius-pill);background:var(--on-primary);color:var(--primary);font:700 10px "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums}.video-more{display:grid;width:34px;height:34px;place-items:center;padding:0 0 1px;border:1px solid var(--overlay-border);border-radius:50%;background:var(--glass-strong);backdrop-filter:blur(12px) saturate(160%);color:var(--primary);box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--glass-rim);cursor:pointer;font:700 17px/1 system-ui}.video-more:hover{border-color:color-mix(in srgb,var(--primary) 48%,var(--overlay-border));background:var(--surface)}
+          .video-hover{position:absolute;top:40px;left:0;width:308px;padding:12px;background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);color:var(--text);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);opacity:0;visibility:hidden;transform:translateY(-6px) scale(.98);transform-origin:top left;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1),visibility 0s linear .18s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:40px;transform:translateY(6px) scale(.98);transform-origin:bottom left}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto;transition-delay:.04s,.04s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;pointer-events:none;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere}.hover-state{flex:none;padding:2px 7px;border:1px solid color-mix(in srgb,var(--green) 32%,transparent);border-radius:var(--radius-pill);background:color-mix(in srgb,var(--green) 14%,var(--surface-2));color:var(--green-ink);font:600 10px/1.3 system-ui;white-space:nowrap}.hover-copy{margin-top:5px;color:var(--muted);font:11px/1.45 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.hover-fact{display:inline-flex;align-items:center;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/1 system-ui;white-space:nowrap;font-variant-numeric:tabular-nums}.hover-fact:first-child{border-color:color-mix(in srgb,var(--primary) 32%,transparent);background:color-mix(in srgb,var(--primary) 13%,var(--surface-2));color:var(--primary-ink)}.hover-source{margin-top:8px;padding:4px 7px;border-radius:6px;background:var(--surface-2);overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-qualities{display:grid;gap:5px;margin-top:9px}.hover-qualities-label{color:var(--muted);font:600 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;letter-spacing:.01em}.hover-qualities-list{display:grid;gap:4px}.quality-pill{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:30px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);cursor:pointer;text-align:left;font:600 11.5px/1.25 "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .15s ease,color .15s ease,border-color .15s ease,transform .12s ease,box-shadow .15s ease}.quality-pill:hover:not([disabled]){border-color:color-mix(in srgb,var(--primary) 52%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3));transform:translateY(-1px)}.quality-pill:active:not([disabled]){transform:scale(.975)}.quality-pill.recommended{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 10%,var(--surface-2))}.quality-pill-main{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1}.quality-pill-name{color:var(--text);font-weight:700;white-space:nowrap}.quality-pill-meta{overflow:hidden;color:var(--muted);font:500 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}.quality-pill-cta{flex:none;padding:2px 7px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 16%,var(--surface));color:var(--primary-ink);font:600 10px/1.3 "Segoe UI Variable Text","Segoe UI",system-ui;white-space:nowrap;transition:background-color .15s ease,color .15s ease}.quality-pill.recommended .quality-pill-cta,.quality-pill:hover:not([disabled]) .quality-pill-cta{background:var(--primary);color:var(--on-primary)}.quality-pill[disabled]{cursor:default;opacity:.6}.quality-pill[data-state=sending] .quality-pill-cta,.quality-pill[data-state=confirming] .quality-pill-cta{background:color-mix(in srgb,var(--primary) 18%,var(--surface-3));color:var(--primary-ink)}.quality-pill[data-state=queued] .quality-pill-cta,.quality-pill[data-state=done] .quality-pill-cta{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink)}.quality-pill[data-state=retry] .quality-pill-cta{background:color-mix(in srgb,var(--red) 14%,var(--surface-3));color:var(--red-ink)}.hover-actions{display:flex;gap:6px;margin-top:10px}.hover-action{min-width:0;flex:1;height:29px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);cursor:pointer;font:600 11px/1 "Segoe UI Variable Text","Segoe UI",system-ui}.hover-action:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{border-color:transparent;background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),var(--shadow-sm)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}.send-error{margin-top:8px;border:1px solid color-mix(in srgb,var(--red) 32%,var(--border));border-radius:var(--radius)}button[data-state=checking]{box-shadow:inset 0 0 0 1px var(--amber,#b7791f)}button[data-state=recoverable]{box-shadow:inset 0 0 0 1px var(--red,#c53030)}button[data-state=canceled]{opacity:.8}button[data-state=sending][disabled],button[data-state=confirming][disabled],button[data-state=queued][disabled],button[data-state=done][disabled]{opacity:1;cursor:progress}button[data-state=sending]::before{content:"";display:inline-block;width:9px;height:9px;margin-right:5px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:hlsd-overlay-spin .8s linear infinite}/* :is() 让这几条压过 .hover-action.primary 及其 :hover，进行中的按钮不再显示成普通蓝底。 */:is(.video-hover,.panel) button[data-state=confirming],:is(.video-hover,.panel) button[data-state=confirming]:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3));color:var(--primary-ink,var(--text))}:is(.video-hover,.panel) button[data-state=queued],:is(.video-hover,.panel) button[data-state=done],:is(.video-hover,.panel) button[data-state=queued]:hover,:is(.video-hover,.panel) button[data-state=done]:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface-3));color:var(--green-ink)}button[data-state=done]{cursor:default}@keyframes hlsd-overlay-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.video-hover,.video-hover *{transition:none!important;animation:none!important}}
           button:focus-visible{outline:2px solid var(--focus-ring, var(--primary));outline-offset:2px}
           /* 统一按钮微交互。视频悬浮按钮与面板按钮此前要么完全没有 transition，
              要么声明了 transform 过渡却没有任何状态去改 transform（等于死代码），
@@ -487,12 +488,17 @@ export default defineContentScript({
         wrap.style.right = 'auto'
       }
     }
+    const panelEl = ui.shadow.querySelector<HTMLElement>('.panel')
+    wrap?.setAttribute('aria-hidden', 'true')
+    if (panelEl && 'inert' in panelEl) (panelEl as HTMLElement & { inert: boolean }).inert = true
     const setOpen = (open: boolean) => {
       if (open && collapseTimer) {
         clearTimeout(collapseTimer)
         collapseTimer = null
       }
       wrap?.classList.toggle('open', open)
+      wrap?.setAttribute('aria-hidden', String(!open))
+      if (panelEl && 'inert' in panelEl) (panelEl as HTMLElement & { inert: boolean }).inert = !open
       if (open) fitPanel()
     }
     const pinButton = ui.shadow.querySelector<HTMLButtonElement>('.pin')
@@ -558,20 +564,25 @@ export default defineContentScript({
 
     const applySendState = (resource: MediaResource, button: HTMLButtonElement, fallbackLabel: string, action: OverlayAction = 'download') => {
       const key = overlaySendKey(resourceFingerprint(resource), action)
-      button.dataset.sendKey = key
-      button.dataset.sendFallback = fallbackLabel
+      if (button.dataset.sendKey !== key) button.dataset.sendKey = key
+      if (button.dataset.sendFallback !== fallbackLabel) button.dataset.sendFallback = fallbackLabel
       const state = resourceSendStates.get(key)
+      const labelText = state?.label || fallbackLabel
       const label = button.querySelector<HTMLElement>('.download-label')
-      if (label) label.textContent = state?.label || fallbackLabel
-      else button.textContent = state?.label || fallbackLabel
-      if (state?.disabled) button.setAttribute('disabled', '')
-      else button.removeAttribute('disabled')
-      if (state?.error) button.title = state.error
-      else if (button.dataset.sendError) button.removeAttribute('title')
-      button.dataset.sendError = state?.error || ''
+      if (label) setTextIfChanged(label, labelText)
+      else setTextIfChanged(button, labelText)
+      if (state?.disabled) setAttrIfChanged(button, 'disabled', '')
+      else setAttrIfChanged(button, 'disabled', null)
+      if (state?.error) setAttrIfChanged(button, 'title', state.error)
+      else if (button.dataset.sendError) setAttrIfChanged(button, 'title', null)
+      const nextSendError = state?.error || ''
+      if ((button.dataset.sendError || '') !== nextSendError) button.dataset.sendError = nextSendError
       // 与弹窗共用同一套状态名，样式按 data-state 统一（发送中/等待确认/核对中…）。
-      if (state?.state) button.dataset.state = state.state
-      else delete button.dataset.state
+      if (state?.state) {
+        if (button.dataset.state !== state.state) button.dataset.state = state.state
+      } else if ('state' in button.dataset) {
+        delete button.dataset.state
+      }
     }
 
     const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '', state?: SendState) => {
@@ -734,6 +745,474 @@ export default defineContentScript({
       setOpen(true)
     }
 
+    interface VideoGroupState {
+      video: HTMLVideoElement
+      rect: OverlayRect
+      choices: MediaResource[]
+      matched: boolean
+      oneClickChoice: boolean
+      controlsWidth: number
+      videoDragged: boolean
+      hoverDismissTimer: ReturnType<typeof setTimeout> | null
+      removeTimer: ReturnType<typeof ctx.setTimeout> | null
+      button: HTMLButtonElement
+      buttonLabel: HTMLSpanElement
+      buttonCount: HTMLElement
+      moreButton: HTMLButtonElement
+      hover: HTMLDivElement
+      hoverTitle: HTMLDivElement
+      hoverState: HTMLSpanElement
+      hoverCopy: HTMLDivElement
+      hoverFacts: HTMLDivElement
+      hoverSource: HTMLDivElement
+      hoverQualities: HTMLDivElement
+      hoverQualitiesLabel: HTMLDivElement
+      hoverQualitiesList: HTMLDivElement
+      hoverDownload: HTMLButtonElement
+      hoverCast: HTMLButtonElement
+      hoverTvbox: HTMLButtonElement
+      hoverPanelBtn: HTMLButtonElement
+      hoverError: HTMLDivElement
+      positionHover: () => void
+    }
+    const videoGroupStates = new WeakMap<HTMLElement, VideoGroupState>()
+    const qualityPillOptions = new WeakMap<HTMLButtonElement, OverlayQualityOption>()
+    const prefersReducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+
+    const createQualityPill = (_option: OverlayQualityOption): HTMLButtonElement => {
+      const pill = document.createElement('button')
+      pill.type = 'button'
+      pill.className = 'quality-pill'
+      const main = document.createElement('span')
+      main.className = 'quality-pill-main'
+      const name = document.createElement('span')
+      name.className = 'quality-pill-name'
+      const meta = document.createElement('span')
+      meta.className = 'quality-pill-meta'
+      main.append(name, meta)
+      const cta = document.createElement('span')
+      cta.className = 'quality-pill-cta download-label'
+      cta.textContent = '下载'
+      pill.append(main, cta)
+      pill.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        const current = qualityPillOptions.get(pill)
+        if (current) sendResource(current.resource, pill)
+      })
+      return pill
+    }
+
+    const updateQualityPill = (pill: HTMLButtonElement, option: OverlayQualityOption) => {
+      qualityPillOptions.set(pill, option)
+      pill.classList.toggle('recommended', option.recommended)
+      setAttrIfChanged(pill, 'aria-label', option.ariaLabel)
+      const name = pill.querySelector<HTMLElement>('.quality-pill-name')
+      const meta = pill.querySelector<HTMLElement>('.quality-pill-meta')
+      if (name) setTextIfChanged(name, option.label)
+      if (meta) {
+        setTextIfChanged(meta, option.detail)
+        meta.hidden = !option.detail
+      }
+      applySendState(option.resource, pill, '下载')
+    }
+
+    type VideoRenderItem = {
+      video: HTMLVideoElement
+      rect: OverlayRect
+      playback: PlaybackContext
+      choices: MediaResource[]
+      matched: boolean
+    }
+
+    const createVideoGroup = (item: VideoRenderItem, key: string): HTMLDivElement => {
+      const buttonHeight = 34
+      const group = document.createElement('div')
+      group.className = 'video-action-group'
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'video-download'
+      const icon = document.createElement('img')
+      icon.src = browser.runtime.getURL('/icon-32.png')
+      icon.alt = ''
+      const buttonLabel = document.createElement('span')
+      buttonLabel.className = 'download-label'
+      const buttonCount = document.createElement('b')
+      buttonCount.hidden = true
+      button.append(icon, buttonLabel, buttonCount)
+
+      const moreButton = document.createElement('button')
+      moreButton.type = 'button'
+      moreButton.className = 'video-more'
+      moreButton.textContent = '⋯'
+      moreButton.title = '展开详细面板：清晰度、投屏与 TVBox'
+      moreButton.setAttribute('aria-label', '展开详细面板：清晰度、投屏与 TVBox')
+
+      const hover = document.createElement('div')
+      hover.className = 'video-hover'
+      hover.setAttribute('role', 'group')
+      const hoverId = `hlsd-video-hover-${key.replace(/[^a-z0-9_-]/gi, '-')}`
+      hover.id = hoverId
+      button.setAttribute('aria-describedby', hoverId)
+
+      const head = document.createElement('div')
+      head.className = 'hover-head'
+      const hoverTitle = document.createElement('div')
+      hoverTitle.className = 'hover-title'
+      const hoverState = document.createElement('span')
+      hoverState.className = 'hover-state'
+      head.append(hoverTitle, hoverState)
+
+      const hoverCopy = document.createElement('div')
+      hoverCopy.className = 'hover-copy'
+      hoverCopy.hidden = true
+
+      const hoverFacts = document.createElement('div')
+      hoverFacts.className = 'hover-facts'
+
+      const hoverSource = document.createElement('div')
+      hoverSource.className = 'hover-source'
+
+      const hoverQualities = document.createElement('div')
+      hoverQualities.className = 'hover-qualities'
+      hoverQualities.hidden = true
+      const hoverQualitiesLabel = document.createElement('div')
+      hoverQualitiesLabel.className = 'hover-qualities-label'
+      hoverQualitiesLabel.textContent = '一键下载清晰度'
+      const hoverQualitiesList = document.createElement('div')
+      hoverQualitiesList.className = 'hover-qualities-list'
+      hoverQualities.append(hoverQualitiesLabel, hoverQualitiesList)
+
+      const hoverActions = document.createElement('div')
+      hoverActions.className = 'hover-actions'
+      const hoverDownload = document.createElement('button')
+      hoverDownload.type = 'button'
+      hoverDownload.className = 'hover-action primary'
+      hoverDownload.textContent = '下载'
+      const hoverCast = document.createElement('button')
+      hoverCast.type = 'button'
+      hoverCast.className = 'hover-action'
+      hoverCast.textContent = '投屏'
+      const hoverTvbox = document.createElement('button')
+      hoverTvbox.type = 'button'
+      hoverTvbox.className = 'hover-action'
+      hoverTvbox.textContent = 'TVBox'
+      const hoverPanelBtn = document.createElement('button')
+      hoverPanelBtn.type = 'button'
+      hoverPanelBtn.className = 'hover-action'
+      hoverPanelBtn.textContent = '更多'
+      hoverActions.append(hoverDownload, hoverCast, hoverTvbox, hoverPanelBtn)
+
+      const hoverError = document.createElement('div')
+      hoverError.className = 'result error send-error'
+      hoverError.setAttribute('role', 'alert')
+      hoverError.hidden = true
+
+      hover.append(head, hoverCopy, hoverFacts, hoverSource, hoverQualities, hoverActions, hoverError)
+      group.append(button, moreButton, hover)
+
+      const positionHover = () => {
+        const groupRect = group.getBoundingClientRect()
+        const hoverWidth = Math.max(220, Math.min(308, innerWidth - 16))
+        hover.style.width = `${hoverWidth}px`
+        const relativeLeft = Math.max(8 - groupRect.left, Math.min(0, innerWidth - 8 - hoverWidth - groupRect.left))
+        hover.style.left = `${relativeLeft}px`
+        ctx.requestAnimationFrame(() => {
+          const hoverHeight = hover.offsetHeight || 160
+          hover.classList.toggle('above', groupRect.bottom + 6 + hoverHeight > innerHeight - 8 && groupRect.top >= hoverHeight + 8)
+        })
+      }
+
+      const state: VideoGroupState = {
+        video: item.video,
+        rect: item.rect,
+        choices: item.choices,
+        matched: item.matched,
+        oneClickChoice: item.matched && item.choices.length === 1,
+        controlsWidth: 194,
+        videoDragged: false,
+        hoverDismissTimer: null,
+        removeTimer: null,
+        button,
+        buttonLabel,
+        buttonCount,
+        moreButton,
+        hover,
+        hoverTitle,
+        hoverState,
+        hoverCopy,
+        hoverFacts,
+        hoverSource,
+        hoverQualities,
+        hoverQualitiesLabel,
+        hoverQualitiesList,
+        hoverDownload,
+        hoverCast,
+        hoverTvbox,
+        hoverPanelBtn,
+        hoverError,
+        positionHover,
+      }
+      videoGroupStates.set(group, state)
+
+      button.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        button.setPointerCapture(event.pointerId)
+        state.videoDragged = false
+        videoControlDragging = true
+        const startX = event.clientX
+        const startY = event.clientY
+        const startLeft = group.offsetLeft
+        const startTop = group.offsetTop
+        const move = (next: PointerEvent) => {
+          if (next.pointerId !== event.pointerId) return
+          if (!state.videoDragged && Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4) {
+            state.videoDragged = true
+            group.classList.add('dragging')
+          }
+          if (!state.videoDragged) return
+          const height = button.offsetHeight || buttonHeight
+          const position = clampVideoButtonPosition(
+            { x: startLeft + next.clientX - startX, y: startTop + next.clientY - startY },
+            { width: state.controlsWidth, height },
+            videoButtonBounds(),
+          )
+          group.style.left = `${position.x}px`
+          group.style.top = `${position.y}px`
+        }
+        const finish = (next: PointerEvent) => {
+          if (next.pointerId !== event.pointerId) return
+          window.removeEventListener('pointermove', move, true)
+          window.removeEventListener('pointerup', finish, true)
+          window.removeEventListener('pointercancel', finish, true)
+          button.removeEventListener('lostpointercapture', finish)
+          if (state.videoDragged && next.type !== 'pointercancel') {
+            videoButtonPositions.set(state.video, { x: group.offsetLeft, y: group.offsetTop })
+          }
+          videoControlDragging = false
+          group.classList.remove('dragging')
+          if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId)
+          scheduleVideoButtons()
+        }
+        // Use the window capture phase as a fallback for players that stop
+        // dispatching pointer events from their overlay while the pointer is
+        // moved outside the button. Pointer capture alone is not reliable in
+        // every iframe/player combination.
+        ctx.addEventListener(window, 'pointermove', move, { capture: true })
+        ctx.addEventListener(window, 'pointerup', finish, { capture: true })
+        ctx.addEventListener(window, 'pointercancel', finish, { capture: true })
+        // iframe 切换或浏览器撤销捕获时，pointerup 可能不再送达当前页面。
+        button.addEventListener('lostpointercapture', finish)
+      })
+
+      button.addEventListener('click', event => {
+        if (state.videoDragged) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          state.videoDragged = false
+          return
+        }
+        if (state.oneClickChoice && state.choices[0]) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          sendResource(state.choices[0], button)
+          return
+        }
+        // Multi-stream players still open the full evidence panel on main click,
+        // while hovering provides 1-click inline quality buttons immediately.
+        openVideoPanel(state.video, state.rect)
+      })
+
+      moreButton.addEventListener('pointerdown', event => event.stopPropagation())
+      moreButton.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        openVideoPanel(state.video, state.rect)
+      })
+
+      hoverDownload.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (state.choices[0]) sendResource(state.choices[0], hoverDownload)
+      })
+      hoverCast.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (state.choices[0]) castResource(state.choices[0], hoverCast)
+      })
+      hoverTvbox.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (state.choices[0]) pushToTv(state.choices[0], hoverTvbox)
+      })
+      hoverPanelBtn.addEventListener('click', event => {
+        event.preventDefault()
+        event.stopPropagation()
+        openVideoPanel(state.video, state.rect)
+      })
+
+      const keepHoverOpen = () => {
+        if (playerDismissTimer) clearTimeout(playerDismissTimer)
+        playerDismissTimer = undefined
+        if (state.hoverDismissTimer) clearTimeout(state.hoverDismissTimer)
+        state.hoverDismissTimer = null
+        group.classList.add('hover-open')
+        positionHover()
+      }
+      const dismissHover = () => {
+        if (state.hoverDismissTimer) clearTimeout(state.hoverDismissTimer)
+        state.hoverDismissTimer = setTimeout(() => {
+          state.hoverDismissTimer = null
+          if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
+          group.classList.remove('hover-open')
+          updateHoveredPlayer()
+          scheduleVideoButtons()
+        }, HOVER_DISMISS_DELAY_MS)
+      }
+      group.addEventListener('pointerenter', keepHoverOpen)
+      group.addEventListener('pointerleave', dismissHover)
+      group.addEventListener('focusin', keepHoverOpen)
+      group.addEventListener('focusout', dismissHover)
+
+      if (prefersReducedMotion()) {
+        group.classList.add('visible')
+      } else {
+        ctx.requestAnimationFrame(() => {
+          if (group.isConnected && group.getAttribute('data-leaving') !== '1') {
+            group.classList.add('visible')
+            positionHover()
+          }
+        })
+      }
+      return group
+    }
+
+    const updateVideoGroup = (group: HTMLDivElement, item: VideoRenderItem, buttonBounds: VideoButtonBounds) => {
+      const state = videoGroupStates.get(group)
+      if (!state) return
+      if (state.removeTimer) {
+        clearTimeout(state.removeTimer)
+        state.removeTimer = null
+      }
+      if (group.getAttribute('data-leaving') === '1') group.removeAttribute('data-leaving')
+      if (group.isConnected) group.classList.add('visible')
+
+      const { video, rect, choices, matched } = item
+      // playerPlaybackResources already enforces the ambiguity boundary for
+      // blob/MSE (per-SourceBuffer evidence).
+      const oneClickChoice = matched && choices.length === 1
+      const buttonWidth = 156
+      const buttonHeight = 34
+      const controlsWidth = buttonWidth + (oneClickChoice ? 38 : 0)
+      state.video = video
+      state.rect = rect
+      state.choices = choices
+      state.matched = matched
+      state.oneClickChoice = oneClickChoice
+      state.controlsWidth = controlsWidth
+
+      const besidePlayer = rect.right + 8
+      const defaultLeft = besidePlayer + controlsWidth <= buttonBounds.right - 8
+        ? besidePlayer
+        : Math.max(buttonBounds.left + 8, Math.min(rect.right - controlsWidth - 8, buttonBounds.right - controlsWidth - 8))
+      const defaultTop = Math.max(buttonBounds.top + 8, Math.min(rect.top + 8, buttonBounds.bottom - buttonHeight - 8))
+      const saved = videoButtonPositions.get(video)
+      const position = clampVideoButtonPosition(saved || { x: defaultLeft, y: defaultTop },
+        { width: controlsWidth, height: buttonHeight }, buttonBounds)
+      const leftPx = `${position.x}px`
+      const topPx = `${position.y}px`
+      if (group.style.left !== leftPx) group.style.left = leftPx
+      if (group.style.top !== topPx) group.style.top = topPx
+
+      const primaryChoice = choices[0]
+      const fallbackLabel = oneClickChoice ? '下载视频' : '选择资源'
+      if (oneClickChoice && primaryChoice) {
+        if (state.button.dataset.resourceId !== primaryChoice.id) state.button.dataset.resourceId = primaryChoice.id
+        setAttrIfChanged(state.button, 'aria-label', '下载当前视频')
+        applySendState(primaryChoice, state.button, fallbackLabel)
+      } else {
+        delete state.button.dataset.resourceId
+        delete state.button.dataset.sendKey
+        delete state.button.dataset.sendFallback
+        delete state.button.dataset.sendError
+        delete state.button.dataset.state
+        setAttrIfChanged(state.button, 'disabled', null)
+        setAttrIfChanged(state.button, 'aria-label', `选择 ${choices.length} 个视频资源`)
+        setTextIfChanged(state.buttonLabel, fallbackLabel)
+      }
+      state.buttonCount.hidden = choices.length <= 1
+      if (choices.length > 1) setTextIfChanged(state.buttonCount, String(choices.length))
+      state.moreButton.hidden = !oneClickChoice
+
+      const details = overlayResourceDetails(primaryChoice)
+      const qualityOptions = overlayQualityOptions(choices, 6)
+      const hasInlineQualities = qualityOptions.length > 0
+
+      setTextIfChanged(state.hoverTitle, oneClickChoice || hasInlineQualities ? details.title : `${choices.length} 个可用资源`)
+      setTextIfChanged(
+        state.hoverState,
+        hasInlineQualities ? `${qualityOptions.length} 个清晰度` : oneClickChoice ? details.state : '需要选择',
+      )
+      const copyText = !oneClickChoice && !hasInlineQualities
+        ? (matched ? `优先候选：${details.title}` : '已发现页面媒体，但尚未确认播放器归属。请核对标题、清晰度和来源后选择。')
+        : ''
+      state.hoverCopy.hidden = !copyText
+      if (copyText) setTextIfChanged(state.hoverCopy, copyText)
+
+      const factItems = oneClickChoice || hasInlineQualities ? details.facts : details.facts.slice(0, 4)
+      patchKeyedChildren(
+        state.hoverFacts,
+        factItems,
+        value => value,
+        () => {
+          const fact = document.createElement('span')
+          fact.className = 'hover-fact'
+          return fact
+        },
+        (fact, value) => setTextIfChanged(fact, value),
+      )
+
+      state.hoverSource.hidden = !oneClickChoice && !hasInlineQualities
+      if (!state.hoverSource.hidden) {
+        setTextIfChanged(state.hoverSource, details.source)
+        setAttrIfChanged(state.hoverSource, 'title', details.source)
+      }
+
+      state.hoverQualities.hidden = !hasInlineQualities
+      patchKeyedChildren(
+        state.hoverQualitiesList,
+        qualityOptions,
+        option => option.key,
+        createQualityPill,
+        updateQualityPill,
+      )
+
+      state.hoverDownload.hidden = !oneClickChoice || hasInlineQualities
+      state.hoverCast.hidden = !matched
+      state.hoverTvbox.hidden = !matched
+      state.hoverPanelBtn.className = !oneClickChoice && !hasInlineQualities ? 'hover-action primary' : 'hover-action'
+      setTextIfChanged(state.hoverPanelBtn, !oneClickChoice && !hasInlineQualities ? '查看并选择' : '更多')
+      if (primaryChoice) {
+        if (!state.hoverDownload.hidden) applySendState(primaryChoice, state.hoverDownload, '下载')
+        if (!state.hoverCast.hidden) applySendState(primaryChoice, state.hoverCast, '投屏', 'cast')
+        if (!state.hoverTvbox.hidden) applySendState(primaryChoice, state.hoverTvbox, 'TVBox', 'tvbox')
+      }
+
+      const errorKeys = [
+        resourceFingerprint(primaryChoice),
+        overlaySendKey(resourceFingerprint(primaryChoice), 'cast'),
+        overlaySendKey(resourceFingerprint(primaryChoice), 'tvbox'),
+        ...qualityOptions.map(option => resourceFingerprint(option.resource)),
+      ]
+      const error = errorKeys.map(key => resourceSendStates.get(key)?.error || '').find(Boolean) || ''
+      setTextIfChanged(state.hoverError, error)
+      state.hoverError.hidden = !error
+
+      state.positionHover()
+    }
+
     const updateVideoButtons = () => {
       if (ctx.isInvalid) return
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
@@ -741,19 +1220,18 @@ export default defineContentScript({
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
       if (videoControlDragging) return
-      let visible = 0
       const buttonBounds = videoButtonBounds()
       const videos = currentVideos()
         .flatMap(video => {
           const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
           return rect ? [{ video, rect, playback: playbackByVideo.get(video) || null }] : []
         })
-        .filter(({ video, rect, playback }) => Boolean(playback)
-          && (video === activeVideo || (!video.paused && !video.ended))
-          && rect.width >= 180 && rect.height >= 100)
+        .filter((item): item is { video: HTMLVideoElement; rect: OverlayRect; playback: PlaybackContext } => Boolean(item.playback)
+          && (item.video === activeVideo || (!item.video.paused && !item.video.ended))
+          && item.rect.width >= 180 && item.rect.height >= 100)
         .map(item => {
           const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
-          const exact = candidates.filter(resource => item.playback?.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
+          const exact = candidates.filter(resource => item.playback.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
           const matched = candidates.length > 0
           const choices = (exact.length ? exact : candidates)
             .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
@@ -768,226 +1246,201 @@ export default defineContentScript({
           }
           return { ...item, choices, matched }
         })
-        .filter(({ video }) => video === hoveredVideo)
+        .filter(({ video, choices }) => video === hoveredVideo
+          && shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length }))
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
         innerWidth, innerHeight, buttonBounds, selectionMode, [...resourceSendStates],
         videos.map(({ video, rect, playback, choices, matched }) => [
-          mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback?.sourceUrls, playback?.startedAt,
+          mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback.sourceUrls, playback.startedAt,
           resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
         ]),
       ])
-      // 时间进度事件不能不断销毁按钮；只在资源、布局或发送状态变化时重建。
+      // 时间进度事件不能不断重排或替换按钮；只在资源、布局或发送状态变化时原地修补。
       if (signature === renderedVideoSignature) return
       renderedVideoSignature = signature
-      layer.replaceChildren()
-      // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，避免串到广告或其他视频。
-      videos.forEach(({ video, rect, playback, choices, matched }) => {
-        if (!playback) return
-        if (!shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length })) return
-        // playerPlaybackResources already enforces the ambiguity boundary for
-        // blob/MSE (per-SourceBuffer evidence).
-        // Requiring a literal currentSrc match again made a uniquely resolved
-        // MSE video open a pointless one-item picker.
-        const oneClickChoice = matched && choices.length === 1
-        visible += 1
-        const buttonWidth = 156
-        const buttonHeight = 34
-        const controlsWidth = buttonWidth + (oneClickChoice ? 38 : 0)
-        const group = document.createElement('div')
-        group.className = 'video-action-group'
-        const button = document.createElement('button')
-        button.type = 'button'; button.className = 'video-download'
-        if (oneClickChoice) button.dataset.resourceId = choices[0].id
-        button.setAttribute('aria-label', oneClickChoice ? '下载当前视频' : `选择 ${choices.length} 个视频资源`)
-        const besidePlayer = rect.right + 8
-        const defaultLeft = besidePlayer + controlsWidth <= buttonBounds.right - 8
-          ? besidePlayer
-          : Math.max(buttonBounds.left + 8, Math.min(rect.right - controlsWidth - 8, buttonBounds.right - controlsWidth - 8))
-        const defaultTop = Math.max(buttonBounds.top + 8, Math.min(rect.top + 8, buttonBounds.bottom - buttonHeight - 8))
-        const saved = videoButtonPositions.get(video)
-        const position = clampVideoButtonPosition(saved || { x: defaultLeft, y: defaultTop },
-          { width: controlsWidth, height: buttonHeight }, buttonBounds)
-        group.style.left = `${position.x}px`
-        group.style.top = `${position.y}px`
-        const icon = document.createElement('img'); icon.src = browser.runtime.getURL('/icon-32.png'); icon.alt = ''
-         const fallbackLabel = oneClickChoice ? '下载视频' : '选择资源'
-         const label = document.createElement('span'); label.className = 'download-label'; label.textContent = fallbackLabel
-        button.append(icon, label)
-        if (choices.length > 1) { const count = document.createElement('b'); count.textContent = String(choices.length); button.append(count) }
-        let videoDragged = false
-        button.addEventListener('pointerdown', event => {
-          if (event.button !== 0) return
-          event.preventDefault()
-          event.stopPropagation()
-          button.setPointerCapture(event.pointerId)
-          videoDragged = false
-          videoControlDragging = true
-          group.classList.add('dragging')
-          const startX = event.clientX; const startY = event.clientY
-          const startLeft = group.offsetLeft; const startTop = group.offsetTop
-          const move = (next: PointerEvent) => {
-            if (next.pointerId !== event.pointerId) return
-            videoDragged ||= Math.abs(next.clientX - startX) + Math.abs(next.clientY - startY) > 4
-            const height = button.offsetHeight || buttonHeight
-            const position = clampVideoButtonPosition(
-              { x: startLeft + next.clientX - startX, y: startTop + next.clientY - startY },
-              { width: controlsWidth, height },
-              videoButtonBounds(),
-            )
-            group.style.left = `${position.x}px`
-            group.style.top = `${position.y}px`
-          }
-          const finish = (next: PointerEvent) => {
-            if (next.pointerId !== event.pointerId) return
-            window.removeEventListener('pointermove', move, true)
-            window.removeEventListener('pointerup', finish, true)
-            window.removeEventListener('pointercancel', finish, true)
-            button.removeEventListener('lostpointercapture', finish)
-            if (videoDragged && next.type !== 'pointercancel') {
-              videoButtonPositions.set(video, { x: group.offsetLeft, y: group.offsetTop })
+      // 每个播放器独立匹配自己的 currentSrc 或 SourceBuffer 响应，按 mediaOwner 原地修补 DOM。
+      patchKeyedChildren(
+        layer,
+        videos,
+        ({ video }) => mediaOwner(video),
+        (item, key) => createVideoGroup(item, key),
+        (group, item) => updateVideoGroup(group, item, buttonBounds),
+        {
+          onRemove(group) {
+            const state = videoGroupStates.get(group)
+            if (state?.hoverDismissTimer) {
+              clearTimeout(state.hoverDismissTimer)
+              state.hoverDismissTimer = null
             }
-            videoControlDragging = false
-            group.classList.remove('dragging')
-            if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId)
-            scheduleVideoButtons()
-          }
-          // Use the window capture phase as a fallback for players that stop
-          // dispatching pointer events from their overlay while the pointer is
-          // moved outside the button. Pointer capture alone is not reliable in
-          // every iframe/player combination.
-          ctx.addEventListener(window, 'pointermove', move, { capture: true })
-          ctx.addEventListener(window, 'pointerup', finish, { capture: true })
-          ctx.addEventListener(window, 'pointercancel', finish, { capture: true })
-          // iframe 切换或浏览器撤销捕获时，pointerup 可能不再送达当前页面。
-          button.addEventListener('lostpointercapture', finish)
-        })
-        button.addEventListener('click', event => {
-          if (videoDragged) {
-            event.preventDefault()
-            event.stopImmediatePropagation()
-            videoDragged = false
-            return
-          }
-           if (oneClickChoice) {
-             event.preventDefault()
-             event.stopImmediatePropagation()
-             sendResource(choices[0], button)
-             return
-           }
-          // Ambiguous MSE resources still require an evidence selection panel.
-          openVideoPanel(video, rect)
-        })
-        if (oneClickChoice) applySendState(choices[0], button, fallbackLabel)
-        group.append(button)
-        if (oneClickChoice) {
-          const more = document.createElement('button')
-          more.type = 'button'; more.className = 'video-more'; more.textContent = '⋯'
-          more.title = '更多操作：投屏或推送当前媒体链接'
-          more.setAttribute('aria-label', '更多操作：投屏或推送当前媒体链接')
-          more.addEventListener('pointerdown', event => event.stopPropagation())
-          more.addEventListener('click', event => {
-            event.preventDefault(); event.stopPropagation()
-            openVideoPanel(video, rect)
-          })
-          group.append(more)
-        }
-        const hover = document.createElement('div')
-        hover.className = 'video-hover'
-        hover.setAttribute('role', 'group')
-        const hoverId = `hlsd-video-hover-${visible}-${choices[0]?.id?.slice(0, 12) || 'identifying'}`
-        hover.id = hoverId
-        button.setAttribute('aria-describedby', hoverId)
-        if (oneClickChoice) {
-          const choice = choices[0]
-          const details = overlayResourceDetails(choice)
-          const head = document.createElement('div'); head.className = 'hover-head'
-          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = details.title
-          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = details.state
-          const facts = document.createElement('div'); facts.className = 'hover-facts'
-          details.facts.forEach(value => { const fact = document.createElement('span'); fact.className = 'hover-fact'; fact.textContent = value; facts.append(fact) })
-          const source = document.createElement('div'); source.className = 'hover-source'; source.textContent = details.source; source.title = details.source
-          const actions = document.createElement('div'); actions.className = 'hover-actions'
-          const download = document.createElement('button'); download.type = 'button'; download.className = 'hover-action primary'; download.textContent = '下载'
-          const cast = document.createElement('button'); cast.type = 'button'; cast.className = 'hover-action'; cast.textContent = '投屏'
-          const tvbox = document.createElement('button'); tvbox.type = 'button'; tvbox.className = 'hover-action'; tvbox.textContent = 'TVBox'
-          download.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); sendResource(choice, download) })
-          cast.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); castResource(choice, cast) })
-          tvbox.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); pushToTv(choice, tvbox) })
-          applySendState(choice, download, '下载')
-          applySendState(choice, cast, '投屏', 'cast')
-          applySendState(choice, tvbox, 'TVBox', 'tvbox')
-          actions.append(download, cast, tvbox)
-          head.append(hoverTitle, state); hover.append(head, facts, source, actions)
-          const fp = resourceFingerprint(choice)
-          const error = resourceSendStates.get(fp)?.error
-            || resourceSendStates.get(overlaySendKey(fp, 'cast'))?.error
-            || resourceSendStates.get(overlaySendKey(fp, 'tvbox'))?.error
-          if (error) {
-            const detail = document.createElement('div')
-            detail.className = 'result error send-error'
-            detail.textContent = error
-            detail.setAttribute('role', 'alert')
-            hover.append(detail)
-          }
-        } else {
-          const details = overlayResourceDetails(choices[0])
-          const head = document.createElement('div'); head.className = 'hover-head'
-          const hoverTitle = document.createElement('div'); hoverTitle.className = 'hover-title'; hoverTitle.textContent = `${choices.length} 个可用资源`
-          const state = document.createElement('span'); state.className = 'hover-state'; state.textContent = '需要选择'
-          const copy = document.createElement('div'); copy.className = 'hover-copy'; copy.textContent = matched
-            ? `优先候选：${details.title}` : '已发现页面媒体，但尚未确认播放器归属。请核对标题、清晰度和来源后选择。'
-          const facts = document.createElement('div'); facts.className = 'hover-facts'
-          details.facts.slice(0, 4).forEach(value => { const fact = document.createElement('span'); fact.className = 'hover-fact'; fact.textContent = value; facts.append(fact) })
-          const actions = document.createElement('div'); actions.className = 'hover-actions'
-          const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'hover-action primary'; choose.textContent = '查看并选择'
-          choose.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openVideoPanel(video, rect) })
-          actions.append(choose); head.append(hoverTitle, state); hover.append(head, copy, facts, actions)
-        }
-        const positionHover = () => {
-          const groupRect = group.getBoundingClientRect()
-          const hoverWidth = Math.max(220, Math.min(292, innerWidth - 16))
-          hover.style.width = `${hoverWidth}px`
-          const relativeLeft = Math.max(8 - groupRect.left, Math.min(0, innerWidth - 8 - hoverWidth - groupRect.left))
-          hover.style.left = `${relativeLeft}px`
-          ctx.requestAnimationFrame(() => {
-            const hoverHeight = hover.offsetHeight || 150
-            hover.classList.toggle('above', groupRect.bottom + 6 + hoverHeight > innerHeight - 8 && groupRect.top >= hoverHeight + 8)
-          })
-        }
-        let hoverDismissTimer: ReturnType<typeof setTimeout> | null = null
-        const keepHoverOpen = () => {
-          if (playerDismissTimer) clearTimeout(playerDismissTimer)
-          playerDismissTimer = undefined
-          if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
-          hoverDismissTimer = null
-          group.classList.add('hover-open')
-          positionHover()
-        }
-        const dismissHover = () => {
-          if (hoverDismissTimer) clearTimeout(hoverDismissTimer)
-          hoverDismissTimer = setTimeout(() => {
-            hoverDismissTimer = null
-            if (shouldKeepHoverOpen(group.matches(':hover'), group.contains(ui.shadow.activeElement))) return
-            group.classList.remove('hover-open')
-            updateHoveredPlayer()
-            scheduleVideoButtons()
-          }, HOVER_DISMISS_DELAY_MS)
-        }
-        group.addEventListener('pointerenter', keepHoverOpen)
-        group.addEventListener('pointerleave', dismissHover)
-        group.addEventListener('focusin', keepHoverOpen)
-        group.addEventListener('focusout', dismissHover)
-        group.append(hover)
-        layer.append(group)
-        positionHover()
-      })
-      if (!visible && !selectionMode) {
+            if (prefersReducedMotion()) {
+              group.remove()
+              return
+            }
+            group.setAttribute('data-leaving', '1')
+            group.classList.remove('visible', 'hover-open')
+            if (state) {
+              if (state.removeTimer) clearTimeout(state.removeTimer)
+              state.removeTimer = ctx.setTimeout(() => {
+                state.removeTimer = null
+                if (group.getAttribute('data-leaving') === '1') group.remove()
+              }, 190)
+            } else {
+              group.remove()
+            }
+          },
+        },
+      )
+      if (!videos.length && !selectionMode) {
         if (pinned) setPinned(false)
         setOpen(false)
         panelPosition = null
       }
+    }
+
+    interface PanelRowState {
+      resource: MediaResource
+      selected: MediaResource
+      name: HTMLDivElement
+      kind: HTMLDivElement
+      resourceUrl: HTMLElement
+      select: HTMLSelectElement
+      downloadBtn: HTMLButtonElement
+      castBtn: HTMLButtonElement
+      pushBtn: HTMLButtonElement
+    }
+    const panelRowStates = new WeakMap<HTMLElement, PanelRowState>()
+
+    const createPanelRow = (resource: MediaResource): HTMLDivElement => {
+      const row = document.createElement('div')
+      row.className = 'item'
+      const meta = document.createElement('div')
+      meta.className = 'meta'
+      const name = document.createElement('div')
+      name.className = 'name'
+      const kind = document.createElement('div')
+      kind.className = 'kind'
+      const resourceUrl = document.createElement('code')
+      resourceUrl.className = 'resource-url'
+      const select = document.createElement('select')
+      select.className = 'hlsd-select quality-select'
+      select.setAttribute('aria-label', '选择视频清晰度')
+      select.hidden = true
+      meta.append(name, kind, resourceUrl, select)
+
+      const actions = document.createElement('div')
+      actions.className = 'item-actions'
+      const downloadBtn = document.createElement('button')
+      downloadBtn.type = 'button'
+      downloadBtn.className = 'download'
+      downloadBtn.textContent = '下载'
+      const castBtn = document.createElement('button')
+      castBtn.type = 'button'
+      castBtn.className = 'download cast'
+      castBtn.textContent = '投屏'
+      castBtn.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
+      const pushBtn = document.createElement('button')
+      pushBtn.type = 'button'
+      pushBtn.className = 'download push-tv'
+      pushBtn.textContent = 'TVBox'
+      pushBtn.title = '直接推送当前媒体链接到 TVBox'
+      actions.append(downloadBtn, castBtn, pushBtn)
+      row.append(meta, actions)
+
+      const rowState: PanelRowState = {
+        resource,
+        selected: resource,
+        name,
+        kind,
+        resourceUrl,
+        select,
+        downloadBtn,
+        castBtn,
+        pushBtn,
+      }
+      panelRowStates.set(row, rowState)
+
+      downloadBtn.addEventListener('click', () => sendResource(rowState.selected, downloadBtn))
+      castBtn.addEventListener('click', () => castResource(rowState.selected, castBtn))
+      pushBtn.addEventListener('click', () => pushToTv(rowState.selected, pushBtn))
+      select.addEventListener('change', () => {
+        const current = rowState.resource
+        const variant = current.variants?.[Number(select.value)]
+        rowState.selected = variant ? selectMediaVariant(current, variant) : current
+        const fp = resourceFingerprint(current)
+        if (variant) {
+          preferredVariants.set(fp, {
+            ...(variant.variantId ? { variantId: variant.variantId } : {}),
+            height: variant.height || 0,
+            bandwidth: variant.bandwidth || 0,
+          })
+        } else {
+          preferredVariants.delete(fp)
+        }
+        applySendState(rowState.selected, downloadBtn, '下载')
+        applySendState(rowState.selected, pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+        applySendState(rowState.selected, castBtn, overlayActionFallback('cast'), 'cast')
+      })
+
+      return row
+    }
+
+    const updatePanelRow = (row: HTMLDivElement, resource: MediaResource) => {
+      const rowState = panelRowStates.get(row)
+      if (!rowState) return
+      rowState.resource = resource
+      const titleText = resource.title || resource.filename || resource.url.split('/').pop() || resource.url
+      setTextIfChanged(rowState.name, titleText)
+      setAttrIfChanged(rowState.name, 'title', resource.title || resource.filename || resource.url)
+      let host = ''
+      try { host = new URL(resource.url).host } catch {}
+      const quality = resource.quality || resourceQuality(resource.url, resource.height)
+      const streamMode = resource.isLive === true ? '直播' : ''
+      const duration = resource.duration ? formatDuration(resource.duration) : ''
+      const bandwidth = resource.bandwidth ? formatBitrate(resource.bandwidth) : ''
+      const likelySize = resource.size || resource.estimatedSize || 0
+      const sizeLabel = resource.size ? formatBytes(resource.size) : likelySize ? `约 ${formatBytes(likelySize)}` : '大小未知'
+      const kindText = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
+      setTextIfChanged(rowState.kind, kindText)
+      const resourceLocation = safeResourceLocation(resource.url)
+      setTextIfChanged(rowState.resourceUrl, resourceLocation)
+      setAttrIfChanged(rowState.resourceUrl, 'title', resourceLocation)
+
+      const preference = preferredVariants.get(resourceFingerprint(resource))
+      const selectedIndex = preference && resource.variants?.length
+        ? (() => {
+          if (preference.variantId) {
+            const byId = resource.variants.findIndex(variant => variant.variantId === preference.variantId)
+            if (byId >= 0) return byId
+          }
+          return resource.variants.findIndex(variant => (variant.height || 0) === preference.height
+            && (variant.bandwidth || 0) === preference.bandwidth)
+        })()
+        : -1
+      const selected = selectedIndex >= 0 ? selectMediaVariant(resource, resource.variants![selectedIndex]) : resource
+      rowState.selected = selected
+
+      if (resource.variants?.length) {
+        rowState.select.hidden = false
+        syncSelectOptions(
+          rowState.select,
+          [
+            { value: 'auto', label: '自动（最高）' },
+            ...resource.variants.map((variant, index) => ({
+              value: String(index),
+              label: [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? formatBitrate(variant.bandwidth) : ''].filter(Boolean).join(' · '),
+            })),
+          ],
+          selectedIndex >= 0 ? String(selectedIndex) : 'auto',
+        )
+      } else {
+        rowState.select.hidden = true
+      }
+
+      applySendState(selected, rowState.downloadBtn, '下载')
+      applySendState(selected, rowState.castBtn, overlayActionFallback('cast'), 'cast')
+      applySendState(selected, rowState.pushBtn, overlayActionFallback('tvbox'), 'tvbox')
     }
 
     const render = () => {
@@ -1011,90 +1464,24 @@ export default defineContentScript({
       // 播放进度和重复网络观察不能不断替换用户正在点击的按钮及清晰度控件。
       if (signature === renderedListSignature) { updateVideoButtons(); return }
       renderedListSignature = signature
-      list.replaceChildren()
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       if (selectionMode && selectionResourceIds?.size === 0 && result) {
         result.hidden = false
         result.classList.add('error')
         result.dataset.source = 'selection'
-        result.textContent = '选中的内容里没有可下载链接'
+        setTextIfChanged(result, '选中的内容里没有可下载链接')
       } else if (result?.dataset.source === 'selection') {
         result.hidden = true
         result.classList.remove('error')
         delete result.dataset.source
       }
-      entries.forEach(resource => {
-        const row = document.createElement('div'); row.className = 'item'
-        const meta = document.createElement('div'); meta.className = 'meta'
-        const name = document.createElement('div'); name.className = 'name'; name.title = resource.title || resource.filename || resource.url; name.textContent = resource.title || resource.filename || resource.url.split('/').pop() || resource.url
-        let host = ''; try { host = new URL(resource.url).host } catch {}
-        const quality = resource.quality || resourceQuality(resource.url, resource.height)
-        const streamMode = resource.isLive === true ? '直播' : ''
-        const duration = resource.duration ? formatDuration(resource.duration) : ''
-        const bandwidth = resource.bandwidth ? formatBitrate(resource.bandwidth) : ''
-        const likelySize = resource.size || resource.estimatedSize || 0
-        const sizeLabel = resource.size ? formatBytes(resource.size) : likelySize ? `约 ${formatBytes(likelySize)}` : '大小未知'
-        const kind = document.createElement('div'); kind.className = 'kind'; kind.textContent = [resource.kind.toUpperCase(), streamMode, quality, resource.width && resource.height ? `${resource.width}×${resource.height}` : '', bandwidth, duration, sizeLabel, host].filter(Boolean).join(' · ')
-        const resourceLocation = safeResourceLocation(resource.url)
-        const resourceUrl = document.createElement('code'); resourceUrl.className = 'resource-url'; resourceUrl.title = resourceLocation; resourceUrl.textContent = resourceLocation
-        const preference = preferredVariants.get(resourceFingerprint(resource))
-        const selectedIndex = preference && resource.variants?.length
-          ? (() => {
-            if (preference.variantId) {
-              const byId = resource.variants.findIndex(variant => variant.variantId === preference.variantId)
-              if (byId >= 0) return byId
-            }
-            return resource.variants.findIndex(variant => (variant.height || 0) === preference.height
-              && (variant.bandwidth || 0) === preference.bandwidth)
-          })()
-          : -1
-        let selected = selectedIndex >= 0 ? selectMediaVariant(resource, resource.variants![selectedIndex]) : resource
-        const actions = document.createElement('div'); actions.className = 'item-actions'
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'download'; button.textContent = '下载'
-        button.addEventListener('click', () => sendResource(selected, button))
-        applySendState(selected, button, '下载')
-        if (resource.variants?.length) {
-          const select = document.createElement('select')
-          select.className = 'hlsd-select quality-select'
-          select.setAttribute('aria-label', '选择视频清晰度')
-          const automatic = document.createElement('option')
-          automatic.value = 'auto'
-          automatic.textContent = '自动（最高）'
-          select.append(automatic)
-          resource.variants.forEach((variant, index) => {
-            const option = document.createElement('option')
-            option.value = String(index)
-            option.textContent = [variant.quality || (variant.height ? `${variant.height}p` : '线路'), variant.bandwidth ? formatBitrate(variant.bandwidth) : ''].filter(Boolean).join(' · ')
-            select.append(option)
-          })
-          select.value = selectedIndex >= 0 ? String(selectedIndex) : 'auto'
-          select.addEventListener('change', () => {
-            const variant = resource.variants?.[Number(select.value)]
-            selected = variant ? selectMediaVariant(resource, variant) : resource
-            if (variant) {
-              preferredVariants.set(resourceFingerprint(resource), {
-                ...(variant.variantId ? { variantId: variant.variantId } : {}),
-                height: variant.height || 0,
-                bandwidth: variant.bandwidth || 0,
-              })
-            } else preferredVariants.delete(resourceFingerprint(resource))
-            applySendState(selected, button, '下载'); applySendState(selected, pushButton, overlayActionFallback('tvbox'), 'tvbox'); applySendState(selected, castButton, overlayActionFallback('cast'), 'cast')
-          })
-          meta.append(name, kind, resourceUrl, select)
-        } else {
-          meta.append(name, kind, resourceUrl)
-        }
-        const pushButton = document.createElement('button'); pushButton.type = 'button'; pushButton.className = 'download push-tv'; pushButton.textContent = 'TVBox'
-        pushButton.title = '直接推送当前媒体链接到 TVBox'
-        pushButton.addEventListener('click', () => pushToTv(selected, pushButton))
-        applySendState(selected, pushButton, overlayActionFallback('tvbox'), 'tvbox')
-        const castButton = document.createElement('button'); castButton.type = 'button'; castButton.className = 'download cast'; castButton.textContent = '投屏'
-        castButton.title = '直接投屏当前媒体链接到 DLNA 或 Chromecast'
-        castButton.addEventListener('click', () => castResource(selected, castButton))
-        applySendState(selected, castButton, overlayActionFallback('cast'), 'cast')
-        actions.append(button, castButton, pushButton)
-        row.append(meta, actions); list.append(row)
-      })
+      patchKeyedChildren(
+        list,
+        entries,
+        resource => resourceFingerprint(resource),
+        createPanelRow,
+        updatePanelRow,
+      )
       updateVideoButtons()
       // 聚合 iframe 资源会增加面板高度；在用户移入之前重新定位，避免鼠标下的按钮突然换位。
       if (wrap?.classList.contains('open')) fitPanel()

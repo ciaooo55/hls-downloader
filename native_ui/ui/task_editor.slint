@@ -27,6 +27,8 @@ export component TaskEditorWindow inherits Window {
     in-out property <string> start-at;
     in-out property <string> stop-at;
     in-out property <string> queue-id: "default";
+    in property <[string]> queue-names: ["默认队列"];
+    in-out property <int> queue-index: 0;
     in-out property <[string]> variants;
     in-out property <int> variant-index: 0;
     in-out property <string> audio;
@@ -41,6 +43,7 @@ export component TaskEditorWindow inherits Window {
     out property <bool> has-advanced-values: root.method != "GET" || root.concurrency != 0 || root.speed-limit != 0 || root.headers != "" || root.cookie != "" || root.proxy != "" || root.body-path != "" || root.checksum != "" || root.mirrors != "" || root.start-at != "" || root.stop-at != "" || (root.queue-id != "" && root.queue-id != "default");
     private property <bool> show-advanced: root.advanced-expanded;
     callback action(string);
+    callback queue-selected(int);
     VerticalLayout {
         spacing: 0px;
         DialogHeader { heading: root.title; description: root.mode == "batch" ? "每行一个链接，批量添加到下载队列" : root.mode == "curl" ? "粘贴浏览器复制的 cURL 命令" : "粘贴下载地址，选择保存位置与下载选项"; icon: root.mode == "new" ? "new" : root.mode == "curl" ? "import" : "batch"; }
@@ -141,7 +144,22 @@ export component TaskEditorWindow inherits Window {
                             HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "限速 KiB/s"; width: 80px; } SpinBox { value <=> root.speed-limit; accessible-label: "任务限速 KiB/s"; height: Tokens.control-height; minimum: 0; maximum: 1000000; } Text { text: "0 表示不限速"; color: Tokens.faint; font-size: 11px; vertical-alignment: center; } }
                             HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划开始"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.start-at; accessible-label: "计划开始"; placeholder-text: "HH:mm 或 2026-01-01T22:00:00+08:00"; } }
                             HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "计划停止"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.stop-at; accessible-label: "计划停止"; placeholder-text: "HH:mm 或 2026-01-01T23:30:00+08:00"; } }
-                            HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "队列 ID"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.queue-id; accessible-label: "队列 ID"; } }
+                            HorizontalLayout {
+                                spacing: Tokens.control-gap;
+                                FieldLabel { label: "下载队列"; width: 80px; }
+                                HotComboBox {
+                                    height: Tokens.control-height;
+                                    model: root.queue-names;
+                                    a11y-label: "下载队列";
+                                    property <int> bound: root.queue-index;
+                                    current-index: root.queue-index;
+                                    changed bound => { self.current-index = root.queue-index; }
+                                    selected(value) => {
+                                        root.queue-index = self.current-index;
+                                        root.queue-selected(self.current-index);
+                                    }
+                                }
+                            }
                         }
                     }
                 }

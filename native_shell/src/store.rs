@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 7;
@@ -17,6 +19,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 pub struct CoreStore {
     pub(crate) connection: Connection,
     path: Option<PathBuf>,
+    settings_version: Arc<AtomicU64>,
 }
 
 /// One half of an atomic credential write.  `Delete` removes the row.
@@ -65,6 +68,7 @@ impl CoreStore {
         let mut store = Self {
             connection,
             path: Some(path.to_path_buf()),
+            settings_version: Arc::new(AtomicU64::new(1)),
         };
         // 文件库可能另有进度写线程的连接（见 `progress_writer`）。显式事务一律 IMMEDIATE：
         // 先拿写锁（受 busy_timeout 等待），避免 WAL 下“先读后写”的延迟事务在另一连接提交后
@@ -84,9 +88,18 @@ impl CoreStore {
         let mut store = Self {
             connection,
             path: None,
+            settings_version: Arc::new(AtomicU64::new(1)),
         };
         store.initialize(0)?;
         Ok(store)
+    }
+
+    pub(crate) fn settings_version(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.settings_version)
+    }
+
+    fn bump_settings_version(&self) {
+        self.settings_version.fetch_add(1, Ordering::Release);
     }
 
     fn commit_with_durability<T: serde::Serialize + serde::de::DeserializeOwned, R>(
@@ -360,16 +373,18 @@ impl CoreStore {
                 ),
                 CoreEvent::PlayerSession { .. }
                 | CoreEvent::CastSession { .. }
-                | CoreEvent::BrowserStatus { .. } => false,
+                | CoreEvent::BrowserStatus { .. }
+                | CoreEvent::Shutdown => false,
                 _ => true,
             });
+        let wrote_settings = settings.is_some_and(|map| !map.is_empty());
         let values = (
             events.to_vec(),
             spec.cloned(),
             settings.cloned(),
             handoff.cloned(),
         );
-        self.commit_with_durability(durable, values, |(events, spec, settings, handoff), transaction| {
+        let result = self.commit_with_durability(durable, values, |(events, spec, settings, handoff), transaction| {
             let events = events.as_slice();
             let spec = spec.as_ref();
             let settings = settings.as_ref();
@@ -423,6 +438,7 @@ impl CoreStore {
                     | CoreEvent::HandoffResolved { .. }
                     | CoreEvent::UiShow { .. }
                     | CoreEvent::UiReady { .. }
+                    | CoreEvent::Shutdown
                     | CoreEvent::Error { .. }
                     | CoreEvent::ProbeResult { .. }
                     | CoreEvent::TorrentProbeResult { .. }
@@ -483,7 +499,11 @@ impl CoreStore {
                 write_settings(transaction, settings)?;
             }
             Ok(())
-        })
+        });
+        if result.is_ok() && wrote_settings {
+            self.bump_settings_version();
+        }
+        result
     }
 
     fn setting_json(&self, key: &str) -> Result<Option<String>, String> {
@@ -555,9 +575,14 @@ impl CoreStore {
         &mut self,
         values: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        self.write_sanitized(values.clone(), |settings, transaction| {
+        let wrote_settings = !values.is_empty();
+        let result = self.write_sanitized(values.clone(), |settings, transaction| {
             write_settings(transaction, &settings)
-        })
+        });
+        if result.is_ok() && wrote_settings {
+            self.bump_settings_version();
+        }
+        result
     }
 
     /// Apply a credential mutation together with the settings that name it, as
@@ -574,7 +599,8 @@ impl CoreStore {
         write: Option<CredentialWrite<'_>>,
         settings: &BTreeMap<String, serde_json::Value>,
     ) -> Result<(), String> {
-        self.commit_with_durability(true, settings.clone(), |settings, transaction| {
+        let wrote_settings = !settings.is_empty();
+        let result = self.commit_with_durability(true, settings.clone(), |settings, transaction| {
             match write {
                 Some(CredentialWrite::Store {
                     credential_ref,
@@ -604,7 +630,11 @@ impl CoreStore {
                 None => {}
             }
             write_settings(transaction, &settings)
-        })
+        });
+        if result.is_ok() && wrote_settings {
+            self.bump_settings_version();
+        }
+        result
     }
 
     pub fn store_credential(
@@ -1451,6 +1481,7 @@ mod tests {
             let mut store = CoreStore {
                 connection,
                 path: None,
+                settings_version: Arc::new(AtomicU64::new(1)),
             };
             assert!(store.initialize(version).is_err());
             assert_eq!(store.schema_version().unwrap(), version);

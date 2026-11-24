@@ -324,6 +324,8 @@ function mseCorrelatedResources(
   const sorted = strongest
     .filter(entry => entry.affinity === best)
     .sort((left, right) => resourceRank(right.item) - resourceRank(left.item)
+      || (right.item.height || 0) - (left.item.height || 0)
+      || (right.item.bandwidth || 0) - (left.item.bandwidth || 0)
       || right.item.seenAt - left.item.seenAt)
   // The same progressive response is commonly observed twice: the network
   // observer initially classifies it as `file`, then SourceBuffer ownership
@@ -337,6 +339,100 @@ function mseCorrelatedResources(
     if (!unique.has(key)) unique.set(key, entry.item)
   }
   return [...unique.values()]
+}
+
+const STREAM_FAMILY_QUALITY_QUERY = /^(?:q|quality|res|resolution|height|width|bitrate|bandwidth|br|itag|profile|level|rendition|variant|fmt|format|codec|codecs|abr|vbr)$/i
+const STREAM_FAMILY_QUALITY_SEGMENT = /^(?:\d{3,4}p(?:\d{2,3})?|\d{3,4}x\d{3,4}|\d+(?:\.\d+)?[km]bps?|\d+k|4k|8k|2k|uhd|fhd|hd|sd|ld|high|medium|med|low|auto|source|origin|orig|avc|hevc|h264|h265|vp9|av1|hls|dash|llhls|cmaf|fmp4|ts)$/i
+const STREAM_FAMILY_GENERIC_LEAF = /^(?:master|index|playlist|manifest|chunklist|stream|video|media|prog_index|live|vod|event|llhls)$/i
+const STREAM_FAMILY_SUFFIX_QUALITY = /(?:[-_.](?:\d{3,4}p(?:\d{2,3})?|\d{3,4}x\d{3,4}|\d+(?:\.\d+)?[km]bps?|\d+k|4k|8k|2k|uhd|fhd|hd|sd|ld|high|medium|med|low|llhls|h264|h265|avc|hevc|vp9|av1))+$/i
+const PLAYER_BOUND_OWNER = /^(?:media-element|mse-source-buffer):.+$/
+
+function stableHref(resource: Pick<MediaResource, 'url' | 'kind'>): string {
+  try {
+    return stableResourceUrl(resource).href
+  } catch {
+    return resource.url.split('#', 1)[0]
+  }
+}
+
+/**
+ * Derive a conservative stream-family key for MSE multi-manifest disambiguation.
+ *
+ * Strips only manifest extensions and quality/rendition labels while keeping
+ * semantic stream identifiers (path stems and non-quality query parameters)
+ * intact, so unrelated videos such as `one.mpd` and `two.mpd` never collapse.
+ */
+function streamFamilyKey(resource: Pick<MediaResource, 'url' | 'kind'>): string {
+  try {
+    const url = stableResourceUrl(resource)
+    const params = new URLSearchParams(url.search)
+    for (const key of [...params.keys()]) {
+      if (STREAM_FAMILY_QUALITY_QUERY.test(key)) params.delete(key)
+    }
+    params.sort()
+    const rawSegments = decodeURIComponent(url.pathname)
+      .split('/')
+      .filter(Boolean)
+    if (!rawSegments.length) return ''
+    const lastIndex = rawSegments.length - 1
+    rawSegments[lastIndex] = rawSegments[lastIndex].replace(/\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|m4a|mp3)$/i, '')
+    const segments = rawSegments.filter(Boolean)
+    while (segments.length > 1 && (STREAM_FAMILY_GENERIC_LEAF.test(segments[segments.length - 1]) || STREAM_FAMILY_QUALITY_SEGMENT.test(segments[segments.length - 1]))) {
+      segments.pop()
+    }
+    if (!segments.length) return ''
+    const strippedLeaf = segments[segments.length - 1].replace(STREAM_FAMILY_SUFFIX_QUALITY, '')
+    if (strippedLeaf) segments[segments.length - 1] = strippedLeaf
+    else if (segments.length > 1) segments.pop()
+    else if (STREAM_FAMILY_QUALITY_SEGMENT.test(segments[0])) return ''
+    const stem = segments.join('/').toLowerCase()
+    const query = params.toString()
+    if (!stem && !query) return ''
+    return `${url.origin}/${stem}${query ? `?${query}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Fold MSE-correlated child playlists into their owning master manifest when
+ * both appear in the correlated set (e.g. nested playlists or DASH/cross-kind
+ * children not already collapsed by `compactResources`).
+ */
+function foldCorrelatedMasterFamily(correlated: MediaResource[]): MediaResource[] {
+  if (correlated.length <= 1) return correlated
+  const hrefs = correlated.map(item => stableHref(item))
+  const owned = new Set<number>()
+  for (let i = 0; i < correlated.length; i += 1) {
+    const child = correlated[i]
+    const childHref = hrefs[i]
+    const childManifestSameKind = child.manifestUrl ? stableHref({ url: child.manifestUrl, kind: child.kind }) : ''
+    for (let j = 0; j < correlated.length; j += 1) {
+      if (i === j) continue
+      const parent = correlated[j]
+      const parentHref = hrefs[j]
+      const listedInParent = (parent.variants || []).some(variant => stableHref({ url: variant.url, kind: child.kind }) === childHref)
+        || (parent.renditionUrls || []).some(url => stableHref({ url, kind: child.kind }) === childHref)
+      const pointsToParent = Boolean(childManifestSameKind && childManifestSameKind === parentHref)
+        || Boolean(child.manifestUrl && stableHref({ url: child.manifestUrl, kind: parent.kind }) === parentHref)
+      if (listedInParent || pointsToParent) {
+        owned.add(i)
+        break
+      }
+    }
+  }
+  const roots = correlated.filter((_, index) => !owned.has(index))
+  return roots.length ? roots : correlated
+}
+
+function shareSameStreamFamily(items: MediaResource[]): boolean {
+  if (items.length <= 1) return true
+  const manifestKeys = items.map(item => (item.manifestUrl ? stableHref({ url: item.manifestUrl, kind: item.kind }) : ''))
+  if (manifestKeys[0] && manifestKeys.every(key => key === manifestKeys[0])) return true
+  const owners = items.map(item => item.owner || '')
+  if (PLAYER_BOUND_OWNER.test(owners[0]) && owners.every(owner => owner === owners[0])) return true
+  const familyKeys = items.map(item => streamFamilyKey(item))
+  return Boolean(familyKeys[0]) && familyKeys.every(key => key === familyKeys[0])
 }
 
 function isNonVideoManifest(resource: Pick<MediaResource, 'url'>): boolean {
@@ -648,7 +744,16 @@ export function playerPlaybackResources(
   const msePlayback = Boolean(playback?.sourceUrls.some(source => source.startsWith('blob:')))
   if (msePlayback && playback) {
     const correlated = mseCorrelatedResources(resources, playback)
-    return correlated.length === 1 ? correlated.slice(0, limit) : []
+    if (correlated.length <= 1) return correlated.slice(0, limit)
+    // Fold child playlists into their correlated master manifest first so
+    // master+variant pairs stay resolved without vanishing into ambiguity.
+    const resolved = foldCorrelatedMasterFamily(correlated)
+    if (resolved.length === 1) return resolved.slice(0, limit)
+    // Allow multiple correlated renditions only when every entry belongs to
+    // the same master/player/stream family; genuinely distinct videos sharing
+    // a common init segment remain unresolved (`[]`).
+    if (!shareSameStreamFamily(resolved)) return []
+    return resolved.slice(0, limit)
   }
   return visiblePlaybackResources(
     resources,

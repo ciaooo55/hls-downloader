@@ -19,11 +19,19 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const GLOBAL_CONNECTION_LIMIT: u32 = 128;
 pub const PER_HOST_CONNECTION_LIMIT: u32 = 24;
+
+const HINT_GLOBAL: u8 = 1 << 0;
+const HINT_QUEUE: u8 = 1 << 1;
+const HINT_TASK: u8 = 1 << 2;
+const HINT_HOURLY: u8 = 1 << 3;
+
+static ACTIVE_THROTTLE_HINTS: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Default)]
 struct BudgetState {
@@ -402,6 +410,33 @@ fn throttle() -> &'static Mutex<ThrottleState> {
     })
 }
 
+fn update_throttle_hints(state: &ThrottleState) {
+    let mut hints = 0u8;
+    if state.global_schedule.global_limit_kib > 0
+        || state.global_schedule.enabled
+        || state
+            .scoped
+            .get("global")
+            .is_some_and(|bucket| bucket.limit_bps > 0.0)
+    {
+        hints |= HINT_GLOBAL;
+    }
+    if state.hourly.limit_bytes > 0 {
+        hints |= HINT_HOURLY;
+    }
+    for (scope, bucket) in &state.scoped {
+        if bucket.limit_bps <= 0.0 {
+            continue;
+        }
+        if scope.starts_with("queue:") {
+            hints |= HINT_QUEUE;
+        } else if scope.starts_with("task:") {
+            hints |= HINT_TASK;
+        }
+    }
+    ACTIVE_THROTTLE_HINTS.store(hints, Ordering::Release);
+}
+
 pub fn configure_scoped_limit(scope: &str, limit_kib: u64) {
     if scope.trim().is_empty() {
         return;
@@ -412,6 +447,7 @@ pub fn configure_scoped_limit(scope: &str, limit_kib: u64) {
             .entry(scope.to_string())
             .or_insert_with(TokenBucket::new)
             .set_limit_kib(limit_kib);
+        update_throttle_hints(&state);
     }
 }
 
@@ -431,18 +467,21 @@ pub fn configure_global_schedule(
             schedule_limit_kib,
         };
         refresh_global_limit_at(&mut state, chrono_minutes_now());
+        update_throttle_hints(&state);
     }
 }
 
 pub fn configure_hourly_quota_mib(limit_mib: u64) {
     if let Ok(mut state) = throttle().lock() {
         state.hourly.set_limit_mib(limit_mib);
+        update_throttle_hints(&state);
     }
 }
 
 pub fn clear_scoped_limit(scope: &str) {
     if let Ok(mut state) = throttle().lock() {
         state.scoped.remove(scope);
+        update_throttle_hints(&state);
     }
 }
 
@@ -462,6 +501,7 @@ pub fn sync_queue_limits<'a>(limits: impl IntoIterator<Item = (&'a str, u64)>) {
                 .or_insert_with(TokenBucket::new)
                 .set_limit_kib(limit);
         }
+        update_throttle_hints(&state);
     }
 }
 
@@ -516,10 +556,9 @@ fn consume_bucket<E>(
         if scope == "global" {
             refresh_global_limit_at(&mut state, chrono_minutes_now());
         }
-        let bucket = state
-            .scoped
-            .entry(scope.to_string())
-            .or_insert_with(TokenBucket::new);
+        let Some(bucket) = state.scoped.get_mut(scope) else {
+            return Ok(());
+        };
         if bucket.limit_bps <= 0.0 {
             return Ok(());
         }
@@ -570,15 +609,84 @@ fn consume_hourly_quota<E>(
     Ok(())
 }
 
-// 仅在限速/配额实际等待时轮询控制；无上限的热路径不增加控制文件 I/O。
+// 仅在限速/配额实际等待时轮询控制；无上限的热路径不取全局锁、不分配字符串、不查本地时钟。
 pub fn consume<E>(nbytes: usize, mut check: impl FnMut() -> Result<(), E>) -> Result<(), E> {
-    let Some(context) = current_throttle_context() else {
+    if nbytes == 0 {
         return Ok(());
-    };
-    consume_bucket("global", nbytes, &mut check)?;
-    consume_bucket(&format!("queue:{}", context.queue_id), nbytes, &mut check)?;
-    consume_bucket(&format!("task:{}", context.task_id), nbytes, &mut check)?;
-    consume_hourly_quota(nbytes, &mut check)
+    }
+    let hints = ACTIVE_THROTTLE_HINTS.load(Ordering::Acquire);
+    if hints == 0 {
+        let unlimited = THROTTLE_CONTEXT.with(|slot| {
+            let borrow = slot.borrow();
+            match borrow.as_ref() {
+                None => true,
+                Some(context) => {
+                    context.global_limit_kib == 0
+                        && !context.schedule_enabled
+                        && context.hourly_quota_mib == 0
+                        && context.queue_limit_kib == 0
+                        && context.task_limit_kib == 0
+                }
+            }
+        });
+        if unlimited {
+            return Ok(());
+        }
+    }
+    let (has_ctx, check_global, check_queue, check_task, check_hourly, queue_id, task_id) =
+        THROTTLE_CONTEXT.with(|slot| {
+            let borrow = slot.borrow();
+            let Some(context) = borrow.as_ref() else {
+                return (
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    String::new(),
+                    String::new(),
+                );
+            };
+            let check_global = (hints & HINT_GLOBAL) != 0
+                || context.global_limit_kib > 0
+                || context.schedule_enabled;
+            let check_queue = (hints & HINT_QUEUE) != 0 || context.queue_limit_kib > 0;
+            let check_task = (hints & HINT_TASK) != 0 || context.task_limit_kib > 0;
+            let check_hourly = (hints & HINT_HOURLY) != 0 || context.hourly_quota_mib > 0;
+            (
+                true,
+                check_global,
+                check_queue,
+                check_task,
+                check_hourly,
+                if check_queue {
+                    context.queue_id.clone()
+                } else {
+                    String::new()
+                },
+                if check_task {
+                    context.task_id.clone()
+                } else {
+                    String::new()
+                },
+            )
+        });
+    if !has_ctx {
+        return Ok(());
+    }
+    if check_global {
+        consume_bucket("global", nbytes, &mut check)?;
+    }
+    if check_queue {
+        consume_bucket(&format!("queue:{queue_id}"), nbytes, &mut check)?;
+    }
+    if check_task {
+        consume_bucket(&format!("task:{task_id}"), nbytes, &mut check)?;
+    }
+    if check_hourly {
+        consume_hourly_quota(nbytes, &mut check)?;
+    }
+    Ok(())
 }
 
 pub fn schedule_window_active(start: &str, end: &str) -> bool {
@@ -1228,5 +1336,63 @@ mod tests {
             "https://cdn.example.test/a",
             "cdn.example.test:8443"
         ));
+    }
+
+    #[test]
+    fn throttle_fast_path_skips_mutex_when_unlimited_and_transitions_when_limited() {
+        let unlimited = ThrottleContext {
+            queue_id: "default".into(),
+            task_id: "fast-path-task".into(),
+            ..ThrottleContext::default()
+        };
+        // Hold the global THROTTLE mutex while resetting hints to 0: if `consume`
+        // tried to acquire the mutex on the unlimited fast path, it would deadlock.
+        {
+            let mut state = throttle().lock().unwrap_or_else(|e| e.into_inner());
+            let saved_schedule = std::mem::take(&mut state.global_schedule);
+            let saved_hourly = state.hourly.limit_bytes;
+            let saved_limits: Vec<(String, f64)> = state
+                .scoped
+                .iter()
+                .map(|(k, b)| (k.clone(), b.limit_bps))
+                .collect();
+            state.hourly.limit_bytes = 0;
+            for bucket in state.scoped.values_mut() {
+                bucket.limit_bps = 0.0;
+            }
+            update_throttle_hints(&state);
+            assert_eq!(ACTIVE_THROTTLE_HINTS.load(Ordering::Acquire), 0);
+
+            with_throttle_context(Some(unlimited.clone()), || {
+                consume(256 * 1024, || -> Result<(), &'static str> {
+                    panic!("fast path must not invoke control check")
+                })
+                .unwrap();
+            });
+
+            // Restore prior global state for any concurrent tests.
+            state.global_schedule = saved_schedule;
+            state.hourly.limit_bytes = saved_hourly;
+            for (scope, limit_bps) in saved_limits {
+                if let Some(bucket) = state.scoped.get_mut(&scope) {
+                    bucket.limit_bps = limit_bps;
+                }
+            }
+            update_throttle_hints(&state);
+        }
+
+        // Transition into throttled mode for a private task scope and verify it enforces the limit.
+        let scope = "task:fast-path-transition";
+        let throttled_ctx = ThrottleContext {
+            queue_id: "default".into(),
+            task_id: "fast-path-transition".into(),
+            ..ThrottleContext::default()
+        };
+        configure_scoped_limit(scope, 1);
+        assert_ne!(ACTIVE_THROTTLE_HINTS.load(Ordering::Acquire) & HINT_TASK, 0);
+        with_throttle_context(Some(throttled_ctx), || {
+            assert_eq!(consume(64 * 1024, || Err("throttled")), Err("throttled"));
+        });
+        clear_scoped_limit(scope);
     }
 }

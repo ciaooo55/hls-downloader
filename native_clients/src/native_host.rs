@@ -735,6 +735,15 @@ impl NativeHostSession {
             download_dir,
             allow_duplicate: false,
             trusted_ui: false,
+            start_paused: message
+                .get("start_paused")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            queue_id: message
+                .get("queue_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
         })?;
         self.handoff_status(&json!({"handoff_id": id}))
     }

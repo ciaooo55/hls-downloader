@@ -1,4 +1,4 @@
-import type { MediaResource } from './resources'
+import { downloadSelectionKey, likelyResourceBytes, selectMediaVariant, type MediaResource } from './resources'
 import { formatBitrate, formatBytes, formatDuration } from './format'
 
 export interface OverlayPosition {
@@ -109,6 +109,152 @@ export interface OverlayResourceDetails {
   facts: string[]
   source: string
   state: string
+}
+
+export interface OverlayQualityOption {
+  /** Stable key for keyed DOM reconciliation and send-state lookup. */
+  key: string
+  /** Concrete resource/variant ready to pass directly to sendResource(). */
+  resource: MediaResource
+  /** Primary concise label, e.g. '1080p', '720p', 'MP4'. */
+  label: string
+  /** Secondary concise detail, e.g. '5.2 Mbps', '120 MB'. */
+  detail: string
+  /** Accessible button description without exposing signed URL parameters. */
+  ariaLabel: string
+  /** Highest-quality recommended option. */
+  recommended: boolean
+}
+
+function overlayFormatTag(resource: Pick<MediaResource, 'kind' | 'url' | 'mimeType'>): string {
+  if (resource.kind === 'hls') return 'HLS'
+  if (resource.kind === 'dash') return 'DASH'
+  if (resource.kind === 'magnet') return '磁力'
+  try {
+    const ext = new URL(resource.url).pathname.match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toUpperCase()
+    if (ext && ['MP4', 'M4V', 'WEBM', 'MKV', 'MOV', 'AVI', 'FLV', 'TS', 'M4A', 'MP3', 'AAC', 'FLAC', 'WAV', 'OGG', 'OPUS'].includes(ext)) {
+      return ext
+    }
+  } catch {}
+  const mime = (resource.mimeType || '').toLowerCase()
+  if (mime.includes('mp4')) return 'MP4'
+  if (mime.includes('webm')) return 'WEBM'
+  if (mime.startsWith('audio/')) return '音频'
+  return resource.kind === 'media' ? '视频' : '文件'
+}
+
+function cleanQualityBadge(quality?: string, height?: number): string {
+  const normalized = String(quality || '').replace(/^最高\s*/, '').trim()
+  if (normalized) return normalized
+  return height && height > 0 ? `${height}p` : ''
+}
+
+/**
+ * Build up to `limit` 1-click quality pill options sorted highest quality first.
+ *
+ * Returns an empty list when only a single stream/quality exists so single-item
+ * players stay compact without a redundant selector list.
+ */
+export function overlayQualityOptions(choices: readonly MediaResource[], limit = 6): OverlayQualityOption[] {
+  interface Candidate {
+    key: string
+    resource: MediaResource
+    formatTag: string
+    label: string
+    width: number
+    height: number
+    bandwidth: number
+    exactSize: number
+    estimatedSize: number
+  }
+
+  const raw: Candidate[] = []
+  for (const choice of choices) {
+    const formatTag = overlayFormatTag(choice)
+    if (choice.variants?.length) {
+      for (const variant of choice.variants) {
+        const selected = selectMediaVariant(choice, variant)
+        const height = Number(variant.height || 0)
+        const width = Number(variant.width || 0)
+        const bandwidth = Number(variant.bandwidth || 0)
+        const estimated = choice.isLive === true
+          ? 0
+          : (Number(choice.duration) > 0 && bandwidth > 0
+              ? Math.round(Number(choice.duration) * bandwidth / 8)
+              : 0)
+        const label = cleanQualityBadge(variant.quality, height) || formatTag
+        raw.push({
+          key: downloadSelectionKey(selected),
+          resource: selected,
+          formatTag,
+          label,
+          width,
+          height,
+          bandwidth,
+          exactSize: 0,
+          estimatedSize: estimated,
+        })
+      }
+    } else {
+      const height = Number(choice.height || 0)
+      const width = Number(choice.width || 0)
+      const bandwidth = Number(choice.bandwidth || 0)
+      const exactSize = Number(choice.size || 0)
+      const estimatedSize = exactSize > 0
+        ? 0
+        : (choice.isLive === true ? 0 : likelyResourceBytes({ ...choice, size: 0 }))
+      const label = cleanQualityBadge(choice.quality, height) || formatTag
+      raw.push({
+        key: downloadSelectionKey(choice),
+        resource: choice,
+        formatTag,
+        label,
+        width,
+        height,
+        bandwidth,
+        exactSize,
+        estimatedSize,
+      })
+    }
+  }
+
+  raw.sort((left, right) => right.height - left.height
+    || right.bandwidth - left.bandwidth
+    || (right.exactSize || right.estimatedSize) - (left.exactSize || left.estimatedSize)
+    || right.width - left.width)
+
+  const deduped: Candidate[] = []
+  const seen = new Set<string>()
+  for (const candidate of raw) {
+    if (seen.has(candidate.key)) continue
+    seen.add(candidate.key)
+    deduped.push(candidate)
+    if (deduped.length >= Math.max(0, limit)) break
+  }
+
+  if (deduped.length < 2) return []
+
+  const multipleFormats = new Set(deduped.map(entry => entry.formatTag)).size > 1
+  return deduped.map((entry, index) => {
+    const parts: string[] = []
+    if (multipleFormats && entry.label !== entry.formatTag) parts.push(entry.formatTag)
+    if (entry.bandwidth > 0) parts.push(formatBitrate(entry.bandwidth))
+    if (entry.exactSize > 0) parts.push(formatBytes(entry.exactSize))
+    else if (entry.estimatedSize > 0) parts.push(`约 ${formatBytes(entry.estimatedSize)}`)
+    if (!parts.length && entry.width > 0 && entry.height > 0 && !entry.label.includes(`${entry.height}p`)) {
+      parts.push(`${entry.width}×${entry.height}`)
+    }
+    if (!parts.length && entry.label !== entry.formatTag) parts.push(entry.formatTag)
+    const detail = parts.join(' · ')
+    return {
+      key: entry.key,
+      resource: entry.resource,
+      label: entry.label,
+      detail,
+      ariaLabel: `下载 ${[entry.label, detail].filter(Boolean).join(' ')}`,
+      recommended: index === 0,
+    }
+  })
 }
 
 /** Display a useful source location without leaking credentials or signed query parameters. */

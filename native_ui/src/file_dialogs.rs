@@ -62,30 +62,195 @@ pub fn files(_owner: Option<i64>, _save: bool) -> Result<Vec<String>, String> {
     Err("文件选择器需要 Windows".into())
 }
 
-#[cfg(windows)]
-pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
-    use windows_sys::Win32::{
-        Foundation::RPC_E_CHANGED_MODE,
-        System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED},
-        UI::Shell::*,
-    };
-    let initialized = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
-    if initialized < 0 && initialized != RPC_E_CHANGED_MODE {
-        return Err(format!("无法初始化文件夹选择器：{initialized:#x}"));
+#[cfg(any(windows, test))]
+const HRESULT_CANCELLED: i32 = 0x8007_04C7u32 as i32; // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+
+#[cfg(any(windows, test))]
+fn is_cancelled_hresult(hr: i32) -> bool {
+    hr == HRESULT_CANCELLED
+}
+
+#[cfg(any(windows, test))]
+unsafe fn wide_nul_to_string(ptr: *const u16) -> Option<String> {
+    if ptr.is_null() {
+        return None;
     }
-    struct Apartment;
-    impl Drop for Apartment {
+    let mut len = 0usize;
+    while len < 32_768 && *ptr.add(len) != 0 {
+        len += 1;
+    }
+    Some(String::from_utf16_lossy(std::slice::from_raw_parts(
+        ptr, len,
+    )))
+}
+
+#[cfg(windows)]
+mod modern_folder_dialog {
+    use super::{is_cancelled_hresult, wide_nul_to_string};
+    use core::ffi::c_void;
+    use windows_sys::core::{GUID, HRESULT};
+    use windows_sys::Win32::{
+        Foundation::HWND,
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER},
+        UI::Shell::{
+            FileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+            SIGDN_FILESYSPATH,
+        },
+    };
+
+    // IID_IFileOpenDialog = {d57c7288-d4ad-4768-be02-9d969532d960}
+    pub const IID_IFILE_OPEN_DIALOG: GUID =
+        GUID::from_u128(0xd57c_7288_d4ad_4768_be02_9d96_9532_d960);
+
+    #[repr(C)]
+    pub struct IShellItemRaw {
+        pub vtbl: *const IShellItemVtbl,
+    }
+
+    #[repr(C)]
+    pub struct IShellItemVtbl {
+        pub query_interface:
+            unsafe extern "system" fn(*mut IShellItemRaw, *const GUID, *mut *mut c_void) -> HRESULT,
+        pub add_ref: unsafe extern "system" fn(*mut IShellItemRaw) -> u32,
+        pub release: unsafe extern "system" fn(*mut IShellItemRaw) -> u32,
+        pub bind_to_handler: *const c_void,
+        pub get_parent: *const c_void,
+        pub get_display_name:
+            unsafe extern "system" fn(*mut IShellItemRaw, i32, *mut *mut u16) -> HRESULT,
+    }
+
+    #[repr(C)]
+    pub struct IFileOpenDialogRaw {
+        pub vtbl: *const IFileDialogVtbl,
+    }
+
+    // IFileOpenDialog inherits directly from IFileDialog (slots 0..=20 match IFileDialog).
+    #[repr(C)]
+    pub struct IFileDialogVtbl {
+        pub query_interface: unsafe extern "system" fn(
+            *mut IFileOpenDialogRaw,
+            *const GUID,
+            *mut *mut c_void,
+        ) -> HRESULT,
+        pub add_ref: unsafe extern "system" fn(*mut IFileOpenDialogRaw) -> u32,
+        pub release: unsafe extern "system" fn(*mut IFileOpenDialogRaw) -> u32,
+        pub show: unsafe extern "system" fn(*mut IFileOpenDialogRaw, HWND) -> HRESULT,
+        pub set_file_types: *const c_void,
+        pub set_file_type_index: *const c_void,
+        pub get_file_type_index: *const c_void,
+        pub advise: *const c_void,
+        pub unadvise: *const c_void,
+        pub set_options: unsafe extern "system" fn(*mut IFileOpenDialogRaw, u32) -> HRESULT,
+        pub get_options: unsafe extern "system" fn(*mut IFileOpenDialogRaw, *mut u32) -> HRESULT,
+        pub set_default_folder: *const c_void,
+        pub set_folder: *const c_void,
+        pub get_folder: *const c_void,
+        pub get_current_selection: *const c_void,
+        pub set_file_name: *const c_void,
+        pub get_file_name: *const c_void,
+        pub set_title: unsafe extern "system" fn(*mut IFileOpenDialogRaw, *const u16) -> HRESULT,
+        pub set_ok_button_label: *const c_void,
+        pub set_file_name_label: *const c_void,
+        pub get_result:
+            unsafe extern "system" fn(*mut IFileOpenDialogRaw, *mut *mut IShellItemRaw) -> HRESULT,
+    }
+
+    struct DialogGuard(*mut IFileOpenDialogRaw);
+    impl Drop for DialogGuard {
         fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
+            if !self.0.is_null() {
+                unsafe {
+                    ((*(*self.0).vtbl).release)(self.0);
+                }
             }
         }
     }
-    let _apartment = if initialized >= 0 {
-        Some(Apartment)
-    } else {
-        None
-    };
+
+    struct ShellItemGuard(*mut IShellItemRaw);
+    impl Drop for ShellItemGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    ((*(*self.0).vtbl).release)(self.0);
+                }
+            }
+        }
+    }
+
+    struct CoTaskMemGuard(*mut u16);
+    impl Drop for CoTaskMemGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CoTaskMemFree(self.0.cast());
+                }
+            }
+        }
+    }
+
+    /// Returns `None` only when `CoCreateInstance` fails so callers can fall back to
+    /// `SHBrowseForFolderW` on exotic environments.
+    pub fn pick_folder(owner: Option<i64>) -> Option<Result<Option<String>, String>> {
+        let mut raw: *mut c_void = std::ptr::null_mut();
+        let created = unsafe {
+            CoCreateInstance(
+                &FileOpenDialog,
+                std::ptr::null_mut(),
+                CLSCTX_INPROC_SERVER,
+                &IID_IFILE_OPEN_DIALOG,
+                &mut raw,
+            )
+        };
+        if created < 0 || raw.is_null() {
+            return None;
+        }
+        let dialog = DialogGuard(raw.cast());
+        let vtbl = unsafe { &*(*dialog.0).vtbl };
+        let mut options: u32 = 0;
+        let hr = unsafe { (vtbl.get_options)(dialog.0, &mut options) };
+        if hr < 0 {
+            return Some(Err(format!("无法配置文件夹选择器：{hr:#x}")));
+        }
+        let desired = options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+        let hr = unsafe { (vtbl.set_options)(dialog.0, desired) };
+        if hr < 0 {
+            return Some(Err(format!("无法启用文件夹选择模式：{hr:#x}")));
+        }
+        let title: Vec<u16> = "选择下载保存位置\0".encode_utf16().collect();
+        let _ = unsafe { (vtbl.set_title)(dialog.0, title.as_ptr()) };
+
+        let hwnd = owner.map_or(std::ptr::null_mut(), |handle| handle as HWND);
+        let shown = unsafe { (vtbl.show)(dialog.0, hwnd) };
+        if is_cancelled_hresult(shown) {
+            return Some(Ok(None));
+        }
+        if shown < 0 {
+            return Some(Err(format!("文件夹选择器失败：{shown:#x}")));
+        }
+
+        let mut item_raw: *mut IShellItemRaw = std::ptr::null_mut();
+        let hr = unsafe { (vtbl.get_result)(dialog.0, &mut item_raw) };
+        if hr < 0 || item_raw.is_null() {
+            return Some(Err(format!("无法读取选中的文件夹：{hr:#x}")));
+        }
+        let item = ShellItemGuard(item_raw);
+        let item_vtbl = unsafe { &*(*item.0).vtbl };
+        let mut wide_path: *mut u16 = std::ptr::null_mut();
+        let hr = unsafe { (item_vtbl.get_display_name)(item.0, SIGDN_FILESYSPATH, &mut wide_path) };
+        if hr < 0 || wide_path.is_null() {
+            return Some(Err("选中的项目不是本地文件夹".into()));
+        }
+        let _path_guard = CoTaskMemGuard(wide_path);
+        match unsafe { wide_nul_to_string(wide_path) } {
+            Some(path) if !path.is_empty() => Some(Ok(Some(path))),
+            _ => Some(Err("选中的项目不是本地文件夹".into())),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn folder_legacy(owner: Option<i64>, changed_mode: bool) -> Result<Option<String>, String> {
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::*};
     let mut display = vec![0u16; 32_768];
     let title: Vec<u16> = "选择下载保存位置\0".encode_utf16().collect();
     let info = BROWSEINFOW {
@@ -94,12 +259,7 @@ pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
         pszDisplayName: display.as_mut_ptr(),
         lpszTitle: title.as_ptr(),
         // The newer dialog requires STA. Keep the caller's existing apartment.
-        ulFlags: BIF_RETURNONLYFSDIRS
-            | if initialized == RPC_E_CHANGED_MODE {
-                0
-            } else {
-                BIF_NEWDIALOGSTYLE
-            },
+        ulFlags: BIF_RETURNONLYFSDIRS | if changed_mode { 0 } else { BIF_NEWDIALOGSTYLE },
         lpfn: None,
         lParam: 0,
         iImage: 0,
@@ -127,11 +287,48 @@ pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf16_lossy(&display[..length])))
 }
 
+#[cfg(windows)]
+pub fn folder(owner: Option<i64>) -> Result<Option<String>, String> {
+    use windows_sys::Win32::{
+        Foundation::RPC_E_CHANGED_MODE,
+        System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+        },
+    };
+    let initialized = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    if initialized < 0 && initialized != RPC_E_CHANGED_MODE {
+        return Err(format!("无法初始化文件夹选择器：{initialized:#x}"));
+    }
+    struct Apartment;
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
+    let _apartment = if initialized >= 0 {
+        Some(Apartment)
+    } else {
+        None
+    };
+    if let Some(result) = modern_folder_dialog::pick_folder(owner) {
+        return result;
+    }
+    folder_legacy(owner, initialized == RPC_E_CHANGED_MODE)
+}
+
 #[cfg(not(windows))]
 pub fn folder(_owner: Option<i64>) -> Result<Option<String>, String> {
     Err("文件夹选择器需要 Windows".into())
 }
 
+#[allow(dead_code)]
 pub fn confirm(owner: Option<i64>, title: &str, message: &str) -> bool {
     #[cfg(windows)]
     {
@@ -247,5 +444,47 @@ mod tests {
         }
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert!(!safe_open_target(source.to_str().unwrap()));
+    }
+
+    #[test]
+    fn modern_folder_dialog_handles_cancel_hresult_and_utf16_paths() {
+        assert!(is_cancelled_hresult(0x8007_04C7u32 as i32));
+        assert!(!is_cancelled_hresult(0));
+        assert!(!is_cancelled_hresult(0x8000_4005u32 as i32));
+        let path: Vec<u16> = r"D:\下载\媒体".encode_utf16().chain(Some(0)).collect();
+        assert_eq!(
+            unsafe { wide_nul_to_string(path.as_ptr()) }.as_deref(),
+            Some(r"D:\下载\媒体")
+        );
+        assert_eq!(unsafe { wide_nul_to_string(std::ptr::null()) }, None);
+        #[cfg(windows)]
+        {
+            use core::mem::offset_of;
+            let ptr_size = std::mem::size_of::<usize>();
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IFileDialogVtbl, show),
+                3 * ptr_size
+            );
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IFileDialogVtbl, set_options),
+                9 * ptr_size
+            );
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IFileDialogVtbl, get_options),
+                10 * ptr_size
+            );
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IFileDialogVtbl, set_title),
+                17 * ptr_size
+            );
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IFileDialogVtbl, get_result),
+                20 * ptr_size
+            );
+            assert_eq!(
+                offset_of!(modern_folder_dialog::IShellItemVtbl, get_display_name),
+                5 * ptr_size
+            );
+        }
     }
 }

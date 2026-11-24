@@ -126,9 +126,9 @@ mod zip_preview;
 
 #[cfg(feature = "full-core")]
 pub use clipboard::{
-    all_urls as clipboard_all_urls, first_url as clipboard_first_url, looks_like_download_url,
-    read_text as read_clipboard, write_files as write_clipboard_files,
-    write_text as write_clipboard,
+    all_urls as clipboard_all_urls, download_urls as clipboard_download_urls,
+    first_url as clipboard_first_url, looks_like_download_url, read_text as read_clipboard,
+    write_files as write_clipboard_files, write_text as write_clipboard,
 };
 pub use contract::{
     AvScanStatus, CastDeviceInfo, ConnectionPart, CoreCommand, CoreEvent, EventEnvelope,
@@ -191,7 +191,9 @@ pub use store::{CoreStore, CURRENT_SCHEMA_VERSION};
 pub use task_export::export_tasks;
 #[cfg(feature = "full-core")]
 pub use torrent_engine::{torrent_session, BuiltinTorrentEngine, TorrentSession};
-pub use tray::{completion_sound, show_notification, spawn_tray, TrayAction};
+pub use tray::{
+    completion_sound, show_notification, spawn_tray, update_tray_state, TrayAction, TrayMenuState,
+};
 #[cfg(feature = "full-core")]
 pub use updater::{
     check_for_update, check_for_update_with_proxy, download_installer,

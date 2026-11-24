@@ -614,6 +614,10 @@ pub enum CoreCommand {
         allow_duplicate: bool,
         #[serde(default)]
         trusted_ui: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        start_paused: bool,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        queue_id: String,
     },
     RejectHandoff {
         handoff_id: String,
@@ -845,6 +849,8 @@ pub enum CoreEvent {
         launch_id: String,
         surface: String,
     },
+    /// Transient: Core is shutting down cleanly so attached presenters can exit.
+    Shutdown,
     ProbeResult {
         url: String,
         resource_kind: ResourceKind,

@@ -137,6 +137,64 @@ struct PresenterSettings {
     category_program: String,
     category_archive: String,
     category_other: String,
+    queue_profiles: Vec<hls_client::QueueProfile>,
+    recent_dirs: Vec<String>,
+}
+
+struct ClipboardOfferFilter {
+    recent: VecDeque<(Vec<String>, std::time::Instant)>,
+    cooldown: Duration,
+    max_entries: usize,
+}
+
+impl Default for ClipboardOfferFilter {
+    fn default() -> Self {
+        Self {
+            recent: VecDeque::new(),
+            cooldown: Duration::from_secs(30),
+            max_entries: 16,
+        }
+    }
+}
+
+impl ClipboardOfferFilter {
+    fn accept(&mut self, urls: &[String], now: std::time::Instant) -> Option<Vec<String>> {
+        let mut normalized = Vec::new();
+        for raw in urls {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() && !normalized.iter().any(|existing| existing == trimmed) {
+                normalized.push(trimmed.to_owned());
+            }
+        }
+        if normalized.is_empty() {
+            return None;
+        }
+        while let Some((_, at)) = self.recent.front() {
+            if now.saturating_duration_since(*at) >= self.cooldown {
+                self.recent.pop_front();
+            } else {
+                break;
+            }
+        }
+        if self.recent.iter().any(|(batch, _)| batch == &normalized) {
+            return None;
+        }
+        self.recent.push_back((normalized.clone(), now));
+        while self.recent.len() > self.max_entries {
+            self.recent.pop_front();
+        }
+        Some(normalized)
+    }
+}
+
+fn normalized_dir_key(path: &str) -> String {
+    let trimmed = path.trim();
+    let stripped = trimmed.trim_end_matches(['\\', '/']);
+    if stripped.is_empty() {
+        trimmed.to_ascii_lowercase()
+    } else {
+        stripped.to_ascii_lowercase()
+    }
 }
 
 struct SettingsReload<C> {
@@ -183,7 +241,9 @@ fn update_presenter_settings(
     if !matches!(response, CorePipeResponse::Settings { .. }) {
         return None;
     }
+    let previous_recent = std::mem::take(&mut presenter.recent_dirs);
     *presenter = PresenterSettings::from_response(Some(response));
+    presenter.recent_dirs = previous_recent;
     *runtime = PresenterRuntimeSettings::from_response(Some(response));
     Some(*runtime)
 }
@@ -207,10 +267,14 @@ impl PresenterSettings {
             category_dir_program,
             category_dir_archive,
             category_dir_other,
+            queue_profiles,
             ..
         }) = response
         else {
-            return Self::default();
+            return Self {
+                queue_profiles: queue_editor::ordered_profiles(&[]),
+                ..Self::default()
+            };
         };
         Self {
             download_dir: download_dir.clone(),
@@ -218,7 +282,70 @@ impl PresenterSettings {
             category_program: category_dir_program.clone(),
             category_archive: category_dir_archive.clone(),
             category_other: category_dir_other.clone(),
+            queue_profiles: queue_editor::ordered_profiles(queue_profiles),
+            recent_dirs: Vec::new(),
         }
+    }
+
+    fn ordered_queues(&self) -> Vec<hls_client::QueueProfile> {
+        queue_editor::ordered_profiles(&self.queue_profiles)
+    }
+
+    fn queue_names(&self) -> Vec<slint::SharedString> {
+        queue_editor::queue_option_names(&self.ordered_queues())
+    }
+
+    fn queue_index_for_id(&self, queue_id: &str) -> i32 {
+        queue_editor::queue_index_for_id(&self.ordered_queues(), queue_id)
+    }
+
+    fn queue_id_at(&self, index: i32) -> String {
+        queue_editor::queue_id_at(&self.ordered_queues(), index)
+    }
+
+    fn record_recent_dir(&mut self, directory: &str) {
+        let trimmed = directory.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let key = normalized_dir_key(trimmed);
+        self.recent_dirs
+            .retain(|entry| normalized_dir_key(entry) != key);
+        self.recent_dirs.insert(0, trimmed.to_owned());
+        self.recent_dirs.truncate(8);
+    }
+
+    fn recent_dirs_for(&self, current: &str) -> (Vec<String>, i32) {
+        let mut dirs = Vec::new();
+        let mut keys = HashSet::new();
+        let mut push = |candidate: &str| {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() || dirs.len() >= 12 {
+                return;
+            }
+            let key = normalized_dir_key(trimmed);
+            if keys.insert(key) {
+                dirs.push(trimmed.to_owned());
+            }
+        };
+        for recent in &self.recent_dirs {
+            push(recent);
+        }
+        push(&self.download_dir);
+        push(&self.category_media);
+        push(&self.category_program);
+        push(&self.category_archive);
+        push(&self.category_other);
+        push(current);
+        let current_key = normalized_dir_key(current);
+        let index = if current_key.is_empty() {
+            -1
+        } else {
+            dirs.iter()
+                .position(|entry| normalized_dir_key(entry) == current_key)
+                .map_or(-1, |idx| idx as i32)
+        };
+        (dirs, index)
     }
 
     fn directory_for(&self, category: &str) -> String {
@@ -672,15 +799,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let presenter_settings = Arc::clone(&presenter_settings);
         let known_tasks = Arc::clone(&known_tasks);
         let known_task_variants = Arc::clone(&known_task_variants);
+        let workbench = Rc::clone(&workbench);
         let window = confirm.as_weak();
         move |command| {
             let command = command.to_string();
             trace(&format!("confirm command: {command}"));
             match command.as_str() {
-                "accept" | "rename_copy" | "accept_long_path" | "copy_long_path" => {
+                "accept"
+                | "accept_paused"
+                | "rename_copy"
+                | "accept_long_path"
+                | "accept_paused_long_path"
+                | "copy_long_path" => {
                     let copy = matches!(command.as_str(), "rename_copy" | "copy_long_path");
-                    let allow_long =
-                        matches!(command.as_str(), "accept_long_path" | "copy_long_path");
+                    let start_paused = matches!(
+                        command.as_str(),
+                        "accept_paused" | "accept_paused_long_path"
+                    );
+                    let allow_long = matches!(
+                        command.as_str(),
+                        "accept_long_path" | "accept_paused_long_path" | "copy_long_path"
+                    );
                     let Some(offer) = pending.lock().ok().and_then(|items| items.front().cloned())
                     else {
                         return;
@@ -695,6 +834,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let download_dir = item.get_download_dir().trim().to_string();
                     let category = item.get_category().to_string();
                     let remember = item.get_remember_directory() && !download_dir.is_empty();
+                    let queue_id = presenter_settings
+                        .lock()
+                        .map(|settings| settings.queue_id_at(item.get_queue_index()))
+                        .unwrap_or_else(|_| hls_client::DEFAULT_QUEUE_ID.to_string());
                     let taken: Vec<String> = if copy {
                         known_tasks
                             .lock()
@@ -704,6 +847,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Vec::new()
                     };
                     item.set_rejecting(false);
+                    item.set_busy_action(
+                        if start_paused {
+                            "accept_paused"
+                        } else {
+                            "accept"
+                        }
+                        .into(),
+                    );
                     item.set_busy(true);
                     clear_confirm_issue(&item);
                     let pending = Arc::clone(&pending);
@@ -711,9 +862,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let presenter_settings = Arc::clone(&presenter_settings);
                     let weak = item.as_weak();
                     thread::spawn(move || {
+                        let map_issue = |issue: target_check::TargetIssue| {
+                            let (text, mut actions) = issue.presentation_for(copy);
+                            if start_paused {
+                                for (_, cmd) in &mut actions {
+                                    if *cmd == "accept_long_path" {
+                                        *cmd = "accept_paused_long_path";
+                                    }
+                                }
+                            }
+                            (text, actions)
+                        };
+                        let retry_command = if copy {
+                            "rename_copy"
+                        } else if start_paused {
+                            "accept_paused"
+                        } else {
+                            "accept"
+                        };
                         let result = (|| {
-                            let filename = confirmed_filename(&filename)
-                                .map_err(|issue| issue.presentation_for(copy))?;
+                            let filename = confirmed_filename(&filename).map_err(map_issue)?;
                             let filename = if copy {
                                 target_check::unique_name(&download_dir, filename, &taken).map_err(
                                     |error| (error, [("选择其他位置", "browse"), ("", "")]),
@@ -722,7 +890,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 filename.to_owned()
                             };
                             target_check::check_target(&download_dir, &filename, allow_long)
-                                .map_err(|issue| issue.presentation_for(copy))?;
+                                .map_err(map_issue)?;
                             (|| {
                                 let mut client = CoreIpcClient::connect()?;
                                 client
@@ -732,8 +900,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         download_dir: download_dir.clone(),
                                         allow_duplicate: copy,
                                         trusted_ui: true,
+                                        start_paused,
+                                        queue_id,
                                     })
                                     .and_then(core_feedback::command_result)?;
+                                if !download_dir.is_empty() {
+                                    if let Ok(mut settings) = presenter_settings.lock() {
+                                        settings.record_recent_dir(&download_dir);
+                                    }
+                                }
                                 if remember {
                                     if let Err(error) = remember_category_directory(
                                         &mut client,
@@ -755,10 +930,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .map_err(|error| {
                                 (
                                     format!("未能开始下载：{error}"),
-                                    [
-                                        ("重试", if copy { "rename_copy" } else { "accept" }),
-                                        ("选择其他位置", "browse"),
-                                    ],
+                                    [("重试", retry_command), ("选择其他位置", "browse")],
                                 )
                             })
                         })();
@@ -776,6 +948,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     })
                                 {
                                     item.set_busy(false);
+                                    item.set_busy_action("".into());
                                     set_confirm_issue(&item, &text, actions);
                                 }
                             });
@@ -793,6 +966,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let suppress_site_kind = item.get_suppress_site_kind();
                     item.set_rejecting(true);
+                    item.set_busy_action("reject".into());
                     item.set_busy(true);
                     clear_confirm_issue(&item);
                     let weak = item.as_weak();
@@ -814,6 +988,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         id.as_deref() == Some(handoff_id.as_str())
                                     }) {
                                         item.set_busy(false);
+                                        item.set_busy_action("".into());
                                         set_confirm_issue(
                                             &item,
                                             &format!("取消未送达主程序：{error}"),
@@ -843,11 +1018,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     match picked {
                         Ok(Some(path)) => {
-                            item.set_download_dir(path.into());
+                            item.set_download_dir(path.clone().into());
+                            if let Ok(mut settings) = presenter_settings.lock() {
+                                settings.record_recent_dir(&path);
+                                sync_confirm_selectors(&item, &settings, &path, None);
+                            }
                             clear_confirm_issue(&item);
                         }
                         Ok(None) => {}
                         Err(error) => set_confirm_issue(&item, &error, [("", ""), ("", "")]),
+                    }
+                    return;
+                }
+                "recent_dir" => {
+                    if let Some(item) = window.upgrade() {
+                        clear_confirm_issue(&item);
                     }
                     return;
                 }
@@ -858,12 +1043,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let filename = item.get_filename().to_string();
                     let directory = item.get_download_dir().to_string();
                     match command.as_str() {
-                        "default_dir" => item.set_download_dir(
-                            hls_client::default_v7_download_dir()
+                        "default_dir" => {
+                            let default_dir = hls_client::default_v7_download_dir()
                                 .to_string_lossy()
-                                .into_owned()
-                                .into(),
-                        ),
+                                .into_owned();
+                            item.set_download_dir(default_dir.clone().into());
+                            if let Ok(settings) = presenter_settings.lock() {
+                                sync_confirm_selectors(&item, &settings, &default_dir, None);
+                            }
+                        }
                         "fix_name" => item.set_filename(target_check::fix_name(&filename).into()),
                         "shorten" => {
                             let Some(short) = target_check::shorten_to_fit(&directory, &filename)
@@ -885,12 +1073,69 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "open_existing" => {
                     if let Some(item) = window.upgrade() {
                         item.invoke_open_workbench(true, "".into());
+                        let dup_id = item.get_duplicate_task_id().to_string();
+                        if !dup_id.is_empty() {
+                            let current = workbench.borrow().clone();
+                            if let Some(wb) = current.as_ref() {
+                                wb.window
+                                    .invoke_action(format!("focus_task:{dup_id}").into());
+                            }
+                        }
                     }
                     return;
                 }
                 "more" => {
-                    if let Some(item) = window.upgrade() {
-                        item.invoke_open_workbench(true, "".into());
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
+                    if item.get_busy() {
+                        return;
+                    }
+                    let offer = pending.lock().ok().and_then(|items| items.front().cloned());
+                    let filename = item.get_filename().to_string();
+                    let download_dir = item.get_download_dir().trim().to_string();
+                    let queue_id = presenter_settings
+                        .lock()
+                        .map(|settings| settings.queue_id_at(item.get_queue_index()))
+                        .unwrap_or_else(|_| hls_client::DEFAULT_QUEUE_ID.to_string());
+                    item.invoke_open_workbench(true, "".into());
+                    if let Some(offer) = offer {
+                        let current = workbench.borrow().clone();
+                        if let Some(wb) = current.as_ref() {
+                            wb.open_editor_from_offer(&offer, &filename, &download_dir, &queue_id);
+                        }
+                        item.set_rejecting(true);
+                        item.set_busy_action("reject".into());
+                        item.set_busy(true);
+                        clear_confirm_issue(&item);
+                        let weak = item.as_weak();
+                        let active_handoff = Arc::clone(&active_handoff);
+                        thread::spawn(move || {
+                            let handoff_id = offer.handoff_id;
+                            let result = CoreIpcClient::connect().and_then(|mut client| {
+                                client
+                                    .command(CoreCommand::RejectHandoff {
+                                        handoff_id: handoff_id.clone(),
+                                        suppress_site_kind: false,
+                                    })
+                                    .and_then(core_feedback::command_result)
+                            });
+                            if let Err(error) = result {
+                                let _ = weak.upgrade_in_event_loop(move |item| {
+                                    if active_handoff.lock().ok().is_some_and(|id| {
+                                        id.as_deref() == Some(handoff_id.as_str())
+                                    }) {
+                                        item.set_busy(false);
+                                        item.set_busy_action("".into());
+                                        set_confirm_issue(
+                                            &item,
+                                            &format!("未能关闭确认窗口：{error}"),
+                                            [("重试关闭", "reject"), ("", "")],
+                                        );
+                                    }
+                                });
+                            }
+                        });
                     }
                     return;
                 }
@@ -899,7 +1144,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if let (Some(item), Ok(settings)) =
                         (window.upgrade(), presenter_settings.lock())
                     {
-                        item.set_download_dir(settings.directory_for(category).into());
+                        let dir = settings.directory_for(category);
+                        item.set_download_dir(dir.clone().into());
+                        sync_confirm_selectors(&item, &settings, &dir, None);
                     }
                     return;
                 }
@@ -939,9 +1186,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let cancel_power = command == "cancel_power";
+            let confirm_power = command == "confirm_power";
+            let power_action = cancel_power || confirm_power;
             let task_id = completed_task.borrow().clone();
             let request = if cancel_power {
                 CoreCommand::CancelPowerAction
+            } else if confirm_power {
+                CoreCommand::ConfirmPowerAction
             } else if command == "open_file" || command == "open_folder" {
                 let Some(task_id) = task_id.clone() else {
                     item.set_action_text("无法找到已完成任务，请在主窗口打开任务详情".into());
@@ -963,8 +1214,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(core_feedback::command_result);
                 let _ = result_window.upgrade_in_event_loop(move |item| {
                     // 下一项下载完成后，旧窗口的打开文件结果不能隐藏新通知；
-                    // 但取消电源动作是全局指令，不绑定特定任务 ID。
-                    if !cancel_power
+                    // 但取消/立即执行电源动作是全局指令，不绑定特定任务 ID。
+                    if !power_action
                         && item.get_task_id().as_str() != task_id.as_deref().unwrap_or("")
                     {
                         return;
@@ -973,7 +1224,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     match result {
                         Ok(_) if cancel_power => {
                             item.set_power_hint("".into());
+                            item.set_power_action_label("".into());
                             item.set_power_seconds(0);
+                            if item.get_task_id().is_empty() {
+                                let _ = item.hide();
+                            }
+                        }
+                        Ok(_) if confirm_power => {
+                            item.set_power_hint("".into());
+                            item.set_power_action_label("".into());
+                            item.set_power_seconds(0);
+                            let _ = item.hide();
                         }
                         Ok(_) => {
                             let _ = item.hide();
@@ -1008,6 +1269,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
     });
+    let clipboard_filter = Rc::new(RefCell::new(ClipboardOfferFilter::default()));
     // IPC 线程只在收到事件后唤醒界面；空闲时不再每秒轮询 250 次。
     confirm.on_core_events_ready({
         let workbench = Rc::clone(&workbench);
@@ -1017,6 +1279,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
+        let clipboard_filter = Rc::clone(&clipboard_filter);
         let settings_reload = settings_reload.clone();
         let runtime_settings = Rc::clone(&runtime_settings);
         let presenter_settings = Arc::clone(&presenter_settings);
@@ -1037,6 +1300,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         (confirm.upgrade(), progress.upgrade(), complete.upgrade())
                     {
                         apply_runtime_settings(&confirm, &progress, &complete, next);
+                        if confirm.window().is_visible() {
+                            if let Ok(settings) = presenter_settings.lock() {
+                                let current_dir = confirm.get_download_dir().to_string();
+                                sync_confirm_selectors(&confirm, &settings, &current_dir, None);
+                            }
+                        }
                         if !next.show_progress {
                             let _ = progress.hide();
                         }
@@ -1054,26 +1323,51 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             for events in batches {
                 for envelope in events {
                     ui_sequence.set(ui_sequence.get().max(envelope.sequence));
+                    if matches!(envelope.event, CoreEvent::Shutdown) {
+                        trace("received CoreEvent::Shutdown; exiting presenter event loop");
+                        let _ = slint::quit_event_loop();
+                        return;
+                    }
                     if native_workbench.get()
                         && workbench.borrow().is_none()
-                        && (matches!(&envelope.event,CoreEvent::UiShow{surface} if surface=="main")
-                            || matches!(
-                                &envelope.event,
-                                CoreEvent::MediaPushRequested { .. }
-                                    | CoreEvent::DuplicateOffered { .. }
-                            ))
+                        && (matches!(
+                            &envelope.event,
+                            CoreEvent::UiShow { surface }
+                                if surface == "main" || surface == "new_download"
+                        ) || matches!(
+                            &envelope.event,
+                            CoreEvent::MediaPushRequested { .. }
+                                | CoreEvent::DuplicateOffered { .. }
+                        ))
                     {
                         if let Some(confirm) = confirm.upgrade() {
                             confirm.invoke_open_workbench(true, "".into());
                         }
                     }
-                    if let Some(window) = workbench.borrow().as_ref() {
+                    let current_workbench = workbench.borrow().clone();
+                    if let Some(window) = current_workbench.as_ref() {
                         window.apply(&envelope);
                     }
                     match envelope.event {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
                         CoreEvent::SettingsChanged { .. } => {
                             let _ = settings_reload.send(());
+                        }
+                        CoreEvent::ClipboardOffer { urls } => {
+                            if let Some(urls) = clipboard_filter
+                                .borrow_mut()
+                                .accept(&urls, std::time::Instant::now())
+                            {
+                                if native_workbench.get() && workbench.borrow().is_none() {
+                                    if let Some(confirm) = confirm.upgrade() {
+                                        confirm.invoke_open_workbench(true, "".into());
+                                    }
+                                }
+                                let current_workbench = workbench.borrow().clone();
+                                if let Some(window) = current_workbench.as_ref() {
+                                    window.open_clipboard_offer(&urls);
+                                }
+                            }
                         }
                         CoreEvent::TaskCreated { snapshot }
                         | CoreEvent::TaskUpdated { snapshot }
@@ -1130,6 +1424,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         } => {
                             if let Some(item) = complete.upgrade() {
                                 item.set_filename(title.into());
+                                if item.get_details().is_empty() {
+                                    item.set_details("全部下载任务已完成".into());
+                                }
                                 item.set_power_hint(
                                     format!(
                                         "{} 将在 {} 秒后执行",
@@ -1142,17 +1439,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 item.set_power_seconds(
                                     i32::try_from(delay_seconds).unwrap_or(i32::MAX),
                                 );
-                                let reopening = !item.window().is_visible();
-                                if reopening {
-                                    item.set_entered(false);
-                                }
-                                if item.show().is_ok() {
-                                    if reopening {
-                                        play_complete_entrance(&item);
-                                    }
-                                    round_native_window(item.window());
-                                    native_window::prepare_dialog(&item, true, true, None);
-                                }
+                                present_complete_toast(&item);
                             }
                         }
                         _ => {}
@@ -1318,6 +1605,16 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_request_context("已安全继承网页凭据".into());
             window.set_request_details("请求方式：GET · 内容类型：video/mp4".into());
             window.set_category("media".into());
+            window.set_queue_names(slint::ModelRc::new(slint::VecModel::from(vec![
+                "默认队列".into(),
+                "夜间队列".into(),
+            ])));
+            window.set_queue_index(0);
+            window.set_recent_dirs(slint::ModelRc::new(slint::VecModel::from(vec![
+                r"D:\下载\媒体".into(),
+                r"D:\下载".into(),
+            ])));
+            window.set_recent_dir_index(0);
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
             window.set_remaining("  ·  后面还有 2 个".into());
             if kind == "confirm-error" {
@@ -1613,6 +1910,7 @@ fn event_loop(
                 trace(&format!("received {} events through {after}", events.len()));
             }
             let mut batched = Vec::new();
+            let mut shutting_down = false;
             for envelope in events {
                 match envelope.event {
                     CoreEvent::HandoffOffered { offer } => {
@@ -1686,6 +1984,9 @@ fn event_loop(
                         }
                     }
                     event => {
+                        if matches!(event, CoreEvent::Shutdown) {
+                            shutting_down = true;
+                        }
                         if let CoreEvent::TaskDeleted { ref task_id } = event {
                             if let Ok(mut variants) = known_task_variants.lock() {
                                 variants.remove(task_id);
@@ -1709,6 +2010,10 @@ fn event_loop(
                 {
                     return;
                 }
+            }
+            if shutting_down {
+                trace("event loop stopping cleanly after CoreEvent::Shutdown");
+                return;
             }
             if last_lease_renewal.elapsed() >= Duration::from_secs(5) {
                 let active = active_handoff.lock().ok().and_then(|value| value.clone());
@@ -1871,6 +2176,36 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
     let _ = confirm;
 }
 
+fn sync_confirm_selectors(
+    item: &ConfirmWindow,
+    settings: &PresenterSettings,
+    current_dir: &str,
+    preferred_queue_id: Option<&str>,
+) {
+    let queue_names = settings.queue_names();
+    let queue_index = match preferred_queue_id {
+        Some(queue_id) => settings.queue_index_for_id(queue_id),
+        None => {
+            let current = item.get_queue_index();
+            if current >= 0 && (current as usize) < queue_names.len() {
+                current
+            } else {
+                settings.queue_index_for_id(hls_client::DEFAULT_QUEUE_ID)
+            }
+        }
+    };
+    item.set_queue_names(slint::ModelRc::new(slint::VecModel::from(queue_names)));
+    item.set_queue_index(queue_index);
+    let (recent_dirs, recent_index) = settings.recent_dirs_for(current_dir);
+    item.set_recent_dirs(slint::ModelRc::new(slint::VecModel::from(
+        recent_dirs
+            .into_iter()
+            .map(slint::SharedString::from)
+            .collect::<Vec<_>>(),
+    )));
+    item.set_recent_dir_index(recent_index);
+}
+
 fn show_next_offer(
     window: &slint::Weak<ConfirmWindow>,
     pending: &Arc<Mutex<VecDeque<ResourceOffer>>>,
@@ -1903,30 +2238,40 @@ fn show_next_offer(
         offer.filename.clone()
     };
     let category = download_category(&filename, "", offer.resource_kind);
-    let download_dir = presenter_settings
+    let settings_snapshot = presenter_settings
         .lock()
-        .map(|settings| settings.directory_for(category))
+        .map(|settings| settings.clone())
         .unwrap_or_default();
+    let download_dir = settings_snapshot.directory_for(category);
     let variants_snapshot = known_task_variants
         .lock()
         .map(|variants| variants.clone())
         .unwrap_or_default();
-    let duplicate_text = known_tasks
+    let (duplicate_text, duplicate_task_id) = known_tasks
         .lock()
         .ok()
         .and_then(|tasks| {
             find_duplicate_task(&tasks, &variants_snapshot, &offer).map(|task| {
-                format!(
-                    "已有同一地址的任务：{}（{}）",
-                    task.filename,
-                    task_status_label(&task.status)
+                (
+                    format!(
+                        "已有同一地址的任务：{}（{}）",
+                        task.filename,
+                        task_status_label(&task.status)
+                    ),
+                    task.task_id.clone(),
                 )
             })
         })
         .unwrap_or_default();
     item.set_filename(filename.clone().into());
-    item.set_download_dir(download_dir.into());
+    item.set_download_dir(download_dir.clone().into());
     item.set_category(category.into());
+    sync_confirm_selectors(
+        &item,
+        &settings_snapshot,
+        &download_dir,
+        Some(hls_client::DEFAULT_QUEUE_ID),
+    );
     item.set_url(safe_display_url(&offer.url).into());
     item.set_source_url(safe_display_url(&offer.source_page_url).into());
     item.set_source_host(url_host(&offer.source_page_url).into());
@@ -1943,10 +2288,12 @@ fn show_next_offer(
     );
     item.set_request_details(format_request_details(&offer).into());
     item.set_duplicate_text(duplicate_text.into());
+    item.set_duplicate_task_id(duplicate_task_id.into());
     item.set_details_expanded(false);
     item.set_remember_directory(true);
     item.set_suppress_site_kind(false);
     item.set_busy(false);
+    item.set_busy_action("".into());
     clear_confirm_issue(&item);
     let remaining = pending
         .lock()
@@ -2458,6 +2805,21 @@ impl ActiveTaskHud {
     }
 }
 
+fn present_complete_toast(item: &CompleteWindow) {
+    let reopening = !item.window().is_visible();
+    if reopening {
+        item.set_entered(false);
+    }
+    native_window::mark_no_activate(item.window());
+    if item.show().is_ok() {
+        if reopening {
+            play_complete_entrance(item);
+        }
+        round_native_window(item.window());
+        native_window::prepare_bottom_right_toast(item, 16.0);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_task_windows(
     snapshot: TaskSnapshot,
@@ -2511,13 +2873,9 @@ fn update_task_windows(
                 );
                 item.set_filename(snapshot.filename.into());
                 item.set_power_hint("".into());
+                item.set_power_action_label("".into());
                 item.set_power_seconds(0);
-                item.set_entered(false);
-                if item.show().is_ok() {
-                    play_complete_entrance(&item);
-                    round_native_window(item.window());
-                    native_window::prepare_dialog(&item, true, true, None);
-                }
+                present_complete_toast(&item);
             }
         }
     }
@@ -3474,5 +3832,130 @@ mod tests {
             format_resource_meta(&id_only, "stream.mpd"),
             "DASH · .mpd · 大小未知 · 轨道 rep-avc-high"
         );
+    }
+
+    #[test]
+    fn clipboard_offer_filter_deduplicates_empty_repeats_and_expires_after_cooldown() {
+        use super::ClipboardOfferFilter;
+        use std::time::{Duration, Instant};
+
+        let mut filter = ClipboardOfferFilter::default();
+        let t0 = Instant::now();
+        assert_eq!(filter.accept(&[], t0), None);
+        assert_eq!(filter.accept(&["  ".into(), "\t".into()], t0), None);
+
+        let batch = vec![
+            " https://example.test/a.mp4 ".into(),
+            "https://example.test/a.mp4".into(),
+            "https://example.test/b.mp4".into(),
+        ];
+        assert_eq!(
+            filter.accept(&batch, t0),
+            Some(vec![
+                "https://example.test/a.mp4".into(),
+                "https://example.test/b.mp4".into(),
+            ])
+        );
+        // Immediate repeat is suppressed to avoid dialog spam.
+        assert_eq!(filter.accept(&batch, t0 + Duration::from_secs(5)), None);
+        // Distinct batch is accepted immediately.
+        assert_eq!(
+            filter.accept(
+                &["https://example.test/c.mp4".into()],
+                t0 + Duration::from_secs(6)
+            ),
+            Some(vec!["https://example.test/c.mp4".into()])
+        );
+        // After cooldown elapses, re-copying the earlier batch is accepted again.
+        assert_eq!(
+            filter.accept(&batch, t0 + Duration::from_secs(31)),
+            Some(vec![
+                "https://example.test/a.mp4".into(),
+                "https://example.test/b.mp4".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn presenter_settings_preserves_mru_dirs_and_maps_queue_profiles_across_reloads() {
+        let initial: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_kib": 0,
+            "download_dir": "D:\\Downloads",
+            "category_dir_media": "D:\\Media",
+            "category_dir_archive": "D:\\Archives",
+            "queue_profiles": [
+                {"id": "default", "name": "默认队列", "priority": 0},
+                {"id": "night", "name": "夜间队列", "priority": 10}
+            ]
+        }))
+        .unwrap();
+        let mut presenter = PresenterSettings::from_response(Some(&initial));
+        let mut runtime = PresenterRuntimeSettings::from_response(Some(&initial));
+        presenter.record_recent_dir(r"E:\Projects\");
+        presenter.record_recent_dir(r"E:\Projects");
+        let (dirs, idx) = presenter.recent_dirs_for(r"D:\Media");
+        assert_eq!(dirs[0], r"E:\Projects");
+        assert_eq!(dirs[1], r"D:\Downloads");
+        assert_eq!(dirs[2], r"D:\Media");
+        assert_eq!(idx, 2);
+        assert_eq!(presenter.queue_id_at(0), "default");
+        assert_eq!(presenter.queue_id_at(1), "night");
+
+        // Settings reload keeps session MRU directories intact.
+        let reloaded = settings_response(r"D:\Downloads2");
+        assert!(update_presenter_settings(&reloaded, &mut presenter, &mut runtime).is_some());
+        let (dirs_after, _) = presenter.recent_dirs_for(r"D:\Downloads2");
+        assert_eq!(dirs_after[0], r"E:\Projects");
+        assert_eq!(dirs_after[1], r"D:\Downloads2");
+    }
+
+    #[test]
+    fn confirm_window_selectors_populate_queues_and_recent_dirs_offscreen() {
+        use super::{sync_confirm_selectors, ConfirmWindow};
+        use slint::Model;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = ConfirmWindow::new().unwrap();
+        let response: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_kib": 0,
+            "download_dir": "D:\\Downloads",
+            "category_dir_media": "D:\\Media",
+            "queue_profiles": [
+                {"id": "fast", "name": "高速队列", "priority": -5},
+                {"id": "default", "name": "默认队列", "priority": 0}
+            ]
+        }))
+        .unwrap();
+        let mut settings = PresenterSettings::from_response(Some(&response));
+        settings.record_recent_dir(r"F:\Custom");
+        sync_confirm_selectors(&confirm, &settings, r"D:\Media", Some("default"));
+        assert_eq!(
+            confirm
+                .get_queue_names()
+                .iter()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            vec!["高速队列", "默认队列"]
+        );
+        assert_eq!(confirm.get_queue_index(), 1);
+        assert_eq!(
+            confirm
+                .get_recent_dirs()
+                .iter()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            vec![r"F:\Custom", r"D:\Downloads", r"D:\Media"]
+        );
+        assert_eq!(confirm.get_recent_dir_index(), 2);
     }
 }

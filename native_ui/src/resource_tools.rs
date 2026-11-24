@@ -15,6 +15,7 @@ use std::{
 pub struct ResourceTools {
     pub window: ResourceToolsWindow,
     rows: Rc<VecModel<ResourceRow>>,
+    queues: RefCell<Vec<hls_client::QueueProfile>>,
     seen: RefCell<VecDeque<u64>>,
     projects: RefCell<Vec<CrawlProject>>,
     harvest: RefCell<Vec<HarvestCandidate>>,
@@ -54,9 +55,18 @@ impl ResourceTools {
         native_window::inherit_appearance(&window, parent);
         let rows = Rc::new(VecModel::default());
         window.set_rows(ModelRc::from(rows.clone()));
+        let default_queues = crate::queue_editor::ordered_profiles(&[]);
+        window.set_queue_names(ModelRc::new(VecModel::from(
+            crate::queue_editor::queue_option_names(&default_queues),
+        )));
+        window.set_queue_index(crate::queue_editor::queue_index_for_id(
+            &default_queues,
+            hls_client::DEFAULT_QUEUE_ID,
+        ));
         let this = Rc::new(Self {
             window,
             rows,
+            queues: RefCell::new(default_queues),
             seen: RefCell::new(VecDeque::new()),
             projects: RefCell::new(Vec::new()),
             harvest: RefCell::new(Vec::new()),
@@ -102,6 +112,13 @@ impl ResourceTools {
                 this.next_refresh.set(Instant::now());
             }
         });
+        let weak = Rc::downgrade(&this);
+        this.window.on_queue_selected(move |index| {
+            if let Some(this) = weak.upgrade() {
+                let queue_id = crate::queue_editor::queue_id_at(&this.queues.borrow(), index);
+                this.window.set_queue_id(queue_id.into());
+            }
+        });
         if mode == "crawl" {
             if let Err(error) = this.action("list") {
                 this.window.set_status_tone("error".into());
@@ -114,6 +131,19 @@ impl ResourceTools {
             });
         }
         Ok(this)
+    }
+
+    pub fn set_queues(&self, profiles: &[hls_client::QueueProfile]) {
+        let ordered = crate::queue_editor::ordered_profiles(profiles);
+        let names = crate::queue_editor::queue_option_names(&ordered);
+        let current = self.window.get_queue_id().to_string();
+        let index = crate::queue_editor::queue_index_for_id(&ordered, &current);
+        let resolved_id = crate::queue_editor::queue_id_at(&ordered, index);
+        *self.queues.borrow_mut() = ordered;
+        self.window
+            .set_queue_names(ModelRc::new(VecModel::from(names)));
+        self.window.set_queue_index(index);
+        self.window.set_queue_id(resolved_id.into());
     }
 
     fn send(&self, request: CorePipeRequest, id: u64) -> bool {
@@ -414,10 +444,15 @@ impl ResourceTools {
                 .map(str::to_owned)
                 .collect()
         };
+        let queue_id = w.get_queue_id().trim().to_owned();
         Ok(CrawlSpec {
             entry_url: w.get_source().trim().into(),
             output_dir: w.get_output_dir().trim().into(),
-            queue_id: w.get_queue_id().trim().into(),
+            queue_id: if queue_id.is_empty() {
+                hls_client::DEFAULT_QUEUE_ID.into()
+            } else {
+                queue_id
+            },
             same_origin: w.get_same_origin(),
             offline: w.get_offline(),
             max_depth,
@@ -833,5 +868,33 @@ mod tests {
         tools.event(&torrent_event(0, "zero"));
         tools.event(&torrent_event(0, "zero again"));
         assert_eq!(tools.rows.row_data(0).unwrap().label, "zero again");
+    }
+
+    #[test]
+    fn crawl_queue_combo_maps_profile_names_to_queue_ids() {
+        let tools = tools("crawl");
+        tools.set_queues(&[
+            hls_client::QueueProfile::default(),
+            hls_client::QueueProfile {
+                id: "crawl-night".into(),
+                name: "夜间抓站队列".into(),
+                priority: 5,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            tools
+                .window
+                .get_queue_names()
+                .iter()
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            vec!["默认队列", "夜间抓站队列"]
+        );
+        assert_eq!(tools.window.get_queue_id().as_str(), "default");
+        tools.window.invoke_queue_selected(1);
+        assert_eq!(tools.window.get_queue_id().as_str(), "crawl-night");
+        tools.window.set_source("https://example.test/".into());
+        assert_eq!(tools.crawl_spec().unwrap().queue_id, "crawl-night");
     }
 }

@@ -115,13 +115,14 @@ export component DecisionWindow inherits Window {
     in property <string> heading;
     in property <string> message;
     in property <string> confirm-label;
+    in property <bool> danger: false;
     in property <bool> busy;
     callback decided(bool);
     public function enter() { content.enter(); }
     content := FadePanel {
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: root.heading; description: "请确认后继续"; icon: "info"; }
+        DialogHeader { heading: root.heading; description: "请确认后继续"; icon: root.danger ? "delete" : "info"; }
         HotScrollView {
             vertical-stretch: 1;
             horizontal-scrollbar-policy: always-off;
@@ -130,7 +131,7 @@ export component DecisionWindow inherits Window {
         }
         DialogFooter {
             HotButton { label: "取消"; enabled: !root.busy; clicked => { root.decided(false); } }
-            HotButton { label: root.confirm-label; enabled: !root.busy; primary: true; clicked => { root.decided(true); } }
+            HotButton { label: root.confirm-label; enabled: !root.busy; primary: !root.danger; danger: root.danger; clicked => { root.decided(true); } }
         }
     }
     }

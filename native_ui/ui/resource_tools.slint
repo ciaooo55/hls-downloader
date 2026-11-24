@@ -16,6 +16,8 @@ export component ResourceToolsWindow inherits Window {
     in-out property <string> source;
     in-out property <string> output-dir;
     in-out property <string> queue-id: "default";
+    in property <[string]> queue-names: ["默认队列"];
+    in-out property <int> queue-index: 0;
     in-out property <string> extensions;
     in-out property <string> includes;
     in-out property <string> excludes;
@@ -39,6 +41,7 @@ export component ResourceToolsWindow inherits Window {
     callback action(string);
     callback toggle(string, bool);
     callback select-project(int);
+    callback queue-selected(int);
     main-layout := VerticalLayout {
         spacing: 0px;
         DialogHeader {
@@ -103,7 +106,22 @@ export component ResourceToolsWindow inherits Window {
                 }
                 HorizontalLayout {
                     spacing: 12px;
-                    VerticalLayout { spacing: 6px; FieldLabel { label: "队列 ID"; } LineEdit { height: Tokens.control-height; text <=> root.queue-id; } }
+                    VerticalLayout {
+                        spacing: 6px;
+                        FieldLabel { label: "下载队列"; }
+                        HotComboBox {
+                            height: Tokens.control-height;
+                            model: root.queue-names;
+                            a11y-label: "下载队列";
+                            property <int> bound: root.queue-index;
+                            current-index: root.queue-index;
+                            changed bound => { self.current-index = root.queue-index; }
+                            selected(value) => {
+                                root.queue-index = self.current-index;
+                                root.queue-selected(self.current-index);
+                            }
+                        }
+                    }
                     VerticalLayout { spacing: 6px; FieldLabel { label: "同步间隔秒（0 关闭，最少 60）"; } LineEdit { height: Tokens.control-height; text <=> root.sync-interval; } }
                 }
                 HotCheckBox { text: "只访问同源页面"; checked <=> root.same-origin; }

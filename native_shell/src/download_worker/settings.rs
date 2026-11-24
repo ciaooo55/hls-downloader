@@ -8,7 +8,17 @@ use crate::output_path::reject_path_escape;
 use crate::QueueProfile;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+
+#[derive(Clone)]
+pub(super) struct CachedSettings {
+    version: u64,
+    settings: CoreSettings,
+    has_explicit_download_dir: bool,
+    env_download_dir: Option<OsString>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CoreSettings {
@@ -77,18 +87,43 @@ pub struct CoreSettings {
 
 impl CoreCoordinator {
     pub fn settings(&self) -> Result<CoreSettings, String> {
+        let version = self.settings_version.load(Ordering::Acquire);
+        if let Ok(guard) = self.settings_cache.read() {
+            if let Some(cached) = guard.as_ref() {
+                if cached.version == version {
+                    if cached.has_explicit_download_dir {
+                        return Ok(cached.settings.clone());
+                    }
+                    let current_env = std::env::var_os("HLS_V7_DOWNLOAD_DIR");
+                    if current_env == cached.env_download_dir {
+                        return Ok(cached.settings.clone());
+                    }
+                    let mut settings = cached.settings.clone();
+                    settings.download_dir = crate::default_v7_download_dir()
+                        .to_string_lossy()
+                        .into_owned();
+                    return Ok(settings);
+                }
+            }
+        }
         let core = self.lock()?;
+        let version = self.settings_version.load(Ordering::Acquire);
         let configured_download_dir = core.store().setting_string("download_dir", "")?;
-        let download_dir = if configured_download_dir.trim().is_empty()
-            || Path::new(&configured_download_dir).is_relative()
-        {
+        let has_explicit_download_dir = !(configured_download_dir.trim().is_empty()
+            || Path::new(&configured_download_dir).is_relative());
+        let env_download_dir = if has_explicit_download_dir {
+            None
+        } else {
+            std::env::var_os("HLS_V7_DOWNLOAD_DIR")
+        };
+        let download_dir = if has_explicit_download_dir {
+            configured_download_dir
+        } else {
             crate::default_v7_download_dir()
                 .to_string_lossy()
                 .into_owned()
-        } else {
-            configured_download_dir
         };
-        Ok(CoreSettings {
+        let loaded = CoreSettings {
             takeover_enabled: core
                 .store()
                 .setting_bool("browser_takeover_enabled", true)?,
@@ -195,7 +230,16 @@ impl CoreCoordinator {
                 .store()
                 .setting_string("preferred_cast_device_id", "")?,
             task_sort: core.store().setting_string("task_sort", "queue:asc")?,
-        })
+        };
+        if let Ok(mut guard) = self.settings_cache.write() {
+            *guard = Some(CachedSettings {
+                version,
+                settings: loaded.clone(),
+                has_explicit_download_dir,
+                env_download_dir,
+            });
+        }
+        Ok(loaded)
     }
 
     pub fn set_setting(&self, key: &str, value: Value) -> Result<(), String> {
@@ -206,7 +250,8 @@ impl CoreCoordinator {
         for (key, value) in &values {
             Self::validate_setting(key, value)?;
         }
-        let queue_profiles = if let Some(value) = values.get("queue_profiles") {
+        let caller_supplied_profiles = values.contains_key("queue_profiles");
+        let mut queue_profiles = if let Some(value) = values.get("queue_profiles") {
             let profiles: Vec<QueueProfile> = serde_json::from_value(value.clone())
                 .map_err(|error| format!("队列配置格式无效: {error}"))?;
             Some(profiles)
@@ -220,13 +265,128 @@ impl CoreCoordinator {
             );
         }
         let mut core = self.lock()?;
-        let orphaned = if let Some(profiles) = &queue_profiles {
-            let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
-            core.tasks()
-                .into_iter()
-                .filter(|task| !ids.contains(task.queue_id.as_str()))
-                .map(|task| task.task_id)
-                .collect()
+        let normalize_power = |raw: &str| -> String {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                "none".into()
+            } else {
+                trimmed.to_string()
+            }
+        };
+        // Keep global `queue_max_active` and `completion_power_action` synchronized
+        // with the "default" queue profile so updating either side always takes effect.
+        if let Some(profiles) = queue_profiles.as_mut() {
+            let existing_profiles = load_queue_profiles(core.store())?;
+            let existing_default = existing_profiles
+                .iter()
+                .find(|profile| profile.id == crate::DEFAULT_QUEUE_ID);
+            let existing_max = core
+                .store()
+                .setting_u64("queue_max_active", 3)?
+                .clamp(1, 64) as u32;
+            let existing_power = core
+                .store()
+                .setting_string("completion_power_action", "none")?;
+            if let Some(default_profile) = profiles
+                .iter_mut()
+                .find(|profile| profile.id == crate::DEFAULT_QUEUE_ID)
+            {
+                let mut profiles_modified = false;
+                if let Some(req_max) = values.get("queue_max_active").and_then(Value::as_u64) {
+                    let req_max = req_max.clamp(1, 64) as u32;
+                    let profile_changed = existing_default
+                        .is_none_or(|prev| prev.max_active != default_profile.max_active);
+                    let global_changed = req_max != existing_max;
+                    if !profile_changed && global_changed {
+                        default_profile.max_active = req_max;
+                        profiles_modified = true;
+                    } else {
+                        values.insert(
+                            "queue_max_active".into(),
+                            Value::from(default_profile.max_active),
+                        );
+                    }
+                } else {
+                    values.insert(
+                        "queue_max_active".into(),
+                        Value::from(default_profile.max_active),
+                    );
+                }
+                if let Some(req_power) = values
+                    .get("completion_power_action")
+                    .and_then(Value::as_str)
+                {
+                    let req_power = normalize_power(req_power);
+                    let profile_power = normalize_power(&default_profile.completion_action);
+                    let prev_profile_power = existing_default
+                        .map(|prev| normalize_power(&prev.completion_action))
+                        .unwrap_or_else(|| normalize_power(&existing_power));
+                    let profile_changed = profile_power != prev_profile_power;
+                    let global_changed = req_power != normalize_power(&existing_power);
+                    if !profile_changed && global_changed {
+                        default_profile.completion_action = req_power;
+                        profiles_modified = true;
+                    } else {
+                        values.insert(
+                            "completion_power_action".into(),
+                            Value::String(profile_power),
+                        );
+                    }
+                } else {
+                    let profile_power = normalize_power(&default_profile.completion_action);
+                    values.insert(
+                        "completion_power_action".into(),
+                        Value::String(profile_power),
+                    );
+                }
+                if profiles_modified {
+                    values.insert(
+                        "queue_profiles".into(),
+                        serde_json::to_value(&*profiles)
+                            .map_err(|error| format!("序列化队列配置失败: {error}"))?,
+                    );
+                }
+            }
+        } else if values.contains_key("queue_max_active")
+            || values.contains_key("completion_power_action")
+        {
+            let stored_raw = core.store().setting_string("queue_profiles", "")?;
+            if !stored_raw.trim().is_empty() {
+                let mut profiles = load_queue_profiles(core.store())?;
+                if let Some(default_profile) = profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == crate::DEFAULT_QUEUE_ID)
+                {
+                    if let Some(max_active) = values.get("queue_max_active").and_then(Value::as_u64)
+                    {
+                        default_profile.max_active = max_active.clamp(1, 64) as u32;
+                    }
+                    if let Some(action) = values
+                        .get("completion_power_action")
+                        .and_then(Value::as_str)
+                    {
+                        default_profile.completion_action = normalize_power(action);
+                    }
+                    values.insert(
+                        "queue_profiles".into(),
+                        serde_json::to_value(&profiles)
+                            .map_err(|error| format!("序列化队列配置失败: {error}"))?,
+                    );
+                    queue_profiles = Some(profiles);
+                }
+            }
+        }
+        let orphaned = if caller_supplied_profiles {
+            if let Some(profiles) = &queue_profiles {
+                let ids: HashSet<_> = profiles.iter().map(|profile| profile.id.as_str()).collect();
+                core.tasks()
+                    .into_iter()
+                    .filter(|task| !ids.contains(task.queue_id.as_str()))
+                    .map(|task| task.task_id)
+                    .collect()
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         };
@@ -247,6 +407,7 @@ impl CoreCoordinator {
             }
             return Err(error);
         }
+        self.invalidate_settings_cache();
         if values.contains_key("ffmpeg_path") {
             super::sync_configured_ffmpeg(core.store());
         }
@@ -729,5 +890,106 @@ mod tests {
             );
         }
         assert!(CoreCoordinator::validate_setting("download_speed_limit_kib", &json!(0)).is_ok());
+    }
+
+    #[test]
+    fn settings_cache_serves_without_sqlite_and_invalidates_on_every_mutation() {
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        // Warm the cache.
+        assert!(!coordinator.settings().unwrap().clipboard_watch);
+        // Holding the core mutex proves a cache hit never locks PersistentCore or SQLite.
+        {
+            let _guard = coordinator.lock().unwrap();
+            assert!(!coordinator.settings().unwrap().clipboard_watch);
+        }
+        // Mutation via set_setting invalidates cache immediately.
+        coordinator
+            .set_setting("clipboard_watch", json!(true))
+            .unwrap();
+        assert!(coordinator.settings().unwrap().clipboard_watch);
+
+        // Mutation via set_site_rule_credential invalidates cache immediately.
+        coordinator
+            .set_setting("site_rules", json!(r#"[{"host":"cdn.test"}]"#))
+            .unwrap();
+        coordinator
+            .set_site_rule_credential("cdn.test", "sid=1", &BTreeMap::new(), false)
+            .unwrap();
+        let rules = crate::parse_site_rules(&coordinator.settings().unwrap().site_rules);
+        assert!(!rules[0].credential_ref.is_empty());
+
+        // Direct store_mut().set_setting also bumps settings_version and invalidates cache.
+        coordinator
+            .lock()
+            .unwrap()
+            .store_mut()
+            .set_setting("theme_mode", "dark")
+            .unwrap();
+        assert_eq!(coordinator.settings().unwrap().theme_mode, "dark");
+    }
+
+    #[test]
+    fn global_queue_and_power_settings_stay_synced_with_default_queue_profile() {
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        // Save custom queue_profiles (creating the stored JSON that previously shadowed globals).
+        coordinator
+            .set_setting(
+                "queue_profiles",
+                json!([
+                    QueueProfile {
+                        id: "default".into(),
+                        name: "默认队列".into(),
+                        max_active: 3,
+                        completion_action: "none".into(),
+                        ..Default::default()
+                    },
+                    QueueProfile {
+                        id: "night".into(),
+                        name: "夜间队列".into(),
+                        max_active: 1,
+                        completion_action: "hibernate".into(),
+                        ..Default::default()
+                    }
+                ]),
+            )
+            .unwrap();
+
+        // Updating global queue_max_active and completion_power_action must update "default" profile.
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("queue_max_active".into(), json!(6)),
+                ("completion_power_action".into(), json!("sleep")),
+            ]))
+            .unwrap();
+        let settings = coordinator.settings().unwrap();
+        assert_eq!(settings.queue_max, 6);
+        assert_eq!(settings.completion_power_action, "sleep");
+        let default_profile = settings
+            .queue_profiles
+            .iter()
+            .find(|p| p.id == "default")
+            .unwrap();
+        assert_eq!(default_profile.max_active, 6);
+        assert_eq!(default_profile.completion_action, "sleep");
+        let night_profile = settings
+            .queue_profiles
+            .iter()
+            .find(|p| p.id == "night")
+            .unwrap();
+        assert_eq!(night_profile.max_active, 1);
+        assert_eq!(night_profile.completion_action, "hibernate");
+
+        // Updating "default" inside queue_profiles must sync back to global keys.
+        let mut updated_profiles = settings.queue_profiles;
+        updated_profiles[0].max_active = 2;
+        updated_profiles[0].completion_action = "shutdown".into();
+        coordinator
+            .set_setting("queue_profiles", json!(updated_profiles))
+            .unwrap();
+        let synced = coordinator.settings().unwrap();
+        assert_eq!(synced.queue_max, 2);
+        assert_eq!(synced.completion_power_action, "shutdown");
+        assert_eq!(synced.queue_profiles[0].max_active, 2);
+        assert_eq!(synced.queue_profiles[0].completion_action, "shutdown");
     }
 }

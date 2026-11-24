@@ -14,9 +14,14 @@ enum Decision {
         action: String,
         message: String,
     },
-    Power {
-        title: String,
-        seconds: u64,
+    Confirm {
+        tag: String,
+        heading: String,
+        message: String,
+        confirm_label: String,
+        danger: bool,
+        owner_system: bool,
+        on_confirm: Option<Box<dyn FnOnce()>>,
     },
 }
 
@@ -208,15 +213,28 @@ impl SystemTools {
                 }
             }
             "install_update" if window.get_can_install() && !window.get_busy() => {
-                if file_dialogs::confirm(
-                    native_window::hwnd(window.window()),
+                let weak = Rc::downgrade(self);
+                self.push_confirm(
+                    "install_update",
                     "安装更新",
-                    "将暂停活动任务并保存断点，退出当前程序后运行已校验的安装包。继续安装？",
-                ) && self.send(CoreCommand::InstallUpdate {
-                    workbench_pid: std::process::id(),
-                }) {
-                    window.set_busy(true);
-                }
+                    "将暂停活动任务并保存断点，退出当前程序后运行已校验的安装包。继续安装？".into(),
+                    "安装更新",
+                    false,
+                    true,
+                    Box::new(move || {
+                        if let Some(this) = weak.upgrade() {
+                            let window = this.window();
+                            if window.get_can_install()
+                                && !window.get_busy()
+                                && this.send(CoreCommand::InstallUpdate {
+                                    workbench_pid: std::process::id(),
+                                })
+                            {
+                                window.set_busy(true);
+                            }
+                        }
+                    }),
+                );
             }
             "chromium" => match chromium_directory() {
                 Ok(path) => {
@@ -283,6 +301,58 @@ impl SystemTools {
         }
         drop(notices);
         self.render();
+    }
+
+    pub fn confirm(
+        &self,
+        tag: &str,
+        heading: &str,
+        message: String,
+        confirm_label: &str,
+        danger: bool,
+        on_confirm: Box<dyn FnOnce()>,
+    ) {
+        self.push_confirm(
+            tag,
+            heading,
+            message,
+            confirm_label,
+            danger,
+            false,
+            on_confirm,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_confirm(
+        &self,
+        tag: &str,
+        heading: &str,
+        message: String,
+        confirm_label: &str,
+        danger: bool,
+        owner_system: bool,
+        on_confirm: Box<dyn FnOnce()>,
+    ) {
+        let mut decisions = self.decisions.borrow_mut();
+        if decisions.len() >= 32
+            || decisions
+                .iter()
+                .any(|d| matches!(d, Decision::Confirm { tag: existing, .. } if existing == tag))
+        {
+            return;
+        }
+        decisions.push_back(Decision::Confirm {
+            tag: tag.to_owned(),
+            heading: heading.to_owned(),
+            message,
+            confirm_label: confirm_label.to_owned(),
+            danger,
+            owner_system,
+            on_confirm: Some(on_confirm),
+        });
+        drop(decisions);
+        self.show_decision();
     }
 
     pub fn event(&self, envelope: &EventEnvelope) {
@@ -409,34 +479,15 @@ impl SystemTools {
                 title,
                 delay_seconds,
             } => {
-                let in_flight = self.decision_request.get().is_some();
-                {
-                    let mut decisions = self.decisions.borrow_mut();
-                    let preserve_head = if in_flight {
-                        decisions.pop_front()
-                    } else {
-                        None
-                    };
-                    decisions.retain(|d| !matches!(d, Decision::Power { .. }));
-                    let action = match action.as_str() {
-                        "shutdown" => "关机",
-                        "sleep" => "睡眠",
-                        "hibernate" => "休眠",
-                        "exit" => "退出程序",
-                        _ => action,
-                    };
-                    let power = Decision::Power {
-                        title: format!("{title}\n完成后动作：{action}"),
-                        seconds: *delay_seconds,
-                    };
-                    if let Some(head) = preserve_head {
-                        decisions.push_front(head);
-                        decisions.push_back(power);
-                    } else {
-                        decisions.push_front(power);
-                    }
-                }
-                self.show_decision();
+                // Power countdown is owned exclusively by CompleteWindow in hot_main.rs;
+                // record a passive entry in Notification Center without popping a second dialog.
+                let label = match action.as_str() {
+                    "shutdown" => "关机",
+                    "sleep" => "睡眠",
+                    "hibernate" => "休眠",
+                    _ => "系统操作",
+                };
+                self.notify(format!("{title} · 将在 {delay_seconds} 秒后执行{label}"));
             }
             CoreEvent::HandoffResolved { task_id, .. } => self.notify(
                 if task_id.is_some() {
@@ -456,7 +507,7 @@ impl SystemTools {
             let _ = self.decision.hide();
             return;
         };
-        let (title, message, confirm) = match next {
+        let (title, message, confirm, danger, owner_system) = match next {
             Decision::Duplicate {
                 message, action, ..
             } => {
@@ -475,32 +526,66 @@ impl SystemTools {
                     ),
                     _ => (message.clone(), "继续已有任务"),
                 };
-                ("发现重复任务", message, label)
+                (
+                    "发现重复任务".to_owned(),
+                    message,
+                    label.to_owned(),
+                    false,
+                    false,
+                )
             }
-            Decision::Power { title, seconds } => (
-                "完成后电源动作",
-                format!("{title}\n将按 Core 记录的 {seconds} 秒倒计时执行，可在此取消。"),
-                "立即执行",
+            Decision::Confirm {
+                heading,
+                message,
+                confirm_label,
+                danger,
+                owner_system,
+                ..
+            } => (
+                heading.clone(),
+                message.clone(),
+                confirm_label.clone(),
+                *danger,
+                *owner_system,
             ),
         };
+        drop(decisions);
         native_window::inherit_appearance(&self.decision, &self.main);
         self.decision.set_heading(title.into());
         self.decision.set_message(message.into());
         self.decision.set_confirm_label(confirm.into());
+        self.decision.set_danger(danger);
         if !self.decision.window().is_visible() {
             self.decision.invoke_enter();
         }
         let _ = self.decision.show();
-        native_window::prepare_dialog(
-            &self.decision,
-            true,
-            true,
-            native_window::hwnd(self.main.window()),
-        );
+        let owner = if owner_system && self.window().window().is_visible() {
+            native_window::hwnd(self.window().window())
+        } else {
+            native_window::hwnd(self.main.window())
+        };
+        native_window::prepare_dialog(&self.decision, true, true, owner);
     }
 
     fn decide(&self, accepted: bool) {
         if self.decision_request.get().is_some() {
+            return;
+        }
+        if matches!(
+            self.decisions.borrow().front(),
+            Some(Decision::Confirm { .. })
+        ) {
+            let entry = self.decisions.borrow_mut().pop_front();
+            self.show_decision();
+            if accepted {
+                if let Some(Decision::Confirm {
+                    on_confirm: Some(callback),
+                    ..
+                }) = entry
+                {
+                    callback();
+                }
+            }
             return;
         }
         let command = match self.decisions.borrow().front() {
@@ -519,11 +604,6 @@ impl SystemTools {
                     .invoke_action(format!("focus_task:{task_id}").into());
                 None
             }
-            Some(Decision::Power { .. }) => Some(if accepted {
-                CoreCommand::ConfirmPowerAction
-            } else {
-                CoreCommand::CancelPowerAction
-            }),
             _ => None,
         };
         if let Some(command) = command {
@@ -569,7 +649,9 @@ impl SystemTools {
                 _ => None,
             };
             if let Some(message) = error {
-                self.decision.set_message(format!("操作未确认成功：{message}\n请检查当前状态后重试。电源倒计时仍由 Core 管理。").into());
+                self.decision.set_message(
+                    format!("操作未确认成功：{message}\n请检查当前状态后重试。").into(),
+                );
             } else {
                 self.decisions.borrow_mut().pop_front();
                 self.show_decision();
@@ -770,5 +852,101 @@ mod tests {
         tools.resynchronize();
         assert_eq!(tools.handoff_request.get(), None);
         assert!(!tools.keeps_ui_alive());
+    }
+
+    #[test]
+    fn power_action_pending_does_not_open_decision_window() {
+        let tools = tools();
+        tools.event(&EventEnvelope {
+            sequence: 7,
+            event: CoreEvent::PowerActionPending {
+                action: "shutdown".into(),
+                title: "全部任务已完成".into(),
+                delay_seconds: 30,
+            },
+        });
+        assert!(tools.decisions.borrow().is_empty());
+        assert!(!tools.decision.window().is_visible());
+        assert!(tools
+            .notices
+            .borrow()
+            .back()
+            .is_some_and(|n| n.contains("关机") && n.contains("30")));
+    }
+
+    #[test]
+    fn themed_confirm_runs_callback_only_on_accept_and_deduplicates_by_tag() {
+        let tools = tools();
+        let fired = Rc::new(Cell::new(0u32));
+        for _ in 0..2 {
+            let fired = Rc::clone(&fired);
+            tools.confirm(
+                "delete",
+                "删除任务",
+                "将处理 1 个任务。".into(),
+                "删除任务",
+                true,
+                Box::new(move || fired.set(fired.get() + 1)),
+            );
+        }
+        assert_eq!(tools.decisions.borrow().len(), 1);
+        assert!(tools.decision.window().is_visible());
+        assert_eq!(tools.decision.get_heading().as_str(), "删除任务");
+        assert_eq!(tools.decision.get_confirm_label().as_str(), "删除任务");
+        assert!(tools.decision.get_danger());
+
+        // Cancelling drops the pending confirmation without firing the callback.
+        tools.decision.invoke_decided(false);
+        assert_eq!(fired.get(), 0);
+        assert!(!tools.decision.window().is_visible());
+
+        // Confirming invokes the callback exactly once and closes DecisionWindow.
+        let fired_accept = Rc::clone(&fired);
+        tools.confirm(
+            "delete",
+            "删除任务",
+            "确认删除？".into(),
+            "删除任务",
+            true,
+            Box::new(move || fired_accept.set(fired_accept.get() + 1)),
+        );
+        tools.decision.invoke_decided(true);
+        assert_eq!(fired.get(), 1);
+        assert!(!tools.decision.window().is_visible());
+    }
+
+    #[test]
+    fn install_update_uses_themed_decision_window() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let sent = Rc::new(RefCell::new(Vec::<CorePipeRequest>::new()));
+        let sent_ref = Rc::clone(&sent);
+        let next = Cell::new(0);
+        let tools = SystemTools::new(
+            WorkbenchWindow::new().unwrap(),
+            Rc::new(move |req| {
+                sent_ref.borrow_mut().push(req);
+                true
+            }),
+            Rc::new(move || {
+                next.set(next.get() + 1);
+                next.get()
+            }),
+        )
+        .unwrap();
+        tools.window().set_can_install(true);
+        tools.action("install_update");
+        assert!(sent.borrow().is_empty());
+        assert!(tools.decision.window().is_visible());
+        assert_eq!(tools.decision.get_heading().as_str(), "安装更新");
+        tools.decision.invoke_decided(true);
+        assert_eq!(sent.borrow().len(), 1);
+        assert!(matches!(
+            sent.borrow()[0],
+            CorePipeRequest::Command {
+                command: CoreCommand::InstallUpdate { .. },
+                ..
+            }
+        ));
+        assert!(tools.window().get_busy());
     }
 }

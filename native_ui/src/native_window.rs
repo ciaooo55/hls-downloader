@@ -114,6 +114,156 @@ pub fn activate(window: &Window) {
     }
 }
 
+/// Computes the top-left physical position for a bottom-right toast inside
+/// `work_area = (left, top, right, bottom)` with physical `margin`.
+/// Never pushes the window above `top` or left of `left`.
+pub fn bottom_right_toast_position(
+    work_area: (i32, i32, i32, i32),
+    window_size: (i32, i32),
+    margin: i32,
+) -> (i32, i32) {
+    let (left, top, right, bottom) = work_area;
+    let (width, height) = window_size;
+    let margin = margin.max(0);
+    let x = (right - width - margin).max(left);
+    let y = (bottom - height - margin).max(top);
+    (x, y)
+}
+
+/// Adds `WS_EX_NOACTIVATE` to an already-created HWND so showing or clicking the
+/// toast never steals keyboard focus from active user applications.
+pub fn mark_no_activate(window: &Window) {
+    #[cfg(windows)]
+    if let Some(handle) = hwnd(window) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        };
+        unsafe {
+            let hwnd = handle as windows_sys::Win32::Foundation::HWND;
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if style & WS_EX_NOACTIVATE as isize == 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE as isize);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
+/// Places a toast window in the bottom-right corner above the taskbar with
+/// `logical_margin` logical pixels of breathing room, keeping it topmost and
+/// never stealing keyboard focus.
+pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::{HWND, RECT},
+            Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+            },
+            UI::WindowsAndMessaging::{
+                GetWindowRect, IsWindowVisible, SetWindowPos, ShowWindow, SystemParametersInfoW,
+                HWND_TOPMOST, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
+            },
+        };
+        let Some(handle) = hwnd(window) else {
+            return false;
+        };
+        let hwnd = handle as HWND;
+        let mut work: RECT = unsafe { std::mem::zeroed() };
+        let has_work_area = unsafe {
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, std::ptr::from_mut(&mut work).cast(), 0) != 0
+        };
+        if !has_work_area {
+            let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
+            if monitor.is_null() {
+                return false;
+            }
+            let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+                return false;
+            }
+            work = info.rcWork;
+        }
+        let mut rect: RECT = unsafe { std::mem::zeroed() };
+        let (width, height) = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0
+            && rect.right > rect.left
+            && rect.bottom > rect.top
+        {
+            (rect.right - rect.left, rect.bottom - rect.top)
+        } else {
+            let size = window.size();
+            (size.width as i32, size.height as i32)
+        };
+        let scale = window.scale_factor();
+        let margin = (logical_margin.max(0.0)
+            * if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            })
+        .round() as i32;
+        let (x, y) = bottom_right_toast_position(
+            (work.left, work.top, work.right, work.bottom),
+            (width, height),
+            margin,
+        );
+        unsafe {
+            let positioned =
+                SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE) != 0;
+            if IsWindowVisible(hwnd) == 0 {
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            positioned
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, logical_margin);
+        false
+    }
+}
+
+/// Prepares a frameless notification toast: hides it from the taskbar, marks it
+/// non-activating, clamps to the work area, and anchors it in the bottom-right
+/// corner above the taskbar without ever stealing focus.
+pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
+    component: &C,
+    logical_margin: f32,
+) where
+    for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
+{
+    #[cfg(windows)]
+    {
+        let weak = component.as_weak();
+        let _ = slint::spawn_local(async move {
+            let Some(component) = weak.upgrade() else {
+                return;
+            };
+            use slint::winit_030::WinitWindowAccessor;
+            if component.window().winit_window().await.is_err() {
+                return;
+            }
+            let tokens = component.global::<crate::Tokens>();
+            apply_caption_theme(
+                component.window(),
+                tokens.get_dark(),
+                tokens.get_surface(),
+                tokens.get_ink(),
+            );
+            if let Some(handle) = hwnd(component.window()) {
+                hls_client::hide_window_from_taskbar(handle);
+            }
+            mark_no_activate(component.window());
+            fit_to_work_area(component.window());
+            position_bottom_right_toast(component.window(), logical_margin);
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (component, logical_margin);
+}
+
 pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
     component: &C,
     center: bool,
@@ -347,6 +497,35 @@ pub fn save_geometry(window: &Window) {
                 size.width.round() as u32,
                 size.height.round() as u32
             ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bottom_right_toast_position;
+
+    #[test]
+    fn bottom_right_toast_anchors_above_taskbar_with_margin_and_clamps_small_screens() {
+        // 1920x1080 with 40px taskbar (work area height 1040), 330x156 toast, 16px margin.
+        assert_eq!(
+            bottom_right_toast_position((0, 0, 1920, 1040), (330, 156), 16),
+            (1574, 868)
+        );
+        // Secondary monitor with negative left coordinate and 150% DPI (24px physical margin).
+        assert_eq!(
+            bottom_right_toast_position((-1920, 0, 0, 1040), (495, 234), 24),
+            (-519, 782)
+        );
+        // Very small work area clamps to top-left without pushing off-screen.
+        assert_eq!(
+            bottom_right_toast_position((100, 50, 300, 180), (330, 200), 16),
+            (100, 50)
+        );
+        // Negative margin is treated as 0.
+        assert_eq!(
+            bottom_right_toast_position((0, 0, 1000, 600), (300, 150), -10),
+            (700, 450)
         );
     }
 }
