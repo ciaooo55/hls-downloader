@@ -31,7 +31,7 @@ mod workbench;
 use hls_client::{
     claim_v7_presenter_instance, completion_sound, download_category, install_root,
     is_already_running_error, os_reduce_motion, spawn_core, CoreCommand, CoreEvent, CoreIpcClient,
-    CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
+    CorePipeRequest, CorePipeResponse, EventEnvelope, ResourceKind, ResourceOffer, TaskSnapshot,
 };
 use serde::Deserialize;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -53,6 +53,12 @@ mod window_titles {
 }
 
 use window_titles::{COMPLETE, CONFIRM, LOCAL_PROCESSING, PROGRESS_HEADLINE};
+
+const PROGRESS_HUD_WIDTH: f32 = 380.0;
+const PROGRESS_HUD_COMPACT_HEIGHT: f32 = 256.0;
+const PROGRESS_HUD_EXPANDED_HEIGHT: f32 = 468.0;
+const PROGRESS_SPEED_HISTORY_LIMIT: usize = 40;
+const PROGRESS_CONNECTION_ROWS_LIMIT: usize = 8;
 
 // GUI 的 stderr 通常不可见，先落盘崩溃现场。
 fn install_panic_log() {
@@ -144,6 +150,7 @@ struct PresenterSettings {
     speed_limit_kib: u64,
     speed_limit_enabled: bool,
     quick_download_enabled: bool,
+    completion_power_action: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -317,6 +324,7 @@ impl PresenterSettings {
             speed_limit_kib,
             speed_limit_enabled,
             quick_download_enabled,
+            completion_power_action,
             ..
         }) = response
         else {
@@ -337,6 +345,7 @@ impl PresenterSettings {
             speed_limit_kib: *speed_limit_kib,
             speed_limit_enabled: *speed_limit_enabled,
             quick_download_enabled: *quick_download_enabled,
+            completion_power_action: completion_power_action.clone(),
         }
     }
 
@@ -601,6 +610,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     progress.hide()?;
     complete.hide()?;
     apply_runtime_settings(&confirm, &progress, &complete, initial_runtime);
+    let open_folder_on_complete = Rc::new(std::cell::Cell::new(false));
+    if let Ok(settings) = presenter_settings.lock() {
+        sync_progress_settings(&progress, &settings, open_folder_on_complete.get());
+    }
     let theme_timer = Timer::default();
     theme_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
         let settings = Rc::clone(&runtime_settings);
@@ -714,14 +727,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    let active_hud = Rc::new(RefCell::new(ActiveTaskHud::default()));
+    let active_hud = Arc::new(Mutex::new(ActiveTaskHud::default()));
     let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
     confirm.on_core_resynced({
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
+        let presenter_settings = Arc::clone(&presenter_settings);
         let ui_sequence = Rc::clone(&ui_sequence);
-        let active_hud = Rc::clone(&active_hud);
+        let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let runtime_settings = Rc::clone(&runtime_settings);
         let progress = progress.as_weak();
@@ -736,7 +750,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(window) = workbench.borrow().as_ref() {
                 window.replace(tasks.clone(), sequence);
             }
-            let primary = active_hud.borrow_mut().reconcile(&tasks);
+            let (primary, position) = active_hud
+                .lock()
+                .map(|mut hud| {
+                    let primary = hud.reconcile(&tasks);
+                    let pos = hud.task_position();
+                    (primary, pos)
+                })
+                .unwrap_or((None, (0, 0)));
+            let fallback_dir = presenter_settings
+                .lock()
+                .map(|settings| settings.download_dir.clone())
+                .unwrap_or_default();
             match primary {
                 Some(primary) => {
                     reset_progress_action_for_new_task(
@@ -744,7 +769,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &rendered_hud_task,
                         &primary.task_id,
                     );
-                    render_progress_hud(&progress, *runtime_settings.borrow(), &primary);
+                    render_progress_hud(
+                        &progress,
+                        *runtime_settings.borrow(),
+                        &primary,
+                        position,
+                        &fallback_dir,
+                    );
                 }
                 None => {
                     if let Ok(mut rendered) = rendered_hud_task.lock() {
@@ -790,60 +821,282 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
 
     progress.on_command({
-        let active_hud = Rc::clone(&active_hud);
+        let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
+        let presenter_settings = Arc::clone(&presenter_settings);
+        let runtime_settings = Rc::clone(&runtime_settings);
+        let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
+        let settings_reload = settings_reload.clone();
+        let workbench = Rc::clone(&workbench);
+        let confirm = confirm.as_weak();
         let window = progress.as_weak();
         move |command| {
             let action = command.to_string();
             trace(&format!("progress command: {action}"));
-            if action == "hide_progress" {
-                if let Some(item) = window.upgrade() {
-                    item.set_hidden_by_user(true);
-                    let _ = item.hide();
-                }
-                return;
-            }
-            if matches!(action.as_str(), "pause" | "cancel") {
-                if let Some(task_id) = active_hud.borrow().primary_task_id() {
+            match action.as_str() {
+                "hide_progress" => {
+                    let remaining = active_hud
+                        .lock()
+                        .ok()
+                        .and_then(|mut hud| hud.dismiss_paused());
+                    if remaining.is_none() {
+                        if let Ok(mut rendered) = rendered_hud_task.lock() {
+                            *rendered = None;
+                        }
+                    }
                     if let Some(item) = window.upgrade() {
-                        item.set_action_busy(true);
-                        item.set_action_error(false);
-                        item.set_action_text(
-                            if action == "pause" {
-                                "正在暂停…"
-                            } else {
-                                "正在取消…"
-                            }
-                            .into(),
+                        item.set_hidden_by_user(true);
+                        let _ = item.hide();
+                    }
+                }
+                "toggle_expand" => {
+                    if let Some(item) = window.upgrade() {
+                        let next = !item.get_expanded();
+                        resize_progress_window(&item, next);
+                    }
+                }
+                "prev_task" | "next_task" => {
+                    let delta = if action == "prev_task" { -1 } else { 1 };
+                    let (selected, position) = active_hud
+                        .lock()
+                        .map(|mut hud| {
+                            let next = hud.cycle(delta);
+                            let pos = hud.task_position();
+                            (next, pos)
+                        })
+                        .unwrap_or((None, (0, 0)));
+                    if let Some(snapshot) = selected {
+                        let fallback_dir = presenter_settings
+                            .lock()
+                            .map(|settings| settings.download_dir.clone())
+                            .unwrap_or_default();
+                        reset_progress_action_for_new_task(
+                            &window,
+                            &rendered_hud_task,
+                            &snapshot.task_id,
+                        );
+                        render_progress_hud(
+                            &window,
+                            *runtime_settings.borrow(),
+                            &snapshot,
+                            position,
+                            &fallback_dir,
                         );
                     }
-                    let result_window = window.clone();
-                    let result_task_id = task_id.clone();
-                    let result_hud_task = Arc::clone(&rendered_hud_task);
-                    thread::spawn(move || {
-                        let result = CoreIpcClient::connect().and_then(|mut client| {
-                            client
-                                .command(CoreCommand::TaskAction { task_id, action })
-                                .and_then(core_feedback::command_result)
-                        });
-                        let _ = result_window.upgrade_in_event_loop(move |item| {
-                            if result_hud_task.lock().ok().and_then(|task| task.clone())
-                                != Some(result_task_id)
-                            {
-                                return;
+                }
+                "open_workbench" => {
+                    let task_id = active_hud.lock().ok().and_then(|hud| hud.primary_task_id());
+                    if let Some(confirm_win) = confirm.upgrade() {
+                        confirm_win.invoke_open_workbench(true, "".into());
+                    }
+                    if let Some(task_id) = task_id {
+                        let current = workbench.borrow().clone();
+                        if let Some(wb) = current.as_ref() {
+                            wb.window
+                                .invoke_action(format!("focus_task:{task_id}").into());
+                        }
+                    }
+                }
+                "open_folder" => {
+                    let fallback_dir = presenter_settings
+                        .lock()
+                        .map(|settings| settings.download_dir.clone())
+                        .unwrap_or_default();
+                    let target_dir = active_hud
+                        .lock()
+                        .ok()
+                        .and_then(|hud| hud.current_snapshot())
+                        .and_then(|snapshot| snapshot_folder(&snapshot, &fallback_dir))
+                        .or_else(|| (!fallback_dir.trim().is_empty()).then_some(fallback_dir));
+                    if let Some(item) = window.upgrade() {
+                        match target_dir {
+                            Some(dir) => match file_dialogs::open(&dir) {
+                                Ok(()) => {
+                                    item.set_action_error(false);
+                                    item.set_action_text("已打开保存目录".into());
+                                }
+                                Err(error) => {
+                                    item.set_action_error(true);
+                                    item.set_action_text(format!("无法打开目录：{error}").into());
+                                }
+                            },
+                            None => {
+                                item.set_action_error(true);
+                                item.set_action_text("当前任务未设置保存目录".into());
                             }
-                            item.set_action_busy(false);
-                            item.set_action_error(result.is_err());
-                            item.set_action_text(match result {
-                                Ok(()) => "指令已发送".into(),
-                                Err(error) => format!("操作失败：{error}").into(),
-                            });
+                        }
+                    }
+                }
+                "speed_limit_toggle" => {
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
+                    let current_enabled = item.get_speed_limit_enabled();
+                    let current_kib = item.get_speed_limit_kib().max(0) as u64;
+                    let (next_enabled, effective_kib, values) =
+                        toggle_hud_speed_limit(current_enabled, current_kib);
+                    item.set_speed_limit_enabled(next_enabled);
+                    item.set_speed_limit_kib(effective_kib.min(i32::MAX as u64) as i32);
+                    if let Ok(mut settings) = presenter_settings.lock() {
+                        settings.speed_limit_enabled = next_enabled;
+                        settings.speed_limit_kib = effective_kib;
+                    }
+                    let label = format_hud_speed_limit_feedback(next_enabled, effective_kib);
+                    let result_window = window.clone();
+                    let reload = settings_reload.clone();
+                    thread::spawn(move || {
+                        let result = store_settings_via_ipc(values);
+                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
+                            Ok(()) => {
+                                item.set_action_error(false);
+                                item.set_action_text(label.into());
+                            }
+                            Err(error) => {
+                                item.set_action_error(true);
+                                item.set_action_text(format!("限速保存失败：{error}").into());
+                                let _ = reload.send(());
+                            }
                         });
                     });
-                } else if let Some(item) = window.upgrade() {
-                    item.set_action_error(true);
-                    item.set_action_text("当前没有可操作的下载任务".into());
                 }
+                value if value.starts_with("speed_limit:") => {
+                    let Some(kib) = value
+                        .strip_prefix("speed_limit:")
+                        .and_then(|raw| raw.parse::<u64>().ok())
+                    else {
+                        return;
+                    };
+                    let enabled = kib > 0;
+                    let values = build_speed_limit_settings(enabled, kib);
+                    if let Some(item) = window.upgrade() {
+                        item.set_speed_limit_enabled(enabled);
+                        item.set_speed_limit_kib(kib.min(i32::MAX as u64) as i32);
+                    }
+                    if let Ok(mut settings) = presenter_settings.lock() {
+                        settings.speed_limit_enabled = enabled;
+                        settings.speed_limit_kib = kib;
+                    }
+                    let label = format_hud_speed_limit_feedback(enabled, kib);
+                    let result_window = window.clone();
+                    let reload = settings_reload.clone();
+                    thread::spawn(move || {
+                        let result = store_settings_via_ipc(values);
+                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
+                            Ok(()) => {
+                                item.set_action_error(false);
+                                item.set_action_text(label.into());
+                            }
+                            Err(error) => {
+                                item.set_action_error(true);
+                                item.set_action_text(format!("限速保存失败：{error}").into());
+                                let _ = reload.send(());
+                            }
+                        });
+                    });
+                }
+                value if value.starts_with("completion_action:") => {
+                    let Some(index) = value
+                        .strip_prefix("completion_action:")
+                        .and_then(|raw| raw.parse::<i32>().ok())
+                    else {
+                        return;
+                    };
+                    let (wire_action, open_folder) = completion_action_from_index(index);
+                    open_folder_on_complete.set(open_folder);
+                    if let Some(item) = window.upgrade() {
+                        item.set_completion_action_index(index);
+                    }
+                    if let Ok(mut settings) = presenter_settings.lock() {
+                        settings.completion_power_action = wire_action.to_owned();
+                    }
+                    let feedback = format!(
+                        "完成后：{}",
+                        COMPLETION_ACTION_LABELS
+                            .get(index.max(0) as usize)
+                            .copied()
+                            .unwrap_or("无操作")
+                    );
+                    let result_window = window.clone();
+                    let reload = settings_reload.clone();
+                    thread::spawn(move || {
+                        let result = CoreIpcClient::connect().and_then(|mut client| {
+                            client.store_setting(
+                                "completion_power_action",
+                                serde_json::Value::String(wire_action.to_owned()),
+                            )
+                        });
+                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
+                            Ok(()) => {
+                                item.set_action_error(false);
+                                item.set_action_text(feedback.into());
+                            }
+                            Err(error) => {
+                                item.set_action_error(true);
+                                item.set_action_text(format!("完成动作保存失败：{error}").into());
+                                let _ = reload.send(());
+                            }
+                        });
+                    });
+                }
+                "pause" | "resume" | "cancel" => {
+                    let task_id = active_hud.lock().ok().and_then(|hud| hud.primary_task_id());
+                    if let Some(task_id) = task_id {
+                        if action == "pause" {
+                            if let Ok(mut hud) = active_hud.lock() {
+                                hud.mark_pause_requested(&task_id);
+                            }
+                        }
+                        if let Some(item) = window.upgrade() {
+                            item.set_action_busy(true);
+                            item.set_action_error(false);
+                            item.set_action_text(
+                                match action.as_str() {
+                                    "pause" => "正在暂停…",
+                                    "resume" => "正在继续…",
+                                    _ => "正在取消…",
+                                }
+                                .into(),
+                            );
+                        }
+                        let result_window = window.clone();
+                        let result_task_id = task_id.clone();
+                        let result_hud_task = Arc::clone(&rendered_hud_task);
+                        let result_active_hud = Arc::clone(&active_hud);
+                        let sent_action = action.clone();
+                        thread::spawn(move || {
+                            let result = CoreIpcClient::connect().and_then(|mut client| {
+                                client
+                                    .command(CoreCommand::TaskAction { task_id, action })
+                                    .and_then(core_feedback::command_result)
+                            });
+                            let _ = result_window.upgrade_in_event_loop(move |item| {
+                                if result.is_err() && sent_action == "pause" {
+                                    if let Ok(mut hud) = result_active_hud.lock() {
+                                        hud.clear_pause_pin(&result_task_id);
+                                    }
+                                }
+                                if result_hud_task.lock().ok().and_then(|task| task.clone())
+                                    != Some(result_task_id)
+                                {
+                                    return;
+                                }
+                                item.set_action_busy(false);
+                                item.set_action_error(result.is_err());
+                                item.set_action_text(match result {
+                                    Ok(()) if sent_action == "pause" || sent_action == "resume" => {
+                                        "".into()
+                                    }
+                                    Ok(()) => "指令已发送".into(),
+                                    Err(error) => format!("操作失败：{error}").into(),
+                                });
+                            });
+                        });
+                    } else if let Some(item) = window.upgrade() {
+                        item.set_action_error(true);
+                        item.set_action_text("当前没有可操作的下载任务".into());
+                    }
+                }
+                _ => {}
             }
         }
     });
@@ -1313,7 +1566,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let workbench = Rc::clone(&workbench);
         let native_workbench = Rc::clone(&native_workbench);
         let ui_sequence = Rc::clone(&ui_sequence);
-        let active_hud = Rc::clone(&active_hud);
+        let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
@@ -1321,6 +1574,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let settings_reload = settings_reload.clone();
         let runtime_settings = Rc::clone(&runtime_settings);
         let presenter_settings = Arc::clone(&presenter_settings);
+        let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
@@ -1338,8 +1592,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         (confirm.upgrade(), progress.upgrade(), complete.upgrade())
                     {
                         apply_runtime_settings(&confirm, &progress, &complete, next);
-                        if confirm.window().is_visible() {
-                            if let Ok(settings) = presenter_settings.lock() {
+                        if let Ok(settings) = presenter_settings.lock() {
+                            if !matches!(settings.completion_power_action.trim(), "" | "none") {
+                                open_folder_on_complete.set(false);
+                            }
+                            sync_progress_settings(
+                                &progress,
+                                &settings,
+                                open_folder_on_complete.get(),
+                            );
+                            if confirm.window().is_visible() {
                                 let current_dir = confirm.get_download_dir().to_string();
                                 sync_confirm_selectors(&confirm, &settings, &current_dir, None);
                             }
@@ -1409,16 +1671,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         CoreEvent::TaskCreated { snapshot }
                         | CoreEvent::TaskUpdated { snapshot }
-                        | CoreEvent::TaskProgress { snapshot } => update_task_windows(
-                            snapshot,
-                            *runtime_settings.borrow(),
-                            &progress,
-                            &complete,
-                            &active_hud,
-                            &rendered_hud_task,
-                            &completed_task,
-                            &completed_notified,
-                        ),
+                        | CoreEvent::TaskProgress { snapshot } => {
+                            let fallback_dir = presenter_settings
+                                .lock()
+                                .map(|settings| settings.download_dir.clone())
+                                .unwrap_or_default();
+                            update_task_windows(
+                                snapshot,
+                                *runtime_settings.borrow(),
+                                open_folder_on_complete.get(),
+                                &fallback_dir,
+                                &progress,
+                                &complete,
+                                &active_hud,
+                                &rendered_hud_task,
+                                &completed_task,
+                                &completed_notified,
+                            );
+                        }
                         CoreEvent::TaskDeleted { task_id } => {
                             completed_notified.borrow_mut().remove(&task_id);
                             if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
@@ -1428,7 +1698,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     let _ = item.hide();
                                 }
                             }
-                            let primary = active_hud.borrow_mut().remove(&task_id);
+                            let (primary, position) = active_hud
+                                .lock()
+                                .map(|mut hud| {
+                                    let primary = hud.remove(&task_id);
+                                    let pos = hud.task_position();
+                                    (primary, pos)
+                                })
+                                .unwrap_or((None, (0, 0)));
+                            let fallback_dir = presenter_settings
+                                .lock()
+                                .map(|settings| settings.download_dir.clone())
+                                .unwrap_or_default();
                             match primary {
                                 Some(primary) => {
                                     reset_progress_action_for_new_task(
@@ -1440,6 +1721,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         &progress,
                                         *runtime_settings.borrow(),
                                         &primary,
+                                        position,
+                                        &fallback_dir,
                                     )
                                 }
                                 None => {
@@ -1686,7 +1969,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
-        "progress" => {
+        "progress" | "progress-expanded" => {
             let window = ProgressWindow::new()?;
             window.on_move_window({
                 let weak = window.as_weak();
@@ -1700,42 +1983,37 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window
                 .global::<Tokens>()
                 .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
-            window.set_headline(PROGRESS_HEADLINE.into());
-            window.set_filename("示例视频 · 1080p.mp4".into());
-            window.set_speed("18.6 MB/s".into());
-            window.set_progress(0.64);
-            window.set_progress_known(true);
-            window.set_segments(slint::ModelRc::new(slint::VecModel::from(vec![
-                SegmentBlock {
-                    width_ratio: 0.25,
-                    fill_ratio: 1.0,
-                    state: "done".into(),
-                },
-                SegmentBlock {
-                    width_ratio: 0.25,
-                    fill_ratio: 0.72,
-                    state: "active".into(),
-                },
-                SegmentBlock {
-                    width_ratio: 0.25,
-                    fill_ratio: 1.0,
-                    state: "done".into(),
-                },
-                SegmentBlock {
-                    width_ratio: 0.25,
-                    fill_ratio: 0.45,
-                    state: "active".into(),
-                },
-            ])));
-            window.set_transferred("81.9 MB / 128.0 MB · 分片 64 / 100".into());
-            window.set_stage_label("正在下载".into());
-            window.set_remaining("剩余约 3 秒".into());
+            populate_progress_fixture(&window, kind == "progress-expanded");
             correct_native_click_position(window.window());
-            window.on_command(|_| {
-                let _ = slint::quit_event_loop();
+            window.on_command({
+                let weak = window.as_weak();
+                move |command| {
+                    if command == "toggle_expand" {
+                        if let Some(item) = weak.upgrade() {
+                            let next = !item.get_expanded();
+                            resize_progress_window(&item, next);
+                        }
+                        return;
+                    }
+                    if command == "prev_task" || command == "next_task" {
+                        if let Some(item) = weak.upgrade() {
+                            let count = item.get_task_count().max(1);
+                            let current = item.get_task_index().clamp(1, count) - 1;
+                            let delta = if command == "prev_task" { -1 } else { 1 };
+                            let next = (current + delta).rem_euclid(count) + 1;
+                            item.set_task_index(next);
+                        }
+                        return;
+                    }
+                    let _ = slint::quit_event_loop();
+                }
             });
             window.show()?;
-            round_native_window(window.window());
+            if kind == "progress-expanded" {
+                resize_progress_window(&window, true);
+            } else {
+                round_native_window(window.window());
+            }
             write_ready_marker();
             slint::run_event_loop_until_quit()?;
         }
@@ -2787,16 +3065,397 @@ fn task_is_active(status: &str) -> bool {
     matches!(status, "downloading" | "recording" | "merging" | "checking")
 }
 
+const COMPLETION_ACTION_LABELS: &[&str] = &["无操作", "打开目录", "睡眠", "休眠", "关机"];
+
+fn progress_window_logical_size(expanded: bool) -> (f32, f32) {
+    (
+        PROGRESS_HUD_WIDTH,
+        if expanded {
+            PROGRESS_HUD_EXPANDED_HEIGHT
+        } else {
+            PROGRESS_HUD_COMPACT_HEIGHT
+        },
+    )
+}
+
+fn resize_progress_window(item: &ProgressWindow, expanded: bool) {
+    let (width, height) = progress_window_logical_size(expanded);
+    item.set_expanded(expanded);
+    item.window()
+        .set_size(slint::LogicalSize::new(width, height));
+    round_native_window(item.window());
+    native_window::fit_to_work_area(item.window());
+    item.window().request_redraw();
+}
+
+fn build_speed_limit_settings(
+    enabled: bool,
+    kib: u64,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let mut values = std::collections::BTreeMap::new();
+    values.insert(
+        "download_speed_limit_enabled".into(),
+        serde_json::Value::Bool(enabled && kib > 0),
+    );
+    values.insert(
+        "download_speed_limit_kib".into(),
+        serde_json::Value::from(kib),
+    );
+    values
+}
+
+fn toggle_hud_speed_limit(
+    current_enabled: bool,
+    current_kib: u64,
+) -> (
+    bool,
+    u64,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    let next_enabled = !(current_enabled && current_kib > 0);
+    let mut values = std::collections::BTreeMap::new();
+    values.insert(
+        "download_speed_limit_enabled".into(),
+        serde_json::Value::Bool(next_enabled),
+    );
+    let effective_kib = if next_enabled && current_kib == 0 {
+        values.insert(
+            "download_speed_limit_kib".into(),
+            serde_json::Value::from(2048u64),
+        );
+        2048
+    } else {
+        current_kib
+    };
+    (next_enabled, effective_kib, values)
+}
+
+fn format_hud_speed_limit_feedback(enabled: bool, kib: u64) -> String {
+    if !enabled || kib == 0 {
+        return "已取消限速".into();
+    }
+    if kib >= 1024 {
+        if kib.is_multiple_of(1024) {
+            format!("已限速 {} MB/s", kib / 1024)
+        } else {
+            format!("已限速 {:.1} MB/s", kib as f64 / 1024.0)
+        }
+    } else {
+        format!("已限速 {kib} KB/s")
+    }
+}
+
+fn store_settings_via_ipc(
+    values: std::collections::BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let mut client = CoreIpcClient::connect()?;
+    match client.request(&CorePipeRequest::StoreSettings {
+        request_id: 1,
+        values,
+    })? {
+        CorePipeResponse::Settings { .. } | CorePipeResponse::Events { .. } => Ok(()),
+        CorePipeResponse::Error { message, .. } => Err(message),
+        other => Err(format!("意外的设置响应：{other:?}")),
+    }
+}
+
+fn completion_action_index_for(power_action: &str, open_folder_on_complete: bool) -> i32 {
+    match power_action.trim() {
+        "sleep" => 2,
+        "hibernate" => 3,
+        "shutdown" => 4,
+        _ if open_folder_on_complete => 1,
+        _ => 0,
+    }
+}
+
+/// Maps HUD combo box index to `(core_completion_power_action, open_folder_on_complete)`.
+/// Core only accepts `"none"`, `"sleep"`, `"hibernate"`, `"shutdown"`.
+fn completion_action_from_index(index: i32) -> (&'static str, bool) {
+    match index {
+        1 => ("none", true),
+        2 => ("sleep", false),
+        3 => ("hibernate", false),
+        4 => ("shutdown", false),
+        _ => ("none", false),
+    }
+}
+
+fn sync_progress_settings(
+    item: &ProgressWindow,
+    settings: &PresenterSettings,
+    open_folder_on_complete: bool,
+) {
+    let active = settings.speed_limit_enabled && settings.speed_limit_kib > 0;
+    item.set_speed_limit_enabled(active);
+    item.set_speed_limit_kib(settings.speed_limit_kib.min(i32::MAX as u64) as i32);
+    let effective_open_folder =
+        open_folder_on_complete && matches!(settings.completion_power_action.trim(), "" | "none");
+    item.set_completion_action_index(completion_action_index_for(
+        &settings.completion_power_action,
+        effective_open_folder,
+    ));
+}
+
+fn snapshot_folder(snapshot: &TaskSnapshot, fallback_dir: &str) -> Option<String> {
+    let dir = snapshot.download_dir.trim();
+    if !dir.is_empty() {
+        return Some(dir.to_owned());
+    }
+    let output = snapshot.output_path.trim();
+    if !output.is_empty() {
+        if let Some(parent) = std::path::Path::new(output)
+            .parent()
+            .and_then(|path| path.to_str())
+            .filter(|path| !path.trim().is_empty())
+        {
+            return Some(parent.to_owned());
+        }
+    }
+    let fallback = fallback_dir.trim();
+    if !fallback.is_empty() {
+        return Some(fallback.to_owned());
+    }
+    None
+}
+
+fn build_progress_speed_data(task: &TaskSnapshot) -> (Vec<f32>, String) {
+    let speeds = crate::speed_stats::summarize(task.speed_bytes_per_sec, &task.speed_history);
+    let stats_text = if speeds.peak > 0 {
+        format!(
+            "峰值 {} · 平均 {}",
+            format_speed(speeds.peak),
+            format_speed(speeds.average)
+        )
+    } else {
+        String::new()
+    };
+    let mut raw: Vec<u64> = task
+        .speed_history
+        .iter()
+        .rev()
+        .take(PROGRESS_SPEED_HISTORY_LIMIT)
+        .copied()
+        .collect();
+    raw.reverse();
+    if raw.is_empty() && task.speed_bytes_per_sec > 0 {
+        raw.push(task.speed_bytes_per_sec);
+    }
+    if raw.is_empty() {
+        return (Vec::new(), stats_text);
+    }
+    let maximum = raw.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let normalized = raw
+        .into_iter()
+        .map(|sample| (sample as f32 / maximum).clamp(0.0, 1.0))
+        .collect();
+    (normalized, stats_text)
+}
+
+fn build_connection_rows(task: &TaskSnapshot) -> Vec<ConnectionRow> {
+    if task.connection_parts.is_empty() {
+        return Vec::new();
+    }
+    let mut indices: Vec<usize> = if task.connection_parts.len() <= PROGRESS_CONNECTION_ROWS_LIMIT {
+        (0..task.connection_parts.len()).collect()
+    } else {
+        let mut selected: Vec<usize> = task
+            .connection_parts
+            .iter()
+            .enumerate()
+            .filter(|(_, part)| {
+                matches!(
+                    part.state.as_str(),
+                    "active" | "downloading" | "retrying" | "retry"
+                )
+            })
+            .map(|(index, _)| index)
+            .take(PROGRESS_CONNECTION_ROWS_LIMIT)
+            .collect();
+        if selected.len() < PROGRESS_CONNECTION_ROWS_LIMIT {
+            for index in (0..task.connection_parts.len()).rev() {
+                if selected.len() >= PROGRESS_CONNECTION_ROWS_LIMIT {
+                    break;
+                }
+                if !selected.contains(&index) {
+                    selected.push(index);
+                }
+            }
+        }
+        selected.sort_unstable();
+        selected
+    };
+    indices.truncate(PROGRESS_CONNECTION_ROWS_LIMIT);
+    indices
+        .into_iter()
+        .map(|index| {
+            let part = &task.connection_parts[index];
+            let span = part.end.saturating_sub(part.start).saturating_add(1).max(1);
+            let (state, state_label) = match part.state.as_str() {
+                "active" | "downloading" => ("active", "下载中"),
+                "done" | "completed" => ("done", "已完成"),
+                "retrying" | "retry" => ("retrying", "重试中"),
+                _ => ("queued", "等待"),
+            };
+            let done = if state == "done" {
+                span
+            } else {
+                part.done.min(span)
+            };
+            let progress = (done as f32 / span as f32).clamp(0.0, 1.0);
+            ConnectionRow {
+                index: format!("#{}", index + 1).into(),
+                progress,
+                transferred: format!("{} / {}", format_bytes(done), format_bytes(span)).into(),
+                state: state.into(),
+                state_label: state_label.into(),
+            }
+        })
+        .collect()
+}
+
+fn format_hud_connection_summary(task: &TaskSnapshot) -> String {
+    if task.connection_parts.is_empty() {
+        return if task.active_workers > 0 {
+            format!("{} 个活动连接", task.active_workers)
+        } else if task.status == "paused" {
+            "连接已暂停".into()
+        } else {
+            "单连接传输".into()
+        };
+    }
+    let done = task
+        .connection_parts
+        .iter()
+        .filter(|part| matches!(part.state.as_str(), "done" | "completed"))
+        .count();
+    let active_parts = task
+        .connection_parts
+        .iter()
+        .filter(|part| matches!(part.state.as_str(), "active" | "downloading"))
+        .count() as u32;
+    let active = task.active_workers.max(active_parts);
+    format!(
+        "{active} 活动 · {done}/{} 分段",
+        task.connection_parts.len()
+    )
+}
+
+fn populate_progress_fixture(window: &ProgressWindow, expanded: bool) {
+    let mb = 1024 * 1024;
+    let sample_task = TaskSnapshot {
+        task_id: "fixture-progress-1".into(),
+        filename: "示例视频 · 1080p.mp4".into(),
+        status: "downloading".into(),
+        downloaded_bytes: 82 * mb,
+        total_bytes: Some(128 * mb),
+        speed_bytes_per_sec: (18.6 * mb as f64) as u64,
+        active_workers: 3,
+        completed_ranges: 64,
+        total_ranges: 100,
+        download_dir: r"D:\下载\媒体".into(),
+        speed_history: vec![
+            6 * mb,
+            9 * mb,
+            12 * mb,
+            15 * mb,
+            14 * mb,
+            17 * mb,
+            20 * mb,
+            22 * mb,
+            19 * mb,
+            16 * mb,
+            18 * mb,
+            21 * mb,
+            23 * mb,
+            20 * mb,
+            18 * mb,
+            17 * mb,
+            19 * mb,
+            21 * mb,
+            18 * mb,
+            19 * mb,
+        ],
+        connection_parts: vec![
+            hls_client::ConnectionPart {
+                start: 0,
+                end: 24 * mb - 1,
+                done: 24 * mb,
+                state: "done".into(),
+            },
+            hls_client::ConnectionPart {
+                start: 24 * mb,
+                end: 48 * mb - 1,
+                done: 18 * mb,
+                state: "active".into(),
+            },
+            hls_client::ConnectionPart {
+                start: 48 * mb,
+                end: 72 * mb - 1,
+                done: 24 * mb,
+                state: "done".into(),
+            },
+            hls_client::ConnectionPart {
+                start: 72 * mb,
+                end: 96 * mb - 1,
+                done: 11 * mb,
+                state: "active".into(),
+            },
+            hls_client::ConnectionPart {
+                start: 96 * mb,
+                end: 112 * mb - 1,
+                done: 5 * mb,
+                state: "retrying".into(),
+            },
+            hls_client::ConnectionPart {
+                start: 112 * mb,
+                end: 128 * mb - 1,
+                done: 0,
+                state: "queued".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    window.set_headline(PROGRESS_HEADLINE.into());
+    window.set_filename(sample_task.filename.clone().into());
+    window.set_speed("18.6 MB/s".into());
+    window.set_progress(0.64);
+    window.set_progress_known(true);
+    window.set_paused(false);
+    window.set_processing(false);
+    window.set_segments(slint::ModelRc::new(slint::VecModel::from(
+        build_segment_blocks(&sample_task),
+    )));
+    window.set_transferred("81.9 MB / 128.0 MB · 分片 64 / 100".into());
+    window.set_stage_label("正在下载".into());
+    window.set_remaining("剩余约 3 秒".into());
+    let (speed_history, speed_stats) = build_progress_speed_data(&sample_task);
+    window.set_speed_history(slint::ModelRc::new(slint::VecModel::from(speed_history)));
+    window.set_speed_stats(speed_stats.into());
+    window.set_connection_rows(slint::ModelRc::new(slint::VecModel::from(
+        build_connection_rows(&sample_task),
+    )));
+    window.set_connection_summary(format_hud_connection_summary(&sample_task).into());
+    window.set_task_index(1);
+    window.set_task_count(3);
+    window.set_speed_limit_enabled(false);
+    window.set_speed_limit_kib(0);
+    window.set_completion_action_index(0);
+    window.set_can_open_folder(true);
+    window.set_expanded(expanded);
+}
+
 /// Ordered view of the tasks currently shown by the progress HUD. Entries are
-/// kept sorted by (activation, task_id): the primary is the task activated
-/// earliest, with simultaneous activations broken by lowest task_id. The
-/// primary only changes when it actually stops, so concurrent downloads never
-/// flip the HUD between filenames, and the HUD hides only once no task is
-/// active anymore.
+/// kept sorted by (activation, task_id): the default selection is the task
+/// activated earliest, with simultaneous activations broken by lowest task_id.
+/// Users can also cycle between tracked tasks in-place and pin a HUD-paused
+/// task so Pause/Resume works directly without hiding the HUD.
 #[derive(Default)]
 struct ActiveTaskHud {
     entries: Vec<ActiveTaskEntry>,
     next_activation: u64,
+    selected_task_id: Option<String>,
+    pinned_paused: HashSet<String>,
 }
 
 struct ActiveTaskEntry {
@@ -2806,14 +3465,67 @@ struct ActiveTaskEntry {
 }
 
 impl ActiveTaskHud {
+    fn sync_selection(&mut self) {
+        if self.entries.is_empty() {
+            self.selected_task_id = None;
+            return;
+        }
+        let still_present = self
+            .selected_task_id
+            .as_deref()
+            .is_some_and(|selected| self.entries.iter().any(|entry| entry.task_id == selected));
+        if !still_present {
+            self.selected_task_id = self.entries.first().map(|entry| entry.task_id.clone());
+        }
+    }
+
+    fn current_snapshot(&self) -> Option<TaskSnapshot> {
+        if let Some(selected) = self.selected_task_id.as_deref() {
+            if let Some(entry) = self.entries.iter().find(|entry| entry.task_id == selected) {
+                return Some(entry.snapshot.clone());
+            }
+        }
+        self.entries.first().map(|entry| entry.snapshot.clone())
+    }
+
+    /// Pin a tracked task so pausing it from the HUD keeps it visible in place.
+    fn mark_pause_requested(&mut self, task_id: &str) {
+        if self.entries.iter().any(|entry| entry.task_id == task_id) {
+            self.pinned_paused.insert(task_id.to_owned());
+        }
+    }
+
+    /// Remove a pause pin (e.g. if the pause command failed).
+    fn clear_pause_pin(&mut self, task_id: &str) {
+        self.pinned_paused.remove(task_id);
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.task_id == task_id && !task_is_active(&entry.snapshot.status))
+        {
+            self.entries.remove(index);
+            self.sync_selection();
+        }
+    }
+
+    /// Drop any HUD-pinned paused tasks (e.g. when the user explicitly closes the HUD).
+    fn dismiss_paused(&mut self) -> Option<TaskSnapshot> {
+        self.pinned_paused.clear();
+        self.entries
+            .retain(|entry| task_is_active(&entry.snapshot.status));
+        self.sync_selection();
+        self.current_snapshot()
+    }
+
     /// Fold a task snapshot into the view and return the snapshot the HUD
-    /// should display afterwards (None when no task is active anymore).
+    /// should display afterwards (None when no task is active or pinned anymore).
     fn observe(&mut self, snapshot: TaskSnapshot) -> Option<TaskSnapshot> {
         let index = self
             .entries
             .iter()
             .position(|entry| entry.task_id == snapshot.task_id);
         if task_is_active(&snapshot.status) {
+            self.pinned_paused.remove(&snapshot.task_id);
             match index {
                 Some(index) => self.entries[index].snapshot = snapshot,
                 None => {
@@ -2832,33 +3544,54 @@ impl ActiveTaskHud {
                     self.entries.insert(insert_at, entry);
                 }
             }
-        } else if let Some(index) = index {
-            self.entries.remove(index);
-        }
-        self.entries.first().map(|entry| entry.snapshot.clone())
-    }
-
-    /// Drop a task deleted while active and return the snapshot the HUD should
-    /// display afterwards.
-    fn remove(&mut self, task_id: &str) -> Option<TaskSnapshot> {
-        self.entries.retain(|entry| entry.task_id != task_id);
-        self.entries.first().map(|entry| entry.snapshot.clone())
-    }
-
-    /// Reconcile active HUD entries against a fresh full snapshot after reconnect/resync.
-    fn reconcile(&mut self, tasks: &[TaskSnapshot]) -> Option<TaskSnapshot> {
-        let active: HashMap<&str, &TaskSnapshot> = tasks
-            .iter()
-            .filter(|task| task_is_active(&task.status))
-            .map(|task| (task.task_id.as_str(), task))
-            .collect();
-        self.entries
-            .retain(|entry| active.contains_key(entry.task_id.as_str()));
-        for entry in &mut self.entries {
-            if let Some(snapshot) = active.get(entry.task_id.as_str()) {
-                entry.snapshot = (*snapshot).clone();
+        } else if snapshot.status == "paused" && self.pinned_paused.contains(&snapshot.task_id) {
+            if let Some(index) = index {
+                self.entries[index].snapshot = snapshot;
+            } else {
+                self.pinned_paused.remove(&snapshot.task_id);
+            }
+        } else {
+            self.pinned_paused.remove(&snapshot.task_id);
+            if let Some(index) = index {
+                self.entries.remove(index);
             }
         }
+        self.sync_selection();
+        self.current_snapshot()
+    }
+
+    /// Drop a task deleted while tracked and return the snapshot the HUD should
+    /// display afterwards.
+    fn remove(&mut self, task_id: &str) -> Option<TaskSnapshot> {
+        self.pinned_paused.remove(task_id);
+        self.entries.retain(|entry| entry.task_id != task_id);
+        self.sync_selection();
+        self.current_snapshot()
+    }
+
+    /// Reconcile HUD entries against a fresh full snapshot after reconnect/resync.
+    fn reconcile(&mut self, tasks: &[TaskSnapshot]) -> Option<TaskSnapshot> {
+        let by_id: HashMap<&str, &TaskSnapshot> = tasks
+            .iter()
+            .map(|task| (task.task_id.as_str(), task))
+            .collect();
+        self.entries.retain(|entry| {
+            let Some(snapshot) = by_id.get(entry.task_id.as_str()) else {
+                return false;
+            };
+            task_is_active(&snapshot.status)
+                || (snapshot.status == "paused" && self.pinned_paused.contains(&entry.task_id))
+        });
+        for entry in &mut self.entries {
+            if let Some(snapshot) = by_id.get(entry.task_id.as_str()) {
+                entry.snapshot = (*snapshot).clone();
+                if task_is_active(&snapshot.status) {
+                    self.pinned_paused.remove(&entry.task_id);
+                }
+            }
+        }
+        self.pinned_paused
+            .retain(|id| self.entries.iter().any(|entry| &entry.task_id == id));
         for snapshot in tasks.iter().filter(|task| task_is_active(&task.status)) {
             if !self
                 .entries
@@ -2868,11 +3601,50 @@ impl ActiveTaskHud {
                 self.observe(snapshot.clone());
             }
         }
-        self.entries.first().map(|entry| entry.snapshot.clone())
+        self.sync_selection();
+        self.current_snapshot()
+    }
+
+    /// Switch the displayed HUD task forward/backward with wrap-around.
+    fn cycle(&mut self, delta: i32) -> Option<TaskSnapshot> {
+        if self.entries.is_empty() {
+            self.selected_task_id = None;
+            return None;
+        }
+        let len = self.entries.len();
+        let current = self
+            .selected_task_id
+            .as_deref()
+            .and_then(|selected| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.task_id == selected)
+            })
+            .unwrap_or(0);
+        let next = (current as isize + delta as isize).rem_euclid(len as isize) as usize;
+        self.selected_task_id = Some(self.entries[next].task_id.clone());
+        Some(self.entries[next].snapshot.clone())
+    }
+
+    /// 1-based `(current, total)` position for the multi-task switcher badge.
+    fn task_position(&self) -> (usize, usize) {
+        if self.entries.is_empty() {
+            return (0, 0);
+        }
+        let current = self
+            .selected_task_id
+            .as_deref()
+            .and_then(|selected| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.task_id == selected)
+            })
+            .unwrap_or(0);
+        (current + 1, self.entries.len())
     }
 
     fn primary_task_id(&self) -> Option<String> {
-        self.entries.first().map(|entry| entry.task_id.clone())
+        self.current_snapshot().map(|snapshot| snapshot.task_id)
     }
 }
 
@@ -2895,9 +3667,11 @@ fn present_complete_toast(item: &CompleteWindow) {
 fn update_task_windows(
     snapshot: TaskSnapshot,
     settings: PresenterRuntimeSettings,
+    open_folder_on_complete: bool,
+    fallback_dir: &str,
     progress: &slint::Weak<ProgressWindow>,
     complete: &slint::Weak<CompleteWindow>,
-    active_hud: &RefCell<ActiveTaskHud>,
+    active_hud: &Mutex<ActiveTaskHud>,
     rendered_hud_task: &Mutex<Option<String>>,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
@@ -2905,11 +3679,18 @@ fn update_task_windows(
     if task_is_active(&snapshot.status) {
         completed_notified.borrow_mut().remove(&snapshot.task_id);
     }
-    let primary = active_hud.borrow_mut().observe(snapshot.clone());
+    let (primary, position) = active_hud
+        .lock()
+        .map(|mut hud| {
+            let primary = hud.observe(snapshot.clone());
+            let pos = hud.task_position();
+            (primary, pos)
+        })
+        .unwrap_or((None, (0, 0)));
     match primary {
         Some(primary) => {
             reset_progress_action_for_new_task(progress, rendered_hud_task, &primary.task_id);
-            render_progress_hud(progress, settings, &primary)
+            render_progress_hud(progress, settings, &primary, position, fallback_dir)
         }
         None => {
             if let Ok(mut rendered) = rendered_hud_task.lock() {
@@ -2929,6 +3710,22 @@ fn update_task_windows(
             .insert(snapshot.task_id.clone())
     {
         *completed_task.borrow_mut() = Some(snapshot.task_id.clone());
+        if open_folder_on_complete {
+            let folder = snapshot_folder(&snapshot, fallback_dir);
+            if let Some(dir) = folder {
+                let _ = file_dialogs::open(&dir);
+            } else {
+                let completed_id = snapshot.task_id.clone();
+                thread::spawn(move || {
+                    let _ = CoreIpcClient::connect().and_then(|mut client| {
+                        client.command(CoreCommand::OpenCompleted {
+                            task_id: completed_id,
+                            folder: true,
+                        })
+                    });
+                });
+            }
+        }
         if let Some(item) = complete.upgrade() {
             item.set_task_id(snapshot.task_id.clone().into());
             item.set_action_busy(false);
@@ -2976,6 +3773,8 @@ fn render_progress_hud(
     progress: &slint::Weak<ProgressWindow>,
     settings: PresenterRuntimeSettings,
     snapshot: &TaskSnapshot,
+    position: (usize, usize),
+    fallback_dir: &str,
 ) {
     if !settings.show_progress {
         return;
@@ -2990,23 +3789,33 @@ fn render_progress_hud(
         "render progress: {} {} {}",
         snapshot.task_id, snapshot.status, snapshot.downloaded_bytes
     ));
-    item.set_headline(
-        if matches!(snapshot.status.as_str(), "merging" | "checking") {
-            LOCAL_PROCESSING.into()
-        } else {
-            PROGRESS_HEADLINE.into()
-        },
-    );
-    item.set_filename(snapshot.filename.clone().into());
+    let paused = snapshot.status == "paused";
     let processing = matches!(snapshot.status.as_str(), "merging" | "checking");
+    item.set_headline(if processing {
+        LOCAL_PROCESSING.into()
+    } else {
+        PROGRESS_HEADLINE.into()
+    });
+    item.set_filename(snapshot.filename.clone().into());
+    item.set_paused(paused);
     item.set_processing(processing);
+    if (paused && item.get_action_text().as_str() == "正在暂停…")
+        || (!paused && item.get_action_text().as_str() == "正在继续…")
+    {
+        item.set_action_busy(false);
+        item.set_action_text("".into());
+    }
     item.set_speed(if processing {
         "本地处理中".into()
+    } else if paused {
+        "已暂停".into()
     } else {
         format_speed(snapshot.speed_bytes_per_sec).into()
     });
     item.set_remaining(if processing {
         "请稍候".into()
+    } else if paused {
+        "点击继续恢复下载".into()
     } else if snapshot.speed_bytes_per_sec > 0 {
         snapshot
             .total_bytes
@@ -3030,6 +3839,7 @@ fn render_progress_hud(
             "merging" => "正在合并音视频",
             "checking" => "正在校验文件",
             "recording" => "正在录制",
+            "paused" => "已暂停",
             _ => "正在下载",
         }
         .into(),
@@ -3063,6 +3873,16 @@ fn render_progress_hud(
         .into(),
         None => format!("已下载 {}", format_bytes(snapshot.downloaded_bytes)).into(),
     });
+    item.set_task_index(position.0.max(1) as i32);
+    item.set_task_count(position.1 as i32);
+    let (speed_history, speed_stats) = build_progress_speed_data(snapshot);
+    item.set_speed_history(slint::ModelRc::new(slint::VecModel::from(speed_history)));
+    item.set_speed_stats(speed_stats.into());
+    item.set_connection_rows(slint::ModelRc::new(slint::VecModel::from(
+        build_connection_rows(snapshot),
+    )));
+    item.set_connection_summary(format_hud_connection_summary(snapshot).into());
+    item.set_can_open_folder(snapshot_folder(snapshot, fallback_dir).is_some());
     let first_show = !item.window().is_visible();
     if first_show {
         item.invoke_enter();
@@ -4133,5 +4953,269 @@ mod tests {
             evaluate_quick_download(&offer, &settings, &[], &HashMap::new()),
             None
         );
+    }
+
+    #[test]
+    fn progress_hud_pause_in_place_pins_task_and_resumes_smoothly() {
+        let mut hud = ActiveTaskHud::default();
+        assert_eq!(
+            hud.observe(hud_snapshot("t-1", "downloading"))
+                .as_ref()
+                .map(|t| t.status.as_str()),
+            Some("downloading")
+        );
+        hud.mark_pause_requested("t-1");
+        let paused = hud
+            .observe(hud_snapshot("t-1", "paused"))
+            .expect("HUD-initiated pause should stay pinned");
+        assert_eq!(paused.task_id, "t-1");
+        assert_eq!(paused.status, "paused");
+        assert_eq!(hud.primary_task_id().as_deref(), Some("t-1"));
+        assert_eq!(hud.task_position(), (1, 1));
+
+        // Reconcile preserves a HUD-pinned paused task while still paused.
+        let reconciled = hud
+            .reconcile(&[hud_snapshot("t-1", "paused")])
+            .expect("reconcile should keep HUD-pinned paused task");
+        assert_eq!(reconciled.status, "paused");
+
+        // Resuming in place returns to active state and clears the pause pin.
+        let resumed = hud
+            .observe(hud_snapshot("t-1", "downloading"))
+            .expect("resumed task stays visible");
+        assert_eq!(resumed.status, "downloading");
+        // After resume, a later external pause (without mark_pause_requested) drops cleanly.
+        assert!(hud.observe(hud_snapshot("t-1", "paused")).is_none());
+        assert_eq!(hud.primary_task_id(), None);
+    }
+
+    #[test]
+    fn progress_hud_external_pause_never_pops_or_pins_untracked_task() {
+        let mut hud = ActiveTaskHud::default();
+        // Pausing externally when HUD wasn't showing the task must never pop a HUD.
+        assert!(hud.observe(hud_snapshot("ext-1", "paused")).is_none());
+        assert_eq!(hud.task_position(), (0, 0));
+
+        // Calling mark_pause_requested on an untracked task does not pin it either.
+        hud.mark_pause_requested("ext-2");
+        assert!(hud.observe(hud_snapshot("ext-2", "paused")).is_none());
+        assert_eq!(hud.primary_task_id(), None);
+    }
+
+    #[test]
+    fn progress_hud_dismiss_cancel_complete_and_delete_clear_pinned_paused_task() {
+        // 1. Closing/dismissing HUD drops pinned paused tasks.
+        let mut hud = ActiveTaskHud::default();
+        hud.observe(hud_snapshot("t-1", "downloading"));
+        hud.mark_pause_requested("t-1");
+        hud.observe(hud_snapshot("t-1", "paused"));
+        assert!(hud.dismiss_paused().is_none());
+        assert_eq!(hud.primary_task_id(), None);
+
+        // 2. Canceling clears pinned paused task.
+        hud.observe(hud_snapshot("t-2", "downloading"));
+        hud.mark_pause_requested("t-2");
+        hud.observe(hud_snapshot("t-2", "paused"));
+        assert!(hud.observe(hud_snapshot("t-2", "canceled")).is_none());
+
+        // 3. Completing clears pinned paused task.
+        hud.observe(hud_snapshot("t-3", "downloading"));
+        hud.mark_pause_requested("t-3");
+        hud.observe(hud_snapshot("t-3", "paused"));
+        assert!(hud.observe(hud_snapshot("t-3", "completed")).is_none());
+
+        // 4. Deleting clears pinned paused task.
+        hud.observe(hud_snapshot("t-4", "downloading"));
+        hud.mark_pause_requested("t-4");
+        hud.observe(hud_snapshot("t-4", "paused"));
+        assert!(hud.remove("t-4").is_none());
+
+        // 5. Failed pause IPC clears pin cleanly.
+        hud.observe(hud_snapshot("t-5", "downloading"));
+        hud.mark_pause_requested("t-5");
+        hud.clear_pause_pin("t-5");
+        assert!(hud.observe(hud_snapshot("t-5", "paused")).is_none());
+    }
+
+    #[test]
+    fn progress_hud_multi_task_switcher_cycles_and_tracks_position() {
+        let mut hud = ActiveTaskHud::default();
+        assert_eq!(hud.task_position(), (0, 0));
+        assert!(hud.cycle(1).is_none());
+
+        hud.observe(hud_snapshot("task-a", "downloading"));
+        hud.observe(hud_snapshot("task-b", "downloading"));
+        hud.observe(hud_snapshot("task-c", "recording"));
+        assert_eq!(hud.primary_task_id().as_deref(), Some("task-a"));
+        assert_eq!(hud.task_position(), (1, 3));
+
+        // Cycle forward through all three tasks and wrap around.
+        assert_eq!(
+            hud.cycle(1).as_ref().map(|t| t.task_id.as_str()),
+            Some("task-b")
+        );
+        assert_eq!(hud.task_position(), (2, 3));
+        assert_eq!(
+            hud.cycle(1).as_ref().map(|t| t.task_id.as_str()),
+            Some("task-c")
+        );
+        assert_eq!(hud.task_position(), (3, 3));
+        assert_eq!(
+            hud.cycle(1).as_ref().map(|t| t.task_id.as_str()),
+            Some("task-a")
+        );
+        assert_eq!(hud.task_position(), (1, 3));
+
+        // Cycle backward wraps to the last task.
+        assert_eq!(
+            hud.cycle(-1).as_ref().map(|t| t.task_id.as_str()),
+            Some("task-c")
+        );
+        assert_eq!(hud.task_position(), (3, 3));
+
+        // Progress updates on other tasks do not steal the user's selected task.
+        let shown = hud.observe(hud_snapshot("task-a", "downloading")).unwrap();
+        assert_eq!(shown.task_id, "task-c");
+        assert_eq!(hud.task_position(), (3, 3));
+
+        // When the selected task finishes, selection falls back cleanly to the earliest task.
+        let fallback = hud.observe(hud_snapshot("task-c", "completed")).unwrap();
+        assert_eq!(fallback.task_id, "task-a");
+        assert_eq!(hud.task_position(), (1, 2));
+    }
+
+    #[test]
+    fn progress_hud_connection_rows_and_speed_curve_format_and_cap_at_eight() {
+        use super::{
+            build_connection_rows, build_progress_speed_data, format_hud_connection_summary,
+        };
+
+        let mb = 1024 * 1024;
+        let parts: Vec<ConnectionPart> = (0..12)
+            .map(|i| ConnectionPart {
+                start: i * mb,
+                end: (i + 1) * mb - 1,
+                done: if i % 4 == 0 {
+                    mb
+                } else if i % 4 == 1 {
+                    mb / 2
+                } else if i % 4 == 2 {
+                    mb / 4
+                } else {
+                    0
+                },
+                state: match i % 4 {
+                    0 => "done",
+                    1 => "active",
+                    2 => "retrying",
+                    _ => "queued",
+                }
+                .into(),
+            })
+            .collect();
+        let task = TaskSnapshot {
+            status: "downloading".into(),
+            speed_bytes_per_sec: 4 * mb,
+            active_workers: 3,
+            speed_history: (1..=50).map(|n| n * 100 * 1024).collect(),
+            connection_parts: parts,
+            ..Default::default()
+        };
+
+        let rows = build_connection_rows(&task);
+        assert_eq!(rows.len(), 8);
+        // Active & retrying parts are prioritized (6 of them in 0..12), plus 2 recent others.
+        assert!(rows.iter().any(|row| row.state_label.as_str() == "下载中"));
+        assert!(rows.iter().any(|row| row.state_label.as_str() == "重试中"));
+        assert!(rows.iter().all(|row| row.index.starts_with('#')));
+        let active_row = rows
+            .iter()
+            .find(|row| row.state.as_str() == "active")
+            .unwrap();
+        assert!((active_row.progress - 0.5).abs() < 0.01);
+        assert_eq!(active_row.transferred.as_str(), "512.0 KB / 1.0 MB");
+
+        let (curve, stats) = build_progress_speed_data(&task);
+        assert_eq!(curve.len(), 40);
+        assert!((curve[39] - 1.0).abs() < 0.001);
+        assert!(stats.contains("峰值"));
+        assert!(stats.contains("平均"));
+
+        let summary = format_hud_connection_summary(&task);
+        assert!(summary.contains("3 活动"));
+        assert!(summary.contains("3/12 分段"));
+    }
+
+    #[test]
+    fn progress_hud_speed_limit_and_completion_action_helpers_emit_valid_core_values() {
+        use super::{
+            build_speed_limit_settings, completion_action_from_index, completion_action_index_for,
+            format_hud_speed_limit_feedback, progress_window_logical_size, toggle_hud_speed_limit,
+        };
+
+        let (w_compact, h_compact) = progress_window_logical_size(false);
+        let (w_expanded, h_expanded) = progress_window_logical_size(true);
+        assert_eq!(w_compact, w_expanded);
+        assert!(h_expanded > h_compact + 150.0);
+
+        let unlimited = build_speed_limit_settings(false, 0);
+        assert_eq!(
+            unlimited["download_speed_limit_enabled"],
+            serde_json::json!(false)
+        );
+        assert_eq!(unlimited["download_speed_limit_kib"], serde_json::json!(0));
+
+        let preset_2m = build_speed_limit_settings(true, 2048);
+        assert_eq!(
+            preset_2m["download_speed_limit_enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            preset_2m["download_speed_limit_kib"],
+            serde_json::json!(2048)
+        );
+        assert_eq!(format_hud_speed_limit_feedback(true, 2048), "已限速 2 MB/s");
+        assert_eq!(format_hud_speed_limit_feedback(false, 0), "已取消限速");
+
+        // Toggle from 0 defaults to 2048 KiB/s; toggling off preserves configured KiB.
+        let (enabled, kib, values) = toggle_hud_speed_limit(false, 0);
+        assert!(enabled);
+        assert_eq!(kib, 2048);
+        assert_eq!(values["download_speed_limit_kib"], serde_json::json!(2048));
+        let (enabled_off, kib_kept, values_off) = toggle_hud_speed_limit(true, 512);
+        assert!(!enabled_off);
+        assert_eq!(kib_kept, 512);
+        assert!(!values_off.contains_key("download_speed_limit_kib"));
+
+        // Every combo index maps to a valid Core completion_power_action wire value.
+        let valid_core = ["none", "sleep", "hibernate", "shutdown"];
+        for index in 0..=4 {
+            let (wire, open_folder) = completion_action_from_index(index);
+            assert!(valid_core.contains(&wire), "invalid wire value {wire}");
+            assert_eq!(completion_action_index_for(wire, open_folder), index);
+        }
+        assert_eq!(completion_action_from_index(1), ("none", true));
+    }
+
+    #[test]
+    fn progress_window_fixture_populates_compact_and_expanded_offscreen() {
+        use super::{populate_progress_fixture, ProgressWindow};
+        use slint::Model;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let compact = ProgressWindow::new().unwrap();
+        populate_progress_fixture(&compact, false);
+        assert!(!compact.get_expanded());
+        assert_eq!(compact.get_task_index(), 1);
+        assert_eq!(compact.get_task_count(), 3);
+        assert_eq!(compact.get_connection_rows().row_count(), 6);
+        assert!(compact.get_speed_history().row_count() >= 10);
+        assert!(!compact.get_speed_stats().is_empty());
+
+        let expanded = ProgressWindow::new().unwrap();
+        populate_progress_fixture(&expanded, true);
+        assert!(expanded.get_expanded());
+        assert_eq!(expanded.get_connection_rows().row_count(), 6);
+        assert_eq!(expanded.get_headline().as_str(), "下载进度");
     }
 }

@@ -595,9 +595,17 @@ export component WorkbenchWindow inherits Window {
                         }
                         }
                         // 非模态可折叠实时检视抽屉：点选任务无需弹窗即可看速度趋势、分片与状态。
-                        if root.inspector-open && !(root.media-visible && !root.media-detached) && root.viewport-height >= 500px: Rectangle {
-                            height: root.inspector-title == "" ? 64px : (146px + (root.inspector-has-telemetry ? 28px : 0px) + (root.inspector-diagnostic != "" ? 28px : 0px));
+                        inspector-drawer := Rectangle {
+                            private property <bool> shown: root.inspector-open && !(root.media-visible && !root.media-detached) && root.viewport-height >= 500px;
+                            private property <length> expanded-height: root.inspector-title == "" ? 64px : (146px + (root.inspector-has-telemetry ? 28px : 0px) + (root.inspector-diagnostic != "" ? 28px : 0px));
+                            height: self.shown ? self.expanded-height : 0px;
+                            opacity: self.shown ? 1 : 0;
+                            visible: self.height > 0px;
+                            clip: true;
+                            animate height, opacity { duration: Tokens.motion-slow; easing: ease-out; }
                             VerticalLayout {
+                                y: 0px;
+                                height: inspector-drawer.expanded-height;
                                 padding-top: 10px; spacing: 0px;
                                 Panel {
                                     vertical-stretch: 1;
@@ -714,6 +722,7 @@ export component WorkbenchWindow inherits Window {
             }
             dock := Rectangle {
                 height: root.media-visible && !root.media-detached ? min(390px, root.viewport-height * 0.48) : 0px;
+                animate height { duration: Tokens.motion-slow; easing: ease-out; }
             }
             Rectangle { height: 1px; background: Tokens.line; }
             Rectangle {
@@ -848,14 +857,15 @@ export component WorkbenchWindow inherits Window {
             in property <bool> tools-open: root.tools-open;
             changed context-open => { if self.context-open { self.context = true; } }
             changed tools-open => { if self.tools-open { self.context = false; } }
+            private property <length> base-y: min(max(0px, self.context ? root.context-y : root.tools-y), root.height - self.height);
             width: 224px; height: min(menu-layout.preferred-height, root.height - 12px);
             x: min(max(0px, self.context ? root.context-x : root.tools-x), root.width - self.width);
-            y: min(max(0px, self.context ? root.context-y : root.tools-y), root.height - self.height);
+            y: self.base-y + ((root.tools-open || root.context-open) ? 0px : -6px);
             background: Tokens.surface; border-width: 1px; border-color: Tokens.line; border-radius: Tokens.card-radius;
             drop-shadow-offset-y: 8px; drop-shadow-blur: 24px; drop-shadow-color: Tokens.dark ? #00000066 : #10182826;
             opacity: root.tools-open || root.context-open ? 1 : 0;
             visible: !root.media-fullscreen && self.opacity > 0;
-            animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
+            animate opacity, y { duration: Tokens.motion-fast; easing: ease-out; }
             HotScrollView {
                 menu-layout := VerticalLayout {
                     padding: 6px; spacing: 1px;

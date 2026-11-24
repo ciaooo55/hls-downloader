@@ -125,9 +125,7 @@ impl Workbench {
             }
             let failure_id = match &job {
                 WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
-                WorkbenchJob::Request(request) => serde_json::to_value(request)
-                    .ok()
-                    .and_then(|value| value.get("request_id").and_then(serde_json::Value::as_u64)),
+                WorkbenchJob::Request(request) => request.request_id(),
             };
             let result = (|| {
                 if client.is_none() {
@@ -1259,9 +1257,7 @@ impl Workbench {
     fn enqueue(&self, commands: &mpsc::SyncSender<WorkbenchJob>, job: WorkbenchJob) -> bool {
         let id = match &job {
             WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
-            WorkbenchJob::Request(request) => serde_json::to_value(request)
-                .ok()
-                .and_then(|value| value["request_id"].as_u64()),
+            WorkbenchJob::Request(request) => request.request_id(),
         };
         if commands.try_send(job).is_err() {
             self.window
@@ -1704,10 +1700,7 @@ impl Workbench {
     }
 
     fn response(self: &Rc<Self>, response: CorePipeResponse) {
-        if let Some(id) = serde_json::to_value(&response)
-            .ok()
-            .and_then(|value| value["request_id"].as_u64())
-        {
+        if let Some(id) = response.request_id() {
             self.outstanding.borrow_mut().remove(&id);
         }
         if let Some(media) = self.media.borrow().as_ref() {

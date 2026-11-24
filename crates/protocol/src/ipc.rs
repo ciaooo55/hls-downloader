@@ -167,6 +167,38 @@ pub enum CorePipeRequest {
     },
 }
 
+impl CorePipeRequest {
+    pub fn request_id(&self) -> Option<u64> {
+        match self {
+            Self::CastControl { request_id, .. }
+            | Self::PlayerControl { request_id, .. }
+            | Self::PlayerEmbed { request_id, .. }
+            | Self::Crawl { request_id, .. }
+            | Self::PreviewZip { request_id, .. }
+            | Self::Command { request_id, .. }
+            | Self::Snapshot { request_id }
+            | Self::ListTasks { request_id, .. }
+            | Self::WaitEventBatch { request_id, .. }
+            | Self::Capabilities { request_id }
+            | Self::WaitEvents { request_id, .. }
+            | Self::StoreSetting { request_id, .. }
+            | Self::StoreSettings { request_id, .. }
+            | Self::LoadSettings { request_id }
+            | Self::SetDefaultCookie { request_id, .. }
+            | Self::SetSiteRuleCredential { request_id, .. }
+            | Self::StoreCredential { request_id, .. }
+            | Self::LoadCredential { request_id, .. }
+            | Self::DeleteCredential { request_id, .. }
+            | Self::AdmitHandoff { request_id, .. }
+            | Self::SaveHandoff { request_id, .. }
+            | Self::LoadHandoffs { request_id, .. }
+            | Self::Subtitle { request_id, .. }
+            | Self::PlayerThumbnail { request_id, .. } => Some(*request_id),
+            Self::Hello { .. } => None,
+        }
+    }
+}
+
 impl std::fmt::Debug for CorePipeRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Payloads may carry credentials, signed URLs or serialized handoffs.
