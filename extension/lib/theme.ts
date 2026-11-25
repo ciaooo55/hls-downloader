@@ -13,6 +13,7 @@ export type ThemePreference = 'auto' | 'dark' | 'light'
 export type ResolvedTheme = 'dark' | 'light'
 
 export const THEME_STORAGE_KEY = 'themePreference'
+export const RESOLVED_THEME_STORAGE_KEY = 'hlsd_resolved_theme'
 
 export const THEME_TOKENS_CSS = `
 [data-hlsd-theme="dark"]{
@@ -167,6 +168,32 @@ export function normalizeThemePreference(value: unknown): ThemePreference {
   return value === 'dark' || value === 'light' ? value : 'auto'
 }
 
+export function readCachedResolvedTheme(
+  storage?: Pick<Storage, 'getItem'> | null,
+): ResolvedTheme | null {
+  try {
+    const target = storage === undefined ? globalThis.localStorage : storage
+    if (!target || typeof target.getItem !== 'function') return null
+    const cached = target.getItem(RESOLVED_THEME_STORAGE_KEY)
+    return cached === 'dark' || cached === 'light' ? cached : null
+  } catch {
+    return null
+  }
+}
+
+export function writeCachedResolvedTheme(
+  resolved: ResolvedTheme,
+  storage?: Pick<Storage, 'setItem'> | null,
+): void {
+  try {
+    const target = storage === undefined ? globalThis.localStorage : storage
+    if (!target || typeof target.setItem !== 'function') return
+    target.setItem(RESOLVED_THEME_STORAGE_KEY, resolved)
+  } catch {
+    // Sandboxed frames or disabled Web Storage fall back to async storage.local.
+  }
+}
+
 /**
  * Stamp the resolved theme on a surface root and keep it in sync with the
  * system scheme while the preference is 'auto'. Returns a cleanup function.
@@ -175,10 +202,13 @@ export function applyTheme(
   root: HTMLElement,
   preference: ThemePreference,
   matchMediaFn: (query: string) => MediaQueryList = query => window.matchMedia(query),
+  onResolve?: (resolved: ResolvedTheme) => void,
 ): () => void {
   const media = matchMediaFn('(prefers-color-scheme: dark)')
   const stamp = () => {
-    root.setAttribute('data-hlsd-theme', resolveTheme(preference, media.matches))
+    const resolved = resolveTheme(preference, media.matches)
+    root.setAttribute('data-hlsd-theme', resolved)
+    onResolve?.(resolved)
   }
   stamp()
   if (preference !== 'auto') return () => {}

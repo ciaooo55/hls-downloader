@@ -272,6 +272,13 @@ impl CoreStore {
                     next = following;
                 }
             }
+            self.connection
+                .execute(
+                    "INSERT INTO settings(key, value_json) VALUES ('url_passwords_migrated_v1', '\"1\"')\
+                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
             Ok(())
         })();
         if result.is_ok() {
@@ -297,7 +304,12 @@ type UrlPasswords = Vec<(String, String)>;
 fn collect_url_passwords<T: Serialize + DeserializeOwned>(
     value: T,
 ) -> Result<(T, UrlPasswords), String> {
-    let mut value = serde_json::to_value(value).map_err(|e| e.to_string())?;
+    let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+    if !serialized.contains('@') {
+        return Ok((value, Vec::new()));
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(&serialized).map_err(|e| e.to_string())?;
     let mut passwords = Vec::new();
     sanitize_url_value(&mut value, false, &mut |authority, password| {
         passwords.push((authority.into(), password.into()));
@@ -739,6 +751,13 @@ mod tests {
                     [serde_json::to_string(&spec).unwrap()],
                 )
                 .unwrap();
+            store
+                .connection
+                .execute(
+                    "DELETE FROM settings WHERE key='url_passwords_migrated_v1'",
+                    [],
+                )
+                .unwrap();
         }
         let store = CoreStore::open(&path).unwrap();
         let proxy = store.setting_string("proxy_url", "").unwrap();
@@ -776,5 +795,65 @@ mod tests {
             assert!(!String::from_utf8_lossy(&bytes).contains(secret));
         }
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn migrated_flag_skips_cold_boot_table_scan_and_redact_fast_path_roundtrips() {
+        let path = std::env::temp_dir().join(format!(
+            "url-migrated-flag-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        {
+            let store = CoreStore::open(&path).unwrap();
+            assert_eq!(
+                store
+                    .setting_string("url_passwords_migrated_v1", "")
+                    .unwrap(),
+                "1"
+            );
+            // Inject a trigger that would abort if `migrate_url_passwords` scanned and updated `task_specs`.
+            let spec = TaskSpec {
+                url: "https://cdn.example.test/video.mp4?token=abc".into(),
+                ..Default::default()
+            };
+            store
+                .connection
+                .execute(
+                    "INSERT INTO task_specs(task_id, spec_json) VALUES ('t1', ?1)",
+                    [serde_json::to_string(&spec).unwrap()],
+                )
+                .unwrap();
+        }
+        let observer = rusqlite::Connection::open(&path).unwrap();
+        let before: i64 = observer
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap();
+        let reopened = CoreStore::open(&path).unwrap();
+        let after: i64 = observer
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "cold boot with migration flag set must not write"
+        );
+        assert_eq!(reopened.load_task_specs().unwrap().len(), 1);
+        drop(reopened);
+        drop(observer);
+        let _ = std::fs::remove_file(path);
+
+        // Verify fast-path `redact_urls` without `@` and slow-path with `@`.
+        let plain_cmd = crate::CoreCommand::UpdateProgress {
+            task_id: "task-fast".into(),
+            downloaded_bytes: 512,
+            total_bytes: Some(1024),
+            speed_bytes_per_sec: 256,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        };
+        assert_eq!(redact_urls(plain_cmd.clone()).unwrap(), plain_cmd);
     }
 }

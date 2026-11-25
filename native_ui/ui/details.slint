@@ -84,11 +84,11 @@ export component DetailsWindow inherits Window {
                     Text { text: Math.round(Math.clamp(root.progress, 0, 1) * 100) + "%"; color: root.progress >= 1 ? Tokens.done : Tokens.accent; font-size: 12px; font-weight: 700; vertical-alignment: center; }
                 }
                 Rectangle {
-                    height: 7px; border-radius: 3.5px; background: Tokens.surface-3; clip: true;
+                    height: 6px; border-radius: 3px; background: Tokens.surface-3; clip: true;
                     Rectangle {
                         x: 0px; y: 0px; height: parent.height;
                         width: parent.width * Math.clamp(root.progress, 0, 1);
-                        border-radius: 3.5px;
+                        border-radius: 3px;
                         background: root.progress >= 1 ? Tokens.done : Tokens.accent;
                         animate width { duration: Tokens.motion; easing: ease-out; }
                         animate background { duration: Tokens.motion-fast; }

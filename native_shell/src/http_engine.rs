@@ -358,6 +358,123 @@ fn strong_etag(value: &str) -> String {
     }
 }
 
+fn is_ephemeral_signature_query_param(raw_key: &str) -> bool {
+    let lower = raw_key.trim().to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "token"
+            | "sig"
+            | "signature"
+            | "sign"
+            | "upsig"
+            | "expires"
+            | "expire"
+            | "deadline"
+            | "e"
+            | "ts"
+            | "timestamp"
+            | "t"
+            | "hdnts"
+            | "hdnea"
+            | "wssecret"
+            | "wstime"
+            | "auth_key"
+            | "key"
+            | "policy"
+            | "ossaccesskeyid"
+            | "googleaccessid"
+            | "trid"
+            | "mid"
+            | "gen"
+            | "os"
+            | "og"
+            | "platform"
+            | "orderid"
+            | "logo"
+            | "sv"
+            | "se"
+            | "sp"
+            | "sr"
+            | "st"
+            | "spr"
+            | "sdd"
+    ) || lower.starts_with("x-amz-")
+        || lower.starts_with("x-oss-")
+        || lower.starts_with("x-cos-")
+        || lower.starts_with("x-goog-")
+}
+
+/// Normalizes an HTTP(S) resource URL into a stable checkpoint identity key by
+/// canonicalizing scheme/host/default-port and stripping ephemeral presigned
+/// query parameters while retaining resource-identifying path and query params.
+pub(crate) fn canonical_url_key(url: &str) -> String {
+    let without_fragment = url.trim().split('#').next().unwrap_or("").trim();
+    let Some((raw_scheme, rest)) = without_fragment.split_once("://") else {
+        return without_fragment.to_string();
+    };
+    let scheme = raw_scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return without_fragment.to_string();
+    }
+    let default_port: u16 = if scheme == "https" { 443 } else { 80 };
+    let (authority, tail) = match rest.find(['/', '?']) {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, "/"),
+    };
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, endpoint)| endpoint)
+        .trim();
+    if host_port.is_empty() {
+        return without_fragment.to_string();
+    }
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        match after_bracket.split_once(']') {
+            Some((ipv6, remainder)) => {
+                let parsed_port = remainder
+                    .strip_prefix(':')
+                    .and_then(|value| value.parse::<u16>().ok());
+                (format!("[{}]", ipv6.to_ascii_lowercase()), parsed_port)
+            }
+            None => (host_port.to_ascii_lowercase(), None),
+        }
+    } else {
+        match host_port.rsplit_once(':') {
+            Some((name, port_str)) if !name.contains(':') => match port_str.parse::<u16>() {
+                Ok(parsed) => (name.to_ascii_lowercase(), Some(parsed)),
+                Err(_) => (host_port.to_ascii_lowercase(), None),
+            },
+            _ => (host_port.to_ascii_lowercase(), None),
+        }
+    };
+    let (raw_path, raw_query) = match tail.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (tail, None),
+    };
+    let path = if raw_path.is_empty() { "/" } else { raw_path };
+    let mut out = format!("{scheme}://{host}");
+    if let Some(port) = port.filter(|value| *value != default_port) {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    out.push_str(path);
+    if let Some(query) = raw_query {
+        let kept: Vec<&str> = query
+            .split('&')
+            .filter(|segment| !segment.is_empty())
+            .filter(|segment| {
+                let key = segment.split('=').next().unwrap_or(segment);
+                !is_ephemeral_signature_query_param(key)
+            })
+            .collect();
+        if !kept.is_empty() {
+            out.push('?');
+            out.push_str(&kept.join("&"));
+        }
+    }
+    out
+}
+
 fn checkpoint_matches(job: &Job, value: &serde_json::Value) -> bool {
     if value.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
         return false;
@@ -365,35 +482,50 @@ fn checkpoint_matches(job: &Job, value: &serde_json::Value) -> bool {
     let Some(total) = value.get("total").and_then(serde_json::Value::as_u64) else {
         return false;
     };
-    if total != job.total {
+    if total == 0 || total != job.total {
         return false;
     }
-    let expected_key = job.resource_key.trim();
+    let fallback_key;
+    let expected_key = if job.resource_key.trim().is_empty() {
+        fallback_key = canonical_url_key(&job.url);
+        fallback_key.trim()
+    } else {
+        job.resource_key.trim()
+    };
     let saved_key = value
         .get("resource_key")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .trim();
-    if expected_key.is_empty() || saved_key != expected_key {
+    if expected_key.is_empty()
+        || saved_key.is_empty()
+        || (saved_key != expected_key && canonical_url_key(saved_key) != expected_key)
+    {
         return false;
     }
     let expected_etag = strong_etag(&job.etag);
-    if !expected_etag.is_empty() {
-        return strong_etag(
-            value
-                .get("etag")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(""),
-        ) == expected_etag;
+    let saved_etag = strong_etag(
+        value
+            .get("etag")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+    );
+    if !expected_etag.is_empty() && !saved_etag.is_empty() && expected_etag != saved_etag {
+        return false;
     }
     let expected_modified = job.last_modified.trim();
-    !expected_modified.is_empty()
-        && value
-            .get("last_modified")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .trim()
-            == expected_modified
+    let saved_modified = value
+        .get("last_modified")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if !expected_modified.is_empty()
+        && !saved_modified.is_empty()
+        && expected_modified != saved_modified
+    {
+        return false;
+    }
+    true
 }
 
 fn range_covered(completed: &[(u64, u64)], start: u64, end: u64) -> bool {
@@ -2684,7 +2816,11 @@ fn fetch_range(
         durable_cursor = cursor;
         if cursor > request_start {
             failed_attempts = 0;
-            scheduler.note_congestion();
+            if read_error.is_some() || cursor <= response_end {
+                scheduler.note_congestion();
+            } else {
+                scheduler.note_success();
+            }
             if read_error.is_some() {
                 wait_before_range_retry(job, stop, 1)?;
             }
@@ -3278,6 +3414,10 @@ fn curl_low_speed_args(throttled: bool) -> &'static [&'static str] {
     }
 }
 
+fn terminal_non_fallback_status(status: u16) -> bool {
+    matches!(status, 401 | 404 | 410 | 429 | 451)
+}
+
 fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
     let mut prepared = job.clone();
@@ -3286,7 +3426,15 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut tried_curl = false;
     if !proxy_needs_curl(&job.proxy) && !origin.is_empty() && waf_curl_cache_hit(&origin) {
         match fetch_curl_follow(&prepared, range) {
-            Some(Ok(fetched)) if (200..400).contains(&fetched.status) => return Ok(fetched),
+            Some(Ok(fetched))
+                if (200..400).contains(&fetched.status)
+                    || terminal_non_fallback_status(fetched.status) =>
+            {
+                if !(200..400).contains(&fetched.status) {
+                    waf_curl_cache_invalidate(&origin);
+                }
+                return Ok(fetched);
+            }
             Some(Ok(_)) => {
                 tried_curl = true;
                 waf_curl_cache_invalidate(&origin);
@@ -3319,7 +3467,24 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
     if browser_eligible && !proxy_needs_curl(&job.proxy) {
         if let Some(result) = fetch_curl_follow(job, range) {
             match result {
-                Ok(fetched) if (200..400).contains(&fetched.status) => return Ok(fetched),
+                Ok(fetched)
+                    if (200..400).contains(&fetched.status)
+                        || terminal_non_fallback_status(fetched.status) =>
+                {
+                    return Ok(fetched);
+                }
+                Ok(fetched) if fetched.status == 403 => {
+                    // Browser-impersonated curl already attempted the request; allow at most
+                    // one native TLS fallback in case fingerprint handling differs, without
+                    // re-entering `fetch()` (which could invoke curl a second time).
+                    let mut prepared = job.clone();
+                    apply_browser_profile(&mut prepared.headers);
+                    return match fetch_follow(&prepared, range) {
+                        Ok(native) if (200..400).contains(&native.status) => Ok(native),
+                        Err(error @ (EngineError::Pause | EngineError::Cancel)) => Err(error),
+                        Ok(_) | Err(_) => Ok(fetched),
+                    };
+                }
                 Err(error @ (EngineError::Pause | EngineError::Cancel)) => return Err(error),
                 Ok(_) | Err(_) => {}
             }
@@ -4090,6 +4255,7 @@ fn fetch_via_curl_impersonate(
             .stderr(stderr)
             .spawn()
             .map_err(|error| EngineError::Failed(error.to_string()))?;
+        crate::job_object::assign_child(&child);
         drop(command);
         if let Some(config) = proxy_config {
             if let Err(error) = child
@@ -10782,6 +10948,270 @@ mod tests {
         );
 
         waf_curl_cache_invalidate(&origin_key);
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &origin_url);
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn canonical_url_key_strips_signatures_and_keeps_resource_identity() {
+        let first = canonical_url_key(
+            "HTTPS://UPOS-SZ-MIRRORCOS.BILIVIDEO.COM:443/upgcxcode/12/34/30280.m4s?e=ig8euxZM2rNcNbdlhoNvNC8BqJIzNbfqXBvEqxTEto8BTrNvN0GvT90W5JZMkX_YN0MvXg8gNEV4NC8xNEV4N03eN0B5tZlqNxTEto8BTrNvNeZVuJ10Kj_g2UB02J0mN0B5tZlqNCNEto8BTrNvNC7MTX502C8f2jmMQJ6mqF2fka1mqx6gqj0eN0B599M=&uipk=5&nbs=1&deadline=1700000000&gen=playurlv2&os=cosbv&oi=123&trid=abcd&mid=999&platform=pc&upsig=11111111111111111111111111111111&uparams=e,uipk,nbs,deadline,gen,os,oi,trid,mid,platform#frag",
+        );
+        let second = canonical_url_key(
+            "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/30280.m4s?e=NEW_E&uipk=5&nbs=1&deadline=1999999999&gen=playurlv2&os=cosbv&oi=123&trid=efgh&mid=999&platform=pc&upsig=22222222222222222222222222222222&uparams=e,uipk,nbs,deadline,gen,os,oi,trid,mid,platform",
+        );
+        assert_eq!(first, second);
+        assert!(first.contains("uipk=5&nbs=1&oi=123"));
+        assert!(!first.contains("upsig="));
+        assert!(!first.contains("deadline="));
+
+        let s3_a = canonical_url_key(
+            "https://bucket.s3.amazonaws.com/archive.iso?versionId=7&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA&X-Amz-Date=20260101T000000Z&X-Amz-Expires=900&X-Amz-Signature=deadbeef",
+        );
+        let s3_b = canonical_url_key(
+            "https://bucket.s3.amazonaws.com/archive.iso?versionId=7&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2&X-Amz-Date=20260102T000000Z&X-Amz-Expires=3600&X-Amz-Signature=cafebabe",
+        );
+        assert_eq!(
+            s3_a,
+            "https://bucket.s3.amazonaws.com/archive.iso?versionId=7"
+        );
+        assert_eq!(s3_a, s3_b);
+
+        let different = canonical_url_key(
+            "https://bucket.s3.amazonaws.com/archive.iso?versionId=8&X-Amz-Signature=cafebabe",
+        );
+        assert_ne!(s3_a, different);
+    }
+
+    #[test]
+    fn checkpoint_matches_allows_missing_validators_but_rejects_validator_mismatch() {
+        let (mut job, dir) = temp_job(
+            "https://cdn.example.test/video.mp4?token=new_sig&expires=999999",
+            false,
+            1024,
+            2,
+        );
+        job.resource_key = canonical_url_key(&job.url);
+        job.etag.clear();
+        job.last_modified.clear();
+
+        let saved_without_validators = serde_json::json!({
+            "version": 2,
+            "resource_key": "https://cdn.example.test/video.mp4",
+            "etag": "",
+            "last_modified": "",
+            "total": 1024,
+            "ranges": [[0, 511]]
+        });
+        assert!(checkpoint_matches(&job, &saved_without_validators));
+
+        // Both checkpoint and probed response have matching strong ETag -> allowed.
+        job.etag = "\"same-v1\"".into();
+        let saved_v1 = serde_json::json!({
+            "version": 2,
+            "resource_key": "https://cdn.example.test/video.mp4",
+            "etag": "\"same-v1\"",
+            "last_modified": "",
+            "total": 1024,
+            "ranges": [[0, 511]]
+        });
+        assert!(checkpoint_matches(&job, &saved_v1));
+
+        // Strong ETag changed -> rejected!
+        job.etag = "\"changed-v2\"".into();
+        assert!(!checkpoint_matches(&job, &saved_v1));
+
+        // Last-Modified changed -> rejected!
+        job.etag.clear();
+        job.last_modified = "Thu, 22 Oct 2026 10:00:00 GMT".into();
+        let saved_mod = serde_json::json!({
+            "version": 2,
+            "resource_key": "https://cdn.example.test/video.mp4",
+            "etag": "",
+            "last_modified": "Wed, 21 Oct 2026 10:00:00 GMT",
+            "total": 1024,
+            "ranges": [[0, 511]]
+        });
+        assert!(!checkpoint_matches(&job, &saved_mod));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn server_capped_206_partial_content_does_not_halve_desired_workers() {
+        let body: &'static [u8] = Box::leak(
+            (0..512 * 1024)
+                .map(|i| (i % 251) as u8)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let peak_inflight = Arc::new(AtomicUsize::new(0));
+        let active_inflight = Arc::new(AtomicUsize::new(0));
+        let peak_srv = Arc::clone(&peak_inflight);
+        let active_srv = Arc::clone(&active_inflight);
+        thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                let peak = Arc::clone(&peak_srv);
+                let active = Arc::clone(&active_srv);
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut req = String::new();
+                    let mut range_hdr = None;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if line.to_ascii_lowercase().starts_with("range:") {
+                            range_hdr = Some(line.split_once(':').unwrap().1.trim().to_string());
+                        }
+                        req.push_str(&line);
+                    }
+                    if req.is_empty() {
+                        return;
+                    }
+                    let mut out = reader.into_inner();
+                    if let Some(spec) = range_hdr.and_then(|r| {
+                        r.strip_prefix("bytes=")
+                            .and_then(|s| s.split_once('-'))
+                            .and_then(|(a, b)| {
+                                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                            })
+                    }) {
+                        let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        let _ = peak.fetch_max(now_active, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(25));
+                        let start = spec.0.min(body.len() - 1);
+                        // Cap each 206 response window to at most 64 KiB regardless of requested end.
+                        let capped_end = spec.1.min(start + 64 * 1024 - 1).min(body.len() - 1);
+                        let slice = &body[start..=capped_end];
+                        let header = format!(
+                            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: \"capped\"\r\nContent-Range: bytes {start}-{capped_end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len(),
+                            slice.len()
+                        );
+                        let _ = out.write_all(header.as_bytes());
+                        let _ = out.write_all(slice);
+                        active.fetch_sub(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        let url = format!("http://{addr}/capped.bin");
+        let (mut job, dir) = temp_job(&url, false, body.len() as u64, 4);
+        job.etag = "\"capped\"".into();
+        job.chunk_bytes = 256 * 1024;
+        run_job(&job).unwrap();
+        assert_eq!(fs::read(&job.output).unwrap(), body);
+        let observed_peak = peak_inflight.load(Ordering::SeqCst);
+        // Verify multi-worker splitting stayed active (>= 2 concurrent workers) and was not crushed to 1 by congestion penalties.
+        assert!(
+            observed_peak >= 2,
+            "expected concurrent multi-range workers without congestion collapse, peak_inflight={observed_peak}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fetch_browser_first_does_not_retry_across_transports_on_terminal_404() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let native_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&native_hits);
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let case_dir = std::env::temp_dir().join(format!("hls-browser-first-404-{stamp}"));
+        fs::create_dir_all(&case_dir).unwrap();
+        let curl_log = case_dir.join("curl-hits.txt");
+        fs::write(&curl_log, "").unwrap();
+        fs::write(
+            case_dir.join("head"),
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+        )
+        .unwrap();
+
+        #[cfg(windows)]
+        let script = {
+            let path = case_dir.join("fake-curl.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 setlocal\r\n\
+                 set \"D=%~dp0\"\r\n\
+                 echo hit>>\"%D%curl-hits.txt\"\r\n\
+                 :loop\r\n\
+                 if \"%~1\"==\"\" goto done\r\n\
+                 if \"%~1\"==\"--dump-header\" (\r\n\
+                   copy /y \"%D%head\" \"%~2\" >nul\r\n\
+                   goto done\r\n\
+                 )\r\n\
+                 shift\r\n\
+                 goto loop\r\n\
+                 :done\r\n\
+                 exit /b 0\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = case_dir.join("fake-curl.sh");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 d=\"$(dirname \"$0\")\"\n\
+                 echo hit >> \"$d/curl-hits.txt\"\n\
+                 h=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; done\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+
+        let origin_url = format!("https://127.0.0.1:{}/", addr.port());
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((origin_url.clone(), script));
+
+        let url = format!("{origin_url}missing.m4s");
+        let (mut job, dir) = temp_job(&url, true, 0, 1);
+        job.method = "GET".into();
+
+        let fetched = fetch_browser_first(&job, None).unwrap();
+        assert_eq!(fetched.status, 404);
+        assert_eq!(
+            fs::read_to_string(&curl_log).unwrap().lines().count(),
+            1,
+            "curl must execute once on terminal 404"
+        );
+        assert_eq!(
+            native_hits.load(Ordering::SeqCst),
+            0,
+            "terminal 404 from primary browser transport must not fall back to native HTTP"
+        );
+
         TEST_CURL_OVERRIDES
             .lock()
             .unwrap_or_else(|error| error.into_inner())

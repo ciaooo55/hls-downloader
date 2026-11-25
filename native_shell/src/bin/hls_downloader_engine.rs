@@ -266,6 +266,7 @@ fn start_installer_endpoint(server: &hls_native_shell::CoreServer) {
         r"\\.\pipe\HLSDownloader.v7.maintenance.{}",
         std::process::id()
     ));
+    server.register_pipe_stop_handle(endpoint.stop_handle());
     let handler = server.transport_handler();
     let stop = server.stop_handle();
     let only_shutdown = std::sync::Arc::new(move |request| match request {

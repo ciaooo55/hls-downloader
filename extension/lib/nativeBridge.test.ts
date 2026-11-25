@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NativeBridge, NativeHostError, nativeDisconnectDetail, nativeDisconnectError, type NativePortLike } from './nativeBridge'
+import { NativeBridge, NativeHostError, PORT_IDLE_MS, PREEMPT_GRACE_MS, nativeDisconnectDetail, nativeDisconnectError, type NativePortLike } from './nativeBridge'
 
 class FakeEvent<T extends (...args: any[]) => void> {
   listener: T | null = null
@@ -270,12 +270,15 @@ describe('persistent native bridge', () => {
     bridge.close()
   })
 
-  it('lets local-file handoff preempt a stalled heartbeat and then resumes the read', async () => {
+  it('lets local-file handoff preempt a stalled heartbeat after the 250ms grace window and then resumes the read', async () => {
+    vi.useFakeTimers()
     const first = new FakePort(), second = new FakePort()
     const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second))
     const heartbeat = bridge.request({ op: 'ping' })
     const handoff = bridge.request({ op: 'offer_local_file', resource: { client_request_id: 'local-1' } })
     try {
+      expect(first.disconnect).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(PREEMPT_GRACE_MS)
       expect(first.disconnect).toHaveBeenCalledOnce()
       expect(second.posted[0]).toMatchObject({ op: 'offer_local_file' })
       first.onMessage.emit({ ok: true, __request_id: first.posted[0].__request_id })
@@ -284,7 +287,54 @@ describe('persistent native bridge', () => {
       expect(second.posted[1]).toMatchObject({ op: 'ping', __request_id: first.posted[0].__request_id })
       second.onMessage.emit({ ok: true, __request_id: second.posted[1].__request_id })
       await expect(heartbeat).resolves.toMatchObject({ ok: true })
-    } finally { bridge.close(); await Promise.allSettled([heartbeat, handoff]) }
+    } finally { bridge.close(); await Promise.allSettled([heartbeat, handoff]); vi.useRealTimers() }
+  })
+
+  it('lets a fast ping or get_settings finish within 250ms without killing NativeHost', async () => {
+    vi.useFakeTimers()
+    const port = new FakePort()
+    const connect = vi.fn(() => port)
+    const bridge = new NativeBridge(connect)
+    const ping = bridge.request({ op: 'ping' })
+    const offer = bridge.request({ op: 'offer', resource: { client_request_id: 'fast-1' } })
+    try {
+      await vi.advanceTimersByTimeAsync(10)
+      expect(port.disconnect).not.toHaveBeenCalled()
+      port.onMessage.emit({ ok: true, __request_id: port.posted[0].__request_id })
+      await expect(ping).resolves.toMatchObject({ ok: true })
+      expect(port.posted).toHaveLength(2)
+      expect(port.posted[1]).toMatchObject({ op: 'offer' })
+      port.onMessage.emit({ ok: true, handoff: { id: 'fast-handoff' }, __request_id: port.posted[1].__request_id })
+      await expect(offer).resolves.toMatchObject({ handoff: { id: 'fast-handoff' } })
+      expect(port.disconnect).not.toHaveBeenCalled()
+      expect(connect).toHaveBeenCalledOnce()
+    } finally { bridge.close(); await Promise.allSettled([ping, offer]); vi.useRealTimers() }
+  })
+
+  it('keeps standard port idle window at 95s so 61s gaps reuse the host and >95s gaps rotate cleanly', async () => {
+    vi.useFakeTimers()
+    expect(PORT_IDLE_MS).toBe(95_000)
+    const first = new FakePort(), second = new FakePort()
+    const connect = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const bridge = new NativeBridge(connect)
+    try {
+      const r1 = bridge.request({ op: 'ping' })
+      first.onMessage.emit({ ok: true, __request_id: first.posted[0].__request_id })
+      await r1
+
+      await vi.advanceTimersByTimeAsync(61_000)
+      const r2 = bridge.request({ op: 'ping' })
+      expect(first.disconnect).not.toHaveBeenCalled()
+      first.onMessage.emit({ ok: true, __request_id: first.posted[1].__request_id })
+      await r2
+
+      await vi.advanceTimersByTimeAsync(96_000)
+      const r3 = bridge.request({ op: 'ping' })
+      expect(first.disconnect).toHaveBeenCalledOnce()
+      second.onMessage.emit({ ok: true, __request_id: second.posted[0].__request_id })
+      await r3
+      expect(connect).toHaveBeenCalledTimes(2)
+    } finally { bridge.close(); vi.useRealTimers() }
   })
 
   it('does not interrupt or replay a local-file handoff when status reads arrive', async () => {

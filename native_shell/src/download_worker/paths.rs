@@ -22,10 +22,14 @@ impl TaskPaths {
         let task_dir = Self::task_dir_for(task_id, spec)?;
         let root = Self::download_root(spec);
         let mut final_name = safe_filename(&spec.filename, &spec.url);
-        if matches!(
-            spec.resource_kind,
-            crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
-        ) {
+        let has_dual_track_audio =
+            spec.resource_kind == crate::ResourceKind::File && !spec.audio_url.trim().is_empty();
+        if has_dual_track_audio
+            || matches!(
+                spec.resource_kind,
+                crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
+            )
+        {
             let extension = Path::new(&final_name)
                 .extension()
                 .and_then(|value| value.to_str())

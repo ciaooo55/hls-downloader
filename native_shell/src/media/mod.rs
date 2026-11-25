@@ -6,7 +6,9 @@ mod harness;
 mod hls;
 mod merge;
 pub(crate) mod preview;
-pub(crate) use merge::{hls_input_options, locate_ffmpeg, set_configured_ffmpeg};
+pub(crate) use merge::{
+    hls_input_options, locate_ffmpeg, mux_av_with_offset, set_configured_ffmpeg,
+};
 mod subtitles;
 
 const MAX_EXPANDED_MEDIA_BYTES: usize = 32 * 1024 * 1024;

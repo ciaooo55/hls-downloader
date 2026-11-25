@@ -19,8 +19,14 @@ use std::time::{Duration, Instant};
 // bound finite without invalidating a connection that the client may still reuse.
 const V7_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const V7_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(15);
+const V7_HELLO_MIN_TIMEOUT: Duration = Duration::from_millis(1_500);
+const V7_HELLO_MAX_TIMEOUT: Duration = Duration::from_millis(5_000);
 // 报完协议违规后收连接前，等对端把残留输入收尾的最长时间。见 linger_close。
 const V7_LINGER_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn hello_handshake_timeout(open_timeout: Duration) -> Duration {
+    open_timeout.clamp(V7_HELLO_MIN_TIMEOUT, V7_HELLO_MAX_TIMEOUT)
+}
 
 // Fallback wakeup interval for legacy callers that only flip `stop: AtomicBool`
 // without signaling `NamedPipeServer`'s manual-reset stop event handle.
@@ -1746,9 +1752,7 @@ impl CoreIpcClient {
             match TcpStream::connect_timeout(&addr, attempt) {
                 Ok(stream) => {
                     let _ = stream.set_nodelay(true);
-                    let hello_timeout = deadline
-                        .saturating_duration_since(std::time::Instant::now())
-                        .max(Duration::from_millis(50));
+                    let hello_timeout = hello_handshake_timeout(timeout);
                     let mut client = Self {
                         transport: IpcTransport::Tcp(stream),
                     };
@@ -1822,11 +1826,11 @@ impl CoreIpcClient {
 
     #[cfg(windows)]
     fn connect_pipe_timeout(name: &str, timeout_ms: u32) -> Result<Self, String> {
-        let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
         let pipe = NamedPipeClient::connect(name, timeout_ms)?;
-        let hello_timeout = deadline
-            .saturating_duration_since(Instant::now())
-            .max(Duration::from_millis(50));
+        // `timeout_ms` bounds waiting for the pipe instance to open; once opened,
+        // give the `Hello` RPC its own bounded handshake deadline so a Core under
+        // CPU/I/O load never fails `Hello` due to only ~50ms remaining.
+        let hello_timeout = hello_handshake_timeout(Duration::from_millis(u64::from(timeout_ms)));
         let mut client = Self {
             transport: IpcTransport::Pipe(pipe.into_stream()),
         };
@@ -2001,6 +2005,17 @@ impl CoreIpcClient {
             request_id: 1,
             key: key.into(),
             value,
+        })?;
+        store_setting_response(response)
+    }
+
+    pub fn store_settings(
+        &mut self,
+        values: std::collections::BTreeMap<String, Value>,
+    ) -> Result<(), String> {
+        let response = self.request(&CorePipeRequest::StoreSettings {
+            request_id: 1,
+            values,
         })?;
         store_setting_response(response)
     }
@@ -2337,6 +2352,79 @@ mod tests {
     #[test]
     fn windows_tcp_loopback_is_opt_in() {
         assert!(!tcp_loopback_enabled());
+    }
+
+    #[test]
+    fn hello_handshake_timeout_gives_opened_pipes_bounded_headroom() {
+        assert_eq!(
+            hello_handshake_timeout(Duration::from_millis(10)),
+            Duration::from_millis(1_500)
+        );
+        assert_eq!(
+            hello_handshake_timeout(Duration::from_millis(25)),
+            Duration::from_millis(1_500)
+        );
+        assert_eq!(
+            hello_handshake_timeout(Duration::from_millis(2_500)),
+            Duration::from_millis(2_500)
+        );
+        assert_eq!(
+            hello_handshake_timeout(Duration::from_secs(10)),
+            Duration::from_millis(5_000)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn connect_pipe_timeout_completes_hello_when_server_is_busy_past_open_budget() {
+        let pipe_name = format!(
+            r"\\.\pipe\HLSDownloader.v7.hello-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        );
+        let server = Arc::new(NamedPipeServer::new(pipe_name.clone()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_worker = {
+            let server = Arc::clone(&server);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                server.serve_loop_with_ready(
+                    stop,
+                    Arc::new(|request| match request {
+                        CorePipeRequest::Hello { .. } => {
+                            // Exceeds both a 25ms probe budget and the old 50ms floor.
+                            thread::sleep(Duration::from_millis(150));
+                            CorePipeResponse::Hello {
+                                protocol: V7_PROTOCOL_NAME.into(),
+                                version: V7_PROTOCOL_VERSION,
+                                pid: std::process::id(),
+                            }
+                        }
+                        other => CorePipeResponse::Error {
+                            request_id: other.request_id(),
+                            code: "unexpected".into(),
+                            message: format!("{other:?}"),
+                        },
+                    }),
+                    ready_tx,
+                )
+            })
+        };
+        ready_rx.recv().unwrap().unwrap();
+
+        let client = CoreIpcClient::connect_pipe_timeout(&pipe_name, 25);
+        assert!(
+            client.is_ok(),
+            "expected opened pipe to finish Hello within dedicated handshake budget: {:?}",
+            client.err()
+        );
+        drop(client);
+        server.signal_stop();
+        stop.store(true, Ordering::SeqCst);
+        server_worker.join().unwrap().unwrap();
     }
 
     #[test]

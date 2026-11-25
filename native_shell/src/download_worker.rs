@@ -170,7 +170,11 @@ pub fn build_job(
         sequential: method.eq_ignore_ascii_case("POST"),
         resume_from: 0,
         proxy: spec.proxy.clone(),
-        resource_key: spec.url.clone(),
+        resource_key: if spec.resource_key.trim().is_empty() {
+            crate::http_engine::canonical_url_key(&spec.url)
+        } else {
+            spec.resource_key.clone()
+        },
         etag: spec.etag.clone(),
         last_modified: spec.last_modified.clone(),
         control: paths.control.clone(),
@@ -220,13 +224,56 @@ pub(crate) fn hydrate_replay_headers(
     Ok((spec, replay))
 }
 
+pub(crate) fn normalize_dual_track_mp4_filename(name: &str) -> String {
+    let trimmed = name.trim();
+    let ext = Path::new(trimmed)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "mp4" {
+        return trimmed.to_string();
+    }
+    let base = if matches!(
+        ext.as_str(),
+        "m3u8" | "m3u" | "mpd" | "ts" | "m4s" | "webm" | "mkv" | "flv" | "mov" | "avi"
+    ) {
+        Path::new(trimmed)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or(trimmed)
+    } else {
+        trimmed
+    };
+    let suffix_units = ".mp4".encode_utf16().count();
+    let budget = 255usize.saturating_sub(suffix_units);
+    let mut used = 0usize;
+    let mut clamped = String::with_capacity(base.len() + 4);
+    for ch in base.chars() {
+        let width = ch.len_utf16();
+        if used + width > budget {
+            break;
+        }
+        used += width;
+        clamped.push(ch);
+    }
+    let stem = clamped.trim_end_matches([' ', '.']);
+    let stem = if stem.is_empty() { "download" } else { stem };
+    format!("{stem}.mp4")
+}
+
 pub(crate) fn provisional_task_name(spec: &TaskSpec) -> String {
     if spec.filename.trim().is_empty() && spec.url.starts_with("magnet:?") {
         return crate::torrent_engine::parse_magnet(&spec.url)
             .map(|meta| safe_filename(&meta.name, ""))
             .unwrap_or_else(|_| "torrent".into());
     }
-    safe_filename(&spec.filename, &spec.url)
+    let name = safe_filename(&spec.filename, &spec.url);
+    if spec.resource_kind == crate::ResourceKind::File && !spec.audio_url.trim().is_empty() {
+        normalize_dual_track_mp4_filename(&name)
+    } else {
+        name
+    }
 }
 
 pub(crate) fn validate_filename(filename: &str) -> Result<(), String> {
@@ -510,9 +557,16 @@ impl CoreCoordinator {
 
     fn build_refreshed_spec(current: &TaskSpec, offer: &crate::ResourceOffer) -> TaskSpec {
         let mut spec = current.clone();
+        if spec.resource_key.trim().is_empty() && spec.local_source_path.is_none() {
+            spec.resource_key = crate::http_engine::canonical_url_key(&current.url);
+        }
         let new_url = offer.url.trim().to_string();
         drop_cross_origin_task_secrets(&mut spec, &current.url, &new_url);
         spec.url = new_url;
+        if !offer.audio_url.trim().is_empty() {
+            spec.audio_url = offer.audio_url.trim().to_string();
+            spec.expected_size = None;
+        }
         spec.credential_ref = offer.credential_ref.clone();
         spec.replay_context_ref = offer.replay_context_ref.clone();
         if !offer.source_page_url.trim().is_empty() {
@@ -625,6 +679,17 @@ impl CoreCoordinator {
             let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
             if !crate::net_policy::url_allowed(offer.url.trim(), &allowed_hosts) {
                 return Err("地址不在允许的域名白名单中".into());
+            }
+            let refreshed_audio = offer.audio_url.trim();
+            if !refreshed_audio.is_empty() {
+                if !crate::http_engine::remote_resource_url_allowed(refreshed_audio)
+                    || !crate::http_engine::http_fetch_url_allowed(refreshed_audio)
+                {
+                    return Err("音轨下载地址无效或不安全".into());
+                }
+                if !crate::net_policy::url_allowed(refreshed_audio, &allowed_hosts) {
+                    return Err("音轨下载地址不在允许的域名白名单中".into());
+                }
             }
             let current = core
                 .task_spec(&armed_task_id)
@@ -2195,9 +2260,13 @@ impl CoreCoordinator {
         {
             return Err("代理地址无效".into());
         }
+        spec.audio_url = spec.audio_url.trim().to_string();
         if let Some(source_path) = spec.local_source_path.as_deref() {
             if spec.resource_kind != crate::ResourceKind::File {
                 return Err("本地文件源只能用于普通文件任务".into());
+            }
+            if !spec.audio_url.is_empty() {
+                return Err("本地文件源不支持附加音轨地址".into());
             }
             let path = validate_local_source_path(&spec.url, source_path, spec.expected_size)?;
             spec.local_source_path = Some(path.to_string_lossy().into_owned());
@@ -2213,6 +2282,26 @@ impl CoreCoordinator {
             reject_task_url(&spec.url)?;
             if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
                 return Err("下载地址不在允许的域名范围内".into());
+            }
+            if !spec.audio_url.is_empty() {
+                if !crate::http_engine::remote_resource_url_allowed(&spec.audio_url)
+                    || !crate::http_engine::http_fetch_url_allowed(&spec.audio_url)
+                {
+                    return Err("音轨下载地址无效或不安全".into());
+                }
+                reject_task_url(&spec.audio_url)?;
+                if !crate::net_policy::url_allowed(&spec.audio_url, &settings.allowed_hosts) {
+                    return Err("音轨下载地址不在允许的域名范围内".into());
+                }
+                if spec.resource_kind == crate::ResourceKind::File {
+                    spec.expected_size = None;
+                    if !spec.filename.trim().is_empty() {
+                        spec.filename = normalize_dual_track_mp4_filename(&spec.filename);
+                    }
+                }
+            }
+            if spec.resource_key.trim().is_empty() {
+                spec.resource_key = crate::http_engine::canonical_url_key(&spec.url);
             }
         }
         if spec.concurrency == 0 {
@@ -2436,11 +2525,14 @@ impl CoreCoordinator {
                 mime_type: offer.mime_type.clone(),
                 credential_ref: offer.credential_ref.clone(),
                 replay_context_ref: offer.replay_context_ref.clone(),
-                expected_size: (offer.size > 0).then_some(offer.size),
+                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                    .then_some(offer.size),
                 preferred_bandwidth: offer.preferred_bandwidth,
                 preferred_height: offer.preferred_height,
                 preferred_variant_id: offer.preferred_variant_id.clone(),
                 source_page_url: offer.source_page_url.clone(),
+                audio_url: offer.audio_url.clone(),
+                resource_key: offer.resource_key.clone(),
                 ..Default::default()
             },
             trust_download_dir,
@@ -3388,12 +3480,368 @@ fn same_source_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.created().ok() == right.created().ok()
 }
 
+fn is_bilibili_cdn_host(url: &str) -> bool {
+    let Some((_, rest)) = url.trim().split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, endpoint)| endpoint)
+        .trim();
+    let host = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        after_bracket.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    }
+    .trim_end_matches('.')
+    .to_ascii_lowercase();
+    ["bilivideo.com", "bilivideo.cn", "hdslb.com", "bilibili.com"]
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn build_audio_track_headers(
+    spec: &TaskSpec,
+    video_headers: &HashMap<String, String>,
+    audio_url: &str,
+) -> HashMap<String, String> {
+    let mut headers = video_headers.clone();
+    let video_origin = crate::credentials::request_origin(&spec.url);
+    let audio_origin = crate::credentials::request_origin(audio_url);
+    if video_origin.is_empty() || audio_origin.is_empty() || video_origin != audio_origin {
+        headers.retain(|name, _| !sensitive_header_name(name));
+    }
+    if is_bilibili_cdn_host(audio_url)
+        && !spec.source_page_url.trim().is_empty()
+        && header_value_allowed("Referer", spec.source_page_url.trim())
+        && !headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("referer"))
+    {
+        headers.insert("Referer".into(), spec.source_page_url.trim().to_string());
+    }
+    headers
+}
+
+fn cleanup_dual_track_temp(
+    video_tmp: &Path,
+    audio_tmp: &Path,
+    video_state_dir: &Path,
+    audio_state_dir: &Path,
+) {
+    let _ = fs::remove_file(video_tmp);
+    let _ = fs::remove_file(audio_tmp);
+    let _ = fs::remove_dir_all(video_state_dir);
+    let _ = fs::remove_dir_all(audio_state_dir);
+}
+
+fn run_dual_track_http_file(
+    core: Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    spec: TaskSpec,
+    replay_json: String,
+) -> Result<(), String> {
+    let audio_url = spec.audio_url.trim().to_string();
+    if !crate::http_engine::remote_resource_url_allowed(&audio_url)
+        || !crate::http_engine::http_fetch_url_allowed(&audio_url)
+    {
+        return Err("音轨下载地址无效或不安全".into());
+    }
+    {
+        let allowed_hosts = core
+            .lock()
+            .map_err(|_| "v7 Core mutex poisoned".to_string())?
+            .store()
+            .setting_string("allowed_hosts", "")?;
+        if !crate::net_policy::url_allowed(&audio_url, &allowed_hosts) {
+            return Err("音轨下载地址不在允许的域名范围内".into());
+        }
+    }
+
+    let (mut base_job, paths) = build_job(task_id, &spec)?;
+    base_job.replay_json = replay_json;
+    let temporary_body = materialize_replay_request_body(&base_job.replay_json, &paths)?;
+    if let Some(path) = &temporary_body.0 {
+        base_job.body_path = path.clone();
+    }
+    if is_bilibili_cdn_host(&spec.url)
+        && !spec.source_page_url.trim().is_empty()
+        && header_value_allowed("Referer", spec.source_page_url.trim())
+        && !base_job
+            .headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("referer"))
+    {
+        base_job
+            .headers
+            .insert("Referer".into(), spec.source_page_url.trim().to_string());
+    }
+    if let Ok(mb) = core
+        .lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?
+        .store()
+        .setting_u64("http_chunk_size_mb", 8)
+    {
+        base_job.chunk_bytes = mb.clamp(1, 64) * 1024 * 1024;
+    }
+
+    let task_dir = paths.task_dir().to_path_buf();
+    let video_tmp = task_dir.join("video.part.m4s");
+    let audio_tmp = task_dir.join("audio.part.m4s");
+    let video_state_dir = task_dir.join("video_state");
+    let audio_state_dir = task_dir.join("audio_state");
+    fs::create_dir_all(&video_state_dir)
+        .map_err(|error| format!("create video state directory: {error}"))?;
+    fs::create_dir_all(&audio_state_dir)
+        .map_err(|error| format!("create audio state directory: {error}"))?;
+    let video_progress = video_state_dir.join("progress.json");
+    let audio_progress = audio_state_dir.join("progress.json");
+    let merged_mp4 = task_dir.join("merged.mp4");
+
+    let total_conns = base_job.connections.max(1);
+    let video_conns = if total_conns <= 1 {
+        1
+    } else {
+        (total_conns * 3).div_ceil(4).max(1)
+    };
+    let audio_conns = if total_conns <= 1 {
+        1
+    } else {
+        (total_conns / 4).max(1)
+    };
+
+    let mut video_job = base_job.clone();
+    video_job.output = video_tmp.clone();
+    video_job.progress = video_progress.clone();
+    video_job.total = 0;
+    video_job.connections = video_conns;
+
+    let audio_headers = build_audio_track_headers(&spec, &video_job.headers, &audio_url);
+    let audio_job = crate::http_engine::Job {
+        url: audio_url.clone(),
+        headers: audio_headers,
+        output: audio_tmp.clone(),
+        connections: audio_conns,
+        chunk_bytes: video_job.chunk_bytes,
+        total: 0,
+        sequential: false,
+        resume_from: 0,
+        proxy: video_job.proxy.clone(),
+        resource_key: crate::http_engine::canonical_url_key(&audio_url),
+        etag: String::new(),
+        last_modified: String::new(),
+        control: paths.control.clone(),
+        progress: audio_progress.clone(),
+        method: "GET".into(),
+        body_path: PathBuf::new(),
+        mirrors: Vec::new(),
+        replay_json: video_job.replay_json.clone(),
+        curl_body_limit: None,
+        range_stop: None,
+        installer_download: false,
+        origin_boundary: spec.origin_boundary.clone(),
+    };
+
+    #[derive(Clone, Copy)]
+    enum DualTrackKind {
+        Video,
+        Audio,
+    }
+
+    let (sender, receiver) = mpsc::channel();
+    let (initial_bytes, _) = current_progress(&core, task_id);
+    let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
+    let throttle = crate::net_policy::current_throttle_context();
+
+    let video_sender = sender.clone();
+    let video_throttle = throttle.clone();
+    let video_worker = thread::spawn(move || {
+        let res =
+            crate::net_policy::with_throttle_context(video_throttle, || run_job_report(&video_job));
+        let _ = video_sender.send((DualTrackKind::Video, res));
+    });
+
+    let audio_worker = thread::spawn(move || {
+        let res = crate::net_policy::with_throttle_context(throttle, || run_job_report(&audio_job));
+        let _ = sender.send((DualTrackKind::Audio, res));
+    });
+
+    let mut video_finished = false;
+    let mut audio_finished = false;
+    let mut video_mirrors = Vec::new();
+
+    let download_result: Result<(), String> = (|| {
+        while !video_finished || !audio_finished {
+            match receiver.recv_timeout(Duration::from_millis(200)) {
+                Ok((kind, outcome)) => {
+                    let report = outcome.map_err(|error| match error {
+                        crate::http_engine::EngineError::RangeUnsupported(message)
+                            if !message.starts_with("resource identity changed:") =>
+                        {
+                            format!("range response rejected: {message}")
+                        }
+                        error => error.to_string(),
+                    })?;
+                    match kind {
+                        DualTrackKind::Video => {
+                            video_finished = true;
+                            video_mirrors = report.mirrors;
+                        }
+                        DualTrackKind::Audio => {
+                            audio_finished = true;
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let vp = read_progress(&video_progress);
+                    let ap = read_progress(&audio_progress);
+                    let v_done = if video_finished {
+                        fs::metadata(&video_tmp).map(|m| m.len()).unwrap_or(0)
+                    } else {
+                        vp.as_ref().map_or(0, |p| p.downloaded)
+                    };
+                    let a_done = if audio_finished {
+                        fs::metadata(&audio_tmp).map(|m| m.len()).unwrap_or(0)
+                    } else {
+                        ap.as_ref().map_or(0, |p| p.downloaded)
+                    };
+                    let v_total = if video_finished {
+                        v_done
+                    } else {
+                        vp.as_ref().map_or(0, |p| p.total)
+                    };
+                    let a_total = if audio_finished {
+                        a_done
+                    } else {
+                        ap.as_ref().map_or(0, |p| p.total)
+                    };
+                    let downloaded = v_done.saturating_add(a_done);
+                    let total =
+                        (v_total > 0 && a_total > 0).then(|| v_total.saturating_add(a_total));
+                    post_progress_speed(
+                        &core,
+                        task_id,
+                        downloaded,
+                        total,
+                        rate.sample(downloaded),
+                        "transfer",
+                        "downloading",
+                    );
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("dual-track HTTP worker disconnected".into());
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    if download_result.is_err()
+        && matches!(
+            crate::http_engine::read_control(&paths.control),
+            crate::http_engine::Control::Run
+        )
+    {
+        let _ = paths.set_control("cancel");
+    }
+    let video_joined = video_worker.join();
+    let audio_joined = audio_worker.join();
+
+    if let Err(error) = download_result {
+        if error == "canceled"
+            || matches!(
+                crate::http_engine::read_control(&paths.control),
+                crate::http_engine::Control::Cancel
+            )
+        {
+            cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+            let _ = fs::remove_file(&merged_mp4);
+        }
+        return Err(error);
+    }
+    video_joined.map_err(|_| "dual-track video HTTP worker panicked".to_string())?;
+    audio_joined.map_err(|_| "dual-track audio HTTP worker panicked".to_string())?;
+
+    if !video_mirrors.is_empty() {
+        core.lock()
+            .map_err(|_| "v7 Core mutex poisoned".to_string())?
+            .set_mirror_result(
+                task_id,
+                video_mirrors
+                    .into_iter()
+                    .map(|item| MirrorStatus {
+                        url: item.url,
+                        final_url: item.final_url,
+                        state: item.state,
+                        detail: item.detail,
+                        ranges: item.ranges,
+                    })
+                    .collect(),
+            )?;
+    }
+
+    if let Err(error) = ensure_publish_allowed(&paths.control) {
+        if error == "canceled" {
+            cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+            let _ = fs::remove_file(&merged_mp4);
+        }
+        return Err(error);
+    }
+
+    let combined_bytes = fs::metadata(&video_tmp)
+        .map(|meta| meta.len())
+        .unwrap_or(0)
+        .saturating_add(fs::metadata(&audio_tmp).map(|meta| meta.len()).unwrap_or(0));
+    mark_progress(
+        &core,
+        task_id,
+        combined_bytes,
+        (combined_bytes > 0).then_some(combined_bytes),
+        "merging",
+        "merging",
+    )?;
+
+    if let Err(error) = crate::media::mux_av_with_offset(
+        &video_tmp,
+        Some(&audio_tmp),
+        &[],
+        &merged_mp4,
+        &paths.control,
+        0.0,
+    ) {
+        if error == "canceled"
+            || matches!(
+                crate::http_engine::read_control(&paths.control),
+                crate::http_engine::Control::Cancel
+            )
+        {
+            cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+            let _ = fs::remove_file(&merged_mp4);
+        }
+        return Err(error);
+    }
+
+    cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+
+    let mut publish_spec = spec;
+    publish_spec.expected_size = None;
+    let publish_res = complete_payload(&core, task_id, &paths, &merged_mp4, &publish_spec);
+    if publish_res.is_ok() && paths.final_output != merged_mp4 {
+        let _ = fs::remove_file(&merged_mp4);
+    }
+    publish_res
+}
+
 fn run_http_file(
     core: Arc<Mutex<PersistentCore>>,
     task_id: &str,
     spec: TaskSpec,
     replay_json: String,
 ) -> Result<(), String> {
+    if !spec.audio_url.trim().is_empty() {
+        return run_dual_track_http_file(core, task_id, spec, replay_json);
+    }
     let (mut job, mut paths) = build_job(task_id, &spec)?;
     job.replay_json = replay_json;
     let temporary_body = materialize_replay_request_body(&job.replay_json, &paths)?;
@@ -4299,6 +4747,10 @@ fn cleanup_completed_media(
                     | "ffmpeg-merge.log"
                     | "muxed.ffmpeg.log"
                     | "merged.ffmpeg.log"
+                    | "video.part.m4s"
+                    | "audio.part.m4s"
+                    | "video_state"
+                    | "audio_state"
                     | ".local.m3u8.tmp"
                     | ".preview.m3u8.tmp"
                     | ".preview-video.m3u8.tmp"
@@ -4307,9 +4759,16 @@ fn cleanup_completed_media(
                 .strip_prefix("seg-")
                 .and_then(|name| name.split_once('.'))
                 .is_some_and(|(index, suffix)| {
-                    !index.is_empty()
-                        && index.bytes().all(|ch| ch.is_ascii_digit())
-                        && matches!(suffix, "m4s" | "progress.json" | "progress.response.json")
+                    let digits = index
+                        .strip_suffix("-init")
+                        .or_else(|| index.strip_suffix("-period"))
+                        .unwrap_or(index);
+                    !digits.is_empty()
+                        && digits.bytes().all(|ch| ch.is_ascii_digit())
+                        && matches!(
+                            suffix,
+                            "m4s" | "mp4" | "progress.json" | "progress.response.json"
+                        )
                 })
                 || (name.starts_with("torrent-selection.json.") && name.ends_with(".tmp"));
             if !temporary || (keep_subtitles && name == "subs") {
@@ -4802,6 +5261,18 @@ fn drop_cross_origin_task_secrets(spec: &mut TaskSpec, from: &str, to: &str) {
         return;
     }
     spec.headers.retain(|key, _| !sensitive_header_name(key));
+    if is_bilibili_cdn_host(from)
+        && is_bilibili_cdn_host(to)
+        && !spec.source_page_url.trim().is_empty()
+        && header_value_allowed("Referer", spec.source_page_url.trim())
+        && !spec
+            .headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("referer"))
+    {
+        spec.headers
+            .insert("Referer".into(), spec.source_page_url.trim().to_string());
+    }
     spec.credential_ref = None;
     spec.replay_context_ref = None;
     spec.body_path.clear();
@@ -6192,6 +6663,9 @@ fn refresh_task_request(
                 .find(|candidate| task.available_actions.iter().any(|item| item == candidate))
         });
     let mut spec = current.clone();
+    if spec.resource_key.trim().is_empty() && spec.local_source_path.is_none() {
+        spec.resource_key = crate::http_engine::canonical_url_key(&current.url);
+    }
     drop_cross_origin_task_secrets(&mut spec, &current.url, url);
     spec.url = url.trim().to_string();
     if !cookie.trim().is_empty() {

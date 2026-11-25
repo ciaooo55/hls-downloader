@@ -1,17 +1,18 @@
 import { browser } from 'wxt/browser'
 import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayQualityOptions, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect, type OverlayAction, type OverlayQualityOption, type OverlayRect } from '../lib/mediaOverlay'
-import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isPlayableMediaResource, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../lib/domPatch'
 import { resourceQuality } from '../lib/hlsManifest'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../lib/downloadConfirmation'
-import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../lib/downloadSendState'
+import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, canForceResend, sendClickAction, sendStateFromHandoff, type SendState } from '../lib/downloadSendState'
 import { mediaPushTerminalResult } from '../lib/mediaPush'
 import { pageDownloadUrls, selectedDownloadUrls } from '../lib/selectionLinks'
+import { HARVEST_CATEGORY_CHIPS, countHarvestCategories, filterHarvestResources, type HarvestLinkCategory } from '../lib/harvestLinks'
 import { formatBitrate, formatBytes, formatDuration } from '../lib/format'
 import { installSubtitleContent } from '../lib/subtitleContent'
-import { isBilibiliFullTrackMseUrl, sitePageVideoId } from '../lib/siteManifest'
+import { isBilibiliAudioTrackMseUrl, isBilibiliFullTrackMseUrl, sameSiteVideoIdentity, sitePageVideoId } from '../lib/siteManifest'
 
 async function runtimeMessage(message: Record<string, unknown>, retries = 1): Promise<any> {
   let lastError: unknown
@@ -94,16 +95,29 @@ export default defineContentScript({
     // The UI mount below is asynchronous. Capture bridge/webRequest messages
     // during that window instead of losing the first manifest from a fast MSE
     // player (which otherwise leaves the overlay in “正在识别” forever).
-    const earlyResourceEvents: Array<{ url: string; mimeType?: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl?: string; responseIdentity?: Record<string, string> }> = []
+    const samePageOrVideo = (sourceUrl: string, targetUrl: string): boolean => {
+      const left = pageKey(sourceUrl)
+      const right = pageKey(targetUrl)
+      return left === right || sameSiteVideoIdentity(left, right)
+    }
+    const earlyResourceEvents: Array<{ url: string; mimeType?: string; audioUrl?: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl?: string; responseIdentity?: Record<string, string> }> = []
     const earlyMseEvents: Array<{ blobUrl: string; mediaUrl: string; purpose?: 'mse' | 'download'; sourcePageUrl?: string }> = []
     const earlyRuntimeMessages: Array<{ message: any; sendResponse?: (value?: unknown) => void }> = []
     let contentReady = false
     const earlyResourceListener = (event: Event) => {
       if (contentReady) return
       const detail = bridgeDetail(event)
-      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
+      if (detail.sourcePageUrl && !samePageOrVideo(detail.sourcePageUrl, location.href)) return
       if (typeof detail.url === 'string') {
-        earlyResourceEvents.push({ url: detail.url, mimeType: detail.mimeType, inspection: detail.inspection, siteVideoId: detail.siteVideoId, sourcePageUrl: detail.sourcePageUrl, responseIdentity: detail.responseIdentity })
+        earlyResourceEvents.push({
+          url: detail.url,
+          mimeType: detail.mimeType,
+          audioUrl: typeof detail.audioUrl === 'string' ? detail.audioUrl : undefined,
+          inspection: detail.inspection,
+          siteVideoId: detail.siteVideoId,
+          sourcePageUrl: detail.sourcePageUrl,
+          responseIdentity: detail.responseIdentity,
+        })
         if (classifyResource(detail.url, detail.mimeType) || detail.siteVideoId) requestActivation()
       }
       if (earlyResourceEvents.length > 200) earlyResourceEvents.splice(0, earlyResourceEvents.length - 200)
@@ -111,7 +125,7 @@ export default defineContentScript({
     const earlyMseListener = (event: Event) => {
       if (contentReady) return
       const detail = bridgeDetail(event)
-      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
+      if (detail.sourcePageUrl && !samePageOrVideo(detail.sourcePageUrl, location.href)) return
       if (typeof detail.blobUrl === 'string' && typeof detail.mediaUrl === 'string') {
         earlyMseEvents.push({
           blobUrl: detail.blobUrl,
@@ -234,7 +248,7 @@ export default defineContentScript({
     activationObservers.length = 0
     // Rendering is intentionally frequent on live pages. Keep handoff state
     // outside the DOM so a network event cannot replace an in-flight button.
-    const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string, state?: SendState }>()
+    const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string, state?: SendState, url?: string, updatedAt?: number }>()
     const preferredVariants = new Map<string, { variantId?: string, height: number, bandwidth: number }>()
     let renderedListSignature = ''
     let renderedVideoSignature = ''
@@ -243,6 +257,11 @@ export default defineContentScript({
     let selectionMode = false
     let selectionResourceIds: Set<string> | null = null
     let selectionEmptyMessage = '选中的内容里没有可下载链接'
+    let harvestMode = false
+    let harvestCategory: HarvestLinkCategory = 'all'
+    let harvestQuery = ''
+    let harvestBatchBusy = false
+    const harvestCheckedIds = new Set<string>()
     // A page can contain several players.  Keep playback evidence per element
     // instead of treating the latest network manifest as belonging to every
     // video in the document.
@@ -279,11 +298,11 @@ export default defineContentScript({
     }
     const resourcePresentationSignature = (items = [...resources.values()], includePlaybackEvidence = true) => items
       .map(resource => [
-        resourceFingerprint(resource), resource.url, resource.title || '', resource.filename || '',
+        resourceFingerprint(resource), resource.url, resource.audioUrl || '', resource.title || '', resource.filename || '',
         resource.kind, resource.mimeType || '', resource.size || 0, resource.estimatedSize || 0,
         resource.width || 0, resource.height || 0, resource.bandwidth || 0, resource.duration || 0,
         resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0,
-        (resource.variants || []).map(variant => `${variant.url}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
+        (resource.variants || []).map(variant => `${variant.url}:${variant.audioUrl || ''}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
         includePlaybackEvidence ? (resource.playbackUrls || []).join(',') : '',
         includePlaybackEvidence ? (resource.playbackPatterns || []).join(',') : '',
         includePlaybackEvidence ? (resource.playbackUrlHashes || []).join(',') : '',
@@ -292,7 +311,7 @@ export default defineContentScript({
       .join('\n')
     const addResource = (resource: MediaResource) => {
       const before = resourcePresentationSignature()
-      replaceResources(mergeResources([...resources.values()], resource, 40))
+      replaceResources(mergeResources([...resources.values()], resource, 240))
       return before !== resourcePresentationSignature()
     }
     const pageMediaTitle = () => {
@@ -321,13 +340,15 @@ export default defineContentScript({
           :host{all:initial}*{box-sizing:border-box}[hidden]{display:none!important}button{font:13px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;letter-spacing:0}
           ${THEME_TOKENS_CSS}
           ${THEME_BASE_CSS}
+          .panel-backdrop{position:fixed;inset:0;z-index:calc(var(--z-extension-overlay) - 1);background:rgba(9,12,18,.38);backdrop-filter:blur(2px);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .16s ease,visibility 0s linear .16s}.panel-backdrop.open{opacity:1;visibility:visible;pointer-events:auto;transition-delay:0s}
           .wrap{position:fixed;top:16px;right:16px;z-index:var(--z-extension-overlay);color:var(--text);pointer-events:none;visibility:hidden;transition:visibility 0s linear .18s}.wrap.open{pointer-events:auto;visibility:visible;transition-delay:0s}
-          .panel{width:min(352px,calc(100vw - 20px));max-height:min(528px,calc(100vh - 20px));background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);overflow:hidden;opacity:0;transform:translateY(6px) scale(.985);transform-origin:top right;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.wrap.open .panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
+          .panel{width:min(352px,calc(100vw - 20px));max-height:min(528px,calc(100vh - 20px));background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);overflow:hidden;opacity:0;transform:translateY(6px) scale(.985);transform-origin:top right;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.wrap.open .panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}.wrap.harvest-mode .panel{display:flex;flex-direction:column;width:min(436px,calc(100vw - 20px));max-height:min(82vh,640px)}
           header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface-2) 86%,transparent);color:var(--text);font:650 12.5px "Segoe UI Variable Text","Segoe UI",system-ui;cursor:grab;touch-action:none}.title{display:flex;align-items:center;gap:7px}.title img{width:18px;height:18px;border-radius:5px;box-shadow:var(--shadow-sm)}.head-actions{display:flex;align-items:center;gap:5px}
-          .pin,.close{height:27px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);cursor:pointer}.pin{padding:0 9px;font:600 11px "Segoe UI Variable Text","Segoe UI",system-ui}.pin.active{border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green-ink)}.close{display:grid;place-items:center;width:27px;font:600 17px/1 system-ui}.pin:hover,.close:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(528px,calc(100vh - 20px)) - 80px);overflow-y:auto;overscroll-behavior:contain}.list::-webkit-scrollbar{width:7px}.list::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:color-mix(in srgb,var(--faint) 55%,transparent);background-clip:content-box}.list::-webkit-scrollbar-track{background:transparent}
-          .item{padding:10px 11px;border-bottom:1px solid var(--border);transition:background-color .14s ease}.item:last-child{border-bottom:0}.item:hover{background:color-mix(in srgb,var(--surface-2) 88%,transparent)}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:11px/1.35 system-ui;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:5px;padding:3px 6px;border-radius:5px;background:var(--surface-2);color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{display:block;width:min(196px,100%);height:29px;margin-top:7px;font-size:11.5px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:30px;border:1px solid transparent;border-radius:var(--radius);background:var(--primary);color:var(--on-primary);padding:4px 8px;cursor:pointer;font-weight:600;font-size:11.5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.2),var(--shadow-sm)}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.push-tv,.download.cast{border-color:var(--border);background:var(--surface-2);color:var(--text);box-shadow:none}.download.push-tv:hover{border-color:transparent;background:var(--purple);color:var(--on-primary)}.download.cast:hover{border-color:transparent;background:var(--green);color:var(--on-primary)}.result{padding:8px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green-ink);font:600 11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red-ink)}
-          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:5px;pointer-events:none;opacity:0;transform:translateY(4px) scale(.96);transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.video-action-group.visible{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}.video-action-group.dragging{transition:none}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 13px 0 10px;border:1px solid color-mix(in srgb,var(--primary) 65%,rgba(255,255,255,.28));border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 92%,transparent);backdrop-filter:blur(12px) saturate(160%);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 4px 14px var(--shadow),0 0 0 1px rgba(0,0,0,.18);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;font:650 12px "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .16s ease,transform .16s ease,box-shadow .16s ease}.video-action-group.dragging .video-download{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:var(--glass-strong);color:var(--muted);box-shadow:var(--shadow-md)}.video-download.identifying:hover{background:var(--glass-strong)}.video-download img{width:18px;height:18px;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.22)}.video-download b{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:var(--radius-pill);background:var(--on-primary);color:var(--primary);font:700 10px "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums}.video-more{display:grid;width:34px;height:34px;place-items:center;padding:0 0 1px;border:1px solid var(--overlay-border);border-radius:50%;background:var(--glass-strong);backdrop-filter:blur(12px) saturate(160%);color:var(--primary);box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--glass-rim);cursor:pointer;font:700 17px/1 system-ui}.video-more:hover{border-color:color-mix(in srgb,var(--primary) 48%,var(--overlay-border));background:var(--surface)}
-          .video-hover{position:absolute;top:40px;left:0;width:308px;padding:12px;background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);color:var(--text);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);opacity:0;visibility:hidden;transform:translateY(-6px) scale(.98);transform-origin:top left;pointer-events:none;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1),visibility 0s linear .18s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:40px;transform:translateY(6px) scale(.98);transform-origin:bottom left}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto;transition-delay:.04s,.04s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;pointer-events:none;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere}.hover-state{flex:none;padding:2px 7px;border:1px solid color-mix(in srgb,var(--green) 32%,transparent);border-radius:var(--radius-pill);background:color-mix(in srgb,var(--green) 14%,var(--surface-2));color:var(--green-ink);font:600 10px/1.3 system-ui;white-space:nowrap}.hover-copy{margin-top:5px;color:var(--muted);font:11px/1.45 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.hover-fact{display:inline-flex;align-items:center;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/1 system-ui;white-space:nowrap;font-variant-numeric:tabular-nums}.hover-fact:first-child{border-color:color-mix(in srgb,var(--primary) 32%,transparent);background:color-mix(in srgb,var(--primary) 13%,var(--surface-2));color:var(--primary-ink)}.hover-source{margin-top:8px;padding:4px 7px;border-radius:6px;background:var(--surface-2);overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-qualities{display:grid;gap:5px;margin-top:9px}.hover-qualities-label{color:var(--muted);font:600 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;letter-spacing:.01em}.hover-qualities-list{display:grid;gap:4px}.quality-pill{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:30px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);cursor:pointer;text-align:left;font:600 11.5px/1.25 "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .15s ease,color .15s ease,border-color .15s ease,transform .12s ease,box-shadow .15s ease}.quality-pill:hover:not([disabled]){border-color:color-mix(in srgb,var(--primary) 52%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3));transform:translateY(-1px)}.quality-pill:active:not([disabled]){transform:scale(.975)}.quality-pill.recommended{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 10%,var(--surface-2))}.quality-pill-main{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1}.quality-pill-name{color:var(--text);font-weight:700;white-space:nowrap}.quality-pill-meta{overflow:hidden;color:var(--muted);font:500 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}.quality-pill-cta{flex:none;padding:2px 7px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 16%,var(--surface));color:var(--primary-ink);font:600 10px/1.3 "Segoe UI Variable Text","Segoe UI",system-ui;white-space:nowrap;transition:background-color .15s ease,color .15s ease}.quality-pill.recommended .quality-pill-cta,.quality-pill:hover:not([disabled]) .quality-pill-cta{background:var(--primary);color:var(--on-primary)}.quality-pill[disabled]{cursor:default;opacity:.6}.quality-pill[data-state=sending] .quality-pill-cta,.quality-pill[data-state=confirming] .quality-pill-cta{background:color-mix(in srgb,var(--primary) 18%,var(--surface-3));color:var(--primary-ink)}.quality-pill[data-state=queued] .quality-pill-cta,.quality-pill[data-state=done] .quality-pill-cta{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink)}.quality-pill[data-state=retry] .quality-pill-cta{background:color-mix(in srgb,var(--red) 14%,var(--surface-3));color:var(--red-ink)}.hover-actions{display:flex;gap:6px;margin-top:10px}.hover-action{min-width:0;flex:1;height:29px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);cursor:pointer;font:600 11px/1 "Segoe UI Variable Text","Segoe UI",system-ui}.hover-action:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{border-color:transparent;background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),var(--shadow-sm)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}.send-error{margin-top:8px;border:1px solid color-mix(in srgb,var(--red) 32%,var(--border));border-radius:var(--radius)}button[data-state=checking]{box-shadow:inset 0 0 0 1px var(--amber,#b7791f)}button[data-state=recoverable]{box-shadow:inset 0 0 0 1px var(--red,#c53030)}button[data-state=canceled]{opacity:.8}button[data-state=sending][disabled],button[data-state=confirming][disabled],button[data-state=queued][disabled],button[data-state=done][disabled]{opacity:1;cursor:progress}button[data-state=sending]::before{content:"";display:inline-block;width:9px;height:9px;margin-right:5px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:hlsd-overlay-spin .8s linear infinite}/* :is() 让这几条压过 .hover-action.primary 及其 :hover，进行中的按钮不再显示成普通蓝底。 */:is(.video-hover,.panel) button[data-state=confirming],:is(.video-hover,.panel) button[data-state=confirming]:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3));color:var(--primary-ink,var(--text))}:is(.video-hover,.panel) button[data-state=queued],:is(.video-hover,.panel) button[data-state=done],:is(.video-hover,.panel) button[data-state=queued]:hover,:is(.video-hover,.panel) button[data-state=done]:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface-3));color:var(--green-ink)}button[data-state=done]{cursor:default}@keyframes hlsd-overlay-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.video-hover,.video-hover *{transition:none!important;animation:none!important}}
+          .pin,.close{height:27px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);cursor:pointer}.pin{padding:0 9px;font:600 11px "Segoe UI Variable Text","Segoe UI",system-ui}.pin.active{border-color:color-mix(in srgb,var(--green) 40%,transparent);background:color-mix(in srgb,var(--green) 18%,var(--surface-3));color:var(--green-ink)}.close{display:grid;place-items:center;width:27px;font:600 17px/1 system-ui}.pin:hover,.close:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 14%,var(--surface-3))}.list{max-height:calc(min(528px,calc(100vh - 20px)) - 80px);overflow-y:auto;overscroll-behavior:contain}.wrap.harvest-mode .list{max-height:min(62vh,460px)}.list::-webkit-scrollbar{width:7px}.list::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:color-mix(in srgb,var(--faint) 55%,transparent);background-clip:content-box}.list::-webkit-scrollbar-track{background:transparent}
+          .harvest-toolbar{display:grid;gap:7px;padding:9px 11px;border-bottom:1px solid var(--border);background:var(--surface)}.harvest-search-row{display:flex;align-items:center;gap:6px}.harvest-search{flex:1;min-width:0;height:29px;padding:0 9px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);font:12px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;transition:border-color .14s ease,background-color .14s ease}.harvest-search::placeholder{color:var(--faint)}.harvest-search:hover{border-color:var(--primary);background:var(--surface)}.harvest-search:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px;border-color:var(--primary)}.harvest-chips{display:flex;flex-wrap:wrap;gap:4px}.harvest-chip{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius-pill);background:var(--surface-2);color:var(--muted);cursor:pointer;font:600 11px/1 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;transition:background-color .14s ease,color .14s ease,border-color .14s ease,transform .12s ease}.harvest-chip:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:var(--surface-3);color:var(--text)}.harvest-chip:active{transform:scale(.96)}.harvest-chip[aria-pressed=true]{border-color:color-mix(in srgb,var(--primary) 48%,var(--border));background:color-mix(in srgb,var(--primary) 16%,var(--surface-2));color:var(--primary-ink)}.harvest-chip b{font-weight:700;font-variant-numeric:tabular-nums}.harvest-batch-bar{display:flex;align-items:center;justify-content:space-between;gap:8px}.harvest-select-all{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid var(--control-border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);cursor:pointer;font:600 11.5px/1 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;transition:background-color .14s ease,border-color .14s ease,transform .12s ease}.harvest-select-all:hover{border-color:var(--primary);background:var(--surface-3)}.harvest-select-all:active{transform:scale(.97)}.download.harvest-batch-btn{flex:none;height:28px;padding:0 12px;font-variant-numeric:tabular-nums}
+          .item{padding:10px 11px;border-bottom:1px solid var(--border);transition:background-color .14s ease}.item:last-child{border-bottom:0}.item:hover{background:color-mix(in srgb,var(--surface-2) 88%,transparent)}.item-head{display:flex;align-items:flex-start;gap:8px}.item-check{width:15px;height:15px;margin:2px 0 0;flex:none;accent-color:var(--primary);cursor:pointer}.item-head .meta{flex:1;min-width:0}.meta{min-width:0}.name{display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;font:600 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere;color:var(--text)}.kind{overflow:hidden;color:var(--muted);font:11px/1.35 system-ui;font-variant-numeric:tabular-nums;margin-top:3px;text-overflow:ellipsis;white-space:nowrap}.resource-url{display:block;margin-top:5px;padding:3px 6px;border-radius:5px;background:var(--surface-2);color:var(--faint);font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text}.quality-select{display:block;width:min(196px,100%);height:29px;margin-top:7px;font-size:11.5px}.item-actions{display:flex;gap:5px;margin-top:8px}.download{min-width:0;flex:1;height:30px;border:1px solid transparent;border-radius:var(--radius);background:var(--primary);color:var(--on-primary);padding:4px 8px;cursor:pointer;font-weight:600;font-size:11.5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.2),var(--shadow-sm)}.download:hover{background:var(--primary-hover)}.download[disabled]{cursor:default;opacity:.6}.download.resend{flex:none;padding:0 9px;border-color:color-mix(in srgb,var(--primary) 36%,var(--border));background:var(--surface-2);color:var(--primary-ink);box-shadow:none}.download.resend:hover:not([disabled]){border-color:transparent;background:var(--primary);color:var(--on-primary)}.download.push-tv,.download.cast{border-color:var(--border);background:var(--surface-2);color:var(--text);box-shadow:none}.download.push-tv:hover{border-color:transparent;background:var(--purple);color:var(--on-primary)}.download.cast:hover{border-color:transparent;background:var(--green);color:var(--on-primary)}.result{padding:8px 11px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--green) 14%,var(--surface));color:var(--green-ink);font:600 11px/1.4 system-ui}.result.error{background:color-mix(in srgb,var(--red) 12%,var(--surface));color:var(--red-ink)}.result.info{background:var(--surface-2);color:var(--muted)}
+          .video-buttons{position:fixed;inset:0;z-index:var(--z-extension-video);pointer-events:none}.video-action-group{position:fixed;display:flex;align-items:center;gap:5px;pointer-events:none;opacity:0;transform:translateY(4px) scale(.96);transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1)}.video-action-group.visible{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}.video-action-group.dragging{transition:none}.video-download{position:relative;display:flex;align-items:center;gap:7px;height:34px;padding:0 13px 0 10px;border:1px solid color-mix(in srgb,var(--primary) 65%,rgba(255,255,255,.28));border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 92%,transparent);backdrop-filter:blur(12px) saturate(160%);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.26),0 4px 14px var(--shadow),0 0 0 1px rgba(0,0,0,.18);cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;font:650 12px "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums;transition:background-color .16s ease,transform .16s ease,box-shadow .16s ease}.video-action-group.dragging .video-download{cursor:grabbing}.video-download:hover{background:var(--primary-hover)}.video-download.identifying{border-color:var(--overlay-border);background:var(--glass-strong);color:var(--muted);box-shadow:var(--shadow-md)}.video-download.identifying:hover{background:var(--glass-strong)}.video-download img{width:18px;height:18px;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.22)}.video-download b{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:var(--radius-pill);background:var(--on-primary);color:var(--primary);font:700 10px "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums}.video-more{display:grid;width:34px;height:34px;place-items:center;padding:0 0 1px;border:1px solid var(--overlay-border);border-radius:50%;background:var(--glass-strong);backdrop-filter:blur(12px) saturate(160%);color:var(--primary);box-shadow:0 4px 14px var(--shadow),inset 0 1px 0 var(--glass-rim);cursor:pointer;font:700 17px/1 system-ui}.video-more:hover{border-color:color-mix(in srgb,var(--primary) 48%,var(--overlay-border));background:var(--surface)}
+          .video-hover{position:absolute;top:40px;left:0;width:308px;padding:12px;background:var(--glass-strong);backdrop-filter:blur(16px) saturate(160%);color:var(--text);border:1px solid var(--overlay-border);border-radius:12px;box-shadow:var(--shadow-lg),inset 0 1px 0 var(--glass-rim);opacity:0;visibility:hidden;transform:translateY(-6px) scale(.98);transform-origin:top left;pointer-events:none;font-variant-numeric:tabular-nums;transition:opacity .18s cubic-bezier(.22,1,.36,1),transform .18s cubic-bezier(.22,1,.36,1),visibility 0s linear .18s}.video-hover::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px}.video-hover.above{top:auto;bottom:40px;transform:translateY(6px) scale(.98);transform-origin:bottom left}.video-hover.above::before{top:auto;bottom:-10px}.video-action-group:hover .video-hover,.video-action-group:focus-within .video-hover,.video-action-group.hover-open .video-hover{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto;transition-delay:.04s,.04s,0s}.video-action-group.dragging .video-hover{opacity:0;visibility:hidden;pointer-events:none;transition:none}.hover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.hover-title{min-width:0;display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical;color:var(--text);font:650 12.5px/1.38 "Segoe UI Variable Text","Segoe UI",system-ui;overflow-wrap:anywhere}.hover-state{flex:none;padding:2px 7px;border:1px solid color-mix(in srgb,var(--green) 32%,transparent);border-radius:var(--radius-pill);background:color-mix(in srgb,var(--green) 14%,var(--surface-2));color:var(--green-ink);font:600 10px/1.3 system-ui;white-space:nowrap}.hover-state[data-tone=progress]{border-color:color-mix(in srgb,var(--primary) 34%,transparent);background:color-mix(in srgb,var(--primary) 14%,var(--surface-2));color:var(--primary-ink)}.hover-copy{margin-top:5px;color:var(--muted);font:11px/1.45 system-ui}.hover-facts{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.hover-fact{display:inline-flex;align-items:center;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:5px;background:var(--surface-2);color:var(--muted);font:600 10px/1 system-ui;white-space:nowrap;font-variant-numeric:tabular-nums}.hover-fact:first-child{border-color:color-mix(in srgb,var(--primary) 32%,transparent);background:color-mix(in srgb,var(--primary) 13%,var(--surface-2));color:var(--primary-ink)}.hover-source{margin-top:8px;padding:4px 7px;border-radius:6px;background:var(--surface-2);overflow:hidden;color:var(--faint);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;text-overflow:ellipsis;white-space:nowrap}.hover-qualities{display:grid;gap:5px;margin-top:9px}.hover-qualities-label{color:var(--muted);font:600 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;letter-spacing:.01em}.hover-qualities-list{display:grid;gap:4px}.quality-pill{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:30px;padding:5px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2);color:var(--text);cursor:pointer;text-align:left;font:600 11.5px/1.25 "Segoe UI Variable Text","Segoe UI",system-ui;transition:background-color .15s ease,color .15s ease,border-color .15s ease,transform .12s ease,box-shadow .15s ease}.quality-pill:hover:not([disabled]){border-color:color-mix(in srgb,var(--primary) 52%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3));transform:translateY(-1px)}.quality-pill:active:not([disabled]){transform:scale(.975)}.quality-pill.recommended{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 10%,var(--surface-2))}.quality-pill-main{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1}.quality-pill-name{color:var(--text);font-weight:700;white-space:nowrap}.quality-pill-meta{overflow:hidden;color:var(--muted);font:500 10.5px/1.2 "Segoe UI Variable Text","Segoe UI",system-ui;font-variant-numeric:tabular-nums;text-overflow:ellipsis;white-space:nowrap}.quality-pill-cta{flex:none;padding:2px 7px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--primary) 16%,var(--surface));color:var(--primary-ink);font:600 10px/1.3 "Segoe UI Variable Text","Segoe UI",system-ui;white-space:nowrap;transition:background-color .15s ease,color .15s ease}.quality-pill.recommended .quality-pill-cta,.quality-pill:hover:not([disabled]) .quality-pill-cta{background:var(--primary);color:var(--on-primary)}.quality-pill[disabled]{cursor:default;opacity:.6}.quality-pill[data-state=sending] .quality-pill-cta,.quality-pill[data-state=confirming] .quality-pill-cta{background:color-mix(in srgb,var(--primary) 18%,var(--surface-3));color:var(--primary-ink)}.quality-pill[data-state=queued] .quality-pill-cta,.quality-pill[data-state=done] .quality-pill-cta{background:color-mix(in srgb,var(--green) 16%,var(--surface-3));color:var(--green-ink)}.quality-pill[data-state=retry] .quality-pill-cta{background:color-mix(in srgb,var(--red) 14%,var(--surface-3));color:var(--red-ink)}.hover-actions{display:flex;gap:6px;margin-top:10px}.hover-action{min-width:0;flex:1;height:29px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--text);cursor:pointer;font:600 11px/1 "Segoe UI Variable Text","Segoe UI",system-ui}.hover-action:hover{border-color:color-mix(in srgb,var(--primary) 42%,var(--border));background:color-mix(in srgb,var(--primary) 12%,var(--surface-3))}.hover-action.primary{border-color:transparent;background:var(--primary);color:var(--on-primary);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),var(--shadow-sm)}.hover-action.primary:hover{background:var(--primary-hover)}.hover-action[disabled]{cursor:default;opacity:.55}.send-error{margin-top:8px;border:1px solid color-mix(in srgb,var(--red) 32%,var(--border));border-radius:var(--radius)}button[data-state=checking]{box-shadow:inset 0 0 0 1px var(--amber,#b7791f)}button[data-state=recoverable]{box-shadow:inset 0 0 0 1px var(--red,#c53030)}button[data-state=canceled]{opacity:.8}button[data-state=sending][disabled],button[data-state=confirming][disabled],button[data-state=queued][disabled],button[data-state=done][disabled]{opacity:1;cursor:progress}button[data-state=sending]::before{content:"";display:inline-block;width:9px;height:9px;margin-right:5px;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:hlsd-overlay-spin .8s linear infinite}/* :is() 让这几条压过 .hover-action.primary 及其 :hover，进行中的按钮不再显示成普通蓝底。 */:is(.video-hover,.panel) button[data-state=confirming],:is(.video-hover,.panel) button[data-state=confirming]:hover{background:color-mix(in srgb,var(--primary) 14%,var(--surface-3));color:var(--primary-ink,var(--text))}:is(.video-hover,.panel) button[data-state=queued],:is(.video-hover,.panel) button[data-state=done],:is(.video-hover,.panel) button[data-state=queued]:hover,:is(.video-hover,.panel) button[data-state=done]:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface-3));color:var(--green-ink)}button[data-state=done]{cursor:default}@keyframes hlsd-overlay-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.video-hover,.video-hover *{transition:none!important;animation:none!important}}
           button:focus-visible{outline:2px solid var(--focus-ring, var(--primary));outline-offset:2px}
           /* 统一按钮微交互。视频悬浮按钮与面板按钮此前要么完全没有 transition，
              要么声明了 transform 过渡却没有任何状态去改 transform（等于死代码），
@@ -352,6 +373,8 @@ export default defineContentScript({
           icon.alt = ''
           return icon
         }
+        const panelBackdrop = element('div', 'panel-backdrop')
+        panelBackdrop.setAttribute('aria-hidden', 'true')
         const panelWrap = element('div', 'wrap')
         const panel = element('div', 'panel')
         const header = element('header')
@@ -364,17 +387,34 @@ export default defineContentScript({
         pin.title = '固定展开'
         const close = element('button', 'close', '×') as HTMLButtonElement
         close.type = 'button'
-        close.title = '折叠'
-        close.setAttribute('aria-label', '折叠')
+        close.title = '关闭'
+        close.setAttribute('aria-label', '关闭')
         headActions.append(pin, close)
         header.append(title, headActions)
+        const harvestToolbar = element('div', 'harvest-toolbar')
+        harvestToolbar.hidden = true
+        const harvestSearchRow = element('div', 'harvest-search-row')
+        const harvestSearch = element('input', 'harvest-search') as HTMLInputElement
+        harvestSearch.type = 'search'
+        harvestSearch.placeholder = '搜索关键词或扩展名（如 .mp4 / .zip / 1080）'
+        harvestSearch.setAttribute('aria-label', '搜索可下载链接')
+        harvestSearchRow.append(harvestSearch)
+        const harvestChips = element('div', 'harvest-chips')
+        const harvestBatchBar = element('div', 'harvest-batch-bar')
+        const harvestSelectAll = element('button', 'harvest-select-all', '全选当前筛选') as HTMLButtonElement
+        harvestSelectAll.type = 'button'
+        const harvestBatchBtn = element('button', 'download harvest-batch-btn', '批量下载选中 (0)') as HTMLButtonElement
+        harvestBatchBtn.type = 'button'
+        harvestBatchBtn.disabled = true
+        harvestBatchBar.append(harvestSelectAll, harvestBatchBtn)
+        harvestToolbar.append(harvestSearchRow, harvestChips, harvestBatchBar)
         const result = element('div', 'result')
         result.hidden = true
         const list = element('div', 'list')
-        panel.append(header, result, list)
+        panel.append(header, harvestToolbar, result, list)
         panelWrap.append(panel)
         const videoButtons = element('div', 'video-buttons')
-        root.append(style, panelWrap, videoButtons)
+        root.append(style, panelBackdrop, panelWrap, videoButtons)
         container.append(root)
         return root
       },
@@ -493,7 +533,13 @@ export default defineContentScript({
       }
     }
     const panelEl = ui.shadow.querySelector<HTMLElement>('.panel')
+    const panelBackdropEl = ui.shadow.querySelector<HTMLElement>('.panel-backdrop')
     const panelTitleEl = ui.shadow.querySelector<HTMLElement>('.title-text')
+    const harvestToolbarEl = ui.shadow.querySelector<HTMLElement>('.harvest-toolbar')
+    const harvestSearchEl = ui.shadow.querySelector<HTMLInputElement>('.harvest-search')
+    const harvestChipsEl = ui.shadow.querySelector<HTMLElement>('.harvest-chips')
+    const harvestSelectAllBtn = ui.shadow.querySelector<HTMLButtonElement>('.harvest-select-all')
+    const harvestBatchBtn = ui.shadow.querySelector<HTMLButtonElement>('.harvest-batch-btn')
     const setPanelTitle = (label: string) => {
       if (panelTitleEl) setTextIfChanged(panelTitleEl, label)
     }
@@ -505,9 +551,16 @@ export default defineContentScript({
         collapseTimer = null
       }
       wrap?.classList.toggle('open', open)
+      wrap?.classList.toggle('harvest-mode', harvestMode)
+      panelBackdropEl?.classList.toggle('open', open && harvestMode)
       wrap?.setAttribute('aria-hidden', String(!open))
       if (panelEl && 'inert' in panelEl) (panelEl as HTMLElement & { inert: boolean }).inert = !open
       if (open) fitPanel()
+    }
+    const closePanel = () => {
+      if (pinned) setPinned(false)
+      harvestMode = false
+      setOpen(false)
     }
     const openFloatingPanel = () => {
       if (wrap && !panelPosition) {
@@ -515,6 +568,7 @@ export default defineContentScript({
         wrap.style.top = '16px'
         wrap.style.right = '16px'
       }
+      wrap?.classList.toggle('harvest-mode', harvestMode)
       render()
       setOpen(true)
     }
@@ -530,13 +584,25 @@ export default defineContentScript({
     })
     wrap?.addEventListener('mouseleave', () => {
       // 选中链接需要逐个桌面确认，离开面板不能使剩余链接消失。
-      if (pinned || dragged || selectionMode) return
+      if (pinned || dragged || selectionMode || harvestMode) return
       collapseTimer = setTimeout(() => setOpen(false), 450)
     })
     pinButton?.addEventListener('click', () => setPinned(!pinned))
-    ui.shadow.querySelector('.close')?.addEventListener('click', () => {
-      if (pinned) setPinned(false)
-      setOpen(false)
+    ui.shadow.querySelector('.close')?.addEventListener('click', closePanel)
+    panelBackdropEl?.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      closePanel()
+    })
+    ctx.addEventListener(window, 'keydown', event => {
+      if (event.key === 'Escape' && wrap?.classList.contains('open')) {
+        event.stopPropagation()
+        closePanel()
+      }
+    }, { capture: true })
+    harvestSearchEl?.addEventListener('input', () => {
+      harvestQuery = harvestSearchEl.value
+      scheduleRender()
     })
     dragHandles.forEach(handle => handle.addEventListener('pointerdown', event => {
       if (!wrap || (event.target as HTMLElement).closest('.close, .pin')) return
@@ -604,7 +670,7 @@ export default defineContentScript({
 
     const setSendState = (resource: MediaResource, button: HTMLButtonElement, label: string, disabled: boolean, fallbackLabel = '下载', action: OverlayAction = 'download', error = '', state?: SendState) => {
       const key = overlaySendKey(resourceFingerprint(resource), action)
-      if (label) resourceSendStates.set(key, { label, disabled, error, state })
+      if (label) resourceSendStates.set(key, { label, disabled, error, state, url: resource.url, updatedAt: Date.now() })
       else resourceSendStates.delete(key)
       applySendState(resource, button, button.dataset.sendFallback || fallbackLabel, action)
       // 等待桌面确认期间控件可能因资源或布局更新而换代；同步当前仍在页面上的同一操作。
@@ -624,33 +690,42 @@ export default defineContentScript({
         }
         if (detail) { detail.textContent = error; detail.hidden = !error }
       })
+      scheduleVideoButtons()
+      scheduleRender()
     }
 
-    const sendResource = (resource: MediaResource, button: HTMLButtonElement) => {
+    const sendResource = (resource: MediaResource, button: HTMLButtonElement, forceResend = false) => {
       const key = overlaySendKey(resourceFingerprint(resource), 'download')
       const current = resourceSendStates.get(key)
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       const showResult = (text: string, error = false) => {
         if (!result) return
         result.hidden = false
+        result.classList.remove('info')
         result.classList.toggle('error', error)
         result.textContent = text
       }
       const show = (state: SendState, error = '') => setSendState(
         resource, button, SEND_LABELS[state], SEND_LOCKED.has(state), '下载', 'download', error || (state === 'checking' || state === 'recoverable' ? SEND_TITLES[state] : ''), state,
       )
-      const click = sendClickAction(current?.state)
-      if (current?.disabled || click === 'none') return
-      if (click === 'open_desktop') {
-        // 失败或暂停的任务在主程序里续传；不在网页上再建一个任务。
-        void runtimeMessage({ type: 'activate' }).catch(() => undefined)
-        showResult('已请求打开主程序，可在任务列表中继续下载')
+      const urlChanged = Boolean(current?.url && current.url !== resource.url)
+      const cooldownElapsed = Boolean(current?.updatedAt && Date.now() - current.updatedAt >= 3_000)
+      if (!forceResend) {
+        const click = sendClickAction(current?.state, { urlChanged, cooldownElapsed })
+        if ((current?.disabled && !urlChanged) || click === 'none') return
+        if (click === 'open_desktop') {
+          // 失败或暂停的任务在主程序里续传；不在网页上再建一个任务。
+          void runtimeMessage({ type: 'activate' }).catch(() => undefined)
+          showResult('已请求打开主程序，可在任务列表中继续下载')
+          return
+        }
+      } else if (current?.state === 'sending' || current?.state === 'confirming') {
         return
       }
       show('sending')
       let delivered = false
-      // 重试或核对都发同一条 download-now：后台按资源摘要找回原请求编号，只回查，不重复创建。
-      void withDeadline(runtimeMessage({ type: 'download-now', resource }), 10_000, '下载器响应超时，正在按原请求核对').then(async response => {
+      // 重试或核对都发同一条 download-now：后台按资源摘要找回原请求编号，只回查，不重复创建；刷新重发时显式轮换请求编号。
+      void withDeadline(runtimeMessage({ type: 'download-now', resource, ...(forceResend || urlChanged ? { forceResend: true } : {}) }), 10_000, '下载器响应超时，正在按原请求核对').then(async response => {
         delivered = true
         if (!response?.ok && response?.ownership_uncertain) {
           show('checking', response.error || SEND_TITLES.checking)
@@ -659,7 +734,12 @@ export default defineContentScript({
         }
         if (!response?.ok) throw new Error(response?.error || '桌面端未接受请求')
         const handoff = response.handoff || {}
-        const state = sendStateFromHandoff({ status: handoff.status, presentation: handoff.presentation, taskStatus: handoff.task_status })
+        const state = sendStateFromHandoff({
+          status: handoff.status,
+          presentation: handoff.presentation,
+          taskStatus: handoff.task_status,
+          taskErrorCode: handoff.task_error_code || handoff.error_code,
+        })
         if (state !== 'confirming') {
           show(state)
           if (state === 'queued' || state === 'done') ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
@@ -752,6 +832,7 @@ export default defineContentScript({
       activeVideo = video
       activePlayback = playbackByVideo.get(video) || null
       selectionMode = false
+      harvestMode = false
       selectionResourceIds = null
       render()
       const preferred = panelPosition || { x: rect.right - 344, y: rect.top + 44 }
@@ -1167,11 +1248,28 @@ export default defineContentScript({
       const details = overlayResourceDetails(primaryChoice)
       const qualityOptions = overlayQualityOptions(choices, 6)
       const hasInlineQualities = qualityOptions.length > 0
+      const primarySendState = primaryChoice
+        ? resourceSendStates.get(overlaySendKey(resourceFingerprint(primaryChoice), 'download'))?.state
+        : undefined
+      const hoverProgressLabel = primarySendState === 'sending'
+        ? '发送中'
+        : primarySendState === 'confirming'
+          ? '等待桌面确认'
+          : primarySendState === 'queued'
+            ? '已加入队列'
+            : primarySendState === 'done'
+              ? '已完成'
+              : ''
 
       setTextIfChanged(state.hoverTitle, oneClickChoice || hasInlineQualities ? details.title : `${choices.length} 个可用资源`)
       setTextIfChanged(
         state.hoverState,
-        hasInlineQualities ? `${qualityOptions.length} 个清晰度` : oneClickChoice ? details.state : '需要选择',
+        hoverProgressLabel || (hasInlineQualities ? `${qualityOptions.length} 个清晰度` : oneClickChoice ? details.state : '需要选择'),
+      )
+      setAttrIfChanged(
+        state.hoverState,
+        'data-tone',
+        primarySendState === 'sending' || primarySendState === 'confirming' ? 'progress' : null,
       )
       const copyText = !oneClickChoice && !hasInlineQualities
         ? (matched ? `优先候选：${details.title}` : '已发现页面媒体，但尚未确认播放器归属。请核对标题、清晰度和来源后选择。')
@@ -1207,9 +1305,10 @@ export default defineContentScript({
         updateQualityPill,
       )
 
+      const playableChoice = Boolean(primaryChoice && isPlayableMediaResource(primaryChoice))
       state.hoverDownload.hidden = !oneClickChoice || hasInlineQualities
-      state.hoverCast.hidden = !matched
-      state.hoverTvbox.hidden = !matched
+      state.hoverCast.hidden = !matched || !playableChoice
+      state.hoverTvbox.hidden = !matched || !playableChoice
       state.hoverPanelBtn.className = !oneClickChoice && !hasInlineQualities ? 'hover-action primary' : 'hover-action'
       setTextIfChanged(state.hoverPanelBtn, !oneClickChoice && !hasInlineQualities ? '查看并选择' : '更多')
       if (primaryChoice) {
@@ -1320,19 +1419,90 @@ export default defineContentScript({
     interface PanelRowState {
       resource: MediaResource
       selected: MediaResource
+      checkbox: HTMLInputElement
       name: HTMLDivElement
       kind: HTMLDivElement
       resourceUrl: HTMLElement
       select: HTMLSelectElement
       downloadBtn: HTMLButtonElement
+      resendBtn: HTMLButtonElement
       castBtn: HTMLButtonElement
       pushBtn: HTMLButtonElement
     }
     const panelRowStates = new WeakMap<HTMLElement, PanelRowState>()
+    let currentFilteredHarvestEntries: MediaResource[] = []
+    let currentAllHarvestEntries: MediaResource[] = []
+
+    harvestSelectAllBtn?.addEventListener('click', () => {
+      if (!currentFilteredHarvestEntries.length) return
+      const allChecked = currentFilteredHarvestEntries.every(item => harvestCheckedIds.has(resourceFingerprint(item)))
+      for (const item of currentFilteredHarvestEntries) {
+        const fp = resourceFingerprint(item)
+        if (allChecked) harvestCheckedIds.delete(fp)
+        else harvestCheckedIds.add(fp)
+      }
+      scheduleRender()
+    })
+
+    harvestBatchBtn?.addEventListener('click', () => {
+      if (harvestBatchBusy) return
+      const selectedItems = currentAllHarvestEntries
+        .filter(item => harvestCheckedIds.has(resourceFingerprint(item)))
+        .map(item => {
+          const pref = preferredVariants.get(resourceFingerprint(item))
+          if (!pref || !item.variants?.length) return item
+          const idx = pref.variantId
+            ? item.variants.findIndex(v => v.variantId === pref.variantId)
+            : item.variants.findIndex(v => (v.height || 0) === pref.height && (v.bandwidth || 0) === pref.bandwidth)
+          return idx >= 0 ? selectMediaVariant(item, item.variants[idx]) : item
+        })
+      if (!selectedItems.length) return
+      harvestBatchBusy = true
+      const result = ui.shadow.querySelector<HTMLElement>('.result')
+      if (result) {
+        result.hidden = false
+        result.classList.remove('error', 'info')
+        result.dataset.source = 'batch'
+        result.textContent = `正在批量发送 ${selectedItems.length} 个链接到桌面端…`
+      }
+      scheduleRender()
+      void withDeadline(runtimeMessage({ type: 'download-batch', resources: selectedItems }), 20_000, '批量发送响应超时').then(response => {
+        harvestBatchBusy = false
+        const sent = Number(response?.sent || 0)
+        const failed = Number(response?.failed || 0)
+        if (result) {
+          result.hidden = false
+          result.classList.remove('info')
+          result.classList.toggle('error', sent === 0 && failed > 0)
+          result.dataset.source = 'batch'
+          result.textContent = failed > 0
+            ? `批量发送完成：已处理 ${sent} 个，${failed} 个未能加入队列`
+            : `已发送 ${sent} 个链接，请在桌面下载器确认或查看队列`
+        }
+        scheduleRender()
+      }).catch(reason => {
+        harvestBatchBusy = false
+        if (result) {
+          result.hidden = false
+          result.classList.remove('info')
+          result.classList.add('error')
+          result.dataset.source = 'batch'
+          result.textContent = reason?.message || String(reason) || '批量下载失败'
+        }
+        scheduleRender()
+      })
+    })
 
     const createPanelRow = (resource: MediaResource): HTMLDivElement => {
       const row = document.createElement('div')
       row.className = 'item'
+      const itemHead = document.createElement('div')
+      itemHead.className = 'item-head'
+      const checkbox = document.createElement('input')
+      checkbox.type = 'checkbox'
+      checkbox.className = 'item-check'
+      checkbox.hidden = true
+      checkbox.setAttribute('aria-label', '选择此链接用于批量下载')
       const meta = document.createElement('div')
       meta.className = 'meta'
       const name = document.createElement('div')
@@ -1346,6 +1516,7 @@ export default defineContentScript({
       select.setAttribute('aria-label', '选择视频清晰度')
       select.hidden = true
       meta.append(name, kind, resourceUrl, select)
+      itemHead.append(checkbox, meta)
 
       const actions = document.createElement('div')
       actions.className = 'item-actions'
@@ -1353,6 +1524,12 @@ export default defineContentScript({
       downloadBtn.type = 'button'
       downloadBtn.className = 'download'
       downloadBtn.textContent = '下载'
+      const resendBtn = document.createElement('button')
+      resendBtn.type = 'button'
+      resendBtn.className = 'download resend'
+      resendBtn.textContent = '刷新重发'
+      resendBtn.title = '使用最新捕获的媒体地址重新发送或刷新桌面任务'
+      resendBtn.hidden = true
       const castBtn = document.createElement('button')
       castBtn.type = 'button'
       castBtn.className = 'download cast'
@@ -1363,23 +1540,32 @@ export default defineContentScript({
       pushBtn.className = 'download push-tv'
       pushBtn.textContent = 'TVBox'
       pushBtn.title = '直接推送当前媒体链接到 TVBox'
-      actions.append(downloadBtn, castBtn, pushBtn)
-      row.append(meta, actions)
+      actions.append(downloadBtn, resendBtn, castBtn, pushBtn)
+      row.append(itemHead, actions)
 
       const rowState: PanelRowState = {
         resource,
         selected: resource,
+        checkbox,
         name,
         kind,
         resourceUrl,
         select,
         downloadBtn,
+        resendBtn,
         castBtn,
         pushBtn,
       }
       panelRowStates.set(row, rowState)
 
+      checkbox.addEventListener('change', () => {
+        const fp = resourceFingerprint(rowState.resource)
+        if (checkbox.checked) harvestCheckedIds.add(fp)
+        else harvestCheckedIds.delete(fp)
+        scheduleRender()
+      })
       downloadBtn.addEventListener('click', () => sendResource(rowState.selected, downloadBtn))
+      resendBtn.addEventListener('click', () => sendResource(rowState.selected, downloadBtn, true))
       castBtn.addEventListener('click', () => castResource(rowState.selected, castBtn))
       pushBtn.addEventListener('click', () => pushToTv(rowState.selected, pushBtn))
       select.addEventListener('change', () => {
@@ -1396,9 +1582,16 @@ export default defineContentScript({
         } else {
           preferredVariants.delete(fp)
         }
+        const playable = isPlayableMediaResource(rowState.selected)
+        castBtn.hidden = !playable
+        pushBtn.hidden = !playable
         applySendState(rowState.selected, downloadBtn, '下载')
-        applySendState(rowState.selected, pushBtn, overlayActionFallback('tvbox'), 'tvbox')
-        applySendState(rowState.selected, castBtn, overlayActionFallback('cast'), 'cast')
+        const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(rowState.selected), 'download'))?.state
+        resendBtn.hidden = !canForceResend(sendState)
+        if (playable) {
+          applySendState(rowState.selected, pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+          applySendState(rowState.selected, castBtn, overlayActionFallback('cast'), 'cast')
+        }
       })
 
       return row
@@ -1408,6 +1601,9 @@ export default defineContentScript({
       const rowState = panelRowStates.get(row)
       if (!rowState) return
       rowState.resource = resource
+      const fp = resourceFingerprint(resource)
+      rowState.checkbox.hidden = !harvestMode
+      rowState.checkbox.checked = harvestMode && harvestCheckedIds.has(fp)
       const titleText = resource.title || resource.filename || resource.url.split('/').pop() || resource.url
       setTextIfChanged(rowState.name, titleText)
       setAttrIfChanged(rowState.name, 'title', resource.title || resource.filename || resource.url)
@@ -1425,7 +1621,7 @@ export default defineContentScript({
       setTextIfChanged(rowState.resourceUrl, resourceLocation)
       setAttrIfChanged(rowState.resourceUrl, 'title', resourceLocation)
 
-      const preference = preferredVariants.get(resourceFingerprint(resource))
+      const preference = preferredVariants.get(fp)
       const selectedIndex = preference && resource.variants?.length
         ? (() => {
           if (preference.variantId) {
@@ -1456,41 +1652,116 @@ export default defineContentScript({
         rowState.select.hidden = true
       }
 
+      const playable = isPlayableMediaResource(selected)
+      rowState.castBtn.hidden = !playable
+      rowState.pushBtn.hidden = !playable
       applySendState(selected, rowState.downloadBtn, '下载')
-      applySendState(selected, rowState.castBtn, overlayActionFallback('cast'), 'cast')
-      applySendState(selected, rowState.pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+      const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(selected), 'download'))?.state
+      rowState.resendBtn.hidden = !canForceResend(sendState)
+      if (playable) {
+        applySendState(selected, rowState.castBtn, overlayActionFallback('cast'), 'cast')
+        applySendState(selected, rowState.pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+      }
     }
 
     const render = () => {
       if (ctx.isInvalid) return
       const list = ui.shadow.querySelector('.list')
       if (!list) return
+      wrap?.classList.toggle('harvest-mode', harvestMode)
+      if (panelBackdropEl && wrap) {
+        panelBackdropEl.classList.toggle('open', harvestMode && wrap.classList.contains('open'))
+      }
       const selectionResources = selectionResourceIds
         ? [...resources.values()].filter(resource => selectionResourceIds?.has(resourceFingerprint(resource)))
         : [...resources.values()]
       // 已有播放器归属证据时，展开面板必须沿用同一资源，不能重新按全页码率挑选。
       const matched = playerPlaybackResources([...resources.values()], activePlayback, 8)
+      const allSelectionEntries = selectionMode && !activePlayback
+        ? compactResources(selectionResources, 200).slice(0, 200)
+        : []
       const entries = selectionMode && !activePlayback
-        ? compactResources(selectionResources, 40).slice(0, 20)
+        ? (harvestMode
+            ? filterHarvestResources(allSelectionEntries, harvestCategory, harvestQuery)
+            : allSelectionEntries.slice(0, 40))
         : matched.length ? matched : visiblePlaybackResources([...resources.values()], activePlayback, 8)
-      const signature = JSON.stringify([selectionMode, selectionResourceIds?.size, selectionEmptyMessage, entries.map(resource => [
-        resource.id, resource.url, resource.title, resource.filename, resource.kind,
-        resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
-        resource.quality, resource.duration, resource.isLive, resource.variants,
-        preferredVariants.get(resourceFingerprint(resource)),
-      ]), [...resourceSendStates]])
+
+      currentAllHarvestEntries = harvestMode ? allSelectionEntries : []
+      currentFilteredHarvestEntries = harvestMode ? entries : []
+
+      if (harvestToolbarEl) {
+        harvestToolbarEl.hidden = !harvestMode
+        if (harvestMode && harvestChipsEl) {
+          const categoryCounts = countHarvestCategories(allSelectionEntries)
+          patchKeyedChildren(
+            harvestChipsEl,
+            [...HARVEST_CATEGORY_CHIPS],
+            ([category]) => category,
+            ([category]) => {
+              const chip = document.createElement('button')
+              chip.type = 'button'
+              chip.className = 'harvest-chip'
+              const labelSpan = document.createElement('span')
+              const countBadge = document.createElement('b')
+              chip.append(labelSpan, countBadge)
+              chip.addEventListener('click', () => {
+                harvestCategory = category
+                scheduleRender()
+              })
+              return chip
+            },
+            (chip, [category, label]) => {
+              setAttrIfChanged(chip, 'aria-pressed', String(harvestCategory === category))
+              const labelSpan = chip.querySelector('span')
+              const countBadge = chip.querySelector('b')
+              if (labelSpan) setTextIfChanged(labelSpan, label)
+              if (countBadge) setTextIfChanged(countBadge, String(categoryCounts[category]))
+            },
+          )
+          const checkedCount = allSelectionEntries.filter(item => harvestCheckedIds.has(resourceFingerprint(item))).length
+          const allFilteredSelected = entries.length > 0 && entries.every(item => harvestCheckedIds.has(resourceFingerprint(item)))
+          if (harvestSelectAllBtn) {
+            harvestSelectAllBtn.disabled = entries.length === 0
+            setAttrIfChanged(harvestSelectAllBtn, 'aria-pressed', String(allFilteredSelected))
+            setTextIfChanged(harvestSelectAllBtn, allFilteredSelected ? '取消全选' : '全选当前筛选')
+          }
+          if (harvestBatchBtn) {
+            harvestBatchBtn.disabled = checkedCount === 0 || harvestBatchBusy
+            setTextIfChanged(harvestBatchBtn, harvestBatchBusy ? `发送中 (${checkedCount})…` : `批量下载选中 (${checkedCount})`)
+          }
+        }
+      }
+
+      const signature = JSON.stringify([
+        selectionMode, harvestMode, harvestCategory, harvestQuery, harvestBatchBusy,
+        [...harvestCheckedIds], selectionResourceIds?.size, selectionEmptyMessage,
+        entries.map(resource => [
+          resource.id, resource.url, resource.audioUrl, resource.title, resource.filename, resource.kind,
+          resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
+          resource.quality, resource.duration, resource.isLive, resource.variants,
+          preferredVariants.get(resourceFingerprint(resource)),
+        ]),
+        [...resourceSendStates],
+      ])
       // 播放进度和重复网络观察不能不断替换用户正在点击的按钮及清晰度控件。
       if (signature === renderedListSignature) { updateVideoButtons(); return }
       renderedListSignature = signature
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       if (selectionMode && selectionResourceIds?.size === 0 && result) {
         result.hidden = false
+        result.classList.remove('info')
         result.classList.add('error')
         result.dataset.source = 'selection'
         setTextIfChanged(result, selectionEmptyMessage)
+      } else if (harvestMode && allSelectionEntries.length > 0 && entries.length === 0 && result) {
+        result.hidden = false
+        result.classList.remove('error')
+        result.classList.add('info')
+        result.dataset.source = 'selection'
+        setTextIfChanged(result, '当前分类或搜索词下没有匹配的链接')
       } else if (result?.dataset.source === 'selection') {
         result.hidden = true
-        result.classList.remove('error')
+        result.classList.remove('error', 'info')
         delete result.dataset.source
       }
       patchKeyedChildren(
@@ -1547,9 +1818,34 @@ export default defineContentScript({
         }, HOVER_DISMISS_DELAY_MS)
       }
     }
+    const POINTER_HIT_TEST_INTERVAL_MS = 80
+    let lastPointerHitTestAt = 0
+    let pointerThrottleTimer: ReturnType<typeof setTimeout> | null = null
+    const schedulePointerHitTest = () => {
+      if (ctx.isInvalid || videoControlDragging) return
+      if (knownVideos.size === 0 && !hoveredVideo) return
+      const now = Date.now()
+      const elapsed = now - lastPointerHitTestAt
+      if (elapsed >= POINTER_HIT_TEST_INTERVAL_MS) {
+        if (pointerThrottleTimer) {
+          clearTimeout(pointerThrottleTimer)
+          pointerThrottleTimer = null
+        }
+        lastPointerHitTestAt = now
+        scheduleVideoButtons()
+        return
+      }
+      if (pointerThrottleTimer) return
+      pointerThrottleTimer = setTimeout(() => {
+        pointerThrottleTimer = null
+        lastPointerHitTestAt = Date.now()
+        scheduleVideoButtons()
+      }, POINTER_HIT_TEST_INTERVAL_MS - elapsed)
+    }
     ctx.addEventListener(window, 'pointermove', event => {
+      if (videoControlDragging || (knownVideos.size === 0 && !hoveredVideo)) return
       pointer = { x: event.clientX, y: event.clientY, inControls: event.composedPath().includes(ui.shadow.host) }
-      scheduleVideoButtons()
+      schedulePointerHitTest()
     }, { capture: true, passive: true })
     ctx.addEventListener(document, 'pointerout', event => {
       if (event.relatedTarget) return
@@ -1558,6 +1854,7 @@ export default defineContentScript({
     }, { capture: true, passive: true })
     ctx.onInvalidated(() => {
       if (playerDismissTimer) clearTimeout(playerDismissTimer)
+      if (pointerThrottleTimer) clearTimeout(pointerThrottleTimer)
     })
     ctx.addEventListener(window, 'scroll', scheduleVideoButtons, { capture: true, passive: true })
     ctx.addEventListener(window, 'resize', scheduleVideoButtons)
@@ -1657,6 +1954,7 @@ export default defineContentScript({
       confidence = 0,
       inspection?: Partial<MediaResource>,
       observedIdentity?: Record<string, string>,
+      audioUrl?: string,
     ) => {
       const confirmedFullTrack = evidence.includes('site_player_metadata') || evidence.includes('mse_full_track')
       const kind = playbackSource
@@ -1667,8 +1965,6 @@ export default defineContentScript({
             ? 'media'
             : null))
       if (!kind) return
-      let filename = ''
-      try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
       const httpUrlOnly = (value: unknown): string | undefined => {
         if (typeof value !== 'string' || !value.trim()) return undefined
         try {
@@ -1678,17 +1974,29 @@ export default defineContentScript({
           return undefined
         }
       }
+      const safeAudioUrl = httpUrlOnly(audioUrl || inspection?.audioUrl)
+      let filename = typeof inspection?.filename === 'string' && inspection.filename.trim()
+        ? inspection.filename.trim()
+        : ''
+      if (!filename) {
+        try { filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') } catch {}
+      }
+      if ((safeAudioUrl || isBilibiliFullTrackMseUrl(url)) && /\.m4s$/i.test(filename)) {
+        filename = filename.replace(/\.m4s$/i, '.mp4')
+      }
       const safeVariants = Array.isArray(inspection?.variants)
         ? inspection.variants
             .map(variant => {
               if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return null
               const safeUrl = httpUrlOnly(variant.url)
               if (!safeUrl) return null
+              const variantAudioUrl = httpUrlOnly(variant.audioUrl) || safeAudioUrl
               const safeVariantId = typeof variant.variantId === 'string' && variant.variantId.trim()
                 ? variant.variantId.trim().slice(0, 256)
                 : undefined
               return {
                 url: safeUrl,
+                ...(variantAudioUrl ? { audioUrl: variantAudioUrl } : {}),
                 ...(safeVariantId ? { variantId: safeVariantId } : {}),
                 ...(typeof variant.width === 'number' && Number.isFinite(variant.width) && variant.width > 0 ? { width: variant.width } : {}),
                 ...(typeof variant.height === 'number' && Number.isFinite(variant.height) && variant.height > 0 ? { height: variant.height } : {}),
@@ -1740,6 +2048,7 @@ export default defineContentScript({
           width: inspection.width, height: inspection.height, bandwidth: inspection.bandwidth,
           estimatedSize: inspection.estimatedSize, quality: inspection.quality,
         } : {}),
+        ...(safeAudioUrl ? { audioUrl: safeAudioUrl } : {}),
         id: resourceId(url), url, kind, mimeType, pageUrl: location.href,
         title: pageMediaTitle() || filename, filename, seenAt: Date.now(),
         evidence: evidence.length ? evidence.slice(0, 16) : [playbackSource ? 'current_src' : 'page_observation'],
@@ -1770,6 +2079,7 @@ export default defineContentScript({
         activeVideo = video
         if (changedPlayer && explicitActivation) {
           selectionMode = false
+          harvestMode = false
           selectionResourceIds = null
         }
       }
@@ -1906,17 +2216,17 @@ export default defineContentScript({
 
     const handleResourceEvent = (event: Event) => {
       const detail = bridgeDetail(event)
-      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
+      if (detail.sourcePageUrl && !samePageOrVideo(detail.sourcePageUrl, location.href)) return
       // A buffered player response may arrive after an SPA navigation.
       if (detail.siteVideoId && detail.siteVideoId !== sitePageVideoId(location.href)) return
       const evidence = detail.siteVideoId
         ? ['site_player_metadata', 'page_response']
         : detail.inspection?.inspected ? ['manifest_inspection', 'page_response'] : []
-      add(detail.url, detail.mimeType, false, evidence, '', 0, detail.inspection, detail.responseIdentity)
+      add(detail.url, detail.mimeType, false, evidence, '', 0, detail.inspection, detail.responseIdentity, detail.audioUrl)
     }
     const handleMseEvent = (event: Event) => {
       const detail = bridgeDetail(event)
-      if (detail.sourcePageUrl && detail.sourcePageUrl !== pageKey(location.href)) return
+      if (detail.sourcePageUrl && !samePageOrVideo(detail.sourcePageUrl, location.href)) return
       const blobUrl = String(detail.blobUrl || '')
       const mediaUrl = String(detail.mediaUrl || '')
       if (!blobUrl.startsWith('blob:') || !/^https?:/i.test(mediaUrl)) return
@@ -1966,17 +2276,24 @@ export default defineContentScript({
         // YouTube-style `/videoplayback` often reaches MSE without a manifest.
         // Register that stream as the current player resource; ordinary `.m4s`/`.ts`
         // fragments stay out of the overlay, while Bilibili's full byte-ranged
-        // video track `.m4s` falls back cleanly when playinfo was unavailable.
+        // video+audio `.m4s` pair falls back cleanly when playinfo was unavailable.
         const ownerVideo = currentVideos().find(video =>
           mediaElementSources(video).some(source => source.url === blobUrl),
         )
         const owner = ownerVideo ? mediaOwner(ownerVideo) : `mse-source-buffer:${resourceId(blobUrl)}`
-        const coveredBySiteMetadata = [...resources.values()].some(item =>
+        const isCoveredBySiteMetadata = (candidateUrl: string) => [...resources.values()].some(item =>
           item.evidence?.includes('site_player_metadata')
-          && (item.url === mediaUrl || (item.playbackUrls || []).includes(mediaUrl)),
+          && (item.url === candidateUrl || (item.playbackUrls || []).includes(candidateUrl)),
         )
-        if (!coveredBySiteMetadata && isBilibiliFullTrackMseUrl(mediaUrl)) {
-          add(mediaUrl, 'video/mp4', false, ['mse_source_buffer', 'mse_full_track'], owner, 0.97)
+        if (!isCoveredBySiteMetadata(mediaUrl) && isBilibiliFullTrackMseUrl(mediaUrl)) {
+          const pairedAudioUrl = [...evidence.urls].find(u => isBilibiliAudioTrackMseUrl(u))
+          add(mediaUrl, 'video/mp4', false, ['mse_source_buffer', 'mse_full_track'], owner, 0.97, undefined, undefined, pairedAudioUrl)
+        } else if (isBilibiliAudioTrackMseUrl(mediaUrl)) {
+          for (const candidateUrl of evidence.urls) {
+            if (isBilibiliFullTrackMseUrl(candidateUrl) && !isCoveredBySiteMetadata(candidateUrl)) {
+              add(candidateUrl, 'video/mp4', false, ['mse_source_buffer', 'mse_full_track'], owner, 0.97, undefined, undefined, mediaUrl)
+            }
+          }
         } else {
           add(mediaUrl, '', false, ['mse_source_buffer'], owner, 0.97)
         }
@@ -2005,11 +2322,13 @@ export default defineContentScript({
     const handleRuntimeMessage = (message: any, _sender?: unknown, sendResponse?: (value?: unknown) => void) => {
       if (message?.type === 'download-error') {
         selectionMode = true
+        harvestMode = false
         selectionResourceIds = null
         openFloatingPanel()
         const result = ui.shadow.querySelector<HTMLElement>('.result')
         if (result) {
           result.hidden = false
+          result.classList.remove('info')
           result.classList.add('error')
           result.dataset.source = 'download'
           result.textContent = String(message.error || '下载请求失败，请重试')
@@ -2047,6 +2366,7 @@ export default defineContentScript({
         )
         selectionEmptyMessage = '选中的内容里没有可下载链接'
         selectionMode = true
+        harvestMode = false
         selectionResourceIds = new Set<string>()
         activePlayback = null
         activeVideo = null
@@ -2099,9 +2419,21 @@ export default defineContentScript({
           [...anchorCandidates, ...dataDownloadCandidates],
           mediaSrcs,
           document.baseURI || location.href,
+          200,
         )
         selectionEmptyMessage = '当前页面没有发现可下载链接'
         selectionMode = true
+        harvestMode = true
+        harvestCategory = 'all'
+        harvestQuery = ''
+        harvestCheckedIds.clear()
+        if (harvestSearchEl) harvestSearchEl.value = ''
+        const result = ui.shadow.querySelector<HTMLElement>('.result')
+        if (result?.dataset.source === 'batch') {
+          result.hidden = true
+          result.classList.remove('error', 'info')
+          delete result.dataset.source
+        }
         selectionResourceIds = new Set<string>()
         activePlayback = null
         activeVideo = null
@@ -2128,6 +2460,7 @@ export default defineContentScript({
         return
       }
       if (message?.type === 'open-media-panel') {
+        harvestMode = false
         if (message.scope === 'tab') {
           activePlayback = null
           activeVideo = null
@@ -2174,7 +2507,7 @@ export default defineContentScript({
     let currentPageUrl = pageKey(location.href)
     function loadPageResources(pageUrl: string, scope?: 'tab') {
       void runtimeMessage({ type: 'list', pageUrl, ...(scope ? { scope } : {}) }).then((stored: MediaResource[]) => {
-        if (ctx.isInvalid || !Array.isArray(stored) || pageKey(location.href) !== pageKey(pageUrl)) return
+        if (ctx.isInvalid || !Array.isArray(stored) || !samePageOrVideo(location.href, pageUrl)) return
         stored.forEach(resource => {
           if (resource?.url) addResource({
             ...resource,
@@ -2187,16 +2520,20 @@ export default defineContentScript({
     const syncPage = () => {
       const next = pageKey(location.href)
       if (next === currentPageUrl) return
+      const previousPage = currentPageUrl
       const previousSiteVideoId = sitePageVideoId(currentPageUrl)
       const nextSiteVideoId = sitePageVideoId(next)
       currentPageUrl = next
       // Locale/tracking replaceState redirects (e.g. Bilibili /video/BV... -> /en/video/BV...)
       // keep the same logical video playing; preserve its MSE provenance and captured streams.
       if (previousSiteVideoId && previousSiteVideoId === nextSiteVideoId) {
-        window.dispatchEvent(new Event('__hls_downloader_replay__'))
-        syncPlayingVideos()
-        scheduleVideoButtons()
-        return
+        if (sameSiteVideoIdentity(previousPage, next)) {
+          loadPageResources(location.href)
+          window.dispatchEvent(new Event('__hls_downloader_replay__'))
+          syncPlayingVideos()
+          scheduleVideoButtons()
+          return
+        }
       }
       const activeBlobs = new Set(
         currentVideos().flatMap(video => mediaElementSources(video).map(source => source.url).filter(url => url.startsWith('blob:'))),
@@ -2204,6 +2541,8 @@ export default defineContentScript({
       activePlayback = null
       activeVideo = null
       selectionMode = false
+      harvestMode = false
+      harvestCheckedIds.clear()
       selectionResourceIds = null
       playbackByVideo = new WeakMap<HTMLVideoElement, PlaybackContext>()
       for (const blobUrl of [...mseEvidenceByBlob.keys()]) {

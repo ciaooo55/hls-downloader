@@ -1929,4 +1929,109 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.browser.tabs.sendMessage).toHaveBeenNthCalledWith(1, 7, { type: 'collect-page-links' }, { frameId: 5 })
     expect(mocks.browser.tabs.sendMessage).toHaveBeenNthCalledWith(2, 7, { type: 'collect-page-links' }, { frameId: 0 })
   })
+
+  it('wakes Core directly on explicit download-now and download-batch even when ping reports user_shutdown, forwarding audio_url', async () => {
+    const pageUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const videoUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+    const audioUrl = 'https://upos-hz-mirrorakam.akamaized.net/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+    mocks.browser.tabs.get.mockResolvedValue({ url: pageUrl })
+    mocks.native.mockClear()
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: false, error_code: 'user_shutdown', error: 'user_shutdown' }
+      if (message.op === 'offer') return { ok: true, handoff: { id: `handoff-${message.resource.client_request_id}`, status: 'pending' } }
+      if (message.op === 'handoff_status') return { ok: true, handoff: { id: String(message.handoff_id || 'handoff'), status: 'accepted', task_status: 'paused', task_error_code: 'refresh_armed' } }
+      return { ok: true }
+    })
+
+    const resource = {
+      id: 'bili-dual',
+      url: videoUrl,
+      audioUrl,
+      kind: 'media',
+      mimeType: 'video/mp4',
+      pageUrl,
+      title: 'Bilibili 4K Demo',
+      filename: '100026.m4s',
+      seenAt: Date.now(),
+    }
+    const singleReply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    await flush()
+    expect(singleReply.ok).toBe(true)
+    expect(mocks.native.mock.calls.some(([m]) => m.op === 'ping')).toBe(false)
+    const offerPayload = mocks.native.mock.calls.find(([m]) => m.op === 'offer')![0].resource
+    expect(offerPayload.url).toBe(videoUrl)
+    expect(offerPayload.audio_url).toBe(audioUrl)
+    expect(offerPayload.filename).toBe('Bilibili 4K Demo.mp4')
+    expect(offerPayload.request_contexts['https://upos-hz-mirrorakam.akamaized.net']).toBeDefined()
+
+    // Explicit forceResend rotates client_request_id for ArmTaskRefresh / re-download.
+    const resendReply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource, forceResend: true },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    await flush()
+    expect(resendReply.ok).toBe(true)
+    const offers = mocks.native.mock.calls.filter(([m]) => m.op === 'offer')
+    expect(offers).toHaveLength(2)
+    expect(offers[1][0].resource.client_request_id).not.toBe(offers[0][0].resource.client_request_id)
+
+    // download-batch processes multiple items in background without popup-lifetime drop.
+    mocks.native.mockClear()
+    const batchReply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      {
+        type: 'download-batch',
+        resources: [
+          { id: 'b1', url: 'https://files.test/one.zip', kind: 'file', pageUrl },
+          { id: 'b2', url: 'https://files.test/two.zip', kind: 'file', pageUrl },
+        ],
+      },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    await flush()
+    expect(batchReply).toMatchObject({ ok: true, sent: 2, failed: 0 })
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'offer')).toHaveLength(2)
+  })
+
+  it('migrates captured tab resources across same-video SPA replaceState redirects', async () => {
+    const cnUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const enUrl = 'https://www.bilibili.com/en/video/BV1xx411c7mD/?vd_source=abc'
+    const cnKey = pageResourceKey(7, cnUrl)
+    const enKey = pageResourceKey(7, enUrl)
+    session[cnKey] = [{ id: 'bili', url: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s', kind: 'media', mimeType: 'video/mp4', evidence: ['site_player_metadata'], pageUrl: cnUrl, seenAt: Date.now() }]
+
+    mocks.browser.tabs.get.mockResolvedValue({ url: enUrl })
+    listener(mocks.browser.tabs.onUpdated)(7, { url: enUrl })
+    await flush()
+
+    expect(session[enKey]).toBeDefined()
+    expect((session[enKey] as any[])[0].pageUrl).toBe(enUrl)
+  })
+
+  it('polls incomplete local-file handoffs every 5s instead of 1s spam', async () => {
+    item.url = item.finalUrl = 'https://cdn.test/small-local.bin'
+    item.filename = 'C:\\Downloads\\small-local.bin'
+    item.state = 'in_progress'
+    item.totalBytes = 128 * 1024
+    item.fileSize = 128 * 1024
+
+    largeResumableResponse({ early: true, size: 128 * 1024, acceptRanges: 'none' })
+    const created = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await created
+
+    const searchBefore = mocks.browser.downloads.search.mock.calls.length
+    // 2 seconds later (< 5_000ms retryAt), no follow-up poll should have run yet.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(mocks.browser.downloads.search.mock.calls.length).toBe(searchBefore)
+
+    // At 5_000ms, the scheduled follow-up runs once.
+    await vi.advanceTimersByTimeAsync(3_100)
+    expect(mocks.browser.downloads.search.mock.calls.length).toBeGreaterThan(searchBefore)
+  })
 })

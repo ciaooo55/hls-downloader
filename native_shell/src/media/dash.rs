@@ -4,7 +4,6 @@ use crate::http_engine::{
     entry_network_scope, fetch_manifest_bytes, media_network_scope, public_entry, run_job,
     set_media_network_scope, validate_media_target, Job,
 };
-use crate::media::merge::merge_with_ffmpeg;
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -261,6 +260,86 @@ fn parse_mpd_with_url_budget(
     parse_mpd_for_recording(xml, base, now, url_budget, &[])
 }
 
+fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
+    const DRM_MARKERS: [&str; 7] = [
+        "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",
+        "9a04f079-9840-4286-ab92-e65be0885f95",
+        "94ce86fb-07ff-4f43-adb8-93d2fa968ca2",
+        "widevine",
+        "playready",
+        "fairplay",
+        "clearkey",
+    ];
+    for node in root.descendants().filter(|node| {
+        node.is_element()
+            && node
+                .tag_name()
+                .name()
+                .eq_ignore_ascii_case("ContentProtection")
+    }) {
+        for attr in node.attributes() {
+            let name = attr.name();
+            let val_trimmed = attr.value().trim();
+            if (name.eq_ignore_ascii_case("default_KID")
+                || name.to_ascii_lowercase().ends_with(":default_kid"))
+                && !val_trimmed.is_empty()
+            {
+                return true;
+            }
+            let lower = val_trimmed.to_ascii_lowercase();
+            if DRM_MARKERS.iter().any(|marker| lower.contains(marker)) {
+                return true;
+            }
+            if name.eq_ignore_ascii_case("value")
+                && matches!(lower.as_str(), "cenc" | "cbcs" | "cens" | "cbc1")
+            {
+                return true;
+            }
+        }
+        for child in node
+            .descendants()
+            .skip(1)
+            .filter(|child| child.is_element())
+        {
+            let tag = child.tag_name().name();
+            if tag.eq_ignore_ascii_case("pssh") || tag.eq_ignore_ascii_case("pro") {
+                return true;
+            }
+            if let Some(text) = child.text() {
+                let lower = text.to_ascii_lowercase();
+                if lower.contains("skd://")
+                    || DRM_MARKERS.iter().any(|marker| lower.contains(marker))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn cleanup_multi_period_temp_files(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let is_multi_period_temp = name.strip_prefix("seg-").is_some_and(|rest| {
+            rest.strip_suffix("-init.mp4")
+                .or_else(|| rest.strip_suffix("-period.m4s"))
+                .is_some_and(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|ch| ch.is_ascii_digit())
+                })
+        });
+        if is_multi_period_temp {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 fn parse_mpd_for_recording(
     xml: &str,
     base: &str,
@@ -279,6 +358,11 @@ fn parse_mpd_for_recording(
     let root = document.root_element();
     if !root.tag_name().name().eq_ignore_ascii_case("MPD") {
         return Err("not a DASH manifest".into());
+    }
+    if has_drm_content_protection(root) {
+        return Err(
+            "检测到受 DRM 加密保护的流媒体（Widevine/PlayReady），不支持直接解密下载".into(),
+        );
     }
     let dynamic = root.attribute("type") == Some("dynamic");
     let periods: Vec<_> = root
@@ -1711,7 +1795,7 @@ fn download_live_dash(
         audio.write_playlist(&audio_dir)?;
         crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
         let output = audio_dir.join("merged.m4a");
-        merge_with_ffmpeg(&audio_dir, &output, control)?;
+        crate::media::merge::merge_with_ffmpeg_opts(&audio_dir, &output, control, false)?;
         Some(output)
     };
     finish_dash(
@@ -2284,7 +2368,7 @@ fn download_dash_primary(
         write_dash_playlist(&audio_dir, &all_audio)?;
         crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
         let output = audio_dir.join("merged.m4a");
-        merge_with_ffmpeg(&audio_dir, &output, control)?;
+        crate::media::merge::merge_with_ffmpeg_opts(&audio_dir, &output, control, false)?;
         Some(output)
     } else {
         None
@@ -2304,7 +2388,8 @@ fn finish_dash(
 ) -> Result<PathBuf, String> {
     crate::http_engine::write_media_merging(&task_dir.join("progress.json"));
     let output = task_dir.join("merged.mp4");
-    merge_with_ffmpeg(task_dir, &output, control)?;
+    let has_external_audio = audio_merged.is_some();
+    crate::media::merge::merge_with_ffmpeg_opts(task_dir, &output, control, !has_external_audio)?;
     let published = if let Some((audio, offset)) = audio_merged {
         let muxed = task_dir.join("muxed.mp4");
         crate::media::merge::mux_av_with_offset(
@@ -2315,10 +2400,14 @@ fn finish_dash(
             control,
             offset,
         )?;
+        let _ = fs::remove_file(&output);
+        let _ = fs::remove_file(&audio);
         muxed
     } else {
         output
     };
+    cleanup_multi_period_temp_files(task_dir);
+    cleanup_multi_period_temp_files(&task_dir.join("audio"));
     save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
     Ok(published)
 }
@@ -3149,6 +3238,7 @@ fn download_dash_subtitle_track(
         }
         crate::atomic_replace::replace_file(&converted, &vtt_path)
             .map_err(|error| error.to_string())?;
+        let _ = fs::remove_file(&joined);
     } else {
         return Err(format!("unsupported DASH subtitle format {mime} {codecs}"));
     }
@@ -7161,6 +7251,77 @@ mod tests {
         );
         assert_eq!(progress["completed_segments"].as_u64(), Some(4));
         assert_eq!(progress["total_segments"].as_u64(), Some(4));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_mpd_rejects_drm_content_protection_fast_with_clear_chinese_message() {
+        let expected = "检测到受 DRM 加密保护的流媒体（Widevine/PlayReady），不支持直接解密下载";
+        let cases = [
+            r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:cenc="urn:mpeg:cenc:2013" type="static" mediaPresentationDuration="PT10S">
+                <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                        <ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" cenc:default_KID="01234567-89ab-cdef-0123-456789abcdef"/>
+                        <SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="2"/>
+                        <Representation id="v1" bandwidth="1000000" width="1280" height="720"/>
+                    </AdaptationSet>
+                </Period>
+            </MPD>"#,
+            r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">
+                <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                        <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"/>
+                        <SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="2"/>
+                        <Representation id="v1" bandwidth="1000000"/>
+                    </AdaptationSet>
+                </Period>
+            </MPD>"#,
+            r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">
+                <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                        <ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>
+                        <SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="2"/>
+                        <Representation id="v1" bandwidth="1000000"/>
+                    </AdaptationSet>
+                </Period>
+            </MPD>"#,
+            r#"<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">
+                <Period>
+                    <AdaptationSet mimeType="video/mp4">
+                        <ContentProtection schemeIdUri="urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2"/>
+                        <SegmentTemplate media="seg-$Number$.m4s" initialization="init.mp4" duration="2"/>
+                        <Representation id="v1" bandwidth="1000000"/>
+                    </AdaptationSet>
+                </Period>
+            </MPD>"#,
+        ];
+        for (idx, xml) in cases.iter().enumerate() {
+            let err = parse_mpd(xml, "https://cdn.example.test/manifest.mpd")
+                .expect_err(&format!("case {idx} must fail fast on DRM"));
+            assert_eq!(err, expected, "case {idx}");
+        }
+    }
+
+    #[test]
+    fn cleanup_multi_period_temp_files_removes_period_markers_only() {
+        let root = std::env::temp_dir().join(format!(
+            "dash-multiperiod-clean-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("seg-0000.m4s"), b"keep").unwrap();
+        fs::write(root.join("seg-0001-init.mp4"), b"drop").unwrap();
+        fs::write(root.join("seg-0002-period.m4s"), b"drop").unwrap();
+        fs::write(root.join("muxed.mp4"), b"keep").unwrap();
+        cleanup_multi_period_temp_files(&root);
+        assert!(root.join("seg-0000.m4s").exists());
+        assert!(root.join("muxed.mp4").exists());
+        assert!(!root.join("seg-0001-init.mp4").exists());
+        assert!(!root.join("seg-0002-period.m4s").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

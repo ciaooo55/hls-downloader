@@ -161,6 +161,7 @@ pub(crate) fn decode(
         command.creation_flags(0x08000000);
     }
     let mut child = command.spawn().map_err(|_| "无法启动音轨解码组件")?;
+    crate::job_object::assign_child(&child);
     let stdout = child.stdout.take().ok_or("音轨解码管道不可用")?;
     // Round up to whole 16 kHz mono PCM16 (2-byte) samples so fractional durations
     // never produce an odd byte limit that rejects a valid aligned FFmpeg output.

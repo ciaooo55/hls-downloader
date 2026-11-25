@@ -1,18 +1,42 @@
 import { browser } from 'wxt/browser'
-import { downloadSelectionKey, normalizeHost, resourceFingerprint, selectMediaVariant, visibleMediaResources, type MediaResource } from '../../lib/resources'
+import {
+  downloadSelectionKey,
+  isPlayableMediaResource,
+  normalizeHost,
+  resourceFingerprint,
+  selectMediaVariant,
+  visibleMediaResources,
+  type MediaResource,
+  type MediaVariant,
+} from '../../lib/resources'
 import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../../lib/domPatch'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, hostForPage, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
 import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
-import { engineConnectionLabel, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from '../../lib/productCopy'
+import {
+  classifyEngineConnectionState,
+  engineStatusCopy,
+  EXTENSION_PRODUCT_LABEL,
+  extensionVersionLabel,
+  type EngineConnectionState,
+} from '../../lib/productCopy'
 import { withDeadline } from '../../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../../lib/downloadConfirmation'
 import { mediaPushTerminalResult } from '../../lib/mediaPush'
 import { formatBitrate, formatBytes, formatDuration } from '../../lib/format'
 import { countPopupCategories, filterPopupResources, type ResourceFilterCategory } from '../../lib/popupFilter'
 import { mountSubtitlePopup } from '../../lib/subtitlePopup'
-import { SEND_LABELS, SEND_LOCKED, SEND_PENDING, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from '../../lib/downloadSendState'
+import {
+  canForceResend,
+  SEND_LABELS,
+  SEND_LOCKED,
+  SEND_PENDING,
+  SEND_TITLES,
+  sendClickAction,
+  sendStateFromHandoff,
+  type SendState,
+} from '../../lib/downloadSendState'
 import { DESKTOP_RELEASES_URL, launchDesktop, launchView, type LaunchAction, type LaunchState } from '../../lib/desktopLaunch'
 import {
   THEME_BASE_CSS,
@@ -20,6 +44,8 @@ import {
   THEME_TOKENS_CSS,
   applyTheme,
   normalizeThemePreference,
+  readCachedResolvedTheme,
+  writeCachedResolvedTheme,
   type ThemePreference,
 } from '../../lib/theme'
 import './style.css'
@@ -36,8 +62,6 @@ function updatePopupMaxHeight(main: HTMLElement) {
   const viewportTop = firefoxWindow.mozInnerScreenY ?? window.screenY
   const workAreaTop = screen.availTop ?? 0
   const remainingHeight = workAreaTop + screen.availHeight - viewportTop
-  // 原生扩展弹窗最高 600 CSS px；超过时浏览器裁切底部，而不会扩大窗口。
-  // 多显示器或屏幕底边向上弹出的窗口可能算出负值或极小值，保留合理下限避免压成 1px。
   const maxHeight = Number.isFinite(remainingHeight) && remainingHeight >= 240
     ? Math.min(600, Math.floor(remainingHeight))
     : 600
@@ -51,7 +75,6 @@ const THEME_LABELS: Record<ThemePreference, string> = {
 }
 const THEME_ORDER: ThemePreference[] = ['auto', 'dark', 'light']
 
-// 按钮状态机使用稳定的状态 token，展示文案单独映射；改文案不能破坏状态判断。
 type PushState = 'working' | 'awaiting' | 'sent' | 'retry'
 const TVBOX_PUSH_LABELS: Record<PushState, string> = { working: '推送中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
 const CAST_PUSH_LABELS: Record<PushState, string> = { working: '投屏中', awaiting: '等待选择', sent: '已发送', retry: '重试' }
@@ -70,6 +93,7 @@ const ICONS: Record<string, Array<['path' | 'circle' | 'rect', Record<string, st
   media: [['rect', { x: '3', y: '5', width: '18', height: '14', rx: '2' }], ['path', { d: 'm10 9 5 3-5 3Z' }]],
   copy: [['rect', { x: '9', y: '9', width: '11', height: '11', rx: '2' }], ['path', { d: 'M5 15V6a2 2 0 0 1 2-2h9' }]],
 }
+
 function icon(name: string, label = '') {
   const node = el('span', 'hlsd-icon')
   node.dataset.iconName = name
@@ -106,17 +130,30 @@ function resourceKindLabel(item: MediaResource) {
   if (item.kind === 'file') return '\u6587\u4ef6'
   const suffix = resourceSuffix(item)
   if (item.mimeType?.toLowerCase().startsWith('audio/') || /^\.(?:aac|flac|m4a|mp3|oga|ogg|opus|wav)$/i.test(suffix)) return '\u97f3\u9891'
-  if (item.mimeType?.toLowerCase().startsWith('video/') || /^\.(?:avi|m4v|mkv|mov|mp4|webm)$/i.test(suffix)) return '\u89c6\u9891'
+  if (item.mimeType?.toLowerCase().startsWith('video/') || /^\.(?:avi|m4s|m4v|mkv|mov|mp4|webm)$/i.test(suffix)) return '\u89c6\u9891'
   return '\u5a92\u4f53'
 }
 
 function resourceSuffix(item: MediaResource) {
+  if (item.audioUrl) return '.mp4'
   try {
     const match = new URL(item.url).pathname.match(/(\.[a-z0-9]{1,10})$/i)
-    return match?.[1]?.toLowerCase() || ''
+    const raw = match?.[1]?.toLowerCase() || ''
+    if (raw === '.m4s' && item.kind === 'media') return '.mp4'
+    return raw
   } catch {
     return ''
   }
+}
+
+function compactQualityLabel(variant: MediaVariant): string {
+  const raw = String(variant.quality || '').replace(/^最高\s*/, '').trim()
+  const height = Number(variant.height || 0)
+  if (/^2160p$/i.test(raw) || (!raw && height >= 2160)) return '4K'
+  if (/^1440p$/i.test(raw) || (!raw && height >= 1440)) return '2K'
+  if (raw) return raw.replace(/^(\d{3,4})p(\d*)$/i, (_, h, fps) => `${h}P${fps}`)
+  if (height > 0) return `${height}P`
+  return variant.bandwidth ? formatBitrate(variant.bandwidth) : '线路'
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
@@ -137,19 +174,21 @@ async function main() {
   logo.width = 18
   logo.height = 18
   const brandText = el('div')
-  brandText.append(el('h1', '', 'HLS Downloader'), el('span', 'status', '\u8fde\u63a5\u4e2d\u2026'))
+  brandText.append(el('h1', '', 'HLS Downloader'), el('span', 'status reconnecting', '\u8fde\u63a5\u4e2d\u2026'))
   brand.append(logo, brandText)
   const actions = el('div', 'header-actions')
-  // Paint the complete shell before the first browser/storage await. An MV3
-  // popup may become visible while storage or the service worker is waking;
-  // keeping all DOM behind that await left a permanent white page whenever
-  // bootstrap was delayed or rejected.
+
   let themePreference: ThemePreference = 'auto'
-  // Every user click bumps this. The async storage restore below captures it and
-  // bails out when it is stale, because a restore that resolves after a click
-  // still carries the pre-click value and would roll the surface back to it.
   let themeChangeGeneration = 0
-  let removeThemeListener = applyTheme(document.documentElement, themePreference)
+  // Preserve the synchronous <head> cached resolved theme until storage.local resolves
+  // so manual light/dark overrides never flash during boot.
+  const bootResolvedTheme = readCachedResolvedTheme()
+  let removeThemeListener = applyTheme(
+    document.documentElement,
+    bootResolvedTheme ?? themePreference,
+    undefined,
+    writeCachedResolvedTheme,
+  )
   const themeBtn = el('button', 'hlsd-button subtle')
   themeBtn.type = 'button'
   themeBtn.append(icon(themePreference, THEME_LABELS[themePreference]))
@@ -159,7 +198,12 @@ async function main() {
     themeChangeGeneration += 1
     themePreference = THEME_ORDER[(THEME_ORDER.indexOf(themePreference) + 1) % THEME_ORDER.length]
     removeThemeListener()
-    removeThemeListener = applyTheme(document.documentElement, themePreference)
+    removeThemeListener = applyTheme(
+      document.documentElement,
+      themePreference,
+      undefined,
+      writeCachedResolvedTheme,
+    )
     patchIcon(themeBtn, themePreference, THEME_LABELS[themePreference])
     themeBtn.title = THEME_LABELS[themePreference]
     themeBtn.setAttribute('aria-label', themeBtn.title)
@@ -169,12 +213,27 @@ async function main() {
       setError('主题已切换，但未能保存；下次打开时可能恢复原设置。')
     }
   })
+
   const openBtn = el('button', 'hlsd-button desktop-open')
   openBtn.type = 'button'
   const openBtnLabel = el('span', '', '主程序')
   openBtn.append(icon('open'), openBtnLabel)
   openBtn.title = '\u6253\u5f00\u684c\u9762\u7aef'
-  // 启动反馈条：每个阶段对应一层真实回执，失败时给出对应的恢复操作。
+
+  // 内联连接状态助手卡（托盘退出可唤醒 / 未安装桌面端 / 引擎离线重试）
+  const connectionHelper = el('div', 'connection-helper')
+  connectionHelper.hidden = true
+  connectionHelper.setAttribute('role', 'status')
+  connectionHelper.setAttribute('aria-live', 'polite')
+  const helperDot = el('span', 'connection-helper-dot')
+  const helperBody = el('div', 'connection-helper-body')
+  const helperTitleEl = el('strong')
+  const helperDetailEl = el('span')
+  const helperActions = el('div', 'connection-helper-actions')
+  helperBody.append(helperTitleEl, helperDetailEl, helperActions)
+  connectionHelper.append(helperDot, helperBody)
+
+  // 启动反馈条
   const launchPanel = el('div', 'launch-status')
   launchPanel.hidden = true
   launchPanel.setAttribute('role', 'status')
@@ -184,6 +243,7 @@ async function main() {
   const LAUNCH_ACTION_LABELS: Record<LaunchAction, string> = {
     retry: '重试', keep_waiting: '继续等待', install: '下载桌面端', repair: '修复安装',
   }
+  let renderConnectionStatus = () => {}
   const renderLaunch = (state: LaunchState, run: number) => {
     if (run !== launchRun) return
     const view = launchView(state)
@@ -217,6 +277,7 @@ async function main() {
     if (actionsRow.childElementCount) text.append(actionsRow)
     launchPanel.replaceChildren(badge, text)
     launchPanel.hidden = false
+    renderConnectionStatus()
     if (launchHideTimer) clearTimeout(launchHideTimer)
     if (view.tone === 'success') {
       launchHideTimer = setTimeout(() => {
@@ -225,17 +286,22 @@ async function main() {
         openBtn.dataset.state = ''
         patchIcon(openBtn, 'open')
         setTextIfChanged(openBtnLabel, '主程序')
+        renderConnectionStatus()
       }, 2_500)
     }
     const failedAction = launchPanel.querySelector<HTMLButtonElement>('[data-launch-action]')
     if (view.tone === 'error' && document.activeElement === document.body) failedAction?.focus({ preventScroll: true })
   }
+  let recheckConnection = async () => {}
   const startLaunch = async (resumeFrom?: LaunchState['pending']) => {
     const run = ++launchRun
     setError('')
     await launchDesktop({
       send: message => withDeadline(browser.runtime.sendMessage(message), 15_000, '主程序响应超时'),
-      onState: state => renderLaunch(state, run),
+      onState: state => {
+        renderLaunch(state, run)
+        if (state.stage === 'ready') void recheckConnection()
+      },
       resumeFrom,
     }).catch(reason => renderLaunch({ stage: 'failed', failure: 'unknown', detail: reason instanceof Error ? reason.message : '' }, run))
   }
@@ -263,9 +329,6 @@ async function main() {
   cookieBtn.type = 'button'
   const excludeBtn = el('button', 'hlsd-button', '\u672c\u7ad9\u63d0\u793a')
   excludeBtn.type = 'button'
-  // The popup DOM becomes visible before its asynchronous storage/bootstrap
-  // work finishes. Do not present controls as clickable until their handlers
-  // and local source of truth are ready; a very fast click was otherwise lost.
   enableBtn.disabled = true
   quickDownloadBtn.disabled = true
   speedLimitBtn.disabled = true
@@ -292,6 +355,27 @@ async function main() {
     controls.append(row)
   }
   settingsPanel.append(controls)
+
+  // 紧凑底部折叠快捷设置抽屉（让媒体资源列表始终置顶，次要开关随时一触即达）
+  const quickDrawer = el('details', 'quick-settings-drawer')
+  const quickSummary = el('summary', 'quick-settings-summary')
+  const quickSummaryLabel = el('span', '', '快捷控制 · 自动接管 / 静默下载 / 限速')
+  quickSummary.append(quickSummaryLabel)
+  const quickRow = el('div', 'quick-settings-row')
+  const quickEnablePill = el('button', 'quick-setting-pill', '自动接管') as HTMLButtonElement
+  quickEnablePill.type = 'button'
+  quickEnablePill.disabled = true
+  const quickSilentPill = el('button', 'quick-setting-pill', '静默快速下载') as HTMLButtonElement
+  quickSilentPill.type = 'button'
+  quickSilentPill.disabled = true
+  const quickSpeedPill = el('button', 'quick-setting-pill', '下载限速') as HTMLButtonElement
+  quickSpeedPill.type = 'button'
+  quickSpeedPill.disabled = true
+  quickEnablePill.addEventListener('click', () => enableBtn.click())
+  quickSilentPill.addEventListener('click', () => quickDownloadBtn.click())
+  quickSpeedPill.addEventListener('click', () => speedLimitBtn.click())
+  quickRow.append(quickEnablePill, quickSilentPill, quickSpeedPill)
+  quickDrawer.append(quickSummary, quickRow)
 
   const updateNotice = el('div', 'update-notice')
   updateNotice.hidden = true
@@ -354,6 +438,7 @@ async function main() {
   const labels = ['资源', '字幕', '设置']
   let subtitleMounted = false
   let pageTabId: number | undefined
+  let activePanelIndex = 0
   const tabs = labels.map((label, index) => {
     const button = el('button', 'view-tab', label)
     button.type = 'button'
@@ -366,6 +451,7 @@ async function main() {
     return button
   })
   const selectPanel = (index: number, focus = false) => {
+    activePanelIndex = index
     if (index === 1 && !subtitleMounted && pageTabId !== undefined) {
       subtitlePanel.replaceChildren()
       mountSubtitlePopup(subtitlePanel, pageTabId)
@@ -376,6 +462,7 @@ async function main() {
       tab.setAttribute('aria-selected', String(at === index))
       tab.tabIndex = at === index ? 0 : -1
     })
+    quickDrawer.hidden = index !== 0
     if (focus) tabs[index].focus()
   }
   tabs[0].append(count)
@@ -393,7 +480,7 @@ async function main() {
   navigation.append(...tabs)
   views.append(...panels)
   selectPanel(0)
-  mainEl.append(header, launchPanel, navigation, updateNotice, errorBox, views, footer)
+  mainEl.append(header, connectionHelper, launchPanel, navigation, updateNotice, errorBox, views, quickDrawer, footer)
   updatePopupMaxHeight(mainEl)
   root.append(mainEl)
   window.addEventListener('resize', () => updatePopupMaxHeight(mainEl))
@@ -402,14 +489,16 @@ async function main() {
   const themeRestoreGeneration = themeChangeGeneration
   void withDeadline(browser.storage.local.get(THEME_STORAGE_KEY), 1_000)
     .then(storedTheme => {
-      // A click that happened while this read was in flight already applied and
-      // persisted a newer preference; honour it instead of the stale snapshot.
       if (themeRestoreGeneration !== themeChangeGeneration) return
       const restoredTheme = normalizeThemePreference(storedTheme[THEME_STORAGE_KEY])
-      if (restoredTheme === themePreference) return
       themePreference = restoredTheme
       removeThemeListener()
-      removeThemeListener = applyTheme(document.documentElement, themePreference)
+      removeThemeListener = applyTheme(
+        document.documentElement,
+        themePreference,
+        undefined,
+        writeCachedResolvedTheme,
+      )
       patchIcon(themeBtn, themePreference, THEME_LABELS[themePreference])
       themeBtn.title = THEME_LABELS[themePreference]
       themeBtn.setAttribute('aria-label', themeBtn.title)
@@ -420,7 +509,7 @@ async function main() {
   let quickDownloadEnabled = false
   let speedLimitEnabled = false
   let speedLimitKib = 0
-  let connectionOnline = false
+  let connectionState: EngineConnectionState = 'core_unreachable'
   let connectionReconnecting = false
   let connectionChecked = false
   let host = ''
@@ -430,9 +519,9 @@ async function main() {
   let suppressions: HandoffSuppression[] = []
   let settingsBusy: HTMLButtonElement | undefined
   const sending: Record<string, SendState> = {}
+  const sentUrls: Record<string, string> = {}
   const pushing: Record<string, PushState> = {}
   let batchRunning = false
-  // 同一资源的不同清晰度分别发送，状态必须对应实际链接。
   const actionKey = (item: MediaResource, action = 'download') => JSON.stringify([item.id, downloadSelectionKey(item), action])
   const manualCopy = new Set<string>()
   const copyStates = new Map<string, 'copying' | 'copied'>()
@@ -457,7 +546,6 @@ async function main() {
       if (button.dataset.copyUrl === url) renderCopyButton(button, url)
     }
   }
-  // DASH 的多个清晰度可能共用 URL；选择和重绘恢复必须同时包含码率与高度。
   const chosenVariant: Record<string, string> = {}
   let filterCategory: ResourceFilterCategory = 'all'
   let filterQuery = ''
@@ -480,21 +568,70 @@ async function main() {
   })
 
   const statusEl = brandText.querySelector('.status') as HTMLSpanElement
-  const renderConnectionStatus = () => {
+  renderConnectionStatus = () => {
     if (!connectionChecked) return
-    const base = engineConnectionLabel(connectionOnline, connectionReconnecting)
+    if (connectionReconnecting && connectionState !== 'online') {
+      statusEl.textContent = '正在检测下载引擎…'
+      statusEl.className = 'status reconnecting'
+      statusEl.dataset.connection = 'reconnecting'
+      connectionHelper.hidden = true
+      return
+    }
+    const copy = engineStatusCopy(connectionState)
+    const connectionOnline = connectionState === 'online'
     const speedSuffix = connectionOnline && speedLimitEnabled
       ? (speedLimitKib > 0 ? ` · 限速 ${speedLimitKib} KiB/s` : ' · 限速中')
       : ''
-    statusEl.textContent = `${base}${speedSuffix}`
+    statusEl.textContent = `${copy.label}${speedSuffix}`
     statusEl.classList.toggle('online', connectionOnline)
-    const detailParts = [base]
+    statusEl.classList.toggle('standby', connectionState === 'user_shutdown')
+    statusEl.classList.remove('reconnecting')
+    statusEl.dataset.connection = connectionState
+    const detailParts = [copy.label]
     if (connectionOnline && speedLimitEnabled) {
       detailParts.push(speedLimitKib > 0 ? `全局限速已开启（${speedLimitKib} KiB/s）` : '全局限速已开启')
     }
     if (quickDownloadEnabled) detailParts.push('静默快速下载已开启')
     statusEl.title = detailParts.join(' · ')
+
+    if (connectionOnline || !launchPanel.hidden) {
+      connectionHelper.hidden = true
+      return
+    }
+    connectionHelper.dataset.tone = copy.tone
+    setTextIfChanged(helperTitleEl, copy.helperTitle)
+    setTextIfChanged(helperDetailEl, copy.helperDetail)
+    const actionDefs: Array<{ key: string; label: string; primary?: boolean; run: () => void }> =
+      connectionState === 'user_shutdown'
+        ? [{ key: 'wake', label: '打开工作台', run: () => void startLaunch() }]
+        : connectionState === 'host_missing'
+          ? [
+              { key: 'install', label: '下载桌面端', primary: true, run: () => void browser.tabs.create({ url: DESKTOP_RELEASES_URL }).catch(() => undefined) },
+              { key: 'recheck', label: '重新检测', run: () => void recheckConnection() },
+            ]
+          : [
+              { key: 'recheck', label: '重试连接', primary: true, run: () => void recheckConnection() },
+              { key: 'open', label: '打开桌面端', run: () => void startLaunch() },
+            ]
+    patchKeyedChildren(
+      helperActions,
+      actionDefs,
+      entry => entry.key,
+      entry => {
+        const btn = el('button', `hlsd-button${entry.primary ? ' primary' : ''}`, entry.label) as HTMLButtonElement
+        btn.type = 'button'
+        btn.dataset.helperAction = entry.key
+        return btn
+      },
+      (btn, entry) => {
+        btn.className = `hlsd-button${entry.primary ? ' primary' : ''}`
+        setTextIfChanged(btn, entry.label)
+        btn.onclick = entry.run
+      },
+    )
+    connectionHelper.hidden = false
   }
+
   const setError = (message = '') => {
     errorBox.hidden = !message
     errorBox.textContent = message
@@ -507,12 +644,14 @@ async function main() {
     line: HTMLSpanElement
     facts: HTMLSpanElement
     lastMeta: string
+    qualityChips: HTMLDivElement
     qualityTrigger: HTMLSelectElement
     mime: HTMLElement
     manualCopyHelp: HTMLElement
     manualCopyInput: HTMLInputElement
     downloadBtn: HTMLButtonElement
     downloadLabel: HTMLSpanElement
+    resendBtn: HTMLButtonElement
     copyBtn: HTMLButtonElement
     castBtn: HTMLButtonElement
     castLabel: HTMLSpanElement
@@ -531,11 +670,14 @@ async function main() {
     article.tabIndex = -1
     const body = el('div', 'resource-body')
     const name = el('strong')
-    // 每项不可断开，分隔点由样式画在后一项前面；换行处行首的分隔点落在裁剪区外，行尾永远不会留下孤立的“·”。
     const line = el('span', 'resource-facts')
     const facts = el('span', 'resource-facts-row')
     facts.setAttribute('aria-hidden', 'true')
     line.append(facts)
+    const qualityChips = el('div', 'quality-chips')
+    qualityChips.setAttribute('role', 'group')
+    qualityChips.setAttribute('aria-label', '一键选择清晰度并下载')
+    qualityChips.hidden = true
     const qualityTrigger = el('select', 'quality-trigger') as HTMLSelectElement
     qualityTrigger.dataset.action = 'quality'
     qualityTrigger.setAttribute('aria-label', '选择视频清晰度')
@@ -553,13 +695,20 @@ async function main() {
     manualCopyInput.setAttribute('aria-label', '完整媒体链接，按 Ctrl+C 复制')
     manualCopyInput.hidden = true
     manualCopyInput.addEventListener('focus', () => manualCopyInput.select())
-    body.append(name, line, qualityTrigger, metaRow, manualCopyHelp, manualCopyInput)
+    body.append(name, line, qualityChips, qualityTrigger, metaRow, manualCopyHelp, manualCopyInput)
 
     const downloadBtn = el('button', 'hlsd-button primary') as HTMLButtonElement
     downloadBtn.type = 'button'
     downloadBtn.dataset.action = 'download'
     const downloadLabel = el('span', '', '下载')
     downloadBtn.append(icon('download'), downloadLabel)
+
+    const resendBtn = el('button', 'hlsd-button resend-button') as HTMLButtonElement
+    resendBtn.type = 'button'
+    resendBtn.dataset.action = 'resend'
+    resendBtn.hidden = true
+    resendBtn.title = '重新发送当前捕获地址（可用于刷新过期链接或再次下载）'
+    resendBtn.append(icon('scan'), el('span', '', '重发'))
 
     const copyBtn = el('button', 'copy-link') as HTMLButtonElement
     copyBtn.type = 'button'
@@ -584,11 +733,11 @@ async function main() {
     const more = el('details', 'resource-more')
     const summary = el('summary', '', '更多')
     summary.dataset.action = 'more'
-    summary.setAttribute('aria-label', '更多媒体操作')
+    summary.setAttribute('aria-label', '更多操作')
     const extra = el('div', 'resource-extra')
     extra.append(copyBtn, castBtn, pushBtn)
     more.append(summary, extra)
-    actionCol.append(downloadBtn, more)
+    actionCol.append(downloadBtn, resendBtn, more)
     article.append(body, actionCol)
 
     const state: PopupCardState = {
@@ -598,12 +747,14 @@ async function main() {
       line,
       facts,
       lastMeta: '',
+      qualityChips,
       qualityTrigger,
       mime,
       manualCopyHelp,
       manualCopyInput,
       downloadBtn,
       downloadLabel,
+      resendBtn,
       copyBtn,
       castBtn,
       castLabel,
@@ -619,10 +770,15 @@ async function main() {
     })
     copyBtn.addEventListener('click', () => void copyLink(state.selected.url))
     downloadBtn.addEventListener('click', () => {
-      const sendState = sending[actionKey(state.selected)]
-      const action = sendClickAction(sendState)
+      const key = actionKey(state.selected)
+      const sendState = sending[key]
+      const urlChanged = Boolean(sentUrls[key] && sentUrls[key] !== state.selected.url)
+      const action = sendClickAction(sendState, { urlChanged })
       if (action === 'open_desktop') void startLaunch()
-      else if (action !== 'none') void send(state.selected)
+      else if (action !== 'none') void send(state.selected, { forceResend: urlChanged })
+    })
+    resendBtn.addEventListener('click', () => {
+      void send(state.selected, { forceResend: true })
     })
     pushBtn.addEventListener('click', () => void pushToTv(state.selected))
     castBtn.addEventListener('click', () => void castToDevice(state.selected))
@@ -650,7 +806,8 @@ async function main() {
     const bandwidth = selected.bandwidth ? formatBitrate(selected.bandwidth) : ''
     const duration = selected.duration ? formatDuration(selected.duration) : ''
     const streamMode = selected.isLive === true ? '直播' : ''
-    const metaParts = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, quality, resolution, bandwidth, duration, size].filter(Boolean)
+    const dualTrackTag = selected.audioUrl ? '音画合并' : ''
+    const metaParts = [resourceKindLabel(selected), resourceSuffix(selected), streamMode, dualTrackTag, quality, resolution, bandwidth, duration, size].filter(Boolean)
     const meta = metaParts.join(' \u00b7 ')
 
     const cardUrl = item.url
@@ -681,21 +838,77 @@ async function main() {
       itemHost ? `\u590d\u5236\u5b8c\u6574\u94fe\u63a5\uff08${itemHost}\uff09` : '\u590d\u5236\u5b8c\u6574\u94fe\u63a5',
     )
 
-    if (item.variants?.length) {
-      state.qualityTrigger.hidden = false
-      // 原生选择框提供方向键、Escape 和越过滚动容器的菜单，原地修补选项避免重绘闪烁。
-      syncSelectOptions(
-        state.qualityTrigger,
-        [
-          { value: downloadSelectionKey(item), label: variantLabel() },
-          ...item.variants.map(variant => ({
-            value: downloadSelectionKey(selectMediaVariant(item, variant)),
-            label: variantLabel(variant),
-          })),
-        ],
-        selectionKey,
+    // 1-Click Inline Quality Pills (up to 4 variants directly clickable inside the card)
+    const allVariants = item.variants || []
+    if (allVariants.length >= 2) {
+      const sortedVariants = [...allVariants]
+        .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bandwidth || 0) - (a.bandwidth || 0))
+      const topVariants = sortedVariants.slice(0, 4).map(variant => {
+        const variantResource = selectMediaVariant(item, variant)
+        return {
+          key: downloadSelectionKey(variantResource),
+          variant,
+          variantResource,
+          label: compactQualityLabel(variant),
+          detail: variantLabel(variant),
+        }
+      })
+      state.qualityChips.hidden = false
+      patchKeyedChildren(
+        state.qualityChips,
+        topVariants,
+        entry => entry.key,
+        entry => {
+          const pill = el('button', 'quality-chip', entry.label) as HTMLButtonElement
+          pill.type = 'button'
+          pill.dataset.action = 'quality-pill'
+          return pill
+        },
+        (pill, entry) => {
+          const pillSendState = sending[actionKey(entry.variantResource)]
+          const isSelected = selectionKey === entry.key || (!chosenVariant[item.id] && entry === topVariants[0])
+          setTextIfChanged(pill, entry.label)
+          setAttrIfChanged(pill, 'data-variant-key', entry.key)
+          setAttrIfChanged(pill, 'data-selected', String(isSelected))
+          setAttrIfChanged(pill, 'data-state', pillSendState || '')
+          const pillPending = pillSendState ? SEND_PENDING.has(pillSendState) : false
+          pill.disabled = pillPending
+          setAttrIfChanged(pill, 'title', `${entry.detail} · 点击一键下载`)
+          setAttrIfChanged(pill, 'aria-label', `一键下载 ${entry.detail}`)
+          pill.onclick = () => {
+            if (entry.key === downloadSelectionKey(item)) delete chosenVariant[item.id]
+            else chosenVariant[item.id] = entry.key
+            const currentPillState = sending[actionKey(entry.variantResource)]
+            if (SEND_PENDING.has(currentPillState as SendState)) {
+              renderList()
+              return
+            }
+            void send(entry.variantResource, { forceResend: canForceResend(currentPillState) })
+          }
+        },
       )
+      // 仅当清晰度超过 4 个时保留紧凑下拉框作完整备选
+      if (allVariants.length > 4) {
+        state.qualityTrigger.hidden = false
+        syncSelectOptions(
+          state.qualityTrigger,
+          [
+            { value: downloadSelectionKey(item), label: variantLabel() },
+            ...allVariants.map(variant => ({
+              value: downloadSelectionKey(selectMediaVariant(item, variant)),
+              label: variantLabel(variant),
+            })),
+          ],
+          selectionKey,
+        )
+      } else {
+        state.qualityTrigger.hidden = true
+      }
+    } else if (allVariants.length === 1) {
+      state.qualityChips.hidden = true
+      state.qualityTrigger.hidden = true
     } else {
+      state.qualityChips.hidden = true
       state.qualityTrigger.hidden = true
     }
 
@@ -706,41 +919,50 @@ async function main() {
       state.manualCopyInput.value = selected.url
     }
 
-    const sendState = sending[actionKey(selected)]
+    const key = actionKey(selected)
+    const sendState = sending[key]
+    const urlChanged = Boolean(sentUrls[key] && sentUrls[key] !== selected.url)
     const nextStateAttr = sendState || ''
     if (article.dataset.state !== nextStateAttr) article.dataset.state = nextStateAttr
-    const label = sendState ? SEND_LABELS[sendState] : '下载'
+    const label = sendState ? (urlChanged && sendState === 'recoverable' ? '刷新下载' : SEND_LABELS[sendState]) : '下载'
     if (state.downloadBtn.dataset.state !== nextStateAttr) state.downloadBtn.dataset.state = nextStateAttr
     const sendPending = sendState ? SEND_PENDING.has(sendState) : false
-    patchIcon(state.downloadBtn, sendPending ? 'scan' : sendState === 'queued' || sendState === 'done' ? 'check' : sendState === 'recoverable' ? 'open' : 'download')
+    patchIcon(state.downloadBtn, sendPending ? 'scan' : sendState === 'queued' || sendState === 'done' ? 'check' : sendState === 'recoverable' && !urlChanged ? 'open' : 'download')
     setTextIfChanged(state.downloadLabel, label)
-    const locked = sendState ? SEND_LOCKED.has(sendState) : false
+    const locked = sendState ? (SEND_LOCKED.has(sendState) && !urlChanged) : false
     state.downloadBtn.disabled = locked
     state.downloadBtn.classList.toggle('busy', sendPending)
     setAttrIfChanged(state.downloadBtn, 'aria-busy', String(sendPending))
     setAttrIfChanged(state.downloadBtn, 'title', sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列')
+    state.resendBtn.hidden = !canForceResend(sendState)
 
-    const pushKey = actionKey(selected, 'tvbox')
-    const pushState = pushing[pushKey]
-    const pushStateAttr = pushState || ''
-    const pushPending = pushState === 'working' || pushState === 'awaiting'
-    if (state.pushBtn.dataset.state !== pushStateAttr) state.pushBtn.dataset.state = pushStateAttr
-    patchIcon(state.pushBtn, pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv')
-    setTextIfChanged(state.pushLabel, pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox')
-    state.pushBtn.disabled = pushState ? PUSH_BUSY.has(pushState) : false
-    state.pushBtn.classList.toggle('busy', pushPending)
-    setAttrIfChanged(state.pushBtn, 'aria-busy', String(pushPending))
+    // Contextual Action Hygiene: 仅对可播放流媒体/音视频展示投屏与 TVBox 按钮
+    const playableMedia = isPlayableMediaResource(selected)
+    state.castBtn.hidden = !playableMedia
+    state.pushBtn.hidden = !playableMedia
+    if (playableMedia) {
+      const pushKey = actionKey(selected, 'tvbox')
+      const pushState = pushing[pushKey]
+      const pushStateAttr = pushState || ''
+      const pushPending = pushState === 'working' || pushState === 'awaiting'
+      if (state.pushBtn.dataset.state !== pushStateAttr) state.pushBtn.dataset.state = pushStateAttr
+      patchIcon(state.pushBtn, pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv')
+      setTextIfChanged(state.pushLabel, pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox')
+      state.pushBtn.disabled = pushState ? PUSH_BUSY.has(pushState) : false
+      state.pushBtn.classList.toggle('busy', pushPending)
+      setAttrIfChanged(state.pushBtn, 'aria-busy', String(pushPending))
 
-    const castKey = actionKey(selected, 'cast')
-    const castState = pushing[castKey]
-    const castStateAttr = castState || ''
-    const castPending = castState === 'working' || castState === 'awaiting'
-    if (state.castBtn.dataset.state !== castStateAttr) state.castBtn.dataset.state = castStateAttr
-    patchIcon(state.castBtn, castPending ? 'scan' : castState === 'sent' ? 'check' : 'cast')
-    setTextIfChanged(state.castLabel, castState ? CAST_PUSH_LABELS[castState] : '投屏')
-    state.castBtn.disabled = castState ? PUSH_BUSY.has(castState) : false
-    state.castBtn.classList.toggle('busy', castPending)
-    setAttrIfChanged(state.castBtn, 'aria-busy', String(castPending))
+      const castKey = actionKey(selected, 'cast')
+      const castState = pushing[castKey]
+      const castStateAttr = castState || ''
+      const castPending = castState === 'working' || castState === 'awaiting'
+      if (state.castBtn.dataset.state !== castStateAttr) state.castBtn.dataset.state = castStateAttr
+      patchIcon(state.castBtn, castPending ? 'scan' : castState === 'sent' ? 'check' : 'cast')
+      setTextIfChanged(state.castLabel, castState ? CAST_PUSH_LABELS[castState] : '投屏')
+      state.castBtn.disabled = castState ? PUSH_BUSY.has(castState) : false
+      state.castBtn.classList.toggle('busy', castPending)
+      setAttrIfChanged(state.castBtn, 'aria-busy', String(castPending))
+    }
   }
 
   interface EmptyCardRefs {
@@ -781,6 +1003,7 @@ async function main() {
   const renderList = () => {
     const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
     setTextIfChanged(count, String(visible.length))
+    quickDrawer.hidden = activePanelIndex !== 0
     const categoryCounts = countPopupCategories(visible)
     if (filterCategory !== 'all' && categoryCounts[filterCategory] === 0) {
       filterCategory = 'all'
@@ -899,8 +1122,6 @@ async function main() {
   }
 
   const refreshButtons = () => {
-    // 这些按钮显示“当前状态”，不是动作。加前缀 + aria-pressed，避免被读成
-    // “点击后会发生什么”的开关。
     enableBtn.textContent = enabled ? '已开启' : '已关闭'
     enableBtn.setAttribute('aria-label', `自动接管：${enableBtn.textContent}`)
     enableBtn.title = enabled ? '全局下载接管已开启；点击关闭' : '全局下载接管已关闭；点击开启'
@@ -926,6 +1147,21 @@ async function main() {
         ? `当前限速 ${speedLimitKib} KiB/s，与主程序实时同步。`
         : '全局限速开关，与主程序限速状态保持同步。',
     )
+
+    // 同步底部折叠快捷抽屉状态
+    quickEnablePill.setAttribute('aria-pressed', String(enabled))
+    setTextIfChanged(quickEnablePill, `自动接管 ${enabled ? '开' : '关'}`)
+    quickSilentPill.setAttribute('aria-pressed', String(quickDownloadEnabled))
+    setTextIfChanged(quickSilentPill, `快速下载 ${quickDownloadEnabled ? '开' : '关'}`)
+    quickSpeedPill.setAttribute('aria-pressed', String(speedLimitEnabled))
+    setTextIfChanged(quickSpeedPill, speedLimitEnabled && speedLimitKib > 0 ? `限速 ${speedLimitKib}K` : `下载限速 ${speedLimitEnabled ? '开' : '关'}`)
+    const summaryTags = [
+      enabled ? '自动接管开' : '自动接管关',
+      quickDownloadEnabled ? '静默下载开' : '',
+      speedLimitEnabled ? (speedLimitKib > 0 ? `限速 ${speedLimitKib}K` : '限速开') : '',
+    ].filter(Boolean)
+    setTextIfChanged(quickSummaryLabel, `快捷设置 · ${summaryTags.join(' · ')}`)
+
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
     cookieBtn.textContent = cookieAuthorized ? '已授权' : '未授权'
     cookieBtn.setAttribute('aria-label', `本站 Cookie：${cookieBtn.textContent}`)
@@ -953,6 +1189,10 @@ async function main() {
         || (button === restorePromptsBtn ? (!host && !suppressionHost) : (!globalSetting && !host))
       button.setAttribute('aria-busy', String(settingsBusy === button))
     }
+    const quickDisabled = Boolean(settingsBusy)
+    quickEnablePill.disabled = quickDisabled
+    quickSilentPill.disabled = quickDisabled
+    quickSpeedPill.disabled = quickDisabled
     renderConnectionStatus()
   }
 
@@ -1027,7 +1267,7 @@ async function main() {
       try {
         await navigator.clipboard.writeText(url)
         copied = true
-      } catch { /* 权限被拒绝时继续尝试同步复制。 */ }
+      } catch {}
       if (!copied) {
         const focused = document.activeElement
         const scratch = document.createElement('textarea')
@@ -1075,35 +1315,38 @@ async function main() {
     try {
       accepted = await waitForDownloadConfirmation(message => browser.runtime.sendMessage(message), handoffId)
     } catch (reason) {
-      // Core 已持久化该交接：读不到状态时只能“核对中”，不能退回可重发的“重试”。
       sending[key] = 'checking'
       const message = reason instanceof Error ? reason.message : '无法读取下载确认状态'
       if (!options?.preserveError) setError(message)
       renderList()
       return message
     }
-    // 取消后保留浏览器原下载（由后台按交接结果处理），按钮允许重新发送。
     sending[key] = accepted ? 'queued' : 'canceled'
     renderList()
     return null
   }
 
-  const send = async (item: MediaResource, options?: { preserveError?: boolean }): Promise<string | null> => {
+  const send = async (item: MediaResource, options?: { preserveError?: boolean; forceResend?: boolean }): Promise<string | null> => {
     const key = actionKey(item)
-    if (sending[key] && SEND_LOCKED.has(sending[key])) return null
+    if (!options?.forceResend && sending[key] && SEND_LOCKED.has(sending[key])) return null
+    if (sending[key] && SEND_PENDING.has(sending[key])) return null
     if (!options?.preserveError) setError('')
     sending[key] = 'sending'
+    sentUrls[key] = item.url
     renderList()
     let delivered = false
     try {
       const response = await withDeadline(
-        browser.runtime.sendMessage({ type: 'download-now', resource: item }),
-        10_000,
+        browser.runtime.sendMessage({
+          type: 'download-now',
+          resource: item,
+          ...(options?.forceResend ? { forceResend: true } : {}),
+        }),
+        15_000,
         '下载器响应超时，正在按原请求核对',
       )
       delivered = true
       if (!response?.ok && response?.ownership_uncertain) {
-        // 回执丢失：后台已保存原请求编号，再点只按原编号回查，不会重复创建。
         sending[key] = 'checking'
         const message = response.error || '暂时无法确认交接状态'
         if (!options?.preserveError) setError(message)
@@ -1111,14 +1354,20 @@ async function main() {
         return message
       }
       if (!response?.ok) throw new Error(response?.error || '桌面端未接受下载请求')
+      // Sending offer directly wakes Core from user_shutdown; refresh header badge if needed.
+      if (connectionState !== 'online') void recheckConnection()
       const handoff = response.handoff || {}
-      const state = sendStateFromHandoff({ status: handoff.status, presentation: handoff.presentation, taskStatus: handoff.task_status })
+      const state = sendStateFromHandoff({
+        status: handoff.status,
+        presentation: handoff.presentation,
+        taskStatus: handoff.task_status,
+        taskErrorCode: handoff.task_error_code,
+      })
       if (state === 'confirming') return await confirmDownload(item, String(handoff.id || ''), options)
       sending[key] = state
       renderList()
       return null
     } catch (reason) {
-      // 超时说明后台可能已按原请求编号登记了交接：只能“核对”，再点按原编号回查，不会新建任务。
       sending[key] = delivered ? 'retry' : 'checking'
       const message = reason instanceof Error ? reason.message : '\u53d1\u9001\u5230\u684c\u9762\u7aef\u5931\u8d25'
       if (!options?.preserveError) setError(message)
@@ -1129,30 +1378,65 @@ async function main() {
 
   const sendBatch = async (targets: MediaResource[]) => {
     if (batchRunning || !targets.length) return
+    const eligible = targets.filter(target => sendClickAction(sending[actionKey(target)]) === 'send')
+    if (!eligible.length) return
     batchRunning = true
     setError('')
+    for (const target of eligible) {
+      const key = actionKey(target)
+      sending[key] = 'sending'
+      sentUrls[key] = target.url
+    }
     renderList()
-    const errors: string[] = []
-    let sentCount = 0
     try {
-      for (const target of targets) {
-        if (sendClickAction(sending[actionKey(target)]) !== 'send') continue
-        const error = await send(target, { preserveError: true })
-        if (error) {
-          errors.push(error)
-          setError(errors.length === 1 ? error : `已有 ${errors.length} 项发送失败：${errors[0]}`)
+      // 一次性交给后台 Service Worker 串行投递，避免第 1 项唤醒桌面确认框导致 Popup 关闭后丢失剩余任务。
+      const response = await withDeadline(
+        browser.runtime.sendMessage({ type: 'download-batch', resources: eligible }),
+        30_000,
+        '批量发送等待超时，后台仍在继续处理',
+      )
+      if (connectionState !== 'online' && Number(response?.sentCount) > 0) void recheckConnection()
+      const results = Array.isArray(response?.results) ? response.results : []
+      const bySelection = new Map<string, any>(results.map((entry: any) => [`${entry.id}:${entry.selectionKey}`, entry]))
+      const confirmations: Array<Promise<string | null>> = []
+      for (const target of eligible) {
+        const key = actionKey(target)
+        const entry = bySelection.get(`${target.id}:${downloadSelectionKey(target)}`)
+        if (!entry) {
+          sending[key] = 'checking'
+          continue
+        }
+        if (!entry.ok) {
+          sending[key] = entry.ownership_uncertain ? 'checking' : 'retry'
+          continue
+        }
+        const handoff = entry.handoff || {}
+        const nextState = sendStateFromHandoff({
+          status: handoff.status,
+          presentation: handoff.presentation,
+          taskStatus: handoff.task_status,
+          taskErrorCode: handoff.task_error_code,
+        })
+        if (nextState === 'confirming' && handoff.id) {
+          confirmations.push(confirmDownload(target, String(handoff.id), { preserveError: true }))
         } else {
-          sentCount += 1
+          sending[key] = nextState
         }
       }
-      if (errors.length > 0) {
-        const summary = sentCount > 0
-          ? `已发送 ${sentCount} 项，${errors.length} 项失败：${errors[0]}`
-          : errors.length === 1
-            ? errors[0]
-            : `${errors.length} 项失败：${errors[0]}`
-        setError(summary)
+      renderList()
+      const failedCount = Number(response?.failedCount || 0)
+      const sentCount = Number(response?.sentCount || 0)
+      if (failedCount > 0) {
+        const errDetail = String(response?.error || '部分资源发送失败')
+        setError(sentCount > 0 ? `已发送 ${sentCount} 项，${failedCount} 项失败：${errDetail}` : errDetail)
       }
+      if (confirmations.length) void Promise.allSettled(confirmations)
+    } catch (reason) {
+      for (const target of eligible) {
+        const key = actionKey(target)
+        if (sending[key] === 'sending') sending[key] = 'checking'
+      }
+      setError(reason instanceof Error ? reason.message : '批量发送到桌面端失败')
     } finally {
       batchRunning = false
       renderList()
@@ -1303,9 +1587,6 @@ async function main() {
   })
 
   const windowTabs = await withDeadline(browser.tabs.query({ currentWindow: true }), 1_000).catch(() => [])
-  // A normal toolbar popup leaves the web tab active. Developer tools and
-  // automated browser checks can open popup.html as an extension tab instead;
-  // fall back to a web tab ONLY when the active tab is this extension's own page.
   const extensionOrigin = browser.runtime.getURL('')
   const activeTab = windowTabs.find(candidate => candidate.active)
   const tab = windowTabs.find(candidate => candidate.active && /^https?:\/\//i.test(candidate.url || ''))
@@ -1389,9 +1670,7 @@ async function main() {
   scanBtn.disabled = !canScanPage
   scanBtn.addEventListener('click', () => void rescanPage())
   renderList()
-  // Load local settings before any network/native request. The popup is often
-  // opened exactly while a page starts a download; controls must be usable even
-  // if the desktop ping or resource query is temporarily slow.
+
   const stored = await withDeadline(browser.storage.local.get([
     'enabled', 'quickDownloadEnabled', 'speedLimitEnabled', 'speedLimitKib',
     'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
@@ -1410,19 +1689,11 @@ async function main() {
   quickDownloadBtn.disabled = false
   speedLimitBtn.disabled = false
   refreshButtons()
-  const connectionRequest = browser.runtime.sendMessage({ type: 'ping' })
-  const [listed, connection] = await Promise.all([
-    withDeadline(browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }), 1_500).catch(() => []),
-    withDeadline(connectionRequest, 1_800).catch(() => ({ reconnecting: true })),
-  ])
-  if (listGeneration === 0) {
-    resources = Array.isArray(listed) ? listed : []
-    resourceState = 'ready'
-  }
+
   function showConnection(response: any) {
     connectionChecked = true
-    connectionOnline = Boolean(response?.ok)
-    connectionReconnecting = Boolean(response?.reconnecting)
+    connectionReconnecting = Boolean(response?.reconnecting) && !response?.ok
+    connectionState = classifyEngineConnectionState(response)
     if (!settingsBusy) {
       if (typeof response?.takeover_enabled === 'boolean') enabled = response.takeover_enabled
       const remoteQuick = typeof response?.quick_download_enabled === 'boolean'
@@ -1452,12 +1723,31 @@ async function main() {
       }
     }
   }
+
+  recheckConnection = async () => {
+    connectionChecked = true
+    connectionReconnecting = true
+    renderConnectionStatus()
+    const reply = await withDeadline(browser.runtime.sendMessage({ type: 'ping' }), 2_500)
+      .catch(error => ({ ok: false, error: error instanceof Error ? error.message : String(error || '') }))
+    showConnection(reply)
+  }
+
+  const connectionRequest = browser.runtime.sendMessage({ type: 'ping' })
+  const [listed, connection] = await Promise.all([
+    withDeadline(browser.runtime.sendMessage({ type: 'list', pageUrl, tabId: tab?.id }), 1_500).catch(() => []),
+    withDeadline(connectionRequest, 1_800).catch(() => ({ reconnecting: true })),
+  ])
+  if (listGeneration === 0) {
+    resources = Array.isArray(listed) ? listed : []
+    resourceState = 'ready'
+  }
   showConnection(connection)
-  // 冷启动超过界面等待期限时，仍接收原请求的真实结果，避免一直显示“重连中”。
-  if (connection.reconnecting) void connectionRequest.then(showConnection).catch(() => showConnection({ ok: false }))
+  if (connection?.reconnecting) void connectionRequest.then(showConnection).catch(() => showConnection({ ok: false }))
   refreshButtons()
   renderList()
   document.documentElement.dataset.popupReady = 'ready'
+
   let transfersPolling = false
   async function refreshBrowserTransfers() {
     if (transfersPolling || document.hidden) return
@@ -1497,7 +1787,7 @@ async function main() {
           }
         },
       )
-    } catch { /* A worker restart is retried by the next visible-popup poll. */ }
+    } catch {}
     finally { transfersPolling = false }
   }
   void refreshBrowserTransfers()
@@ -1515,6 +1805,7 @@ async function main() {
       if (!selected) continue
       const key = actionKey(selected)
       if (sending[key]) continue
+      if (typeof handoff.url === 'string' && handoff.url) sentUrls[key] = handoff.url
       if (selected !== item && !chosenVariant[item.id]) chosenVariant[item.id] = downloadSelectionKey(selected)
       const restored = sendStateFromHandoff(handoff)
       if (restored !== 'confirming') {

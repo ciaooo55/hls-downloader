@@ -884,12 +884,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let workbench = Rc::new(RefCell::new(None::<Rc<workbench::Workbench>>));
     let ui_sequence = Rc::new(std::cell::Cell::new(initial_sequence));
     let native_workbench = Rc::new(std::cell::Cell::new(true));
+    let core_online = Arc::new(std::sync::atomic::AtomicBool::new(true));
     confirm.on_open_workbench({
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
         let runtime_settings = Rc::clone(&runtime_settings);
         let ui_sequence = Rc::clone(&ui_sequence);
         let native_workbench = Rc::clone(&native_workbench);
+        let core_online = Arc::clone(&core_online);
         move |explicit_native, launch_id: slint::SharedString| {
             let launch_id = (!launch_id.is_empty()).then(|| launch_id.to_string());
             if explicit_native {
@@ -908,6 +910,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     settings.reduce_motion,
                 ) {
                     Ok(window) => {
+                        window.set_engine_online(
+                            core_online.load(std::sync::atomic::Ordering::Relaxed),
+                        );
                         let owner = Rc::downgrade(&workbench);
                         window.window.on_request_close(move || {
                             let owner = owner.clone();
@@ -977,6 +982,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    confirm.on_core_connection_changed({
+        let workbench = Rc::clone(&workbench);
+        let core_online = Arc::clone(&core_online);
+        move |online| {
+            core_online.store(online, std::sync::atomic::Ordering::Relaxed);
+            if let Some(window) = workbench.borrow().as_ref() {
+                window.set_engine_online(online);
+            }
+        }
+    });
     confirm.on_core_resynced({
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
@@ -986,8 +1001,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let runtime_settings = Rc::clone(&runtime_settings);
+        let core_online = Arc::clone(&core_online);
         let progress = progress.as_weak();
         move |sequence| {
+            core_online.store(true, std::sync::atomic::Ordering::Relaxed);
             let _ = settings_reload.send(());
             let sequence = sequence.parse().unwrap_or_default();
             ui_sequence.set(sequence);
@@ -996,6 +1013,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|tasks| tasks.clone())
                 .unwrap_or_default();
             if let Some(window) = workbench.borrow().as_ref() {
+                window.set_engine_online(true);
                 window.replace(tasks.clone(), sequence);
             }
             let (primary, position, processing_elapsed) = active_hud
@@ -1068,6 +1086,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         known_tasks: Arc::clone(&known_tasks),
         known_task_variants: Arc::clone(&known_task_variants),
         quick_failed: Arc::clone(&quick_failed),
+        confirm_dir_overridden: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        core_online: Arc::clone(&core_online),
     };
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
@@ -1363,7 +1383,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let workbench = Rc::clone(&workbench);
         move |message| {
             if let Some(window) = workbench.borrow().as_ref() {
-                window.window.set_notice(message);
+                window.show_notice("warning", message);
             }
         }
     });
@@ -1609,6 +1629,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     match picked {
                         Ok(Some(path)) => {
+                            offer_state
+                                .confirm_dir_overridden
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             item.set_download_dir(path.clone().into());
                             if let Ok(mut settings) = presenter_settings.lock() {
                                 settings.record_recent_dir(&path);
@@ -1616,6 +1639,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             clear_confirm_issue(&item);
                             refresh_confirm_duplicate(&item, &offer_state);
+                            refresh_confirm_disk_space(&item, current_pending_size(&pending));
                         }
                         Ok(None) => {}
                         Err(error) => set_confirm_issue(&item, &error, [("", ""), ("", "")]),
@@ -1624,14 +1648,58 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "recent_dir" => {
                     if let Some(item) = window.upgrade() {
+                        offer_state
+                            .confirm_dir_overridden
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         clear_confirm_issue(&item);
                         refresh_confirm_duplicate(&item, &offer_state);
+                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                    }
+                    return;
+                }
+                "dir_edited" => {
+                    if let Some(item) = window.upgrade() {
+                        offer_state
+                            .confirm_dir_overridden
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        clear_confirm_issue(&item);
+                        refresh_confirm_duplicate(&item, &offer_state);
+                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                    }
+                    return;
+                }
+                "filename_edited" => {
+                    if let Some(item) = window.upgrade() {
+                        let current_offer =
+                            pending.lock().ok().and_then(|items| items.front().cloned());
+                        let resource_kind = current_offer
+                            .as_ref()
+                            .map_or(ResourceKind::File, |offer| offer.resource_kind);
+                        let expected_size = current_offer.as_ref().map_or(0, |offer| offer.size);
+                        if let Ok(settings) = presenter_settings.lock() {
+                            sync_confirm_filename_category(
+                                &item,
+                                &settings,
+                                resource_kind,
+                                offer_state
+                                    .confirm_dir_overridden
+                                    .load(std::sync::atomic::Ordering::Relaxed),
+                            );
+                        }
+                        if let Some(offer) = current_offer.as_ref() {
+                            item.set_resource_meta(
+                                format_resource_meta(offer, &item.get_filename()).into(),
+                            );
+                        }
+                        refresh_confirm_duplicate(&item, &offer_state);
+                        refresh_confirm_disk_space(&item, expected_size);
                     }
                     return;
                 }
                 "recheck_duplicate" => {
                     if let Some(item) = window.upgrade() {
                         refresh_confirm_duplicate(&item, &offer_state);
+                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
                     }
                     return;
                 }
@@ -1643,6 +1711,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let directory = item.get_download_dir().to_string();
                     match command.as_str() {
                         "default_dir" => {
+                            offer_state
+                                .confirm_dir_overridden
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             let default_dir = hls_client::default_v7_download_dir()
                                 .to_string_lossy()
                                 .into_owned();
@@ -1666,8 +1737,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         _ => unreachable!(),
                     }
+                    if matches!(command.as_str(), "fix_name" | "shorten") {
+                        let resource_kind = pending
+                            .lock()
+                            .ok()
+                            .and_then(|items| items.front().map(|offer| offer.resource_kind))
+                            .unwrap_or(ResourceKind::File);
+                        if let Ok(settings) = presenter_settings.lock() {
+                            sync_confirm_filename_category(
+                                &item,
+                                &settings,
+                                resource_kind,
+                                offer_state
+                                    .confirm_dir_overridden
+                                    .load(std::sync::atomic::Ordering::Relaxed),
+                            );
+                        }
+                    }
                     clear_confirm_issue(&item);
                     refresh_confirm_duplicate(&item, &offer_state);
+                    refresh_confirm_disk_space(&item, current_pending_size(&pending));
                     return;
                 }
                 "open_existing" => {
@@ -1744,10 +1833,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if let (Some(item), Ok(settings)) =
                         (window.upgrade(), presenter_settings.lock())
                     {
+                        offer_state
+                            .confirm_dir_overridden
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        item.set_category(category.into());
                         let dir = settings.directory_for(category);
                         item.set_download_dir(dir.clone().into());
                         sync_confirm_selectors(&item, &settings, &dir, None);
                         refresh_confirm_duplicate(&item, &offer_state);
+                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
                     }
                     return;
                 }
@@ -2081,8 +2175,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             item.window()
                 .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
-            if item.show().is_ok() {
-                native_window::prepare_dialog(&item, false, false, None);
+            if native_window::show_non_activating(&item, false, false).is_ok() {
                 // `show()` initializes the native window and renderer. Some
                 // Windows/driver combinations deliberately skip rendering
                 // notifications for a fully off-screen window, which used to
@@ -2225,6 +2318,8 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             window.set_recent_dir_index(0);
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
             window.set_remaining("  ·  后面还有 2 个".into());
+            window.set_free_space_hint("磁盘可用 186.4 GB".into());
+            window.set_free_space_low(false);
             if kind == "confirm-error" {
                 let (text, actions) = target_check::TargetIssue::NoPermission.presentation();
                 set_confirm_issue(&window, &text, actions);
@@ -2366,10 +2461,16 @@ fn write_ready_marker() {
 }
 
 fn connect_or_start_core() -> Result<CoreIpcClient, String> {
-    if let Ok(client) = CoreIpcClient::connect() {
+    if let Ok(client) = CoreIpcClient::connect_existing(Duration::from_millis(25)) {
+        return Ok(client);
+    }
+    #[cfg(windows)]
+    let _launch_guard = hls_client::instance::lock_core_launch()?;
+    if let Ok(client) = CoreIpcClient::connect_existing(Duration::from_millis(25)) {
         return Ok(client);
     }
     let root = install_root().ok_or_else(|| "找不到应用安装目录".to_string())?;
+    hls_client::clear_user_shutdown();
     spawn_core(&root)?;
     // One connection deadline includes all pipe retries. Repeating connect()
     // would multiply its two-second timeout and hide startup errors for minutes.
@@ -2417,6 +2518,8 @@ struct EventLoopState {
     known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
     known_task_variants: Arc<Mutex<HashMap<String, VariantSelection>>>,
     quick_failed: Arc<Mutex<HashSet<String>>>,
+    confirm_dir_overridden: Arc<std::sync::atomic::AtomicBool>,
+    core_online: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn event_loop(
@@ -2427,19 +2530,37 @@ fn event_loop(
 ) {
     loop {
         let Ok(mut client) = CoreIpcClient::connect() else {
+            if state
+                .core_online
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                let _ = confirm
+                    .upgrade_in_event_loop(|item| item.invoke_core_connection_changed(false));
+            }
             thread::sleep(Duration::from_millis(200));
             continue;
         };
         let Ok((tasks, latest_sequence)) = client.snapshot_state() else {
+            if state
+                .core_online
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                let _ = confirm
+                    .upgrade_in_event_loop(|item| item.invoke_core_connection_changed(false));
+            }
             thread::sleep(Duration::from_millis(50));
             continue;
         };
+        state
+            .core_online
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut known_tasks) = state.known_tasks.lock() {
             *known_tasks = tasks.clone();
         }
         if confirm
             .upgrade_in_event_loop(move |item| {
-                item.invoke_core_resynced(latest_sequence.to_string().into())
+                item.invoke_core_connection_changed(true);
+                item.invoke_core_resynced(latest_sequence.to_string().into());
             })
             .is_err()
         {
@@ -2626,6 +2747,13 @@ fn event_loop(
                 last_lease_renewal = std::time::Instant::now();
             }
         }
+        if state
+            .core_online
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            let _ =
+                confirm.upgrade_in_event_loop(|item| item.invoke_core_connection_changed(false));
+        }
     }
 }
 
@@ -2692,9 +2820,6 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
                 },
                 WinitWindowAccessor,
             };
-            use windows_sys::Win32::Graphics::Gdi::{
-                GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-            };
             let native = match confirm.window().winit_window().await {
                 Ok(native) => native,
                 Err(error) => {
@@ -2708,19 +2833,17 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
                 return;
             };
-            let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            let monitor =
-                unsafe { MonitorFromWindow(handle.hwnd.get() as _, MONITOR_DEFAULTTONEAREST) };
-            if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            let Some((work_left, work_top, work_right, work_bottom)) =
+                native_window::work_area(Some(handle.hwnd.get() as i64))
+            else {
                 trace(&format!(
                     "fit confirm: monitor query failed {}",
                     std::io::Error::last_os_error()
                 ));
                 return;
-            }
-            let work_width = (info.rcWork.right - info.rcWork.left) as u32;
-            let work_height = (info.rcWork.bottom - info.rcWork.top) as u32;
+            };
+            let work_width = (work_right - work_left) as u32;
+            let work_height = (work_bottom - work_top) as u32;
             let scale = native.scale_factor() as f32;
             let Some((width, height)) =
                 confirm_window_logical_size((work_width, work_height), scale)
@@ -2734,8 +2857,8 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
             ));
             let _ = native.request_inner_size(PhysicalSize::new(width, height));
             native.set_outer_position(PhysicalPosition::new(
-                info.rcWork.left + ((work_width - width) / 2) as i32,
-                info.rcWork.top + ((work_height - height) / 2) as i32,
+                work_left + ((work_width - width) / 2) as i32,
+                work_top + ((work_height - height) / 2) as i32,
             ));
             round_native_window(confirm.window());
         });
@@ -2803,6 +2926,49 @@ fn refresh_confirm_duplicate(item: &ConfirmWindow, state: &EventLoopState) {
             .unwrap_or_default();
     item.set_duplicate_text(duplicate_text.into());
     item.set_duplicate_task_id(duplicate_task_id.into());
+}
+
+fn current_pending_size(pending: &Arc<Mutex<VecDeque<ResourceOffer>>>) -> u64 {
+    pending
+        .lock()
+        .ok()
+        .and_then(|items| items.front().map(|offer| offer.size))
+        .unwrap_or(0)
+}
+
+fn refresh_confirm_disk_space(item: &ConfirmWindow, expected_size: u64) {
+    let dir = item.get_download_dir().to_string();
+    match target_check::query_available_space(&dir) {
+        Some(free_bytes) => {
+            let status = target_check::format_disk_space_status(free_bytes, expected_size);
+            item.set_free_space_hint(status.hint.into());
+            item.set_free_space_low(status.low_space);
+        }
+        None => {
+            item.set_free_space_hint("".into());
+            item.set_free_space_low(false);
+        }
+    }
+}
+
+fn sync_confirm_filename_category(
+    item: &ConfirmWindow,
+    settings: &PresenterSettings,
+    resource_kind: ResourceKind,
+    dir_overridden: bool,
+) {
+    let filename = item.get_filename().to_string();
+    let next_category = download_category(&filename, "", resource_kind);
+    if item.get_category().as_str() != next_category {
+        item.set_category(next_category.into());
+    }
+    if !dir_overridden {
+        let next_dir = settings.directory_for(next_category);
+        if item.get_download_dir().as_str() != next_dir {
+            item.set_download_dir(next_dir.clone().into());
+            sync_confirm_selectors(item, settings, &next_dir, None);
+        }
+    }
 }
 
 fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) {
@@ -2935,6 +3101,9 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     )
     .map(format_duplicate_notice)
     .unwrap_or_default();
+    state
+        .confirm_dir_overridden
+        .store(false, std::sync::atomic::Ordering::Relaxed);
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
     item.set_category(category.into());
@@ -2962,11 +3131,12 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     item.set_duplicate_text(duplicate_text.into());
     item.set_duplicate_task_id(duplicate_task_id.into());
     item.set_details_expanded(false);
-    item.set_remember_directory(true);
+    item.set_remember_directory(false);
     item.set_suppress_site_kind(false);
     item.set_busy(false);
     item.set_busy_action("".into());
     clear_confirm_issue(&item);
+    refresh_confirm_disk_space(&item, offer.size);
     let remaining = state
         .pending
         .lock()
@@ -3000,14 +3170,24 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
         let _ = item.hide();
         return;
     }
-    let shown = item.show().is_ok();
+    let quiet_fullscreen = native_window::is_foreground_fullscreen_or_busy();
+    let shown = if quiet_fullscreen {
+        native_window::show_non_activating(&item, false, true).is_ok()
+    } else {
+        native_window::set_no_activate(item.window(), false);
+        item.show().is_ok()
+    };
     if shown {
         if let Ok(mut active) = state.active_handoff.lock() {
             *active = Some(offer.handoff_id.clone());
         }
-        native_window::prepare_dialog(&item, false, false, None);
-        fit_confirm_window(&item);
-        native_window::prepare_dialog(&item, false, true, None);
+        if quiet_fullscreen {
+            fit_confirm_window(&item);
+        } else {
+            native_window::prepare_dialog(&item, false, false, None);
+            fit_confirm_window(&item);
+            native_window::prepare_dialog(&item, false, true, None);
+        }
     } else if let Ok(mut active) = state.active_handoff.lock() {
         *active = None;
     }
@@ -4068,11 +4248,15 @@ impl ActiveTaskHud {
 }
 
 fn present_complete_toast(item: &CompleteWindow) {
+    if item.get_power_seconds() <= 0 && native_window::is_foreground_fullscreen_or_busy() {
+        trace("suppressing complete toast while foreground fullscreen/busy");
+        return;
+    }
     let reopening = !item.window().is_visible();
     if reopening {
         item.set_entered(false);
     }
-    native_window::mark_no_activate(item.window());
+    native_window::prepare_bottom_right_toast(item, 16.0);
     if item.show().is_ok() {
         if reopening {
             play_complete_entrance(item);
@@ -4319,11 +4503,14 @@ fn render_progress_hud(
     item.set_can_open_folder(snapshot_folder(snapshot, fallback_dir).is_some());
     let first_show = !item.window().is_visible();
     if first_show {
+        if native_window::is_foreground_fullscreen_or_busy() {
+            trace("suppressing background progress HUD while foreground fullscreen/busy");
+            return;
+        }
         item.invoke_enter();
     }
-    if first_show && item.show().is_ok() {
+    if first_show && native_window::show_non_activating(&item, true, false).is_ok() {
         round_native_window(item.window());
-        native_window::prepare_dialog(&item, true, false, None);
     }
     // show/resize 由 round_native_window 清缓存；普通进度更新保留局部重绘。
     item.window().request_redraw();
@@ -5887,5 +6074,68 @@ mod tests {
             hud.processing_elapsed_secs("hls-1", t2 + Duration::from_secs(3)),
             None
         );
+    }
+
+    #[test]
+    fn confirm_window_defaults_remember_off_reresolves_category_until_overridden_and_checks_space()
+    {
+        use super::{
+            refresh_confirm_disk_space, sync_confirm_filename_category, ConfirmWindow,
+            PresenterSettings,
+        };
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = ConfirmWindow::new().unwrap();
+        assert!(
+            !confirm.get_remember_directory(),
+            "ConfirmWindow must not default remember_directory to true"
+        );
+
+        let settings = PresenterSettings {
+            download_dir: r"D:\Downloads".into(),
+            category_media: r"D:\Downloads\Media".into(),
+            category_archive: r"D:\Downloads\Archives".into(),
+            category_program: r"D:\Downloads\Programs".into(),
+            category_other: r"D:\Downloads\Other".into(),
+            ..Default::default()
+        };
+
+        // Initial media filename resolves media category & folder.
+        confirm.set_filename("lecture.mp4".into());
+        sync_confirm_filename_category(&confirm, &settings, ResourceKind::File, false);
+        assert_eq!(confirm.get_category().as_str(), "media");
+        assert_eq!(confirm.get_download_dir().as_str(), r"D:\Downloads\Media");
+
+        // Changing extension to .zip dynamically switches category & save directory.
+        confirm.set_filename("lecture-materials.zip".into());
+        sync_confirm_filename_category(&confirm, &settings, ResourceKind::File, false);
+        assert_eq!(confirm.get_category().as_str(), "archive");
+        assert_eq!(
+            confirm.get_download_dir().as_str(),
+            r"D:\Downloads\Archives"
+        );
+
+        // Once the user manually overrides the directory, editing filename updates category
+        // without clobbering their chosen folder.
+        confirm.set_download_dir(r"F:\CustomProject".into());
+        confirm.set_filename("installer.exe".into());
+        sync_confirm_filename_category(&confirm, &settings, ResourceKind::File, true);
+        assert_eq!(confirm.get_category().as_str(), "program");
+        assert_eq!(confirm.get_download_dir().as_str(), r"F:\CustomProject");
+
+        #[cfg(windows)]
+        {
+            let temp = std::env::temp_dir().to_string_lossy().into_owned();
+            confirm.set_download_dir(temp.into());
+            refresh_confirm_disk_space(&confirm, 1024);
+            assert!(!confirm.get_free_space_low());
+            assert!(confirm.get_free_space_hint().starts_with("磁盘可用 "));
+
+            refresh_confirm_disk_space(&confirm, u64::MAX);
+            assert!(confirm.get_free_space_low());
+            assert!(confirm
+                .get_free_space_hint()
+                .starts_with("磁盘剩余空间不足"));
+        }
     }
 }

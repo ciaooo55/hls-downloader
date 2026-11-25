@@ -13,53 +13,86 @@ export global Tokens {
     // 面板展开、提示出现等“回应用户操作”的过渡；减少动态效果时同样降到 1ms。
     out property <duration> motion-slow: reduce-motion ? 1ms : 220ms;
     out property <string> type-face: "Noto Sans CJK SC";
-    // 统一视觉系统 "Fluent Graphite + Luminous Cobalt"：中性石墨底色 + 钴蓝强调色。
-    // 保留全部既有 token 名称，所有窗口和 Rust 绑定完全兼容。
+    // 现代冷灰岩（Cool Slate）与澄澈钴蓝（Crisp Cobalt）桌面设计令牌体系。
+    // 保持 rail / canvas / surface / dialog 清晰海拔层级，严格通过 WCAG AA 对比度门禁。
     out property <length> control-height: 34px;
-    // 圆角体系：控件 6px（Fluent 原生复选框/下拉框单独保持 4px 对齐），无边框弹窗/图标块 8px（与 Win11 DWM 匹配），主面板/卡片 10px。
     out property <length> control-radius: 6px;
     out property <length> card-radius: 8px;
     out property <length> panel-radius: 10px;
     out property <length> control-gap: 8px;
-    out property <color> surface: dark ? #161922 : #ffffff;
-    out property <color> surface-2: dark ? #1c202b : #f5f7fa;
-    out property <color> surface-3: dark ? #252b38 : #e9edf3;
-    out property <color> control-hover: dark ? #242a37 : #eef1f6;
-    out property <color> control-pressed: dark ? #2d3546 : #e2e7f0;
-    out property <color> canvas: dark ? #0c0e13 : #f1f3f7;
-    out property <color> rail: dark ? #101319 : #f7f8fb;
-    out property <color> faint: dark ? #8690a2 : #4b5563;
-    out property <color> selected: dark ? #192642 : #edf3ff;
-    out property <color> hairline: dark ? #1f2430 : #edf0f5;
-    out property <color> shadow: dark ? #0000004d : #0f172a12;
-    out property <color> success-surface: dark ? #112d1e : #eafaf0;
-    out property <color> warn-surface: dark ? #33250c : #fff6e6;
-    out property <color> fail-surface: dark ? #3b1719 : #fef0ef;
-    out property <color> info-surface: dark ? #162442 : #edf3ff;
-    out property <color> ink: dark ? #f1f4f9 : #0f172a;
-    out property <color> muted: dark ? #b3bccb : #334155;
-    out property <color> accent: dark ? #7aa2ff : #2e5bea;
-    out property <color> accent-top: dark ? #8cb0ff : #3e6bf2;
-    out property <color> accent-hover: dark ? #96b6ff : #234cd4;
-    out property <color> accent-soft: dark ? #7aa2ff29 : #2e5bea16;
-    out property <color> accent-border: dark ? #7aa2ff4a : #2e5bea42;
-    // 主按钮按下：比悬停再深一档，代替原来整体降透明度（降透明度会让按钮看起来像被禁用）。
-    out property <color> accent-pressed: dark ? #6288e8 : #1a3cb3;
-    // 键盘焦点环：只在 Tab 导航时出现，鼠标点击不出现，颜色取强调色。
-    out property <color> focus-ring: dark ? #96b6ff : #2e5bea;
-    out property <color> on-accent: dark ? #0c0e13 : #ffffff;
-    // 状态色按主题取值，浅色/深色底上都保持 ≥4.5:1。
-    out property <color> done: dark ? #3ed481 : #15803d;
-    out property <color> warn: dark ? #f6ad2d : #b45309;
-    out property <color> fail: dark ? #ff7c76 : #c8231a;
-    out property <color> media-tint: dark ? #c5b4ff : #6d41cc;
-    out property <color> archive-tint: dark ? #f4c47a : #b45d09;
-    out property <color> line: dark ? #282f3d : #dfe4ec;
-    out property <color> border-strong: dark ? #394356 : #c5cedc;
-    // 播放器影院舞台与浅/深色自适应控制栏令牌。
+
+    // ── 表面层级（Surface Elevation）─────────────────────────────────────
+    out property <color> rail: dark ? #0c1017 : #edf2f8;
+    out property <color> canvas: dark ? #10151f : #f4f7fb;
+    out property <color> surface: dark ? #161c28 : #ffffff;
+    out property <color> dialog: dark ? #19202e : #ffffff;
+    out property <color> surface-2: dark ? #1d2535 : #f1f5fa;
+    out property <color> surface-3: dark ? #252f43 : #e4ebf5;
+    out property <color> control-hover: dark ? #242e42 : #e8eff8;
+    out property <color> control-pressed: dark ? #2d3952 : #dbe4f2;
+    out property <color> selected: dark ? #192a4a : #e8f0fe;
+    out property <color> hairline: dark ? #212a3c : #e6ecf5;
+    out property <color> line: dark ? #2a354b : #d5dfec;
+    // 交互边框与强边界在浅/深色全部表面上均满足 >= 3.0:1 非文本对比度。
+    out property <color> control-border: dark ? #72839d : #64748b;
+    out property <color> border-strong: dark ? #72839d : #64748b;
+    out property <color> shadow: dark ? #00000059 : #0f172a12;
+
+    // ── 文本层级（全部在 surface / surface-2 / surface-3 / canvas / rail 上 >= 4.5:1）──
+    out property <color> ink: dark ? #f1f5fb : #0f172a;
+    out property <color> muted: dark ? #b8c4d6 : #334155;
+    out property <color> faint: dark ? #94a3b8 : #475569;
+
+    // ── 品牌主色（Accent）────────────────────────────────────────────────
+    out property <color> accent: dark ? #73a7ff : #2454d1;
+    out property <color> accent-top: dark ? #8ab6ff : #3564e0;
+    out property <color> accent-hover: dark ? #8fb9ff : #1c46b8;
+    out property <color> accent-pressed: dark ? #5a90eb : #163999;
+    out property <color> accent-soft: dark ? #73a7ff26 : #2454d117;
+    out property <color> accent-border: dark ? #73a7ff54 : #2454d145;
+    out property <color> focus-ring: dark ? #8fb9ff : #2454d1;
+    out property <color> on-accent: dark ? #090d14 : #ffffff;
+
+    // ── 语义状态色与底色（全部满足 >= 4.5:1 文本对比度）──────────────────
+    out property <color> done: dark ? #42e08c : #14763c;
+    out property <color> warn: dark ? #f8b642 : #9e4706;
+    out property <color> fail: dark ? #ff8580 : #be1d24;
+    out property <color> info: dark ? #7eb0ff : #1d4ed8;
+    out property <color> success-surface: dark ? #102a1e : #e8f8ef;
+    out property <color> warn-surface: dark ? #2f220d : #fff4e3;
+    out property <color> fail-surface: dark ? #36161a : #fef0f0;
+    out property <color> info-bg: dark ? #152542 : #ebf2ff;
+    out property <color> info-surface: info-bg;
+
+    // ── 文件分类柔和色调徽标（media / archive / program / document / torrent）──
+    out property <color> media-bg: dark ? #231d3f : #f2eeff;
+    out property <color> media-ink: dark ? #c4b5fd : #5b32b8;
+    out property <color> media-border: dark ? #8b5cf652 : #6d41cc38;
+
+    out property <color> archive-bg: dark ? #30220f : #fff4e0;
+    out property <color> archive-ink: dark ? #fcd37d : #9a4a06;
+    out property <color> archive-border: dark ? #f59e0b52 : #d9770638;
+
+    out property <color> program-bg: dark ? #12283b : #e6f4fe;
+    out property <color> program-ink: dark ? #7dd3fc : #075985;
+    out property <color> program-border: dark ? #38bdf852 : #0284c738;
+
+    out property <color> document-bg: dark ? #1e2636 : #edf2f7;
+    out property <color> document-ink: dark ? #cbd5e1 : #334155;
+    out property <color> document-border: dark ? #94a3b84a : #64748b38;
+
+    out property <color> torrent-bg: dark ? #0f2b26 : #e6faf4;
+    out property <color> torrent-ink: dark ? #6ee7b7 : #0d6852;
+    out property <color> torrent-border: dark ? #10b98152 : #0d948838;
+
+    // 兼容旧引用别名
+    out property <color> media-tint: media-ink;
+    out property <color> archive-tint: archive-ink;
+
+    // ── 播放器影院舞台与浅/深色自适应控制栏令牌 ─────────────────────────
     out property <color> cinema-bg: #07090d;
-    out property <color> cinema-bar: dark ? #131720 : #f7f9fc;
-    out property <color> cinema-subbar: dark ? #181c26 : #eff2f7;
+    out property <color> cinema-bar: dark ? #121722 : #f6f8fc;
+    out property <color> cinema-subbar: dark ? #171d2a : #edf1f8;
     out property <color> cinema-pill: #0b0e14d9;
     out property <color> cinema-pill-border: #ffffff24;
 }
@@ -77,9 +110,9 @@ export component WorkbenchIcon inherits Rectangle {
     }
     if !root.artwork: Path {
         width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
-        fill: transparent; stroke: root.ink; stroke-width: 1.7px; stroke-line-cap: round; stroke-line-join: round;
+        fill: transparent; stroke: root.ink; stroke-width: 1.75px; stroke-line-cap: round; stroke-line-join: round;
         commands: root.name == "new" ? "M12 5V19 M5 12H19" :
-            root.name == "more" ? "M4 12H5 M11.5 12H12.5 M19 12H20" :
+            root.name == "more" ? "M4.5 12H5.5 M11.5 12H12.5 M18.5 12H19.5" :
             root.name == "search" ? "M20 20L16 16 M17 10A7 7 0 1 1 3 10A7 7 0 1 1 17 10Z" :
             root.name == "close" ? "M6 6L18 18 M6 18L18 6" :
             root.name == "sun" ? "M12 2V4 M12 20V22 M2 12H4 M20 12H22 M5 5L6.5 6.5 M17.5 17.5L19 19 M5 19L6.5 17.5 M17.5 6.5L19 5 M16 12A4 4 0 1 1 8 12A4 4 0 1 1 16 12Z" :
@@ -91,6 +124,7 @@ export component WorkbenchIcon inherits Rectangle {
             root.name == "info" ? "M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z M12 11V17 M12 7V7.2" :
             root.name == "save" ? "M4 3H17L21 7V21H3V3Z M7 3V9H16V3 M7 21V14H17V21" :
             root.name == "check" ? "M4 12L9 17L20 6" :
+            root.name == "clear-done" ? "M4 12.5L8.5 17L17.5 8 M11 17L15 21L21.5 11.5" :
             root.name == "stop" ? "M5 5H19V19H5Z" :
             root.name == "volume" ? "M3 9H7L12 5V19L7 15H3Z M16 8A6 6 0 0 1 16 16 M19 5A10 10 0 0 1 19 19" :
             root.name == "muted" ? "M3 9H7L12 5V19L7 15H3Z M16 9L22 15 M16 15L22 9" :
@@ -100,18 +134,21 @@ export component WorkbenchIcon inherits Rectangle {
             root.name == "dock" ? "M3 4H21V20H3Z M3 14H21 M8 8L12 11L16 8" :
             root.name == "fullscreen" ? "M3 9V3H9 M15 3H21V9 M21 15V21H15 M9 21H3V15" :
             root.name == "restore" ? "M9 3V9H3 M21 9H15V3 M15 21V15H21 M3 15H9V21" :
-            root.name == "down" ? "M7 9L12 14L17 9" :
+            root.name == "chevron-down" || root.name == "down" ? "M6.5 9.5L12 15L17.5 9.5" :
+            root.name == "chevron-up" || root.name == "up" ? "M6.5 14.5L12 9L17.5 14.5" :
+            root.name == "chevron-left" ? "M14.5 6.5L9 12L14.5 17.5" :
+            root.name == "chevron-right" ? "M9.5 6.5L15 12L9.5 17.5" :
             root.name == "arrow-up" ? "M12 19V5 M6 11L12 5L18 11" :
             root.name == "arrow-down" ? "M12 5V19 M6 13L12 19L18 13" :
-            root.name == "up" ? "M7 14L12 9L17 14" :
             root.name == "running" ? "M12 3V14 M8 10L12 14L16 10 M5 16V20H19V16" :
             root.name == "queued" ? "M12 6V12L16 14 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
             root.name == "paused" ? "M9 8V16 M15 8V16 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
             root.name == "completed" ? "M7 12L10.5 15.5L17 9 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
             root.name == "failed" ? "M12 7V12 M12 16V16.2 M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12Z" :
-            root.name == "media" ? "M3 5H21V19H3Z M3 16L9 10L14 15L17 12L21 16 M16 8H16.2" :
+            root.name == "media" ? "M4 5H20V19H4Z M10 9L16 12L10 15Z" :
             root.name == "program" ? "M4 4H10V10H4Z M14 4H20V10H14Z M4 14H10V20H4Z M14 14H20V20H14Z" :
             root.name == "archive" ? "M3 6H10L12 8H21V20H3Z M15 8V10H17V12H15V14H17V17H15V19" :
+            root.name == "document" ? "M6 3H14L19 8V21H6Z M14 3V8H19 M9 13H16 M9 17H14" :
             root.name == "file" ? "M5 3H14L19 8V21H5Z M14 3V8H19" :
             root.name == "queue" ? "M4 6H15 M4 11H15 M4 16H11 M17 12L22 16L17 20Z" :
             root.name == "cast" ? "M3 5H21V19H14 M3 12A7 7 0 0 1 10 19 M3 16A3 3 0 0 1 6 19 M3 19H3.2" :
@@ -119,7 +156,10 @@ export component WorkbenchIcon inherits Rectangle {
             root.name == "import" ? "M4 4H14 M4 4V20H20V11 M20 3L12 11 M12 5V11H18" :
             root.name == "export" ? "M4 4H14 M4 4V20H20V11 M12 11L20 3 M14 3H20V9" :
             root.name == "delete" ? "M4 6H20 M9 6V3H15V6 M6 6L7 21H17L18 6 M10 10V17 M14 10V17" :
-            root.name == "drag" ? "M5 9H19 M5 15H19" :
+            root.name == "drag" ? "M9 6H9.2 M15 6H15.2 M9 12H9.2 M15 12H15.2 M9 18H9.2 M15 18H15.2" :
+            root.name == "panel-right" ? "M3 4H21V20H3Z M15 4V20" :
+            root.name == "bolt" ? "M13 2L4 14H11L10 22L20 10H13Z" :
+            root.name == "disk" ? "M4 6C4 4.3 7.6 3 12 3C16.4 3 20 4.3 20 6V18C20 19.7 16.4 21 12 21C7.6 21 4 19.7 4 18V6Z M4 12C4 13.7 7.6 15 12 15C16.4 15 20 13.7 20 12" :
             root.name == "details" ? "M4 4H20V20H4Z M8 8H16 M8 12H16 M8 16H13" :
             root.name == "link" ? "M10 13A5 5 0 0 0 17.54 13.54L20.54 10.54A5 5 0 0 0 13.46 3.46L11.75 5.17 M14 11A5 5 0 0 0 6.46 10.46L3.46 13.46A5 5 0 0 0 10.54 20.54L12.24 18.84" :
             root.name == "folder" ? "M3 6H10L12 8H21V20H3Z" :
@@ -127,12 +167,9 @@ export component WorkbenchIcon inherits Rectangle {
     }
 }
 
-// 键盘焦点环：画在控件外侧 2px，不改变控件自身的边框和尺寸，因此主按钮（本身就是强调色边框）
-// 也能看出焦点。shown 由各控件按 FocusReason 决定：Tab 导航显示，鼠标点击不显示。
 export component FocusRing inherits Rectangle {
     in property <bool> shown;
     in property <length> radius: Tokens.control-radius;
-    // 使用处给出 x/y = -3px、宽高 = 控件 + 6px（组件定义里不能引用 parent）。
     border-radius: root.radius + 3px;
     border-width: 2px;
     border-color: Tokens.focus-ring;
@@ -140,7 +177,6 @@ export component FocusRing inherits Rectangle {
     animate opacity { duration: Tokens.motion-fast; easing: ease-out; }
 }
 
-// 进行中指示：三个圆点依次明暗。不用旋转，软件渲染器也能正确绘制；减少动态效果时静止。
 export component BusyDots inherits HorizontalLayout {
     in property <color> ink: Tokens.on-accent;
     private property <float> phase: Tokens.reduce-motion ? 0 : mod(animation-tick() / 1ms, 900) / 300;
@@ -160,8 +196,6 @@ export component HotButton inherits Rectangle {
     in property <bool> primary: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
-    // 进行中：保留按钮颜色与宽度、显示进行中圆点并拦截点击。与 enabled=false 区分，
-    // 避免“正在开始下载”看起来像按钮被禁用。
     in property <bool> busy: false;
     in property <string> busy-label: root.label;
     callback clicked;
@@ -187,10 +221,9 @@ export component HotButton inherits Rectangle {
             : (root.down ? Tokens.control-pressed : touch.has-hover && root.active ? Tokens.control-hover : Tokens.surface);
     border-width: 1px;
     border-color: root.danger ? Tokens.fail.with-alpha(0.48) : root.primary ? Tokens.accent : touch.has-hover && root.active ? Tokens.border-strong : Tokens.line;
-    // 按下时阴影收起，配合内容下移 1px，形成“按进去”的反馈。
     drop-shadow-offset-y: root.down ? 0px : root.primary ? 2px : 1px;
     drop-shadow-blur: root.down ? 0px : root.primary ? 10px : 2px;
-    drop-shadow-color: !root.enabled && !root.busy ? transparent : root.primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.28) : Tokens.shadow;
+    drop-shadow-color: !root.enabled && !root.busy ? transparent : root.primary ? Tokens.accent.with-alpha(Tokens.dark ? 0.22 : 0.26) : Tokens.shadow;
     animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
     animate drop-shadow-blur, drop-shadow-offset-y { duration: Tokens.motion-fast; easing: ease-out; }
     if root.primary && !root.down && (root.enabled || root.busy): Rectangle {
@@ -247,6 +280,7 @@ export component HotCloseButton inherits Rectangle {
     FocusRing { x: -3px; y: -3px; width: root.width + 6px; height: root.height + 6px; shown: root.focus-visible && focus.has-focus; }
     WorkbenchIcon {
         name: "close"; ink: touch.has-hover && root.enabled ? Tokens.ink : Tokens.muted;
+        width: 15px; height: 15px;
         x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
     }
     forward-focus: focus;
@@ -258,6 +292,7 @@ export component HotCloseButton inherits Rectangle {
     }
     touch := TouchArea {
         enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
         accessible-role: button;
         accessible-label: root.accessible-name;
         clicked => { focus.focus(); root.clicked(); }
@@ -268,7 +303,6 @@ export component ChoiceButton inherits Rectangle {
     in property <string> label;
     in property <string> icon;
     in property <bool> selected: false;
-    // 列表式选择（例如投屏设备）左对齐，分段/标签式选择居中。
     in property <bool> align-start: false;
     in property <bool> enabled: true;
     callback clicked;
@@ -287,7 +321,6 @@ export component ChoiceButton inherits Rectangle {
             text: root.label;
             color: root.selected ? Tokens.accent : Tokens.ink;
             font-size: root.align-start ? 13px : 12px;
-            // 选中只改颜色、底色和描边，不改字重，避免文字宽度变化导致布局抖动。
             font-weight: 500;
             horizontal-alignment: root.align-start ? left : center;
             vertical-alignment: center;
@@ -323,8 +356,6 @@ export component HotLineEdit inherits LineEdit {
     font-size: 13px;
 }
 
-// 统一的复选框：钴蓝强调色 + 4px 控件圆角，不跟随系统强调色（Fluent 自带复选框会随系统变成青色/绿色等，
-// 且自带 2px 圆角，与其它控件的 4px 不一致）。接口与 std CheckBox 保持一致：text / checked / enabled / toggled。
 export component HotCheckBox inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
@@ -350,10 +381,10 @@ export component HotCheckBox inherits Rectangle {
         alignment: start;
         Rectangle {
             width: 18px; height: 18px; y: (parent.height - self.height) / 2;
-            border-radius: 4px;
+            border-radius: 5px;
             background: !root.enabled ? (root.checked ? Tokens.faint : Tokens.surface-2) : root.checked ? (touch.pressed ? Tokens.accent-pressed : touch.has-hover ? Tokens.accent-hover : Tokens.accent) : (touch.pressed ? Tokens.control-pressed : touch.has-hover ? Tokens.control-hover : Tokens.surface);
             border-width: root.checked && !root.ring ? 0px : root.ring ? 2px : 1px;
-            border-color: root.ring ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.faint;
+            border-color: root.ring ? (root.checked ? Tokens.accent-hover : Tokens.accent) : touch.has-hover && root.enabled ? Tokens.muted : Tokens.control-border;
             animate background, border-color { duration: Tokens.motion-fast; easing: ease-out; }
             if root.checked: Path {
                 x: 3px; y: 3px; width: 12px; height: 12px; viewbox-width: 24; viewbox-height: 24;
@@ -378,7 +409,6 @@ export component HotCheckBox inherits Rectangle {
             return reject;
         }
     }
-    // 点击区域只覆盖复选框和文字，空白处不切换。
     touch := TouchArea {
         x: 0px; width: min(root.width, layout.preferred-width);
         enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default;
@@ -427,7 +457,7 @@ export component Panel inherits Rectangle {
     border-radius: Tokens.panel-radius;
     background: Tokens.surface;
     border-width: 1px;
-    border-color: Tokens.dark ? Tokens.line : Tokens.line.darker(0.03);
+    border-color: Tokens.line;
     @children
 }
 
@@ -439,7 +469,6 @@ export component WindowDragArea inherits TouchArea {
         root.drag((self.mouse-x - self.pressed-x) / 1px, (self.mouse-y - self.pressed-y) / 1px);
     }
 }
-
 
 export struct SegmentBlock {
     width-ratio: float,
@@ -464,7 +493,6 @@ export component SegmentMapBar inherits Rectangle {
         for seg[i] in root.segments: Rectangle {
             horizontal-stretch: seg.width-ratio;
             height: parent.height;
-            // 软件渲染器不会按圆角裁剪子元素，首尾分段自己带圆角。
             border-top-left-radius: i == 0 ? max(0px, root.border-radius - 1px) : 0px;
             border-bottom-left-radius: i == 0 ? max(0px, root.border-radius - 1px) : 0px;
             border-top-right-radius: i == root.segments.length - 1 ? max(0px, root.border-radius - 1px) : 0px;
@@ -485,9 +513,6 @@ export component SegmentMapBar inherits Rectangle {
     }
 }
 
-// 深色主题下 Fluent 滚动条的细线颜色是 FluentPalette.border（8% 白），几乎看不见；
-// 这里按 Fluent ScrollBar 的几何（14px 轨道、上下各 16px 留白、细线距右缘 4px、宽 3px）
-// 在同一位置叠一根可见的细线。它不含 TouchArea，拖动、滚轮、悬停仍由原滚动条处理。
 export component ScrollCue inherits Rectangle {
     in property <length> viewport-y;
     in property <length> viewport-height;
@@ -505,7 +530,6 @@ export component ScrollCue inherits Rectangle {
     }
 }
 
-// 与 std ScrollView 接口一致的包装：深色主题下叠加 ScrollCue，浅色主题保持 Fluent 原样。
 export component HotScrollView {
     in property <bool> enabled: true;
     out property <length> visible-width <=> sv.visible-width;
@@ -536,12 +560,9 @@ export component HotScrollView {
     }
 }
 
-// Fluent ComboBox 禁用态边框是 FluentPalette.border（浅色 45% 黑），比启用态还重；
-// 禁用时在原边框上叠一层与输入框一致的 Tokens.line 细边框（Fluent 下拉框圆角 3px）。
 export component HotComboBox {
     in property <[string]> model;
     in property <bool> enabled: true;
-    // 读屏名称转给内部的 ComboBox（包装层本身不是可访问控件）。
     in property <string> a11y-label;
     out property <bool> has-focus: cb.has-focus;
     in-out property <int> current-index <=> cb.current-index;

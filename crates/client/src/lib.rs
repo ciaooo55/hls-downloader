@@ -16,12 +16,17 @@ pub mod window_util;
 pub use core_ipc::*;
 pub use core_spawn::*;
 pub use credential_vault::CredentialVault;
-pub use instance::{claim_v7_instance, claim_v7_presenter_instance, is_already_running_error};
+pub use instance::{
+    claim_v7_instance, claim_v7_presenter_instance, is_already_running_error, lock_core_launch,
+    CoreLaunchGuard,
+};
 pub use media_ext::download_category;
 pub use profile_paths::{
     clear_user_shutdown, default_v7_database_path, default_v7_download_dir,
-    is_user_shutdown_active, record_user_shutdown, user_shutdown_marker_path,
+    is_user_shutdown_active, portable_v7_root, portable_v7_root_from, record_user_shutdown,
+    user_shutdown_marker_path,
 };
+pub use request_validation::canonical_resource_key;
 pub use runtime_log::{init_runtime_log, record_runtime_log};
 pub use tray::{
     completion_sound, show_notification, spawn_tray, update_tray_state, TrayAction, TrayMenuState,

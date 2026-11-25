@@ -596,6 +596,11 @@ impl CoreRuntime {
             filename.to_string()
         };
         let queue_id = queue_id.trim();
+        let resource_key = if offer.resource_key.trim().is_empty() {
+            crate::http_engine::canonical_url_key(&offer.url)
+        } else {
+            offer.resource_key
+        };
         let spec = TaskSpec {
             url: offer.url,
             resource_kind: offer.resource_kind,
@@ -621,6 +626,8 @@ impl CoreRuntime {
             preferred_height: offer.preferred_height,
             preferred_variant_id: offer.preferred_variant_id.clone(),
             source_page_url: offer.source_page_url,
+            audio_url: offer.audio_url,
+            resource_key,
             ..Default::default()
         };
         let snapshot = self.create_task(spec);
@@ -1864,6 +1871,8 @@ mod tests {
                 preferred_bandwidth: 2_500_000,
                 preferred_height: 720,
                 preferred_variant_id: "v2".into(),
+                audio_url: String::new(),
+                resource_key: String::new(),
             },
         });
         assert!(matches!(events[0].event, CoreEvent::HandoffOffered { .. }));

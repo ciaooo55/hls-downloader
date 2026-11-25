@@ -145,7 +145,7 @@ export component TaskEditorWindow inherits Window {
                                 WorkbenchIcon { name: "settings"; ink: root.show-advanced ? Tokens.accent : Tokens.muted; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
                                 Text { text: "高级选项"; color: Tokens.ink; font-size: 13px; font-weight: 600; vertical-alignment: center; }
                                 Text { text: root.has-advanced-values ? "已填写自定义参数" : "请求头、Cookie、代理、限速、校验与计划"; color: root.has-advanced-values ? Tokens.accent : Tokens.faint; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                                WorkbenchIcon { name: root.show-advanced ? "up" : "down"; ink: Tokens.muted; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
+                                WorkbenchIcon { name: root.show-advanced ? "chevron-up" : "chevron-down"; ink: Tokens.muted; width: 16px; height: 16px; y: (parent.height - self.height) / 2; }
                             }
                             adv-touch := TouchArea {
                                 mouse-cursor: pointer;

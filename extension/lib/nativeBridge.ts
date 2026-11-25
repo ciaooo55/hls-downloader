@@ -1,6 +1,16 @@
 // Native Messaging is the extension transport to the resident Core.
 
 const MAX_NATIVE_RESOURCE_TITLE_CODE_UNITS = 4096
+/**
+ * Keep the Native Messaging port alive across Chrome's 1-minute MV3 worker
+ * alarm while still rotating before Core's 120-second idle IPC close.
+ */
+export const PORT_IDLE_MS = 95_000
+/**
+ * Brief grace window before tearing down an in-flight `ping` / `get_settings`
+ * port for a higher-priority request so fast ~2ms replies complete cleanly.
+ */
+export const PREEMPT_GRACE_MS = 250
 
 function scalarSafeNativeText(value: string): string {
   let result = ''
@@ -65,6 +75,7 @@ interface PendingRequest {
   timeoutMs: number
   retriesRemaining: number
   priority: number
+  startedAt?: number
   resolve(value: unknown): void
   reject(reason: Error): void
   timer?: ReturnType<typeof setTimeout>
@@ -107,10 +118,17 @@ export function nativeDisconnectDetail(port: unknown): string {
   }
 }
 
+function usesGracePreemption(message: Record<string, unknown>): boolean {
+  const op = String(message.op || '')
+  if (op === 'ping') return message.interactive !== true
+  return op === 'get_settings' || op === 'get_takeover_settings'
+}
+
 export class NativeBridge {
   private port: NativePortLike | null = null
   private portLastResponseAt = 0
   private active: PendingRequest | null = null
+  private preemptTimer: ReturnType<typeof setTimeout> | null = null
   private readonly queue: PendingRequest[] = []
   private closed = false
   private requestSequence = 0
@@ -139,27 +157,31 @@ export class NativeBridge {
         resolve,
         reject,
       }
-      // A user click must not wait behind a hung heartbeat/status poll. A
-      // Native Messaging port cannot cancel one in-flight message, so the
-      // interactive request is sent on a fresh port and the interrupted
-      // request — always an idempotent read or long poll — is re-issued right
-      // after it. The old port is detached before disconnect() so its final
-      // event cannot reject or complete work on the replacement connection.
+      // A user click must not wait behind a hung heartbeat/status poll. For fast
+      // read probes (`ping` / `get_settings`), allow a 250ms grace window first
+      // so healthy ~2ms responses complete on the existing port without killing
+      // and respawning NativeHost.exe.
       if (this.active && request.priority > this.active.priority) {
-        const interrupted = this.active
-        if (interrupted.timer) clearTimeout(interrupted.timer)
-        interrupted.timer = undefined
-        this.active = null
-        // pump() keeps the active request at queue[0] until its response
-        // arrives; take it out before requeueing so it cannot end up queued
-        // twice (or not at all) on either side of the preempting request.
-        if (this.queue[0] === interrupted) this.queue.shift()
-        this.queue.unshift(request)
-        this.queue.splice(1, 0, interrupted)
-        const port = this.port
-        this.port = null
-        try { port?.disconnect() } catch {}
-        this.pump()
+        if (usesGracePreemption(this.active.message)) {
+          const elapsed = this.active.startedAt !== undefined ? Date.now() - this.active.startedAt : 0
+          if (elapsed < PREEMPT_GRACE_MS) {
+            const start = 1
+            const nextLowerPriority = this.queue.findIndex(
+              (queued, index) => index >= start && queued.priority < request.priority,
+            )
+            if (nextLowerPriority >= 0) this.queue.splice(nextLowerPriority, 0, request)
+            else this.queue.push(request)
+            this.scheduleGracePreemption(PREEMPT_GRACE_MS - Math.max(0, elapsed))
+            return
+          }
+        }
+        const start = 1
+        const nextLowerPriority = this.queue.findIndex(
+          (queued, index) => index >= start && queued.priority < request.priority,
+        )
+        if (nextLowerPriority >= 0) this.queue.splice(nextLowerPriority, 0, request)
+        else this.queue.push(request)
+        this.preemptActive()
         return
       }
       // Native Messaging hosts process stdin serially. Interactive offers and
@@ -175,12 +197,50 @@ export class NativeBridge {
     })
   }
 
+  private scheduleGracePreemption(delayMs: number): void {
+    if (this.preemptTimer) return
+    this.preemptTimer = setTimeout(() => {
+      this.preemptTimer = null
+      if (this.closed || !this.active) return
+      const nextQueued = this.queue[1]
+      if (nextQueued && nextQueued.priority > this.active.priority) {
+        this.preemptActive()
+      }
+    }, Math.max(0, delayMs))
+  }
+
+  private clearPreemptTimer(): void {
+    if (!this.preemptTimer) return
+    clearTimeout(this.preemptTimer)
+    this.preemptTimer = null
+  }
+
+  private preemptActive(): void {
+    this.clearPreemptTimer()
+    const interrupted = this.active
+    if (!interrupted) return
+    if (interrupted.timer) clearTimeout(interrupted.timer)
+    interrupted.timer = undefined
+    interrupted.startedAt = undefined
+    this.active = null
+    if (this.queue[0] === interrupted) this.queue.shift()
+    const insertAt = this.queue.findIndex(queued => queued.priority <= interrupted.priority)
+    if (insertAt >= 0) this.queue.splice(insertAt, 0, interrupted)
+    else this.queue.push(interrupted)
+    const port = this.port
+    this.port = null
+    try { port?.disconnect() } catch {}
+    this.pump()
+  }
+
   private requestPriority(message: Record<string, unknown>): number {
     // 只有已知只读请求能被抢占；本地文件交接等写操作不能因遗漏分类而断线重放。
     // 字幕使用独立连接，所有动作保持同优先级，PCM 不抢断正在进行的 poll。
     switch (String(message.op || '')) {
       // 交接前的探测不能排在挂起的后台长轮询后；普通心跳仍保持最低优先级。
       case 'ping': return message.interactive === true ? 30 : 0
+      case 'get_settings':
+      case 'get_takeover_settings': return 10
       case 'handoff_status':
       case 'media_push_status': return 20
       default: return 30
@@ -190,6 +250,7 @@ export class NativeBridge {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.clearPreemptTimer()
     const error = new Error('插件连接已关闭')
     this.rejectActive(error)
     while (this.queue.length) this.queue.shift()!.reject(error)
@@ -199,8 +260,8 @@ export class NativeBridge {
   }
 
   private ensurePort(): NativePortLike {
-    // Core 会在空闲 120 秒后关闭 IPC。字幕连接没有心跳，发送新请求前提前换连接。
-    if (this.port && Date.now() - this.portLastResponseAt >= 60_000) {
+    // Core 会在空闲 120 秒后关闭 IPC。保持 95 秒以跨越 Chrome 1 分钟 MV3 心跳，避免每分钟杀进程。
+    if (this.port && Date.now() - this.portLastResponseAt >= PORT_IDLE_MS) {
       const expired = this.port
       this.port = null
       try { expired.disconnect() } catch {}
@@ -218,6 +279,7 @@ export class NativeBridge {
     if (this.closed || this.active || !this.queue.length) return
     const request = this.queue[0]
     this.active = request
+    request.startedAt = Date.now()
     try {
       const port = this.ensurePort()
       request.timer = setTimeout(() => {
@@ -226,13 +288,12 @@ export class NativeBridge {
       }, request.timeoutMs)
       port.postMessage(request.message)
     } catch (error) {
+      this.clearPreemptTimer()
       if (request.timer) clearTimeout(request.timer)
       request.timer = undefined
+      request.startedAt = undefined
       const failedPort = this.port
       this.port = null
-      // connectNative() may succeed even though the first postMessage throws
-      // (for example while the host is exiting). Detach that unusable port;
-      // otherwise every retry leaves another native host connection alive.
       try { failedPort?.disconnect() } catch {}
       const reason = error instanceof Error ? error : new Error(String(error))
       if (request.retriesRemaining > 0 && !this.closed) {
@@ -253,28 +314,20 @@ export class NativeBridge {
     if (this.port !== port) return
     const request = this.active
     if (!request) return
-    // v7 Core echoes the request id on every response. A missing id is not a
-    // response to the active request: accepting it would shift the serialized
-    // queue and hand an unsolicited/malformed result to the wrong caller.
     if (!message || typeof message !== 'object') return
     const response = message as Record<string, unknown>
     const responseId = String(response.__request_id || '')
     if (responseId !== request.requestId) return
+    this.clearPreemptTimer()
     this.portLastResponseAt = Date.now()
     const coreTransportFailed = response.ok === false
       && /^Core (?:pipe|IPC|stream) (?:write|read|closed|frame|header)\b/i.test(String(response.error || ''))
-    // A Host error envelope can still mean Core committed an offer and lost
-    // its reply. Use the caller's idempotent retry budget and the same payload,
-    // rather than treating a broken pipe as an application-level refusal.
     if (coreTransportFailed && request.retriesRemaining > 0) {
       this.retryOrRejectActive(port, new Error(String(response.error)))
       return
     }
     if (request.timer) clearTimeout(request.timer)
     request.timer = undefined
-    // If an already-accepted media_push failed its best-effort admission status check
-    // (transport error or older Host returning ok:false), return the saved pending response
-    // instead of reporting a false failure.
     if (request.fallbackResponse !== undefined && (coreTransportFailed || response.ok === false)) {
       if (coreTransportFailed) {
         this.port = null
@@ -297,8 +350,6 @@ export class NativeBridge {
     if (this.tryMediaPushAdmissionCheck(port, request, resolvedResponse)) return
     this.active = null
     this.queue.shift()
-    // No retry budget remains (or replay was forbidden). Preserve the error,
-    // but detach the stale Host before processing another queued request.
     if (coreTransportFailed) {
       this.port = null
       try { port.disconnect() } catch {}
@@ -319,11 +370,6 @@ export class NativeBridge {
     const id = typeof response.id === 'string' ? response.id.trim() : ''
     if (!id) return false
 
-    // Core can synchronously reject a second media-push while the older Native
-    // Host still reports the locally constructed request as pending. Re-read
-    // the durable row once on the same serialized port before resolving the
-    // browser call, so an immediate Core failure is visible without waiting
-    // for the content script's one-second polling interval.
     request.fallbackResponse = response
     request.message = {
       op: 'media_push_status',
@@ -356,6 +402,7 @@ export class NativeBridge {
   }
 
   private retryOrRejectActive(port: NativePortLike, error: Error): void {
+    this.clearPreemptTimer()
     const request = this.active
     if (request?.timer) clearTimeout(request.timer)
     this.port = null
@@ -367,6 +414,7 @@ export class NativeBridge {
     }
     if (request && request.retriesRemaining > 0 && !this.closed) {
       request.retriesRemaining -= 1
+      request.startedAt = undefined
       this.active = null
     } else {
       this.rejectActive(error)
