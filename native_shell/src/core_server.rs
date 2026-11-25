@@ -16,6 +16,8 @@ pub struct CoreServer {
     coordinator: CoreCoordinator,
     notify: Arc<(Mutex<u64>, Condvar)>,
     stop: Arc<AtomicBool>,
+    #[cfg(windows)]
+    pipe_stops: Arc<Mutex<Vec<crate::NamedPipeStopHandle>>>,
     torrent_probe_active: Arc<AtomicBool>,
     event_subscribers: Arc<AtomicUsize>,
     subtitles: Arc<crate::subtitle_translate::SubtitleService>,
@@ -65,6 +67,8 @@ impl CoreServer {
             coordinator,
             notify,
             stop,
+            #[cfg(windows)]
+            pipe_stops: Arc::new(Mutex::new(Vec::new())),
             torrent_probe_active: Arc::new(AtomicBool::new(false)),
             event_subscribers: Arc::new(AtomicUsize::new(0)),
             subtitles: Arc::new(crate::subtitle_translate::SubtitleService::default()),
@@ -92,9 +96,24 @@ impl CoreServer {
             .map(|_| ())
     }
 
+    #[cfg(windows)]
+    pub fn register_pipe_stop_handle(&self, handle: crate::NamedPipeStopHandle) {
+        if self.stop.load(Ordering::SeqCst) {
+            handle.signal();
+        }
+        if let Ok(mut stops) = self.pipe_stops.lock() {
+            stops.push(handle);
+        }
+    }
+
     pub fn shutdown(&self) {
         self.subtitles.stop_all();
-        stop_event_waiters(&self.notify, &self.stop);
+        stop_event_waiters(
+            &self.notify,
+            &self.stop,
+            #[cfg(windows)]
+            &self.pipe_stops,
+        );
     }
 
     fn restore_install_result(&self) {
@@ -111,45 +130,73 @@ impl CoreServer {
         }
     }
 
+    #[cfg(windows)]
+    fn start_named_pipe_listener(
+        &self,
+        pipe_name: String,
+    ) -> Result<thread::JoinHandle<Result<(), String>>, String> {
+        let stop = self.stop_handle();
+        let handler = self.transport_handler();
+        let stop_on_startup_failure = self.stop_handle();
+        let server = crate::NamedPipeServer::new(pipe_name);
+        let pipe_stop = server.stop_handle();
+        self.register_pipe_stop_handle(pipe_stop.clone());
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || server.serve_loop_with_ready(stop, handler, ready_tx));
+        match ready_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(())) => Ok(worker),
+            Ok(Err(error)) => {
+                pipe_stop.signal();
+                let _ = worker.join();
+                Err(format!("bind v7 Core named pipe: {error}"))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                stop_on_startup_failure.store(true, Ordering::SeqCst);
+                pipe_stop.signal();
+                let _ = worker.join();
+                Err("v7 Core named pipe startup timed out".into())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                pipe_stop.signal();
+                let _ = worker.join();
+                Err("v7 Core named pipe startup thread exited before ready".into())
+            }
+        }
+    }
+
     pub fn bind_local(
         &self,
     ) -> Result<(std::net::SocketAddr, thread::JoinHandle<Result<(), String>>), String> {
         #[cfg(windows)]
-        {
-            let stop = self.stop_handle();
-            let handler = self.transport_handler();
-            let stop_on_startup_failure = self.stop_handle();
-            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-            let worker = thread::spawn(move || {
-                let server = crate::NamedPipeServer::new(crate::v7_pipe_name());
-                server.serve_loop_with_ready(stop, handler, ready_tx)
-            });
-            match ready_rx.recv_timeout(Duration::from_secs(2)) {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    let _ = worker.join();
-                    return Err(format!("bind v7 Core named pipe: {error}"));
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    stop_on_startup_failure.store(true, Ordering::SeqCst);
-                    return Err("v7 Core named pipe startup timed out".into());
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("v7 Core named pipe startup thread exited before ready".into());
-                }
-            }
-        }
+        let pipe_worker = self.start_named_pipe_listener(crate::v7_pipe_name())?;
         if !crate::tcp_loopback_enabled() {
-            let stop = self.stop_handle();
-            let notify = Arc::clone(&self.notify);
-            let worker = thread::spawn(move || {
-                while !stop.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                stop_event_waiters(&notify, &stop);
-                Ok(())
-            });
-            return Ok((default_core_bind()?, worker));
+            #[cfg(windows)]
+            {
+                let stop = self.stop_handle();
+                let notify = Arc::clone(&self.notify);
+                let pipe_stops = Arc::clone(&self.pipe_stops);
+                let worker = thread::spawn(move || {
+                    let result = pipe_worker
+                        .join()
+                        .map_err(|_| "v7 Core named pipe listener panicked".to_string())?;
+                    stop_event_waiters(&notify, &stop, &pipe_stops);
+                    result
+                });
+                return Ok((default_core_bind()?, worker));
+            }
+            #[cfg(not(windows))]
+            {
+                let stop = self.stop_handle();
+                let notify = Arc::clone(&self.notify);
+                let worker = thread::spawn(move || {
+                    while !stop.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    stop_event_waiters(&notify, &stop);
+                    Ok(())
+                });
+                return Ok((default_core_bind()?, worker));
+            }
         }
         let bind = default_core_bind()?;
         // TCP loopback clients deliberately use the same configured endpoint.
@@ -159,6 +206,23 @@ impl CoreServer {
         let addr = listener
             .local_addr()
             .map_err(|error| format!("v7 Core local addr: {error}"))?;
+        #[cfg(windows)]
+        {
+            let tcp_worker = self.serve(listener);
+            let pipe_stops = Arc::clone(&self.pipe_stops);
+            let worker = thread::spawn(move || {
+                let tcp_result = tcp_worker
+                    .join()
+                    .map_err(|_| "v7 Core TCP listener panicked".to_string())?;
+                signal_pipe_stops(&pipe_stops);
+                let pipe_result = pipe_worker
+                    .join()
+                    .map_err(|_| "v7 Core named pipe listener panicked".to_string())?;
+                tcp_result.and(pipe_result)
+            });
+            Ok((addr, worker))
+        }
+        #[cfg(not(windows))]
         Ok((addr, self.serve(listener)))
     }
 
@@ -166,9 +230,16 @@ impl CoreServer {
         let stop = Arc::clone(&self.stop);
         let handler = self.transport_handler();
         let notify = Arc::clone(&self.notify);
+        #[cfg(windows)]
+        let pipe_stops = Arc::clone(&self.pipe_stops);
         thread::spawn(move || {
             let result = serve_tcp_listener(listener, Arc::clone(&stop), handler);
-            stop_event_waiters(&notify, &stop);
+            stop_event_waiters(
+                &notify,
+                &stop,
+                #[cfg(windows)]
+                &pipe_stops,
+            );
             result
         })
     }
@@ -177,6 +248,8 @@ impl CoreServer {
         let handler = self.transport_handler();
         let stop = self.stop_handle();
         let notify = Arc::clone(&self.notify);
+        #[cfg(windows)]
+        let pipe_stops = Arc::clone(&self.pipe_stops);
         Arc::new(move |request| {
             let shutdown = matches!(
                 request,
@@ -187,7 +260,12 @@ impl CoreServer {
             );
             let response = handler(request);
             if shutdown && matches!(response, CorePipeResponse::Events { .. }) {
-                stop_event_waiters(&notify, &stop);
+                stop_event_waiters(
+                    &notify,
+                    &stop,
+                    #[cfg(windows)]
+                    &pipe_stops,
+                );
             }
             response
         })
@@ -199,6 +277,8 @@ impl CoreServer {
         let coordinator = self.coordinator.clone();
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
+        #[cfg(windows)]
+        let pipe_stops = Arc::clone(&self.pipe_stops);
         let torrent_probe_active = Arc::clone(&self.torrent_probe_active);
         let event_subscribers = Arc::clone(&self.event_subscribers);
         let subtitles = Arc::clone(&self.subtitles);
@@ -228,6 +308,8 @@ impl CoreServer {
                 &coordinator,
                 &notify,
                 &stop,
+                #[cfg(windows)]
+                &pipe_stops,
                 &torrent_probe_active,
                 &event_subscribers,
                 request,
@@ -295,6 +377,7 @@ fn dispatch(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &Arc<AtomicBool>,
+    #[cfg(windows)] pipe_stops: &Arc<Mutex<Vec<crate::NamedPipeStopHandle>>>,
     torrent_probe_active: &Arc<AtomicBool>,
     event_subscribers: &Arc<AtomicUsize>,
     request: CorePipeRequest,
@@ -487,9 +570,16 @@ fn dispatch(
                     {
                         let stop = Arc::clone(stop);
                         let notify = Arc::clone(notify);
+                        #[cfg(windows)]
+                        let pipe_stops = Arc::clone(pipe_stops);
                         thread::spawn(move || {
                             thread::sleep(Duration::from_millis(500));
-                            stop_event_waiters(&notify, &stop);
+                            stop_event_waiters(
+                                &notify,
+                                &stop,
+                                #[cfg(windows)]
+                                &pipe_stops,
+                            );
                         });
                     }
                     // Subscribers receive every committed update through event batches or a snapshot.
@@ -899,10 +989,27 @@ fn settings_response(coordinator: &CoreCoordinator, request_id: u64) -> CorePipe
     }
 }
 
-fn stop_event_waiters(notify: &Arc<(Mutex<u64>, Condvar)>, stop: &AtomicBool) {
-    let _guard = notify.0.lock();
-    stop.store(true, Ordering::SeqCst);
-    notify.1.notify_all();
+#[cfg(windows)]
+fn signal_pipe_stops(pipe_stops: &Mutex<Vec<crate::NamedPipeStopHandle>>) {
+    if let Ok(stops) = pipe_stops.lock() {
+        for handle in stops.iter() {
+            handle.signal();
+        }
+    }
+}
+
+fn stop_event_waiters(
+    notify: &Arc<(Mutex<u64>, Condvar)>,
+    stop: &AtomicBool,
+    #[cfg(windows)] pipe_stops: &Mutex<Vec<crate::NamedPipeStopHandle>>,
+) {
+    {
+        let _guard = notify.0.lock();
+        stop.store(true, Ordering::SeqCst);
+        notify.1.notify_all();
+    }
+    #[cfg(windows)]
+    signal_pipe_stops(pipe_stops);
 }
 
 fn wait_events(
@@ -1867,5 +1974,40 @@ mod tests {
         }
         assert!(worker.join().unwrap().is_ok());
         assert!(!server.has_event_subscribers());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shutdown_wakes_blocked_named_pipe_listener_via_stop_handle() {
+        let server = CoreServer::in_memory().unwrap();
+        let pipe_name = format!(
+            r"\\.\pipe\HLSDownloader.v7.stoptest.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let worker = server.start_named_pipe_listener(pipe_name.clone()).unwrap();
+
+        let mut client = crate::NamedPipeClient::connect(&pipe_name, 2_000).unwrap();
+        let events = client
+            .request(&CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::Ping,
+            })
+            .unwrap();
+        assert!(matches!(events, CorePipeResponse::Events { .. }));
+        drop(client);
+
+        let started = std::time::Instant::now();
+        server.shutdown();
+        let joined = worker.join().expect("named pipe listener should not panic");
+        assert!(joined.is_ok(), "named pipe listener returned error: {joined:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "NamedPipeStopHandle should wake ConnectNamedPipe promptly, took {:?}",
+            started.elapsed()
+        );
     }
 }

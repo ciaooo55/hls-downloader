@@ -43,6 +43,8 @@ mod harvest;
 #[cfg(feature = "full-core")]
 mod http_engine;
 #[cfg(feature = "full-core")]
+mod job_object;
+#[cfg(feature = "full-core")]
 mod url_credentials;
 use hls_client::instance;
 #[cfg(feature = "full-core")]
@@ -60,10 +62,10 @@ mod metalink;
 mod mirrors;
 #[cfg(feature = "full-core")]
 mod motw;
-#[cfg(all(test, feature = "full-core"))]
+#[cfg(all(test, feature = "full-core", native_host_offer_v2))]
 #[path = "../../native_clients/src/native_host.rs"]
 mod native_host;
-#[cfg(all(test, feature = "full-core"))]
+#[cfg(all(test, feature = "full-core", native_host_offer_v2))]
 pub use native_host::run as run_native_host;
 #[cfg(feature = "full-core")]
 mod native_host_registration;
@@ -142,7 +144,7 @@ pub use core_ipc::{
     CoreIpcClient, CorePipeRequest, CorePipeResponse, PlayerEmbed, V7_PIPE_NAME, V7_TCP_PORT,
 };
 #[cfg(windows)]
-pub use core_ipc::{NamedPipeClient, NamedPipeServer};
+pub use core_ipc::{NamedPipeClient, NamedPipeServer, NamedPipeStopHandle};
 #[cfg(feature = "full-core")]
 pub use core_runtime::CoreRuntime;
 #[cfg(feature = "full-core")]

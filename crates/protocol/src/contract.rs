@@ -88,6 +88,10 @@ pub struct ResourceOffer {
     pub preferred_height: u32,
     #[serde(default)]
     pub preferred_variant_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resource_key: String,
 }
 
 impl Default for ResourceOffer {
@@ -111,6 +115,8 @@ impl Default for ResourceOffer {
             preferred_bandwidth: 0,
             preferred_height: 0,
             preferred_variant_id: String::new(),
+            audio_url: String::new(),
+            resource_key: String::new(),
         }
     }
 }
@@ -411,6 +417,10 @@ pub struct TaskSpec {
     pub torrent_piece_count: u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_page_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resource_key: String,
 }
 
 impl std::fmt::Debug for TaskSpec {
@@ -464,6 +474,8 @@ impl Default for TaskSpec {
             torrent_selection: Vec::new(),
             torrent_piece_count: 0,
             source_page_url: String::new(),
+            audio_url: String::new(),
+            resource_key: String::new(),
         }
     }
 }
@@ -1083,6 +1095,8 @@ mod tests {
             preferred_bandwidth: 2_500_000,
             preferred_height: 720,
             preferred_variant_id: "v2".into(),
+            audio_url: String::new(),
+            resource_key: String::new(),
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
         let restored: ResourceOffer = serde_json::from_slice(&encoded).unwrap();

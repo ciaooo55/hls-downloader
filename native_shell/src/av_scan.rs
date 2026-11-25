@@ -274,6 +274,11 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -284,6 +289,7 @@ fn run_command_with_timeout(engine: &str, argv: &[String], timeout: Duration) ->
             }
         }
     };
+    crate::job_object::assign_child(&child);
     drop(command);
     let started = Instant::now();
     loop {

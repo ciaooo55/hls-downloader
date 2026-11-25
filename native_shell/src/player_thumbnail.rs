@@ -85,6 +85,7 @@ pub(crate) fn decode(source: &str, seconds: f64) -> Result<String, String> {
         command.creation_flags(0x08000000);
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
+    crate::job_object::assign_child(&child);
     let stdout = child.stdout.take().ok_or("缩略图管道不可用")?;
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();

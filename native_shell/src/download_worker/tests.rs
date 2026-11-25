@@ -8483,3 +8483,462 @@ fn task_throttle_context_respects_speed_limit_enabled_toggle() {
         .set_setting("download_speed_limit_kib", serde_json::json!(0))
         .unwrap();
 }
+
+#[test]
+fn dual_track_audio_url_downloads_both_streams_and_muxes_to_mp4() {
+    let Some(ffmpeg) = crate::media::locate_ffmpeg() else {
+        eprintln!("skipped: no FFmpeg on PATH/HLS_FFMPEG");
+        return;
+    };
+    let root = lifecycle_test_root("dual-track-audio-url");
+    let gen_dir = root.join("fixtures");
+    fs::create_dir_all(&gen_dir).unwrap();
+    let video_fixture = gen_dir.join("video_src.m4s");
+    let audio_fixture = gen_dir.join("audio_src.m4s");
+
+    let gen_video = std::process::Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=size=64x48:rate=10:duration=1",
+            "-c:v",
+            "mpeg4",
+            "-f",
+            "mp4",
+        ])
+        .arg(&video_fixture)
+        .output()
+        .unwrap();
+    assert!(
+        gen_video.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gen_video.stderr)
+    );
+
+    let gen_audio = std::process::Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            "aac",
+            "-f",
+            "mp4",
+        ])
+        .arg(&audio_fixture)
+        .output()
+        .unwrap();
+    assert!(
+        gen_audio.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gen_audio.stderr)
+    );
+
+    let video_bytes = Arc::new(fs::read(&video_fixture).unwrap());
+    let audio_bytes = Arc::new(fs::read(&audio_fixture).unwrap());
+    let audio_headers_seen = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let spawn_range_server =
+        |payload: Arc<Vec<u8>>, record_headers: Option<Arc<Mutex<Vec<String>>>>| {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                while let Ok((stream, _)) = listener.accept() {
+                    let payload = Arc::clone(&payload);
+                    let record_headers = record_headers.clone();
+                    std::thread::spawn(move || {
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut headers_raw = String::new();
+                        let mut range_hdr = None;
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0
+                                || line.trim().is_empty()
+                            {
+                                break;
+                            }
+                            if line.to_ascii_lowercase().starts_with("range:") {
+                                range_hdr =
+                                    Some(line.split_once(':').unwrap().1.trim().to_string());
+                            }
+                            headers_raw.push_str(&line);
+                        }
+                        if headers_raw.is_empty() {
+                            return;
+                        }
+                        if let Some(log) = record_headers {
+                            log.lock().unwrap().push(headers_raw.clone());
+                        }
+                        let mut out = reader.into_inner();
+                        if let Some((start, end)) = range_hdr.and_then(|r| {
+                            let (s, e) = r.strip_prefix("bytes=")?.split_once('-')?;
+                            let start = s.parse::<usize>().ok()?;
+                            let end = if e.is_empty() {
+                                payload.len() - 1
+                            } else {
+                                e.parse::<usize>().ok()?.min(payload.len() - 1)
+                            };
+                            Some((start, end))
+                        }) {
+                            let slice = &payload[start..=end];
+                            let header = format!(
+                                "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                payload.len(),
+                                slice.len()
+                            );
+                            let _ = out.write_all(header.as_bytes());
+                            let _ = out.write_all(slice);
+                        } else {
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                payload.len()
+                            );
+                            let _ = out.write_all(header.as_bytes());
+                            let _ = out.write_all(&payload);
+                        }
+                    });
+                }
+            });
+            addr
+        };
+
+    let video_addr = spawn_range_server(Arc::clone(&video_bytes), None);
+    let audio_addr = spawn_range_server(
+        Arc::clone(&audio_bytes),
+        Some(Arc::clone(&audio_headers_seen)),
+    );
+
+    let out_dir = root.join("downloads");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(out_dir.to_string_lossy().as_ref()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting("default_referer", serde_json::json!("https://www.bilibili.com/video/BV1test"))
+        .unwrap();
+    coordinator
+        .set_setting("default_user_agent", serde_json::json!("DualTrackTestUA/1.0"))
+        .unwrap();
+
+    // Unsafe audio_url scheme must be rejected before starting a task.
+    let bad_err = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{video_addr}/30280.m4s"),
+                audio_url: "file:///C:/Windows/win.ini".into(),
+                filename: "bad.m4s".into(),
+                download_dir: out_dir.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        })
+        .unwrap_err();
+    assert!(bad_err.contains("音轨"), "unexpected error: {bad_err}");
+
+    // OfferResource + AcceptHandoff with `.m4s` filename and video-only size.
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "handoff-dual-1".into(),
+                url: format!("http://{video_addr}/30280.m4s?upsig=v_sig"),
+                audio_url: format!("http://{audio_addr}/30216.m4s?upsig=a_sig"),
+                resource_kind: ResourceKind::File,
+                filename: "30280.m4s".into(),
+                title: "Dual Track Video".into(),
+                source_page_url: "https://www.bilibili.com/video/BV1test".into(),
+                size: video_bytes.len() as u64,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    let accepted = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "handoff-dual-1".into(),
+            filename: String::new(),
+            download_dir: out_dir.to_string_lossy().into_owned(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: false,
+            queue_id: String::new(),
+        })
+        .unwrap();
+
+    let task_id = accepted
+        .iter()
+        .find_map(|env| match &env.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .expect("TaskCreated event");
+
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(completed.task_id, task_id);
+    assert_eq!(completed.filename, "30280.mp4");
+
+    let final_mp4 = out_dir.join("30280.mp4");
+    assert!(final_mp4.is_file(), "expected muxed output at {}", final_mp4.display());
+
+    // Verify task-scoped video.part.m4s and audio.part.m4s were cleaned up.
+    let task_work_dir = out_dir.join(".hls-tasks").join(&task_id);
+    assert!(!task_work_dir.join("video.part.m4s").exists());
+    assert!(!task_work_dir.join("audio.part.m4s").exists());
+
+    // Verify cross-origin audio server received Referer & User-Agent without leaking cookies.
+    {
+        let seen = audio_headers_seen.lock().unwrap();
+        assert!(!seen.is_empty(), "audio server must be contacted");
+        let first_req = seen[0].to_ascii_lowercase();
+        assert!(
+            first_req.contains("referer: https://www.bilibili.com/video/bv1test"),
+            "audio request missing Referer: {}",
+            seen[0]
+        );
+        assert!(
+            first_req.contains("user-agent: dualtracktestua/1.0"),
+            "audio request missing User-Agent: {}",
+            seen[0]
+        );
+        assert!(!first_req.contains("cookie:"));
+    }
+
+    // Verify muxed MP4 contains both video (stream 0) and audio (stream 1) frames.
+    let decoded = std::process::Command::new(&ffmpeg)
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(&final_mp4)
+        .args(["-f", "framecrc", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        decoded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&decoded.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&decoded.stdout);
+    assert!(
+        stdout.lines().any(|line| line.starts_with("0,")),
+        "muxed MP4 missing video frames:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line.starts_with("1,")),
+        "muxed MP4 missing audio frames:\n{stdout}"
+    );
+
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn refresh_task_url_preserves_halfway_checkpoint_without_redownloading_completed_ranges() {
+    let root = lifecycle_test_root("refresh-preserves-checkpoint");
+    let out_dir = root.join("downloads");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let total_len: usize = 256 * 1024;
+    let half_len: usize = total_len / 2;
+    let payload: Arc<Vec<u8>> = Arc::new((0..total_len).map(|i| (i % 251) as u8).collect());
+    let new_token_ranges = Arc::new(Mutex::new(Vec::<(usize, usize)>::new()));
+    let new_token_ranges_srv = Arc::clone(&new_token_ranges);
+    let payload_srv = Arc::clone(&payload);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let payload = Arc::clone(&payload_srv);
+            let new_ranges = Arc::clone(&new_token_ranges_srv);
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let mut range_hdr = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if line.to_ascii_lowercase().starts_with("range:") {
+                        range_hdr = Some(line.split_once(':').unwrap().1.trim().to_string());
+                    }
+                }
+                let mut out = reader.into_inner();
+                let is_old_token = req_line.contains("token=old_sig");
+                let is_new_token = req_line.contains("token=new_sig");
+                if !is_old_token && !is_new_token {
+                    let _ = out.write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
+                let Some((start, req_end)) = range_hdr.and_then(|r| {
+                    let (s, e) = r.strip_prefix("bytes=")?.split_once('-')?;
+                    let start = s.parse::<usize>().ok()?;
+                    let end = if e.is_empty() {
+                        payload.len() - 1
+                    } else {
+                        e.parse::<usize>().ok()?.min(payload.len() - 1)
+                    };
+                    Some((start, end))
+                }) else {
+                    let _ = out.write_all(
+                        b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                };
+
+                if is_old_token {
+                    if start >= half_len {
+                        // Presigned URL expired right after delivering the first 50% window!
+                        let _ = out.write_all(
+                            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                        return;
+                    }
+                    let end = if req_end == 0 {
+                        0
+                    } else {
+                        req_end.min(half_len - 1)
+                    };
+                    let slice = &payload[start..=end];
+                    // Intentionally omit both ETag and Last-Modified to simulate signed CDN streams.
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len(),
+                        slice.len()
+                    );
+                    let _ = out.write_all(header.as_bytes());
+                    let _ = out.write_all(slice);
+                } else {
+                    new_ranges.lock().unwrap().push((start, req_end));
+                    let slice = &payload[start..=req_end];
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{req_end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len(),
+                        slice.len()
+                    );
+                    let _ = out.write_all(header.as_bytes());
+                    let _ = out.write_all(slice);
+                }
+            });
+        }
+    });
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(out_dir.to_string_lossy().as_ref()),
+        )
+        .unwrap();
+
+    let old_url = format!("http://{addr}/signed/archive.bin?id=77&token=old_sig&expires=100000");
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: old_url,
+                filename: "archive.bin".into(),
+                download_dir: out_dir.to_string_lossy().into_owned(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = created
+        .iter()
+        .find_map(|env| match &env.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    let failed = wait_for_task_status(&coordinator, "failed");
+    assert_eq!(failed.task_id, task_id);
+
+    let saved_key_before = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&task_id)
+        .unwrap()
+        .resource_key
+        .clone();
+    assert_eq!(
+        saved_key_before,
+        format!("http://{addr}/signed/archive.bin?id=77")
+    );
+
+    // Refresh task URL with rotated `?token=new_sig&expires=999999` via ArmTaskRefresh + OfferResource.
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+    let refreshed_url =
+        format!("http://{addr}/signed/archive.bin?id=77&token=new_sig&expires=999999");
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "handoff-refresh-50pct".into(),
+                url: refreshed_url.clone(),
+                resource_kind: ResourceKind::File,
+                filename: "archive.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(completed.task_id, task_id);
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().resource_key,
+        saved_key_before
+    );
+    assert_eq!(
+        fs::read(out_dir.join("archive.bin")).unwrap(),
+        *payload
+    );
+
+    let ranges = new_token_ranges.lock().unwrap().clone();
+    // Under `new_sig`, only the 1-byte probe (`0..=0`) and the uncovered second half (`131072..=262143`)
+    // may be fetched; the completed first half (`0..=131071`) must NOT be re-downloaded!
+    assert!(
+        ranges
+            .iter()
+            .all(|&(start, end)| (start == 0 && end == 0) || start >= half_len),
+        "completed first-half range was re-downloaded after URL refresh: {ranges:?}"
+    );
+    assert!(
+        ranges.iter().any(|&(start, _)| start == half_len),
+        "expected resume starting at 50% offset ({half_len}), saw: {ranges:?}"
+    );
+
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
