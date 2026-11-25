@@ -320,10 +320,16 @@ export class NativeBridge {
     if (responseId !== request.requestId) return
     this.clearPreemptTimer()
     this.portLastResponseAt = Date.now()
-    const coreTransportFailed = response.ok === false
-      && /^Core (?:pipe|IPC|stream) (?:write|read|closed|frame|header)\b/i.test(String(response.error || ''))
+    const isUserShutdown = response.user_shutdown === true
+      || String(response.error_code ?? '').trim().toLowerCase() === 'user_shutdown'
+      || String(response.code ?? '').trim().toLowerCase() === 'user_shutdown'
+    const coreTransportFailed = response.ok === false && (
+      response.transport_error === true
+      || (!isUserShutdown && response.code === 'core_unreachable')
+      || /^Core (?:pipe|IPC|stream|TCP) /i.test(String(response.error ?? ''))
+    )
     if (coreTransportFailed && request.retriesRemaining > 0) {
-      this.retryOrRejectActive(port, new Error(String(response.error)))
+      this.retryOrRejectActive(port, new Error(String(response.error || '下载引擎连接中断')))
       return
     }
     if (request.timer) clearTimeout(request.timer)

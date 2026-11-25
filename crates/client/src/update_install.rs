@@ -918,8 +918,24 @@ fn write_install_result(path: &Path, result: &InstallResult) -> Result<(), Strin
     std::fs::rename(&temporary, path).map_err(|error| format!("发布升级结果失败: {error}"))
 }
 
+pub fn has_pending_install_result() -> bool {
+    has_pending_install_result_at(&update_root().join("last-install-result.json"))
+}
+
+fn has_pending_install_result_at(path: &Path) -> bool {
+    path.is_file() || path.with_extension("json.part").is_file()
+}
+
 pub fn take_install_result() -> Result<Option<InstallResult>, String> {
     take_install_result_at(&update_root().join("last-install-result.json"))
+}
+
+fn remove_install_result_file(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("确认升级结果失败: {error}")),
+    }
 }
 
 /// Reads and consumes the last recorded upgrade result at `path`.
@@ -938,41 +954,155 @@ fn take_install_result_at(path: &Path) -> Result<Option<InstallResult>, String> 
         return Ok(None);
     }
     let _lock = lock_install_result(path)?;
-    let source = if exists(path)? {
-        path.to_path_buf()
-    } else {
-        sidecar
-    };
-    if !exists(&source)? {
+    let has_main = exists(path)?;
+    let has_sidecar = exists(&sidecar)?;
+    if !has_main && !has_sidecar {
         return Ok(None);
     }
-    let data = std::fs::read(&source).map_err(|error| format!("读取升级结果失败: {error}"))?;
-    let result =
-        serde_json::from_slice(&data).map_err(|error| format!("解析升级结果失败: {error}"))?;
-    std::fs::remove_file(&source).map_err(|error| format!("确认升级结果失败: {error}"))?;
-    Ok(Some(result))
+    if has_main {
+        let main_data =
+            std::fs::read(path).map_err(|error| format!("读取升级结果失败: {error}"))?;
+        match serde_json::from_slice::<InstallResult>(&main_data) {
+            Ok(result) => {
+                remove_install_result_file(path)?;
+                if has_sidecar {
+                    let _ = remove_install_result_file(&sidecar);
+                }
+                return Ok(Some(result));
+            }
+            Err(main_error) => {
+                let _ = remove_install_result_file(path);
+                if has_sidecar {
+                    match std::fs::read(&sidecar) {
+                        Ok(sidecar_data) => {
+                            match serde_json::from_slice::<InstallResult>(&sidecar_data) {
+                                Ok(result) => {
+                                    remove_install_result_file(&sidecar)?;
+                                    return Ok(Some(result));
+                                }
+                                Err(sidecar_error) => {
+                                    let _ = remove_install_result_file(&sidecar);
+                                    return Err(format!(
+                                        "解析升级结果失败: {main_error}; sidecar: {sidecar_error}"
+                                    ));
+                                }
+                            }
+                        }
+                        Err(read_error) => {
+                            let _ = remove_install_result_file(&sidecar);
+                            return Err(format!("读取升级结果失败: {read_error}"));
+                        }
+                    }
+                }
+                return Err(format!("解析升级结果失败: {main_error}"));
+            }
+        }
+    }
+    let sidecar_data =
+        std::fs::read(&sidecar).map_err(|error| format!("读取升级结果失败: {error}"))?;
+    match serde_json::from_slice::<InstallResult>(&sidecar_data) {
+        Ok(result) => {
+            remove_install_result_file(&sidecar)?;
+            Ok(Some(result))
+        }
+        Err(sidecar_error) => {
+            let _ = remove_install_result_file(&sidecar);
+            Err(format!("解析升级结果失败: {sidecar_error}"))
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+const PRODUCT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(any(windows, test))]
+const PRODUCT_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(200);
+#[cfg(any(windows, test))]
+const PRODUCT_UI_CLOSE_DELAY: Duration = Duration::from_secs(1);
+#[cfg(any(windows, test))]
+const PRODUCT_AUXILIARY_GRACE_PERIOD: Duration = Duration::from_secs(5);
+
+#[cfg(any(windows, test))]
+#[allow(clippy::too_many_arguments)]
+fn wait_for_product_shutdown_with(
+    total_timeout: Duration,
+    grace_period: Duration,
+    ui_close_delay: Duration,
+    poll_interval: Duration,
+    mut elapsed: impl FnMut() -> Duration,
+    mut sleep: impl FnMut(Duration),
+    mut core_running: impl FnMut() -> bool,
+    mut ui_running: impl FnMut() -> bool,
+    mut auxiliary_running: impl FnMut() -> bool,
+    mut close_ui_windows: impl FnMut(),
+    mut close_auxiliary_windows: impl FnMut(),
+    mut terminate_auxiliary: impl FnMut(),
+) -> Result<(), String> {
+    loop {
+        let is_core_running = core_running();
+        let is_ui_running = ui_running();
+        let is_aux_running = auxiliary_running();
+        if !is_core_running && !is_ui_running && !is_aux_running {
+            return Ok(());
+        }
+        let now_elapsed = elapsed();
+        if now_elapsed < grace_period {
+            if !is_core_running || now_elapsed >= ui_close_delay {
+                if is_ui_running {
+                    close_ui_windows();
+                }
+                if is_aux_running {
+                    close_auxiliary_windows();
+                }
+            }
+            if now_elapsed >= total_timeout {
+                return Err("工作台或下载引擎未能安全退出，已取消覆盖升级".into());
+            }
+            sleep(poll_interval);
+            continue;
+        }
+
+        if is_ui_running {
+            close_ui_windows();
+        }
+        if is_aux_running {
+            close_auxiliary_windows();
+            sleep(poll_interval);
+            if auxiliary_running() {
+                terminate_auxiliary();
+            }
+            if !core_running() && !ui_running() && !auxiliary_running() {
+                return Ok(());
+            }
+            if elapsed() >= total_timeout {
+                return Err("工作台或下载引擎未能安全退出，已取消覆盖升级".into());
+            }
+            continue;
+        }
+        if now_elapsed >= total_timeout {
+            return Err("工作台或下载引擎未能安全退出，已取消覆盖升级".into());
+        }
+        sleep(poll_interval);
+    }
 }
 
 fn wait_for_product_shutdown(args: &HelperArgs) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let ui_running =
-                process_running_in_install_root(args.workbench_pid, &args.install_root);
-            if ui_running {
-                request_process_window_close(args.workbench_pid);
-            }
-            let core_running = process_running_in_install_root(args.core_pid, &args.install_root);
-            terminate_auxiliary_processes(&args.install_root);
-            if !core_running && !ui_running {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err("工作台或下载引擎未能安全退出，已取消覆盖升级".into());
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        let started = Instant::now();
+        wait_for_product_shutdown_with(
+            PRODUCT_SHUTDOWN_TIMEOUT,
+            PRODUCT_AUXILIARY_GRACE_PERIOD,
+            PRODUCT_UI_CLOSE_DELAY,
+            PRODUCT_SHUTDOWN_POLL_INTERVAL,
+            || started.elapsed(),
+            std::thread::sleep,
+            || process_running_in_install_root(args.core_pid, &args.install_root),
+            || process_running_in_install_root(args.workbench_pid, &args.install_root),
+            || has_running_auxiliary_processes(&args.install_root),
+            || request_process_window_close(args.workbench_pid),
+            || close_auxiliary_process_windows(&args.install_root),
+            || terminate_auxiliary_processes(&args.install_root),
+        )
     }
     #[cfg(not(windows))]
     {
@@ -1096,6 +1226,14 @@ fn request_process_window_close(pid: u32) {
 }
 
 #[cfg(any(windows, test))]
+fn is_auxiliary_executable_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("hlsdownloaderpresenter.exe")
+        || name.eq_ignore_ascii_case("hls-downloader-presenter.exe")
+        || name.eq_ignore_ascii_case("hlsdownloadernativehost.exe")
+        || name.eq_ignore_ascii_case("hls-downloader-native-host.exe")
+}
+
+#[cfg(any(windows, test))]
 fn should_terminate_auxiliary_process(
     exe_path: &Path,
     install_root: &Path,
@@ -1107,23 +1245,30 @@ fn should_terminate_auxiliary_process(
     }
     let filename = exe_path.to_string_lossy();
     let name = filename.rsplit(['/', '\\']).next().unwrap_or_default();
-    (name.eq_ignore_ascii_case("hlsdownloaderpresenter.exe")
-        || name.eq_ignore_ascii_case("hlsdownloadernativehost.exe"))
-        && path_is_under_install_root(exe_path, install_root)
+    is_auxiliary_executable_name(name) && path_is_under_install_root(exe_path, install_root)
 }
 
 #[cfg(windows)]
-fn terminate_auxiliary_processes(install_root: &Path) {
+fn visit_auxiliary_processes(
+    install_root: &Path,
+    need_terminate_access: bool,
+    mut visitor: impl FnMut(u32, windows_sys::Win32::Foundation::HANDLE),
+) {
     use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+        OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     };
+    const SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
+
+    if install_root.as_os_str().is_empty() {
+        return;
+    }
     // SAFETY: `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)` takes no pointers and returns
     // `INVALID_HANDLE_VALUE` on failure or an owned snapshot handle closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -1134,6 +1279,14 @@ fn terminate_auxiliary_processes(install_root: &Path) {
     // `dwSize` is set to `size_of::<PROCESSENTRY32W>()` before `Process32FirstW`.
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let current_pid = std::process::id();
+    let desired_access = SYNCHRONIZE_ACCESS
+        | PROCESS_QUERY_LIMITED_INFORMATION
+        | if need_terminate_access {
+            PROCESS_TERMINATE
+        } else {
+            0
+        };
     // SAFETY: `snapshot` is a valid process snapshot handle and `entry.dwSize` matches its layout.
     let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
     while more {
@@ -1142,42 +1295,36 @@ fn terminate_auxiliary_processes(install_root: &Path) {
             .iter()
             .position(|value| *value == 0)
             .unwrap_or(entry.szExeFile.len());
-        let name = String::from_utf16_lossy(&entry.szExeFile[..end]).to_ascii_lowercase();
-        if matches!(
-            name.as_str(),
-            "hlsdownloaderpresenter.exe" | "hlsdownloadernativehost.exe"
-        ) {
+        let name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+        if entry.th32ProcessID != 0
+            && entry.th32ProcessID != current_pid
+            && is_auxiliary_executable_name(&name)
+        {
             // SAFETY: Opens a non-inheritable handle to `entry.th32ProcessID`, returning null if
             // the process already exited or access is denied.
-            let handle = unsafe {
-                OpenProcess(
-                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
-                    0,
-                    entry.th32ProcessID,
-                )
-            };
+            let handle = unsafe { OpenProcess(desired_access, 0, entry.th32ProcessID) };
             if !handle.is_null() {
-                let mut image = vec![0u16; 32768];
-                let mut length = image.len() as u32;
-                // SAFETY: `handle` is non-null with `PROCESS_QUERY_LIMITED_INFORMATION`, and `image`
-                // provides `length` (`32768`) writable `u16` elements.
-                let got_image = unsafe {
-                    QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length)
-                };
-                if got_image != 0 {
-                    let written = (length as usize).min(image.len());
-                    let path = PathBuf::from(OsString::from_wide(&image[..written]));
-                    if should_terminate_auxiliary_process(
-                        &path,
-                        install_root,
-                        entry.th32ProcessID,
-                        std::process::id(),
-                    ) {
-                        request_process_window_close(entry.th32ProcessID);
-                        // SAFETY: `handle` was opened with `PROCESS_TERMINATE` and verified to
-                        // belong to an auxiliary executable inside `install_root`.
-                        unsafe {
-                            TerminateProcess(handle, 0);
+                // SAFETY: `handle` is non-null with `SYNCHRONIZE` access; timeout `0` polls whether
+                // the process is still running without blocking.
+                let running = unsafe { WaitForSingleObject(handle, 0) == WAIT_TIMEOUT };
+                if running {
+                    let mut image = vec![0u16; 32768];
+                    let mut length = image.len() as u32;
+                    // SAFETY: `handle` is non-null with `PROCESS_QUERY_LIMITED_INFORMATION`, and `image`
+                    // provides `length` (`32768`) writable `u16` elements.
+                    let got_image = unsafe {
+                        QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length)
+                    };
+                    if got_image != 0 {
+                        let written = (length as usize).min(image.len());
+                        let path = PathBuf::from(OsString::from_wide(&image[..written]));
+                        if should_terminate_auxiliary_process(
+                            &path,
+                            install_root,
+                            entry.th32ProcessID,
+                            current_pid,
+                        ) {
+                            visitor(entry.th32ProcessID, handle);
                         }
                     }
                 }
@@ -1192,6 +1339,35 @@ fn terminate_auxiliary_processes(install_root: &Path) {
     }
     // SAFETY: `snapshot` is uniquely owned by this function and closed once after enumeration.
     unsafe { CloseHandle(snapshot) };
+}
+
+#[cfg(windows)]
+fn has_running_auxiliary_processes(install_root: &Path) -> bool {
+    let mut found = false;
+    visit_auxiliary_processes(install_root, false, |_, _| {
+        found = true;
+    });
+    found
+}
+
+#[cfg(windows)]
+fn close_auxiliary_process_windows(install_root: &Path) {
+    visit_auxiliary_processes(install_root, false, |pid, _| {
+        request_process_window_close(pid);
+    });
+}
+
+#[cfg(windows)]
+fn terminate_auxiliary_processes(install_root: &Path) {
+    use windows_sys::Win32::System::Threading::TerminateProcess;
+    visit_auxiliary_processes(install_root, true, |pid, handle| {
+        request_process_window_close(pid);
+        // SAFETY: `handle` was opened with `PROCESS_TERMINATE` in `visit_auxiliary_processes` and
+        // verified to belong to a running auxiliary executable inside `install_root`.
+        unsafe {
+            TerminateProcess(handle, 0);
+        }
+    });
 }
 
 pub fn update_root() -> PathBuf {
@@ -1412,7 +1588,9 @@ mod tests {
         let root = Path::new(r"C:\Apps\HLS");
         for path in [
             r"C:\Apps\HLS\HLSDownloaderPresenter.exe",
+            r"C:\Apps\HLS\hls-downloader-presenter.exe",
             r"C:\Apps\HLS\bin\HLSDownloaderNativeHost.exe",
+            r"C:\Apps\HLS\bin\hls-downloader-native-host.exe",
             r"\\?\C:\Apps\HLS\HLSDownloaderPresenter.exe",
         ] {
             assert!(
@@ -1802,5 +1980,171 @@ mod tests {
             );
         });
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_install_result_falls_back_to_valid_sidecar_and_never_wedges_subsequent_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-updater-corrupt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("last-install-result.json");
+        let sidecar = path.with_extension("json.part");
+        assert!(!has_pending_install_result_at(&path));
+        let _ = has_pending_install_result();
+
+        let expected = InstallResult {
+            version: "10.2.0".into(),
+            status: "success".into(),
+            exit_code: 0,
+            message: "ok".into(),
+            install_log: r"C:\Temp\install.log".into(),
+        };
+
+        // 1. Valid main file + stale sidecar: returns main result and cleans up both files.
+        write_install_result(&path, &expected).unwrap();
+        std::fs::write(&sidecar, b"{corrupt stale sidecar").unwrap();
+        assert!(has_pending_install_result_at(&path));
+        assert_eq!(
+            take_install_result_at(&path).unwrap(),
+            Some(expected.clone())
+        );
+        assert!(!path.exists());
+        assert!(!sidecar.exists());
+        assert!(!has_pending_install_result_at(&path));
+
+        // 2. Corrupt main file + valid sidecar: removes corrupt main, recovers sidecar, cleans up sidecar.
+        std::fs::write(&path, b"{truncated").unwrap();
+        std::fs::write(&sidecar, serde_json::to_vec_pretty(&expected).unwrap()).unwrap();
+        assert!(has_pending_install_result_at(&path));
+        assert_eq!(take_install_result_at(&path).unwrap(), Some(expected));
+        assert!(!path.exists());
+        assert!(!sidecar.exists());
+        assert_eq!(take_install_result_at(&path).unwrap(), None);
+
+        // 3. Corrupt main file + corrupt sidecar: removes both and returns Err once, then Ok(None).
+        std::fs::write(&path, b"not-json").unwrap();
+        std::fs::write(&sidecar, b"also-not-json").unwrap();
+        assert!(take_install_result_at(&path).is_err());
+        assert!(!path.exists());
+        assert!(!sidecar.exists());
+        assert_eq!(take_install_result_at(&path).unwrap(), None);
+
+        // 4. Corrupt main file only: removes corrupt file and never wedges next call.
+        std::fs::write(&path, b"").unwrap();
+        assert!(take_install_result_at(&path).is_err());
+        assert!(!path.exists());
+        assert_eq!(take_install_result_at(&path).unwrap(), None);
+
+        // 5. Missing main file + corrupt sidecar: removes corrupt sidecar and never wedges next call.
+        std::fs::write(&sidecar, b"{bad").unwrap();
+        assert!(has_pending_install_result_at(&path));
+        assert!(take_install_result_at(&path).is_err());
+        assert!(!sidecar.exists());
+        assert_eq!(take_install_result_at(&path).unwrap(), None);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn product_shutdown_allows_graceful_exit_before_force_terminating_auxiliary_processes() {
+        use std::cell::Cell;
+
+        // 1. Core exits at 400ms, UI + Presenter exit at 800ms after WM_CLOSE -> zero TerminateProcess!
+        let now = Cell::new(Duration::ZERO);
+        let ui_close_calls = Cell::new(0usize);
+        let aux_close_calls = Cell::new(0usize);
+        let terminate_calls = Cell::new(0usize);
+        wait_for_product_shutdown_with(
+            PRODUCT_SHUTDOWN_TIMEOUT,
+            PRODUCT_AUXILIARY_GRACE_PERIOD,
+            PRODUCT_UI_CLOSE_DELAY,
+            PRODUCT_SHUTDOWN_POLL_INTERVAL,
+            || now.get(),
+            |step| now.set(now.get() + step),
+            || now.get() < Duration::from_millis(400),
+            || now.get() < Duration::from_millis(800),
+            || now.get() < Duration::from_millis(800),
+            || ui_close_calls.set(ui_close_calls.get() + 1),
+            || aux_close_calls.set(aux_close_calls.get() + 1),
+            || terminate_calls.set(terminate_calls.get() + 1),
+        )
+        .unwrap();
+        assert_eq!(now.get(), Duration::from_millis(800));
+        assert!(ui_close_calls.get() >= 1);
+        assert!(aux_close_calls.get() >= 1);
+        assert_eq!(
+            terminate_calls.get(),
+            0,
+            "graceful exit within 5s must never invoke TerminateProcess"
+        );
+
+        // 2. Auxiliary process lingers past 5s grace window -> WM_CLOSE + 200ms wait, then TerminateProcess!
+        let now = Cell::new(Duration::ZERO);
+        let aux_alive = Cell::new(true);
+        let events = std::cell::RefCell::new(Vec::<(u128, &'static str)>::new());
+        wait_for_product_shutdown_with(
+            PRODUCT_SHUTDOWN_TIMEOUT,
+            PRODUCT_AUXILIARY_GRACE_PERIOD,
+            PRODUCT_UI_CLOSE_DELAY,
+            PRODUCT_SHUTDOWN_POLL_INTERVAL,
+            || now.get(),
+            |step| now.set(now.get() + step),
+            || false,
+            || false,
+            || aux_alive.get(),
+            || {
+                events
+                    .borrow_mut()
+                    .push((now.get().as_millis(), "close_ui"))
+            },
+            || {
+                events
+                    .borrow_mut()
+                    .push((now.get().as_millis(), "close_aux"))
+            },
+            || {
+                events
+                    .borrow_mut()
+                    .push((now.get().as_millis(), "terminate_aux"));
+                aux_alive.set(false);
+            },
+        )
+        .unwrap();
+        let recorded = events.borrow();
+        let terminate_entries: Vec<_> = recorded
+            .iter()
+            .filter(|(_, action)| *action == "terminate_aux")
+            .collect();
+        assert_eq!(terminate_entries.len(), 1);
+        assert!(
+            terminate_entries[0].0 >= 5_200,
+            "expected TerminateProcess only after 5s grace + 200ms close wait, got {:?}",
+            *recorded
+        );
+
+        // 3. Core wedged past total timeout -> fails cleanly with timeout error.
+        let now = Cell::new(Duration::ZERO);
+        let err = wait_for_product_shutdown_with(
+            Duration::from_secs(6),
+            PRODUCT_AUXILIARY_GRACE_PERIOD,
+            PRODUCT_UI_CLOSE_DELAY,
+            PRODUCT_SHUTDOWN_POLL_INTERVAL,
+            || now.get(),
+            |step| now.set(now.get() + step),
+            || true,
+            || false,
+            || false,
+            || {},
+            || {},
+            || {},
+        )
+        .unwrap_err();
+        assert!(err.contains("未能安全退出"), "{err}");
     }
 }
