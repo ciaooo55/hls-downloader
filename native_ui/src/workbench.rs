@@ -49,6 +49,7 @@ pub struct Workbench {
     settings_response: RefCell<Option<CorePipeResponse>>,
     show_settings: Cell<bool>,
     settings_save_id: Cell<Option<u64>>,
+    settings_instant_save_id: Cell<Option<u64>>,
     queues: RefCell<Option<QueueEditor>>,
     pending_queues: Cell<bool>,
     queue_save: RefCell<Option<QueueSave>>,
@@ -350,6 +351,7 @@ impl Workbench {
             settings_response: RefCell::new(None),
             show_settings: Cell::new(false),
             settings_save_id: Cell::new(None),
+            settings_instant_save_id: Cell::new(None),
             exports: RefCell::new(HashMap::new()),
             queues: RefCell::new(None),
             pending_queues: Cell::new(false),
@@ -2031,6 +2033,7 @@ impl Workbench {
                     }
                 }
                 let settings_saved = self.settings_save_id.get() == Some(request_id);
+                let instant_saved = self.settings_instant_save_id.get() == Some(request_id);
                 if let Some(editor) = self.settings.borrow_mut().as_mut() {
                     editor.receive_settings(&response, settings_saved);
                 }
@@ -2040,6 +2043,12 @@ impl Workbench {
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("success".into());
                         editor.window.set_status("设置已保存".into());
+                    }
+                } else if instant_saved {
+                    self.settings_instant_save_id.set(None);
+                    if let Some(editor) = self.settings.borrow_mut().as_mut() {
+                        editor.window.set_status_tone("success".into());
+                        editor.window.set_status("开关已即时生效".into());
                     }
                 }
                 *self.settings_response.borrow_mut() = Some(response.clone());
@@ -2097,6 +2106,13 @@ impl Workbench {
                     self.settings_save_id.set(None);
                     if let Some(settings) = self.settings.borrow().as_ref() {
                         settings.window.set_busy(false);
+                        settings.window.set_status_tone("error".into());
+                        settings.window.set_status(message.into());
+                    }
+                } else if request_id.is_some() && request_id == self.settings_instant_save_id.get()
+                {
+                    self.settings_instant_save_id.set(None);
+                    if let Some(settings) = self.settings.borrow().as_ref() {
                         settings.window.set_status_tone("error".into());
                         settings.window.set_status(message.into());
                     }
@@ -2748,6 +2764,31 @@ impl Workbench {
                     if let Err(error) = editor.edit(&key, &value) {
                         editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
+                    } else if !editor.window.get_busy() {
+                        if let Some(values) = editor.take_instant_bool_change(&key) {
+                            if key.as_str() == "reduce_motion" {
+                                let reduce = value.as_str() == "true";
+                                editor
+                                    .window
+                                    .global::<crate::Tokens>()
+                                    .set_reduce_motion(reduce);
+                                this.window
+                                    .global::<crate::Tokens>()
+                                    .set_reduce_motion(reduce);
+                            }
+                            let id = this.id();
+                            if this.request(CorePipeRequest::StoreSettings {
+                                request_id: id,
+                                values,
+                            }) {
+                                this.settings_instant_save_id.set(Some(id));
+                            } else {
+                                editor.window.set_status_tone("error".into());
+                                editor.window.set_status("命令队列已满，请稍后重试".into());
+                            }
+                        } else {
+                            editor.window.set_status("".into());
+                        }
                     } else {
                         editor.window.set_status("".into());
                     }

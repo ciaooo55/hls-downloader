@@ -1,7 +1,7 @@
 /* ───────────────────────────────────────────────────────────────────────────
  * Extension Popup Stylesheet — "Fluent Graphite + Luminous Cobalt"
  *
- * 360px-380px 自适应版心（默认 372px），统一左侧 12px 基准线。
+ * 360px 标准版心，统一左侧 12px 基准线。
  * 滚动区 scrollbar-gutter: stable 在右侧固定占 8px，所以滚动区右内边距取 4px，
  * 内容右缘与顶部标签轨道对齐。
  * 主题样式（THEME_TOKENS_CSS + THEME_BASE_CSS）在此表之后注入，
@@ -14,7 +14,7 @@
 button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
-body { margin: 0; min-width: 360px; width: 372px; max-width: 380px; background: var(--bg); color: var(--text); font: 12px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+body { margin: 0; width: 360px; min-width: 360px; max-width: 360px; background: var(--bg); color: var(--text); font: 12px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 main { display: flex; min-height: 0; max-height: var(--popup-max-height, 600px); flex-direction: column; overflow: hidden; }
 
 /* 顶部栏与四态引擎连接状态胶囊 */

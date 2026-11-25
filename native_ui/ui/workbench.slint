@@ -1241,6 +1241,7 @@ export component WorkbenchWindow inherits Window {
 
                                     ScrollCue {
                                         x: parent.width - self.width; y: 34px; height: parent.height - 34px;
+                                        interactive: true;
                                         viewport-y <=> root.task-scroll-y; viewport-height: root.tasks.length * root.row-height; visible-height: parent.height - 34px;
                                     }
                                 }

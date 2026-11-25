@@ -393,7 +393,6 @@ if ($isPackage) {
     Copy-Item -LiteralPath $cli -Destination (Join-Path $resources 'HLSDownloaderCli.exe') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'docs\free-edition.md') -Destination (Join-Path $resources 'FREE-EDITION.md') -Force
     Copy-Item -LiteralPath $presenter -Destination (Join-Path $resources 'HLSDownloaderPresenter.exe') -Force
-    Copy-Item -LiteralPath (Join-Path $repo 'native_ui\fonts\OFL.txt') -Destination (Join-Path $resources 'NotoSansCJK-OFL.txt') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'assets\licenses\material-icons-Apache-2.0.txt') -Destination (Join-Path $resources 'MaterialIcons-Apache-2.0.txt') -Force
     $vcRuntime = if ($env:HLS_V7_VC_RUNTIME_DIR) { Join-Path $env:HLS_V7_VC_RUNTIME_DIR 'vcruntime140.dll' } else { $null }
     if (-not $vcRuntime) {
