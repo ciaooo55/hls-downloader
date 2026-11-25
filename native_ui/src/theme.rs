@@ -62,6 +62,9 @@ fn system_dark() -> bool {
     let name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
     let mut value = 1_u32;
     let mut size = std::mem::size_of_val(&value) as u32;
+    // SAFETY: `HKEY_CURRENT_USER` is a valid predefined registry pseudo-handle, `path` and `name`
+    // are NUL-terminated UTF-16 strings outliving the call, `RRF_RT_REG_DWORD` restricts output
+    // to a 4-byte `DWORD`, and `value`/`size` point to a writable 4-byte stack `u32`.
     let result = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
@@ -69,7 +72,7 @@ fn system_dark() -> bool {
             name.as_ptr(),
             RRF_RT_REG_DWORD,
             std::ptr::null_mut(),
-            (&mut value as *mut u32).cast(),
+            std::ptr::from_mut(&mut value).cast(),
             &mut size,
         )
     };

@@ -288,6 +288,9 @@ pub fn query_available_space(directory: &str) -> Option<u64> {
         }
         let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
         let mut free_available = 0_u64;
+        // SAFETY: `wide` is a NUL-terminated UTF-16 directory path outliving the call,
+        // `free_available` is a writable `u64` (`ULARGE_INTEGER`), and the two trailing
+        // total-bytes out-pointers are documented as optional (`NULL` permitted).
         let ok = unsafe {
             GetDiskFreeSpaceExW(
                 wide.as_ptr(),
