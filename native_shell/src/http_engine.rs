@@ -80,14 +80,18 @@ pub(crate) enum ProxyRoute<'a> {
     Manual(&'a str),
 }
 
-pub(crate) fn proxy_route(proxy: &str) -> ProxyRoute<'_> {
+pub(crate) fn proxy_route(proxy: &str) -> Result<ProxyRoute<'_>, EngineError> {
     let proxy = proxy.trim();
-    if proxy.is_empty() || proxy == crate::net_policy::DIRECT_PROXY_SENTINEL {
-        ProxyRoute::Direct
+    if proxy == crate::net_policy::INVALID_MANUAL_PROXY {
+        Err(EngineError::Failed(
+            "手动代理模式未配置代理服务器地址".into(),
+        ))
+    } else if proxy.is_empty() || proxy == crate::net_policy::DIRECT_PROXY_SENTINEL {
+        Ok(ProxyRoute::Direct)
     } else if proxy == crate::net_policy::SYSTEM_PROXY_SENTINEL {
-        ProxyRoute::System
+        Ok(ProxyRoute::System)
     } else {
-        ProxyRoute::Manual(proxy)
+        Ok(ProxyRoute::Manual(proxy))
     }
 }
 
@@ -108,19 +112,23 @@ fn proxy_needs_curl(proxy: &str) -> bool {
 #[cfg(test)]
 #[test]
 fn proxy_route_identity_distinguishes_transports() {
-    assert_eq!(proxy_route(""), ProxyRoute::Direct);
+    assert_eq!(proxy_route("").unwrap(), ProxyRoute::Direct);
     assert_eq!(
-        proxy_route(crate::net_policy::DIRECT_PROXY_SENTINEL),
+        proxy_route(crate::net_policy::DIRECT_PROXY_SENTINEL).unwrap(),
         ProxyRoute::Direct
     );
     assert_eq!(
-        proxy_route(crate::net_policy::SYSTEM_PROXY_SENTINEL),
+        proxy_route(crate::net_policy::SYSTEM_PROXY_SENTINEL).unwrap(),
         ProxyRoute::System
     );
     assert_eq!(
-        proxy_route("http://127.0.0.1:8080"),
+        proxy_route("http://127.0.0.1:8080").unwrap(),
         ProxyRoute::Manual("http://127.0.0.1:8080")
     );
+    assert!(matches!(
+        proxy_route(crate::net_policy::INVALID_MANUAL_PROXY),
+        Err(EngineError::Failed(msg)) if msg == "手动代理模式未配置代理服务器地址"
+    ));
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -930,10 +938,11 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
     if job.total > 0 || !job.etag.trim().is_empty() {
         identity = Some(((job.total > 0).then_some(job.total), job.etag.clone()));
     }
+    let mut base_job = job.clone();
     for (index, url) in urls.into_iter().enumerate() {
-        let mut attempt = job.clone();
+        let mut attempt = base_job.clone();
         attempt.url = url;
-        if range_validator(job).is_empty() {
+        if range_validator(&base_job).is_empty() {
             // A newly probed validator cannot identify a prefix saved without one.
             attempt.resume_from = 0;
         }
@@ -942,6 +951,9 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
             drop_cross_origin_secrets(&mut attempt.headers, &replay, &job.url, &attempt.url);
             attempt.replay_json = replay;
         }
+        let has_partial = attempt.resume_from > 0
+            || (completed_ranges_path(&attempt).exists()
+                && attempt.output.metadata().is_ok_and(|meta| meta.len() > 0));
         let mut initial_response = None;
         let mut session_accept_ranges = false;
         if probe_allowed
@@ -951,36 +963,52 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                 || (strong_etag(&attempt.etag).is_empty()
                     && attempt.last_modified.trim().is_empty()))
         {
-            match probe_resource_response(&attempt) {
+            let mut probe_attempt = attempt.clone();
+            if index == 0 && !has_partial {
+                probe_attempt.etag.clear();
+                probe_attempt.last_modified.clear();
+            }
+            match probe_resource_response(&probe_attempt) {
                 Ok((probe, response)) => {
-                    if let Some((len, etag)) = &identity {
-                        if !crate::mirrors::mirror_identity_compatible(
-                            *len,
-                            etag,
-                            probe.total,
-                            &probe.etag,
-                        ) {
-                            last = EngineError::Failed("mirror identity mismatch".into());
-                            if index > 0 {
+                    if index > 0 {
+                        if let Some((len, etag)) = &identity {
+                            if !crate::mirrors::mirror_identity_compatible(
+                                *len,
+                                etag,
+                                probe.total,
+                                &probe.etag,
+                            ) {
+                                last = EngineError::Failed("mirror identity mismatch".into());
                                 let report = &mut reports[index - 1];
                                 report.state = "skipped".into();
                                 report.detail = "资源身份不一致".into();
+                                continue;
                             }
-                            continue;
+                        } else {
+                            identity = Some((probe.total, probe.etag.clone()));
                         }
                     } else {
                         identity = Some((probe.total, probe.etag.clone()));
                     }
-                    if attempt.total == 0 {
-                        if let Some(total) = probe.total {
-                            attempt.total = total;
+                    if index == 0 && !has_partial {
+                        base_job.total = probe.total.unwrap_or(0);
+                        base_job.etag = probe.etag;
+                        base_job.last_modified = probe.last_modified;
+                        attempt.total = base_job.total;
+                        attempt.etag = base_job.etag.clone();
+                        attempt.last_modified = base_job.last_modified.clone();
+                    } else {
+                        if attempt.total == 0 {
+                            if let Some(total) = probe.total {
+                                attempt.total = total;
+                            }
                         }
-                    }
-                    if strong_etag(&attempt.etag).is_empty() {
-                        attempt.etag = probe.etag;
-                    }
-                    if attempt.last_modified.is_empty() {
-                        attempt.last_modified = probe.last_modified;
+                        if strong_etag(&attempt.etag).is_empty() {
+                            attempt.etag = probe.etag;
+                        }
+                        if attempt.last_modified.is_empty() {
+                            attempt.last_modified = probe.last_modified;
+                        }
                     }
                     if !probe.accept_ranges || attempt.total == 0 {
                         attempt.sequential = true;
@@ -997,6 +1025,9 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                     }
                 }
                 Err(error) => {
+                    if matches!(error, EngineError::Pause | EngineError::Cancel) {
+                        return Err(error);
+                    }
                     if index > 0 {
                         let report = &mut reports[index - 1];
                         report.state = "failed".into();
@@ -1029,6 +1060,9 @@ pub fn run_job_report(job: &Job) -> Result<HttpRunReport, EngineError> {
                 });
             }
             Err(error) => {
+                if matches!(error, EngineError::Pause | EngineError::Cancel) {
+                    return Err(error);
+                }
                 if index > 0 {
                     let report = &mut reports[index - 1];
                     report.state = "failed".into();
@@ -2294,15 +2328,13 @@ impl RangeScheduler {
     }
 
     fn complete(&self, id: u64) {
+        let pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
         let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
         active.retain(|item| item.id != id);
         let active_empty = active.is_empty();
+        let pending_empty = pending.is_empty();
         drop(active);
-        let pending_empty = self
-            .pending
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_empty();
+        drop(pending);
         if (active_empty && pending_empty) || (self.split_minimum.is_some() && !active_empty) {
             self.wake.notify_all();
         }
@@ -2317,17 +2349,9 @@ impl RangeScheduler {
     }
 
     fn is_idle(&self) -> bool {
-        let active_empty = self
-            .active
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_empty();
-        let pending_empty = self
-            .pending
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .is_empty();
-        pending_empty && active_empty
+        let pending = self.pending.lock().unwrap_or_else(|err| err.into_inner());
+        let active = self.active.lock().unwrap_or_else(|err| err.into_inner());
+        pending.is_empty() && active.is_empty()
     }
 
     fn active_ranges(&self) -> Vec<(u64, u64)> {
@@ -2781,6 +2805,16 @@ fn fetch_range(
             let count = match read {
                 Ok(count) => count,
                 Err(err) => {
+                    if let Err(control_err) = check_range_control(job, stop) {
+                        if cursor > durable_cursor {
+                            persist_range_progress(job, file, completed, start, cursor)?;
+                        }
+                        return Err(control_err);
+                    }
+                    if cursor > durable_cursor && failed_attempts + 1 >= MAX_RANGE_ATTEMPTS {
+                        persist_range_progress(job, file, completed, start, cursor)?;
+                        durable_cursor = cursor;
+                    }
                     read_error = Some(err.to_string());
                     break;
                 }
@@ -2796,11 +2830,17 @@ fn fetch_range(
                 match reader.read(&mut [0]) {
                     Ok(0) => {}
                     Ok(_) => {
+                        if cursor > durable_cursor {
+                            persist_range_progress(job, file, completed, start, cursor)?;
+                        }
                         return Err(EngineErrorCode::RangeUnsupported(
                             "range body exceeds Content-Range".into(),
-                        ))
+                        ));
                     }
                     Err(error) => {
+                        if cursor > durable_cursor {
+                            persist_range_progress(job, file, completed, start, cursor)?;
+                        }
                         check_range_control(job, stop)?;
                         return Err(EngineErrorCode::Failed(error.to_string()));
                     }
@@ -3462,8 +3502,15 @@ fn curl_low_speed_args(throttled: bool) -> &'static [&'static str] {
     }
 }
 
-fn terminal_non_fallback_status(status: u16) -> bool {
-    matches!(status, 401 | 404 | 410 | 429 | 451)
+fn curl_cached_direct_status(status: u16) -> bool {
+    matches!(
+        status,
+        200..=399 | 401 | 404 | 410 | 429 | 451 | 500..=599
+    )
+}
+
+fn curl_cached_evict_status(status: u16) -> bool {
+    matches!(status, 401 | 404 | 410 | 451)
 }
 
 fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
@@ -3474,11 +3521,8 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let mut tried_curl = false;
     if !proxy_needs_curl(&job.proxy) && !origin.is_empty() && waf_curl_cache_hit(&origin) {
         match fetch_curl_follow(&prepared, range) {
-            Some(Ok(fetched))
-                if (200..400).contains(&fetched.status)
-                    || terminal_non_fallback_status(fetched.status) =>
-            {
-                if !(200..400).contains(&fetched.status) {
+            Some(Ok(fetched)) if curl_cached_direct_status(fetched.status) => {
+                if curl_cached_evict_status(fetched.status) {
                     waf_curl_cache_invalidate(&origin);
                 }
                 return Ok(fetched);
@@ -3497,15 +3541,16 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     if first.status != 403 || proxy_needs_curl(&job.proxy) || tried_curl {
         return Ok(first);
     }
-    if let Some(via_curl) = fetch_curl_follow(&prepared, range) {
-        if let Ok(ref fetched) = via_curl {
-            if (200..400).contains(&fetched.status) && !origin.is_empty() {
+    match fetch_curl_follow(&prepared, range) {
+        Some(Ok(via_curl)) => {
+            if (200..400).contains(&via_curl.status) && !origin.is_empty() {
                 waf_curl_cache_record(origin);
             }
+            Ok(via_curl)
         }
-        return via_curl;
+        Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => Err(error),
+        Some(Err(_)) | None => Ok(first),
     }
-    Ok(first)
 }
 
 fn is_tls_handshake_error(url: &str, error: &EngineError) -> bool {
@@ -3544,11 +3589,8 @@ fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, En
     let mut tried_curl = false;
     if !origin.is_empty() && waf_curl_cache_hit(&origin) {
         match fetch_curl_follow(&prepared, range) {
-            Some(Ok(fetched))
-                if (200..400).contains(&fetched.status)
-                    || matches!(fetched.status, 401 | 404 | 410 | 451) =>
-            {
-                if !(200..400).contains(&fetched.status) {
+            Some(Ok(fetched)) if curl_cached_direct_status(fetched.status) => {
+                if curl_cached_evict_status(fetched.status) {
                     waf_curl_cache_invalidate(&origin);
                 }
                 return Ok(fetched);
@@ -3677,7 +3719,9 @@ pub(crate) fn entry_network_scope(url: &str, proxy: &str) -> NetworkScope {
     if local_host(&parsed.host) {
         return NetworkScope::Local;
     }
-    if proxy_route(proxy) == ProxyRoute::Direct && parsed.host.parse::<IpAddr>().is_err() {
+    if matches!(proxy_route(proxy), Ok(ProxyRoute::Direct))
+        && parsed.host.parse::<IpAddr>().is_err()
+    {
         if let Ok(mut addresses) = (parsed.host.as_str(), parsed.port).to_socket_addrs() {
             if addresses
                 .next()
@@ -3693,10 +3737,11 @@ pub(crate) fn entry_network_scope(url: &str, proxy: &str) -> NetworkScope {
 
 impl NetworkScope {
     fn destination(&self, parsed: &ParsedUrl, proxy: &str) -> Result<Vec<SocketAddr>, EngineError> {
+        let route = proxy_route(proxy)?;
         let public = match self {
             Self::Public => {
                 validate_public_host(&parsed.host)?;
-                if proxy_route(proxy) != ProxyRoute::Direct && !parsed.host.is_ascii() {
+                if route != ProxyRoute::Direct && !parsed.host.is_ascii() {
                     return Err(EngineError::Failed(
                         "proxied international host must use Punycode".into(),
                     ));
@@ -3706,7 +3751,7 @@ impl NetworkScope {
             Self::LocalDns(host) if parsed.host.eq_ignore_ascii_case(host) => false,
             _ => return Ok(Vec::new()),
         };
-        if proxy_route(proxy) != ProxyRoute::Direct || parsed.host.parse::<IpAddr>().is_ok() {
+        if route != ProxyRoute::Direct || parsed.host.parse::<IpAddr>().is_ok() {
             return Ok(Vec::new());
         }
         let addresses: Vec<_> = (parsed.host.as_str(), parsed.port)
@@ -3858,7 +3903,7 @@ fn fetch_follow_restricted(
                     },
                 );
             }
-            if parsed.https || !matches!(proxy_route(&hop.proxy), ProxyRoute::Direct) {
+            if parsed.https || !matches!(proxy_route(&hop.proxy)?, ProxyRoute::Direct) {
                 #[cfg(windows)]
                 {
                     return winhttp::get(&hop, &url, range, &destinations);
@@ -3943,6 +3988,12 @@ pub(crate) fn read_metadata(
         .map(|c| c.control)
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_default();
+    let is_head = spec.request_method.trim().eq_ignore_ascii_case("HEAD");
+    let method = if is_head {
+        "HEAD".to_string()
+    } else {
+        sanitize_http_method(&spec.request_method)
+    };
     let mut job = Job {
         url: spec.url.clone(),
         headers: spec.headers.clone().into_iter().collect(),
@@ -3958,12 +4009,7 @@ pub(crate) fn read_metadata(
         last_modified: spec.last_modified.clone(),
         control,
         progress: PathBuf::new(),
-        method: if spec.request_method == "HEAD" {
-            "HEAD"
-        } else {
-            "GET"
-        }
-        .into(),
+        method,
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
         replay_json: String::new(),
@@ -3977,42 +4023,77 @@ pub(crate) fn read_metadata(
     if range.is_some() && fetched.status != 206 {
         return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
     }
-    require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
-    let has_body = job.method != "HEAD" && fetched.status != 304;
-    if has_body && fetched.content_length.is_some_and(|n| n > limit) {
-        return Err("元数据超过读取上限".into());
-    }
+    let status = fetched.status;
+    let content_length = fetched.content_length;
+    let etag = fetched.etag.clone();
+    let last_modified = fetched.last_modified.clone();
     let parsed_range = fetched
         .content_range
         .as_deref()
         .and_then(parse_content_range);
+    if is_head {
+        require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
+        return Ok(MetadataResponse {
+            status,
+            final_url: fetched.final_url,
+            body: Vec::new(),
+            range: parsed_range,
+            etag,
+            last_modified,
+            content_length,
+        });
+    }
+    if status == 304 {
+        require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
+        return Ok(MetadataResponse {
+            status,
+            final_url: fetched.final_url,
+            body: Vec::new(),
+            range: None,
+            etag,
+            last_modified,
+            content_length,
+        });
+    }
+    if !matches!(status, 200 | 206) {
+        return Ok(MetadataResponse {
+            status,
+            final_url: fetched.final_url,
+            body: Vec::new(),
+            range: None,
+            etag,
+            last_modified,
+            content_length,
+        });
+    }
+    if range.is_some() && fetched.content_encoding {
+        return Err("metadata range response uses compressed Content-Encoding".into());
+    }
+    require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
+    if content_length.is_some_and(|n| n > limit) {
+        return Err("元数据超过读取上限".into());
+    }
     let mut body = Vec::new();
-    let status = fetched.status;
-    let content_length = fetched.content_length;
-    let expected = if has_body { content_length } else { None };
-    let etag = fetched.etag.clone();
-    let last_modified = fetched.last_modified.clone();
+    let expected = content_length;
     let mut reader = fetched.body;
     let mut buffer = [0; 16 * 1024];
-    if has_body {
-        loop {
-            check_job_control(&job).map_err(|e| e.to_string())?;
-            let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
-                .min(buffer.len() as u64) as usize;
-            if want == 0 {
-                return Err("元数据超过读取上限".into());
-            }
-            let n = reader
-                .read(&mut buffer[..want])
-                .map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            crate::net_policy::consume(n, || check_job_control(&job)).map_err(|e| e.to_string())?;
-            body.extend_from_slice(&buffer[..n]);
-            if body.len() as u64 > limit {
-                return Err("元数据超过读取上限".into());
-            }
+    loop {
+        check_job_control(&job).map_err(|e| e.to_string())?;
+        let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
+            .min(buffer.len() as u64) as usize;
+        if want == 0 {
+            return Err("元数据超过读取上限".into());
+        }
+        let n = reader
+            .read(&mut buffer[..want])
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        crate::net_policy::consume(n, || check_job_control(&job)).map_err(|e| e.to_string())?;
+        body.extend_from_slice(&buffer[..n]);
+        if body.len() as u64 > limit {
+            return Err("元数据超过读取上限".into());
         }
     }
     if expected.is_some_and(|n| n != body.len() as u64) {
@@ -4178,6 +4259,35 @@ fn apply_curl_proxy_args(
     }
 }
 
+fn create_curl_temp_dir() -> Result<PathBuf, EngineError> {
+    static NEXT_CURL_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+    let base = std::env::temp_dir();
+    let pid = std::process::id();
+    for _ in 0..64 {
+        let seq = NEXT_CURL_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let candidate = base.join(format!("hls-curl-impersonate-{pid}-{seq}-{nanos}"));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                if fs::create_dir_all(&base).is_err() {
+                    return Err(EngineError::Failed("curl-impersonate temp dir".into()));
+                }
+                match fs::create_dir(&candidate) {
+                    Ok(()) => return Ok(candidate),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(_) => return Err(EngineError::Failed("curl-impersonate temp dir".into())),
+                }
+            }
+        }
+    }
+    Err(EngineError::Failed("curl-impersonate temp dir".into()))
+}
+
 fn fetch_via_curl_impersonate(
     job: &Job,
     range: Option<&str>,
@@ -4207,8 +4317,8 @@ fn fetch_via_curl_impersonate(
         path.is_file().then_some(path)
     })?;
     let proxy_plan = match proxy_route(&job.proxy) {
-        ProxyRoute::Direct => CurlProxyPlan::Direct,
-        ProxyRoute::Manual(proxy) => {
+        Ok(ProxyRoute::Direct) => CurlProxyPlan::Direct,
+        Ok(ProxyRoute::Manual(proxy)) => {
             if proxy_needs_curl(proxy) {
                 if proxy.chars().any(char::is_control) {
                     return Some(Err(EngineError::Failed("代理地址无效".into())));
@@ -4218,7 +4328,7 @@ fn fetch_via_curl_impersonate(
                 CurlProxyPlan::Arg(proxy.to_string())
             }
         }
-        ProxyRoute::System => {
+        Ok(ProxyRoute::System) => {
             if let Err(error) = check_job_control(job) {
                 return Some(Err(error));
             }
@@ -4237,19 +4347,13 @@ fn fetch_via_curl_impersonate(
                 return None;
             }
         }
+        Err(error) => return Some(Err(error)),
     };
     let headers = &job.headers;
-    let dir = std::env::temp_dir().join(format!(
-        "hls-curl-impersonate-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    if fs::create_dir_all(&dir).is_err() {
-        return Some(Err(EngineError::Failed("curl-impersonate temp dir".into())));
-    }
+    let dir = match create_curl_temp_dir() {
+        Ok(dir) => dir,
+        Err(error) => return Some(Err(error)),
+    };
     let result = (|| {
         check_job_control(job)?;
         // 浏览器身份路径每个响应一个 curl 子进程：按任务（控制文件）与全局封顶，
@@ -5084,7 +5188,7 @@ fn http_get(
     range: Option<&str>,
     destinations: &[SocketAddr],
 ) -> Result<FetchResult, EngineError> {
-    let mut stream = match proxy_route(&job.proxy) {
+    let mut stream = match proxy_route(&job.proxy)? {
         ProxyRoute::Direct if !destinations.is_empty() => {
             TcpStream::connect(destinations).map_err(|e| EngineError::Failed(e.to_string()))?
         }
@@ -5484,7 +5588,7 @@ mod winhttp {
         // publication and retained in `CACHE` for the lifetime of the process so it always
         // outlives child `connect` and `request` handles.
         unsafe {
-            let session = match super::proxy_route(proxy) {
+            let session = match super::proxy_route(proxy)? {
                 super::ProxyRoute::Direct => WinHttpOpen(
                     ua.as_ptr(),
                     WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -11657,5 +11761,473 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner())
             .retain(|(item, _)| item != &origin_url);
         let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn primary_rotated_identity_updates_mirrors_and_pause_cancel_short_circuits() {
+        let fresh_payload: &'static [u8] = b"0123456789abcdef";
+        let stale_payload: &'static [u8] = b"0123456789";
+
+        // 1) Primary probes with rotated size/ETag (preset job had stale total=10 or stale etag),
+        //    must NOT self-reject with "mirror identity mismatch", and updates mirror identity.
+        let primary_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let primary_url = format!("http://{}/item.bin", primary_listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let mut probe_only = true;
+            while let Ok((stream, _)) = primary_listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut range_hdr = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range:") {
+                        range_hdr = rest.trim().to_string();
+                    }
+                }
+                let mut out = reader.into_inner();
+                if range_hdr == "bytes=0-0" {
+                    let _ = write!(
+                        out,
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: \"live-v2\"\r\nContent-Range: bytes 0-0/{}\r\nContent-Length: 1\r\nConnection: close\r\n\r\n0",
+                        fresh_payload.len()
+                    );
+                } else if probe_only {
+                    // Fail primary's range transfer so mirrors are tested against primary's live probe identity!
+                    probe_only = false;
+                    let _ = out.write_all(
+                        b"HTTP/1.1 503 Unavailable\r\nRetry-After: 999\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                } else {
+                    let _ = write!(
+                        out,
+                        "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: \"live-v2\"\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        fresh_payload.len() - 1,
+                        fresh_payload.len(),
+                        fresh_payload.len()
+                    );
+                    let _ = out.write_all(fresh_payload);
+                }
+            }
+        });
+
+        let serve_etag_body = |body: &'static [u8], etag: &'static str| -> String {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/mirror.bin", listener.local_addr().unwrap());
+            thread::spawn(move || {
+                while let Ok((stream, _)) = listener.accept() {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut range_hdr = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range:") {
+                            range_hdr = rest.trim().to_string();
+                        }
+                    }
+                    let mut out = reader.into_inner();
+                    if range_hdr == "bytes=0-0" {
+                        let _ = write!(
+                            out,
+                            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nContent-Range: bytes 0-0/{}\r\nContent-Length: 1\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = out.write_all(&body[..1]);
+                    } else {
+                        let _ = write!(
+                            out,
+                            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len() - 1,
+                            body.len(),
+                            body.len()
+                        );
+                        let _ = out.write_all(body);
+                    }
+                }
+            });
+            url
+        };
+
+        let stale_mirror = serve_etag_body(stale_payload, "\"stale-v1\"");
+        let matching_mirror = serve_etag_body(fresh_payload, "\"live-v2\"");
+
+        // Preset stale job.total = 10, empty etag: primary probes 16 + "live-v2", fails transfer (503),
+        // skips stale_mirror (10 + "stale-v1"), and succeeds on matching_mirror (16 + "live-v2")!
+        let (mut job1, dir1) = temp_job(&primary_url, false, stale_payload.len() as u64, 1);
+        job1.etag.clear();
+        job1.mirrors = vec![stale_mirror, matching_mirror];
+        let report1 = run_job_report(&job1).unwrap();
+        assert_eq!(fs::read(&job1.output).unwrap(), fresh_payload);
+        assert_eq!(report1.mirrors[0].state, "skipped");
+        assert_eq!(report1.mirrors[1].state, "active");
+        let _ = fs::remove_dir_all(dir1);
+
+        // Next run on primary directly with preset stale etag and total=0 succeeds directly on primary!
+        let (mut job2, dir2) = temp_job(&primary_url, false, 0, 1);
+        job2.etag = "\"stale-v1\"".into();
+        let report2 = run_job_report(&job2).unwrap();
+        assert_eq!(report2.used_url, primary_url);
+        assert_eq!(fs::read(&job2.output).unwrap(), fresh_payload);
+        let _ = fs::remove_dir_all(dir2);
+
+        // 2) Pause/Cancel on primary must short-circuit immediately without probing mirrors.
+        for (word, is_pause) in [("pause", true), ("cancel", false)] {
+            let mirror_hits = Arc::new(AtomicUsize::new(0));
+            let hits_srv = Arc::clone(&mirror_hits);
+            let mirror_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mirror_url = format!("http://{}/m.bin", mirror_listener.local_addr().unwrap());
+            thread::spawn(move || {
+                if mirror_listener.accept().is_ok() {
+                    hits_srv.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            let (mut stop_job, stop_dir) = temp_job(&primary_url, false, 0, 1);
+            stop_job.etag.clear();
+            stop_job.mirrors = vec![mirror_url];
+            fs::write(&stop_job.control, word).unwrap();
+            let err = run_job_report(&stop_job).unwrap_err();
+            if is_pause {
+                assert!(matches!(err, EngineError::Pause), "{err:?}");
+            } else {
+                assert!(matches!(err, EngineError::Cancel), "{err:?}");
+            }
+            assert_eq!(
+                mirror_hits.load(Ordering::SeqCst),
+                0,
+                "{word} must not fall through to remaining mirrors"
+            );
+            let _ = fs::remove_dir_all(stop_dir);
+        }
+    }
+
+    #[test]
+    fn waf_curl_cache_retains_transient_statuses_and_preserves_403_on_curl_transport_failure() {
+        for s in [200, 206, 302, 401, 404, 410, 429, 451, 500, 502, 503, 504] {
+            assert!(
+                curl_cached_direct_status(s),
+                "status {s} should return directly"
+            );
+        }
+        assert!(!curl_cached_direct_status(403));
+        assert!(!curl_cached_evict_status(429));
+        assert!(!curl_cached_evict_status(503));
+        assert!(curl_cached_evict_status(404));
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let native_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&native_hits);
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let case_dir = std::env::temp_dir().join(format!("hls-waf-parity-{stamp}"));
+        fs::create_dir_all(&case_dir).unwrap();
+
+        #[cfg(windows)]
+        let script = {
+            let path = case_dir.join("fake-curl.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 setlocal\r\n\
+                 set \"D=%~dp0\"\r\n\
+                 if exist \"%D%fail\" exit /b 7\r\n\
+                 :loop\r\n\
+                 if \"%~1\"==\"\" exit /b 0\r\n\
+                 if \"%~1\"==\"--dump-header\" (\r\n\
+                   type \"%D%head\" >> \"%~2\"\r\n\
+                   exit /b 0\r\n\
+                 )\r\n\
+                 shift\r\n\
+                 goto loop\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = case_dir.join("fake-curl.sh");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 d=\"$(dirname \"$0\")\"\n\
+                 [ -f \"$d/fail\" ] && exit 7\n\
+                 h=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; done\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+
+        let origin_url = format!("http://127.0.0.1:{}/", addr.port());
+        let origin_key = http_origin(&origin_url).unwrap();
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((origin_url.clone(), script));
+        let url = format!("{origin_url}asset.bin");
+        let (job, dir) = temp_job(&url, true, 0, 1);
+
+        // 1) Transient 429 and 503 on cached curl must NOT evict waf_curl_cache or hit native HTTP.
+        for code in [429u16, 503u16] {
+            fs::write(
+                case_dir.join("head"),
+                format!("HTTP/1.1 {code} Busy\r\nContent-Length: 0\r\n\r\n"),
+            )
+            .unwrap();
+            waf_curl_cache_record(origin_key.clone());
+            assert_eq!(fetch(&job, None).unwrap().status, code);
+            assert!(
+                waf_curl_cache_hit(&origin_key),
+                "fetch must keep waf_curl_cache on transient {code}"
+            );
+            assert_eq!(fetch_browser_first(&job, None).unwrap().status, code);
+            assert!(
+                waf_curl_cache_hit(&origin_key),
+                "fetch_browser_first must keep waf_curl_cache on transient {code}"
+            );
+            assert_eq!(native_hits.load(Ordering::SeqCst), 0);
+        }
+
+        // 2) Uncached native 403 + curl transport/spawn failure must return Ok(first) with status 403!
+        waf_curl_cache_invalidate(&origin_key);
+        fs::write(case_dir.join("fail"), b"1").unwrap();
+        let fallback_403 = fetch(&job, None).unwrap();
+        assert_eq!(fallback_403.status, 403);
+        assert_eq!(native_hits.load(Ordering::SeqCst), 1);
+
+        waf_curl_cache_invalidate(&origin_key);
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &origin_url);
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn fetch_range_checkpoints_verified_prefix_on_chunked_tail_truncation_and_scheduler_idle_is_atomic(
+    ) {
+        // 1) Chunked 206 delivers first chunk (4 bytes) cleanly, then truncates terminator on final chunk.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/chunked.bin", listener.local_addr().unwrap());
+        let first_attempt = Arc::new(AtomicBool::new(true));
+        let first_srv = Arc::clone(&first_attempt);
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                if first_srv.swap(false, Ordering::SeqCst) {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 206 Partial Content\r\nETag: \"native-test\"\r\nContent-Range: bytes 0-7/8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\nabcd\r\n4\r\nefgh",
+                    );
+                } else {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            }
+        });
+        let (job, dir) = temp_job(&url, false, 8, 1);
+        assert!(run_job(&job).is_err());
+        assert_eq!(
+            load_completed_ranges(&job),
+            Some(vec![(0, 3)]),
+            "verified chunk [0..=3] must be durably checkpointed before returning truncation error"
+        );
+        assert_eq!(&fs::read(&job.output).unwrap()[..4], b"abcd");
+        let _ = fs::remove_dir_all(dir);
+
+        // 2) RangeScheduler::is_idle never observes a false-idle gap during pending->active transitions.
+        let ranges: Vec<WorkRange> = (0..64)
+            .map(|i| WorkRange {
+                start: i * 1024,
+                end: (i + 1) * 1024 - 1,
+            })
+            .collect();
+        let scheduler = Arc::new(RangeScheduler::new(ranges, 8));
+        let remaining = Arc::new(AtomicUsize::new(64));
+        std::thread::scope(|scope| {
+            let sched_obs = Arc::clone(&scheduler);
+            let rem_obs = Arc::clone(&remaining);
+            scope.spawn(move || {
+                while rem_obs.load(Ordering::Acquire) > 0 {
+                    if sched_obs.is_idle() {
+                        assert_eq!(
+                            rem_obs.load(Ordering::Acquire),
+                            0,
+                            "RangeScheduler::is_idle() returned true while ranges were still pending/active"
+                        );
+                    }
+                    std::hint::spin_loop();
+                }
+            });
+            for worker in 0..4 {
+                let sched_w = Arc::clone(&scheduler);
+                let rem_w = Arc::clone(&remaining);
+                scope.spawn(move || {
+                    while let Some(claimed) = sched_w.claim(worker) {
+                        sched_w.note_success();
+                        rem_w.fetch_sub(1, Ordering::Release);
+                        sched_w.complete(claimed.id);
+                    }
+                });
+            }
+        });
+        assert!(scheduler.is_idle());
+    }
+
+    #[test]
+    fn create_curl_temp_dir_produces_distinct_atomic_directories() {
+        let created: Vec<PathBuf> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| scope.spawn(|| create_curl_temp_dir().unwrap()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let unique: std::collections::HashSet<&PathBuf> = created.iter().collect();
+        assert_eq!(unique.len(), 16);
+        for path in &created {
+            assert!(path.is_dir());
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+
+    #[test]
+    fn read_metadata_normalizes_head_preserves_non_200_status_and_rejects_compressed_ranges() {
+        // 1) Case-insensitive HEAD (" head ") sends HEAD and ignores large Content-Length when limit=0.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/doc.html", listener.local_addr().unwrap());
+        let srv = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 999999\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            first
+        });
+        let head_spec = crate::TaskSpec {
+            url,
+            request_method: " head ".into(),
+            ..Default::default()
+        };
+        let head_meta = read_metadata(&head_spec, None, 0, None).unwrap();
+        assert_eq!(head_meta.status, 200);
+        assert!(head_meta.body.is_empty());
+        assert_eq!(head_meta.content_length, Some(999999));
+        assert!(srv.join().unwrap().starts_with("HEAD /doc.html HTTP/1.1"));
+
+        // 2) Non-200 GET statuses (404, 500) return Ok with empty body even if error body exceeds limit!
+        for code in [404u16, 500u16] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/err", listener.local_addr().unwrap());
+            thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {code} Error\r\nContent-Length: 512\r\nConnection: close\r\n\r\n{}",
+                    "x".repeat(512)
+                );
+            });
+            let spec = crate::TaskSpec {
+                url,
+                request_method: "GET".into(),
+                ..Default::default()
+            };
+            let res = read_metadata(&spec, None, 4, None).unwrap();
+            assert_eq!(res.status, code);
+            assert!(res.body.is_empty());
+        }
+
+        // 3) Range 206 with compressed Content-Encoding is rejected fail-closed!
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/archive.zip", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/100\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\x1f\x8b\x08\x00",
+            );
+        });
+        let zip_spec = crate::TaskSpec {
+            url,
+            request_method: "GET".into(),
+            ..Default::default()
+        };
+        let err = read_metadata(&zip_spec, Some("bytes=0-3"), 16, None)
+            .err()
+            .expect("expected compressed Content-Encoding error");
+        assert!(err.contains("compressed Content-Encoding"), "{err}");
+    }
+
+    #[test]
+    fn invalid_manual_proxy_fails_closed_without_opening_direct_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = Arc::clone(&hits);
+        let url = format!("http://{}/secret.bin", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            if listener.accept().is_ok() {
+                hits_srv.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let (mut job, dir) = temp_job(&url, true, 0, 1);
+        job.proxy = crate::net_policy::INVALID_MANUAL_PROXY.into();
+        let err = run_job(&job).unwrap_err();
+        assert!(
+            err.to_string().contains("手动代理模式未配置代理服务器地址"),
+            "{err}"
+        );
+        let spec = crate::TaskSpec {
+            url,
+            proxy: crate::net_policy::INVALID_MANUAL_PROXY.into(),
+            ..Default::default()
+        };
+        let meta_err = read_metadata(&spec, None, 64, None)
+            .err()
+            .expect("expected fail-closed proxy error");
+        assert!(
+            meta_err.contains("手动代理模式未配置代理服务器地址"),
+            "{meta_err}"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let _ = fs::remove_dir_all(dir);
     }
 }
