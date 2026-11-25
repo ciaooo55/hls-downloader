@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 项目概览与快速上手 (README)
+    url: https://github.com/ciaooo55/hls-downloader/blob/main/README.md
+    about: 查看系统要求、安装升级说明、支持协议范围与浏览器接管用法
+  - name: 📚 完整文档与故障排查索引 (docs/README.md)
+    url: https://github.com/ciaooo55/hls-downloader/blob/main/docs/README.md
+    about: 查阅命令行与高级工具指南、缓存与边播边下、字幕配置及系统架构说明
+  - name: 🔐 私下报告安全漏洞 (Security Advisory)
+    url: https://github.com/ciaooo55/hls-downloader/security/advisories/new
+    about: 涉及本地 IPC、Native Messaging、更新器或凭据泄露的安全问题请私下提交，切勿创建公开 Issue
