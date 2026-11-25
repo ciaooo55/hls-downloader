@@ -1,6 +1,6 @@
 # 原生 workspace 与 IPC
 
-实施计划见 [原生化计划](native-migration-plan.md)，实际验证见 [实施记录](../validation/native-migration-progress.md)。
+运行所有权边界见 [运行架构](v7-architecture.md)，规范功能条目见 [功能映射](../validation/native-feature-mapping.md)。
 
 | 成员 | 责任与依赖 |
 |---|---|

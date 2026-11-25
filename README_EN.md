@@ -3,8 +3,8 @@
 
   <h1>HLS Downloader</h1>
 
-  <p><strong>More than an m3u8 downloader — a modern Windows download workbench.</strong></p>
-  <p>Files · HLS · DASH · FTP · SFTP · BitTorrent · Browser handoff · Resume · Local playback · LAN casting</p>
+  <p><strong>More than an m3u8 downloader — a modern native download workbench for Windows.</strong></p>
+  <p>Multi-connection HTTP · HLS · DASH · Dual-track muxing · FTP/SFTP · BitTorrent · Browser handoff · Local playback · LAN casting</p>
 
   <p>
     <a href="README.md">简体中文</a> · <strong>English</strong>
@@ -12,165 +12,153 @@
 
   <p>
     <a href="https://github.com/ciaooo55/hls-downloader/releases/latest"><img src="https://img.shields.io/badge/Download-GitHub%20Releases-2ea44f?style=for-the-badge&logo=github" alt="Download" /></a>
-    <a href="https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml"><img src="https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="https://github.com/ciaooo55/hls-downloader/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="CI" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/ciaooo55/hls-downloader?style=flat-square" alt="License" /></a>
     <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows x64" />
-    <img src="https://img.shields.io/badge/core-Rust-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust Core" />
+    <img src="https://img.shields.io/badge/core-Rust%20%2B%20Slint-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust + Slint" />
   </p>
 </div>
 
 ---
 
-HLS Downloader is a Windows-first desktop download manager that brings ordinary file downloads, HLS/DASH streaming media, FTP/SFTP, BitTorrent, and browser download handoff into one recoverable, persistent task queue.
+HLS Downloader is a native Windows desktop download manager that brings multi-connection HTTP/HTTPS file acceleration, HLS/DASH and dual-track streaming media, FTP/FTPS, SFTP, BitTorrent, and browser download handoff into one recoverable, persistent task queue.
 
-Unlike downloaders whose transfer lifetime is tied to the visible window, HLS Downloader keeps active jobs inside an independent **Rust Core**. The desktop workbench, browser extension, and native presenter are clients of that Core, so closing the main window, browser, or player does not automatically terminate active transfers.
+Unlike downloaders whose transfers live inside the UI window, HLS Downloader runs active jobs inside an independent background **Rust Core**. The native Rust + Slint workbench, browser extension, and lightweight confirmation/progress windows connect to that Core as clients — so closing the main window, video player, or browser never interrupts active downloads.
 
 ## 🚀 Download
 
-For Windows x64, open the [stable release](https://github.com/ciaooo55/hls-downloader/releases/latest) and choose **Windows-x64.exe**. For Chrome or Edge download handoff, also download the Chromium extension from the same release. Choose MSI for deployment or Portable ZIP for use without installation.
+For Windows x64, visit [GitHub Releases](https://github.com/ciaooo55/hls-downloader/releases/latest) and download **Windows-x64.exe** (or choose **MSI** for managed deployment, or **Portable ZIP** for no-install use). For browser download takeover and media sniffing, install the matching **Chromium** (Chrome / Edge) or **Firefox** extension from the same release.
 
-The current source targets [10.1.0 (release draft)](docs/releases/v10.1.0.md), which is not formally released yet; the latest published stable release is [10.0.0](docs/releases/v10.0.0.md). Windows installers are unsigned and updates require manual installation. The Firefox package and its source are available for signing. Permanent installation in standard Firefox requires Mozilla signing.
+The current source targets [10.1.0 (release draft)](docs/releases/v10.1.0.md); the latest published stable release is [10.0.0](docs/releases/v10.0.0.md). Windows installers are currently unsigned, so updates are installed manually by running the new installer; the Firefox extension is provided unsigned alongside its build source, as permanent installation in standard Firefox requires Mozilla signing.
 
-The installer lets you select the installation directory. New profiles save to the current Windows user's system Downloads folder, including folders moved to another drive. You can change this in settings or the download confirmation window. Personal tasks, downloaded files and service credentials are excluded from the package.
-
-Current native implementation, component builds and validation are tracked in the [migration log](docs/validation/native-migration-progress.md) and [feature map](docs/validation/native-feature-mapping.md). The [historical delivery record](docs/validation/convergence.md) does not identify the current source or component builds. Canonical readiness permits frozen-source acceptance; formal delivery still requires matching packaged components and installation/startup gates.
+The setup wizard supports choosing a custom installation directory. By default, downloads are saved to your Windows `Downloads` Known Folder (including folders relocated to another drive) and can be changed in Settings or per download.
 
 ### Installation and data
 
-- **10.x:** retain the product identity and `%LOCALAPPDATA%\HLS Downloader\v7` profile. Do not rename or clear that directory for a marketing version change.
-- **Pre-10 versions:** compatibility migration is no longer supported. Back up configuration, tasks and downloads, then install fresh and reconfigure. Do not overwrite the current Core database with an old one. Published artifacts have the upgrade scope documented in their own release notes.
+- **10.x in-place upgrades:** 10.x releases share the same `%LOCALAPPDATA%\HLS Downloader\v7` profile directory and upgrade cleanly in place while preserving tasks, site rules, and encrypted credentials (Portable builds keep isolated data inside `data/` next to the executable).
+- **Earlier 5.x versions:** Legacy Tauri/Python databases are incompatible with the native Core; back up existing downloads and perform a clean installation.
 
 ### Requirements
 
 | Item | Requirement |
 | --- | --- |
-| Operating system | Windows 10 or Windows 11 (x64) |
-| CPU architecture | **x64 only.** Playback and part of the capture path rely on the x64 native libraries shipped in the package (libmpv, curl-impersonate), so ARM64 Windows cannot run it |
-| Runtime | The native 10.0.0 implementation requires no Java and contains no JRE |
-| Privileges | MSI installation or upgrade requires administrator rights; see the corresponding release instructions for portable packages |
-| Browser | Chromium-based (Chrome / Edge) or Firefox, for download handoff |
-| Display | 1024×600 minimum; the UI follows the system DPI scaling |
-
-> [!NOTE]
-> **[10.0.0 is formally released](https://github.com/ciaooo55/hls-downloader/releases/tag/v10.0.0).** Its `ARTIFACT-MANIFEST.json` and `RELEASE-EVIDENCE.json` identify the shipped components and acceptance scope. Later source changes do not inherit that artifact's acceptance results.
-
-Online subtitles can be enabled from the video player button or the extension popup, and dragged directly over the video; if the page has multiple videos, you can switch the bound player from the popup. Subtitle translation service, API key, global toggle, target language, sync mode, source text display, and default offset are configured in the desktop main window under `Settings -> Subtitle Translation` (the key is encrypted at rest by the local Core), while the browser extension only controls the per-page toggle, player selection, and starting/stopping subtitles; see the [QwenCloud subtitle guide](docs/guides/qwencloud-subtitles.md).
+| Operating system | Windows 10 or Windows 11 (64-bit) |
+| CPU architecture | **x64 only** (bundled native `ffmpeg`, `libmpv`, and `curl-impersonate` binaries target x64) |
+| Runtime | Pure native Rust + Slint — no Java / JRE or external runtime required |
+| Privileges | Administrator rights for EXE / MSI install or upgrade; none required for Portable ZIP |
+| Browser | Chrome, Edge (Chromium), or Firefox (Manifest V3) for browser integration |
+| Display | 1024×600 minimum; automatic system DPI scaling with Light, Dark, and System themes |
 
 ## ✨ Why HLS Downloader
 
 | | |
 | --- | --- |
-| ⚡ **Resilient transfers**<br>Designed for long-running jobs with resume, retry, request recovery, and persistent task state. | 🎬 **HLS / DASH media**<br>Supports HLS and DASH for both VOD and live workflows, including media jobs that require request context. |
-| 🌐 **Browser handoff**<br>Chromium and Firefox Manifest V3 extensions can discover downloads and media resources, then hand them to the desktop app through Native Messaging. | 🧠 **Independent Rust Core**<br>The Core owns transfer state and SQLite, so active downloads can continue even when the workbench, browser, or player is closed. |
-| 📦 **One queue, multiple protocols**<br>HTTP/HTTPS, FTP, SFTP, BitTorrent, and streaming media share one task model and control path. | 🧩 **Desktop workbench**<br>Create tasks, paste or drop links, batch import, pause/resume/retry, inspect logs, speed, details, and connection state. |
-| 📺 **Playback and casting**<br>Play downloaded media locally or publish it over the LAN for compatible devices / TVBox-style workflows. | 🛟 **Upgrade and rollback path**<br>Packaging and install flows include validation, Native Messaging Host registration, and rollback handling. |
+| ⚡ **Multi-connection speed & resume**<br>Dynamic HTTP Range tail splitting, breakpoint recovery, global and per-task speed limits, and expired presigned URL refresh without losing downloaded bytes. | 🎬 **HLS, DASH & dual-track muxing**<br>VOD/live HLS (`.m3u8`), DASH (`.mpd`), and split video+audio streams (such as Bilibili `.m4s`) with exact quality selection and lossless FFmpeg `.mp4` muxing. |
+| 🌐 **Seamless browser handoff**<br>On-video hover quality pills, popup search/category filtering, batch capture, confirmation dialog, and 1-click silent quick download. | 🧠 **Independent Rust Core**<br>Owns SQLite state and DPAPI-encrypted credentials independently of UI windows, with Win32 Job Object child-process cleanup. |
+| 📦 **One queue, every protocol**<br>HTTP/HTTPS, HLS/DASH, FTP/FTPS, SFTP (with HTTP/SOCKS proxy tunneling), and BitTorrent/Magnet share named queues and scheduling. | 🧩 **Productive desktop workbench**<br>Collapsible bottom Task Inspector Drawer (live speed curve & segment map), wildcard batch URLs, site crawl/sync, remote ZIP preview, and CLI. |
+| 📺 **Play-while-downloading & LAN cast**<br>Built-in `libmpv` overlay and Picture-in-Picture player with play-while-downloading support, plus DLNA / Chromecast / TVBox LAN streaming. | 🛟 **Safe upgrades & rollback**<br>Installer flows coordinate running processes, register the Native Messaging Host, and roll back cleanly on failure to protect user data. |
 
 ## 🔌 Supported workflows
 
 | Type | Support | Notes |
 | --- | :---: | --- |
-| HTTP / HTTPS | ✅ | Regular downloads, recovery, per-task request context |
-| HLS / `.m3u8` | ✅ | VOD / Live |
-| DASH / `.mpd` | ✅ | Streaming media downloads |
-| FTP | ✅ | File transfer |
-| SFTP | ✅ | SSH file transfer |
-| BitTorrent / Magnet | ✅ | BT tasks and magnet-link workflows |
-| Chromium extension | ✅ | Manifest V3 + Native Messaging |
-| Firefox extension | ✅ | Manifest V3 + Native Messaging |
-| Local playback | ✅ | Bundled media playback path in packaged builds |
-| LAN casting | ✅ | LAN publishing / device selection / TVBox workflow |
+| HTTP / HTTPS | ✅ | Multi-connection segmented acceleration, dynamic tail split, resume, presigned URL refresh |
+| HLS (`.m3u8`) | ✅ | VOD / Live, AES-128 decryption, exact variant selection, lossless `.mp4` muxing |
+| DASH (`.mpd` / dual-track `.m4s`) | ✅ | Multi-representation streams & split video+audio concurrent download with FFmpeg `.mp4` muxing |
+| FTP / FTPS | ✅ | Multi-connection transfers, resume, HTTP CONNECT / SOCKS proxy tunneling |
+| SFTP | ✅ | Native SSH file transfer, host-key verification, and proxy tunneling |
+| BitTorrent / Magnet | ✅ | Torrent probing, multi-file selection, and magnet-link workflows |
+| Browser extensions | ✅ | Chromium (Chrome / Edge) and Firefox Manifest V3 + Native Messaging |
+| CLI, Site Crawl & ZIP Preview | ✅ | Headless CLI, static site crawl/sync, and HTTP Range remote ZIP preview ([Tools guide](docs/free-edition.md)) |
+| Local playback | ✅ | Bundled `libmpv` overlay & PiP player, including play-while-downloading |
+| LAN casting | ✅ | LAN media proxy publishing, DLNA / Chromecast device selection, and TVBox push |
+| Subtitle translation | Optional | Real-time web video speech-to-subtitle translation with user API key ([QwenCloud guide](docs/guides/qwencloud-subtitles.md)) |
 
 ## 🧭 Get started in three steps
 
-1. Download and install the desktop app from [Releases](https://github.com/ciaooo55/hls-downloader/releases). If you want browser handoff, use the matching Chromium or Firefox extension as well.
-2. Paste a URL, drop content into the workbench, create or batch-import tasks, or let the browser extension send discovered downloads and media resources to HLS Downloader.
-3. Manage pause, resume, retry, logs, details, and playback from the workbench. The Core owns the download lifetime, so the main UI does not need to remain open for active jobs to exist.
+1. Install the desktop app from [Releases](https://github.com/ciaooo55/hls-downloader/releases/latest), and load the matching Chromium or Firefox extension if you want browser takeover and media detection.
+2. Click a download link, pick a stream quality pill from the on-page video overlay, or paste URLs / cURL commands and drop `.torrent` or task files directly into the workbench.
+3. Inspect live speed and segment maps, pause/resume, play locally, or cast over LAN from the workbench — the background Core keeps transfers running even if you close the UI.
 
 ## 🌐 How browser handoff works
 
-In the current source, explicit links intercepted before a browser request are sent to the Core through Native Messaging. File and audio/video responses already requested by the browser, POST forms, and Blob/data-generated files finish in the browser and are then imported. The source file is removed only after a successful import; rejection or failure preserves it. Holding `Alt`, disabling takeover, or matching an exclusion rule keeps the download in the browser.
+1. **Direct Multi-Connection & Stream Acceleration:** Ordinary HTTP/HTTPS file downloads, HLS (`.m3u8`), DASH (`.mpd`), and dual-track video+audio streams (such as Bilibili DASH `.m4s`) are handed directly to the desktop **Rust Core** via Native Messaging for multi-connection segmented acceleration, breakpoint resume (including rotated presigned URL refresh), and lossless FFmpeg `.mp4` muxing.
+2. **Safe One-Time Payload Preservation:** One-time `POST` form downloads and browser-generated `Blob` / `data:` files are safely handed off after the browser receives the payload, avoiding duplicate `POST` submissions or broken single-use tokens.
+3. **Non-Intrusive User Control:** Supports both an interactive confirmation dialog and 1-click **silent quick download** (`静默快速下载`). Holding `Alt` while clicking, turning off auto-takeover in the popup, or matching an excluded site/file rule leaves downloads in the browser untouched.
 
-Preserving the original response avoids replaying one-use URLs. These transfers remain browser-owned until completion, so closing the browser can interrupt them and the desktop confirmation appears after completion. HLS/DASH manifests still use the Core media engine. Historical versions passed hosted Windows Edge / Firefox regressions for recognition, credentials, receipt recovery and real Host / Core handoff. These historical results do not certify 10.1.0. Browser download creation remains recorded per entry point.
-
-That keeps the browser as an entry point rather than the owner of the download lifecycle. Once a task has entered the Core, its persistent state is managed independently of the browser connection.
+Once a task is handed off, the browser is no longer the owner of the transfer lifecycle — closing the tab or exiting the browser leaves Core-managed downloads running uninterrupted.
 
 ## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
-    B["Chromium / Firefox"] -->|Native Messaging| H["Native Host"]
+    B["Chromium / Firefox (MV3)"] -->|Native Messaging| H["Native Host"]
     H <-->|Named Pipe IPC| C["Rust Core"]
     UI["Rust + Slint Workbench / Presenter"] <-->|Named Pipe IPC| C
-    C --> DB[(SQLite)]
+    CLI["HLSDownloaderCli"] <-->|Named Pipe IPC| C
+    C --> DB[(SQLite + DPAPI)]
     C --> E["HTTP · HLS · DASH · FTP · SFTP · BT"]
-    C --> M["Local Player · LAN Cast"]
+    C --> M["FFmpeg Muxer · libmpv Player · LAN Cast"]
 ```
 
-**The Core is the only owner of download state and SQLite**. The native workbench, extension, player and casting path cooperate through it. 10.0.0 uses the Rust / Slint native entry point; historical workbench source remains available through Git tags. Matching-source acceptance and publication records are in the [current evidence](docs/validation/current-evidence.json).
+**The Rust Core is the sole owner of download state, SQLite persistence, and DPAPI-encrypted credentials.** The Slint workbench, confirmation/progress HUD windows, Native Messaging Host, and CLI communicate with the Core over overlapped Named Pipe IPC, while external media and helper child processes are isolated with Win32 Job Objects.
 
 ## 📁 Repository layout
 
 | Path | Responsibility |
 | --- | --- |
-| `native_shell/` | Rust Core, SQLite, transfer engines and background media services |
-| `crates/` | Shared protocol and lightweight IPC client |
-| `native_clients/` | Native Host, CLI, updater and native launcher |
-| `native_ui/` | Rust + Slint workbench, confirmation, progress and completion windows |
-| `extension/` | WXT-based Chromium / Firefox Manifest V3 extension |
-| `scripts/` | Windows build, test, install, upgrade, package, and verification scripts |
-| `docs/` | [Documentation index](docs/README.md): guides, architecture, releases and validation evidence |
-| `config/` | [Versioned product contracts](config/README.md), separate from generated output and user settings |
+| `native_shell/` | Rust Core daemon, SQLite store, multi-protocol transfer engines, and media services |
+| `crates/` | Versioned IPC protocol (`hls-protocol`) and shared client library (`hls-client`) |
+| `native_clients/` | Native Messaging Host, CLI, updater, and native desktop launcher |
+| `native_ui/` | Rust + Slint workbench, inspector drawer, confirmation/progress/completion HUDs, and player UI |
+| `extension/` | WXT-based Chromium and Firefox Manifest V3 browser extensions |
+| `scripts/` | Windows build, packaging, installer, upgrade, and validation scripts ([Script index](scripts/README.md)) |
+| `docs/` | Guides, architecture notes, and release documentation ([Documentation index](docs/README.md)) |
+| `config/` | Versioned feature parity and update-signer contracts ([Config overview](config/README.md)) |
 
 ## 🛠️ Build from source
 
-The active product line is Windows-first. Development requires the Rust MSVC toolchain, Visual Studio C++ Build Tools, Node.js and pnpm; CI defines the pinned versions. The Slint workbench needs no JDK. Run the following commands from the repository root.
+Development targets Windows x64 and requires the Rust MSVC toolchain, Visual Studio C++ Build Tools, Node.js, and `pnpm` (no JDK needed). Run the following commands from the repository root:
 
-Run the integrated test gate:
+Run the integrated test suite:
 
 ```powershell
 .\scripts\build-v7.ps1 -Task test
 ```
 
-Or test individual components:
+Or test and build individual components:
 
 ```powershell
 # Rust Core
 cargo test --manifest-path native_shell/Cargo.toml --lib
 
-# Native Presenter
+# Native Slint Workbench & Presenter
 cargo test --manifest-path native_ui/Cargo.toml
 
-# Browser Extension
+# Browser Extension (Chromium & Firefox)
 cd extension
 pnpm install --frozen-lockfile
 pnpm test
 pnpm run build
 ```
 
-For deeper implementation and verification details, see:
+Further documentation:
 
-- [Maintenance script entry points](scripts/README.md)
-- [Documentation index and file purposes](docs/README.md)
-- [v7 architecture](docs/architecture/v7-architecture.md)
-- [v7 module map](docs/architecture/v7-module-map.md)
-- [v7 verification status](docs/validation/v7-verification.md)
-- [Local upgrade and rollback](docs/guides/v7-local-upgrade.md)
-- [Source layout and version history](docs/architecture/source-layout-and-history.md)
-
-## 🧬 Current source
-
-`main` maintains one 10.x product line: Rust Core, the Slint native UI and MV3 extensions. Building and using it does not require old source trees or removed historical tags. Source, artifacts and evidence are tied to a specific commit and release.
+- [Documentation index](docs/README.md) · [CLI, site crawl/sync & remote ZIP preview](docs/free-edition.md)
+- [Runtime architecture](docs/architecture/v7-architecture.md) · [Module map](docs/architecture/v7-module-map.md) · [Source layout & history](docs/architecture/source-layout-and-history.md)
+- [Installation, upgrades & user directories](docs/guides/v7-local-upgrade.md) · [Cache lifecycle & play-while-downloading](docs/guides/download-cache-and-playback.md)
+- [Maintenance scripts](scripts/README.md) · [Verification overview](docs/validation/v7-verification.md)
 
 ## 🔐 Security, privacy, and lawful use
 
-Only download content that you are authorized to access, store, or process. Follow applicable laws, website terms, and content licenses in your jurisdiction.
+Only download content that you are authorized to access, store, or process, and comply with applicable laws, website terms of service, and content licenses in your jurisdiction.
 
 Project documents: [LICENSE](LICENSE) · [SECURITY](SECURITY.md) · [PRIVACY](PRIVACY.md) · [TERMS](TERMS.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 ## ⭐ Like the project?
 
-If HLS Downloader is useful to you, consider giving the repository a **Star**. Bugs, compatibility problems, and feature requests are welcome in [Issues](https://github.com/ciaooo55/hls-downloader/issues).
+If HLS Downloader is useful to you, consider giving the repository a **Star**. Bug reports, site compatibility feedback, and feature requests are welcome in [Issues](https://github.com/ciaooo55/hls-downloader/issues).
 
 <div align="center">
-  <sub>Built for long-running downloads, browser handoff and resilient media workflows on Windows.</sub>
+  <sub>Built with Rust &amp; Slint for fast, resilient downloads and seamless browser handoff on Windows.</sub>
 </div>
