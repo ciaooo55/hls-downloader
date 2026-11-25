@@ -189,6 +189,24 @@ impl QueueEditor {
         ))
     }
 
+    pub fn receive_saved_profiles(&mut self, mut profiles: Vec<QueueProfile>) {
+        let previous_id = self.profiles.get(self.selected).map(|p| p.id.clone());
+        if profiles.is_empty() {
+            profiles.push(QueueProfile::default());
+        }
+        self.profiles = profiles;
+        if let Some(id) = previous_id {
+            if let Some(pos) = self.profiles.iter().position(|p| p.id == id) {
+                self.selected = pos;
+            } else {
+                self.selected = self.selected.min(self.profiles.len() - 1);
+            }
+        } else {
+            self.selected = self.selected.min(self.profiles.len() - 1);
+        }
+        self.render();
+    }
+
     fn flush(&mut self) -> Result<(), String> {
         let w = &self.window;
         let name = w.get_queue_name().trim().to_owned();
@@ -358,5 +376,48 @@ mod tests {
         assert_eq!(queue_id_at(&profiles, 0), "high");
         assert_eq!(queue_id_at(&profiles, 1), "default");
         assert_eq!(queue_id_at(&profiles, 99), "default");
+    }
+
+    #[test]
+    fn receive_saved_profiles_preserves_selected_queue_by_id_and_clamps_removed_selection() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let parent = WorkbenchWindow::new().unwrap();
+        let mut editor = QueueEditor::new(
+            vec![
+                QueueProfile::default(),
+                QueueProfile {
+                    id: "vip".into(),
+                    name: "高速优先".into(),
+                    priority: -5,
+                    ..Default::default()
+                },
+            ],
+            &parent,
+            false,
+        )
+        .unwrap();
+        editor.select(1).unwrap();
+        assert_eq!(editor.window.get_queue_name().as_str(), "高速优先");
+
+        // Reordered / canonicalized profiles from Core preserve selection by queue ID.
+        editor.receive_saved_profiles(vec![
+            QueueProfile {
+                id: "vip".into(),
+                name: "极速通道".into(),
+                priority: -10,
+                max_active: 8,
+                ..Default::default()
+            },
+            QueueProfile::default(),
+        ]);
+        assert_eq!(editor.window.get_selected(), 0);
+        assert_eq!(editor.window.get_queue_name().as_str(), "极速通道");
+        assert_eq!(editor.window.get_max_active().as_str(), "8");
+
+        // Select index 1, then receive a single-profile list: selection clamps cleanly to 0.
+        editor.select(1).unwrap();
+        editor.receive_saved_profiles(Vec::new());
+        assert_eq!(editor.window.get_selected(), 0);
+        assert_eq!(editor.window.get_queue_name().as_str(), "默认队列");
     }
 }

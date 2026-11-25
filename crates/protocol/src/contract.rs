@@ -636,6 +636,8 @@ pub enum CoreCommand {
         start_paused: bool,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         queue_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spec_override: Option<Box<TaskSpec>>,
     },
     RejectHandoff {
         handoff_id: String,
