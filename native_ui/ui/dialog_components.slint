@@ -5,19 +5,19 @@ export component DialogHeader inherits Rectangle {
     in property <string> heading;
     in property <string> description;
     in property <string> icon;
-    height: 78px;
-    background: Tokens.surface;
+    height: 74px;
+    background: Tokens.dialog;
     HorizontalLayout {
         padding-left: 24px; padding-right: 24px; spacing: 14px;
         Rectangle {
             width: 40px; height: 40px; y: (parent.height - self.height) / 2;
-            border-radius: Tokens.card-radius; background: Tokens.selected;
+            border-radius: 10px; background: Tokens.info-bg;
             border-width: 1px; border-color: Tokens.accent-border;
             WorkbenchIcon { name: root.icon; ink: Tokens.accent; width: 20px; height: 20px; x: 10px; y: 10px; }
         }
         VerticalLayout {
-            alignment: center; spacing: 4px;
-            Text { text: root.heading; font-size: 19px; font-weight: 700; color: Tokens.ink; overflow: elide; }
+            alignment: center; spacing: 3px;
+            Text { text: root.heading; font-size: 18px; font-weight: 700; color: Tokens.ink; overflow: elide; }
             Text { text: root.description; font-size: 12px; color: Tokens.muted; overflow: elide; }
         }
     }
@@ -26,14 +26,12 @@ export component DialogHeader inherits Rectangle {
 
 export component DialogFooter inherits Rectangle {
     in property <string> status;
-    // 状态语气：info（说明，中性）、success（完成，绿）、warning（需注意，琥珀，默认）、error（失败，红）。
+    // 状态语气：info（说明，蓝/中性）、success（完成，绿）、warning（需注意，琥珀）、error（失败，红）。
     in property <string> tone: "warning";
-    private property <color> tone-ink: tone == "success" ? Tokens.done : tone == "error" ? Tokens.fail : tone == "info" ? Tokens.muted : Tokens.warn;
-    private property <color> tone-icon-ink: tone == "info" ? Tokens.accent : root.tone-ink;
-    private property <string> tone-icon: tone == "success" ? "completed" : tone == "info" ? "info" : "failed";
-    // 状态信息与按钮同一行：左侧带图标的说明（最多两行，完整内容见悬停提示），右侧按钮。
-    // 有无状态时页脚高度一致，不会把按钮顶下去、也不会在状态上方留出大块空白。
-    height: 68px;
+    private property <color> tone-ink: tone == "success" ? Tokens.done : tone == "error" ? Tokens.fail : tone == "info" ? Tokens.info : Tokens.warn;
+    private property <color> tone-icon-ink: tone == "info" ? Tokens.info : root.tone-ink;
+    private property <string> tone-icon: tone == "success" ? "completed" : tone == "info" ? "info" : tone == "warning" ? "notices" : "failed";
+    height: 64px;
     background: Tokens.rail;
     Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Tokens.line; }
     HorizontalLayout {
@@ -45,7 +43,6 @@ export component DialogFooter inherits Rectangle {
                 min-width: 0px; horizontal-stretch: 1;
                 status-text := Text {
                     x: 0px; width: parent.width;
-                    // 最多两行，超出在第二行末尾省略；整体在页脚中垂直居中。
                     height: min(self.preferred-height, 36px); y: (parent.height - self.height) / 2;
                     text: root.status; color: root.tone-ink; font-size: 12px;
                     wrap: word-wrap; overflow: elide; vertical-alignment: top;
