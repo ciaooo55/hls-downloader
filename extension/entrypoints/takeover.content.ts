@@ -212,6 +212,7 @@ export default defineContentScript({
           href,
           pageUrl,
           altBypass: !preserveLocal,
+          ctrlForce: Boolean(ctrlForce),
           opensNewTab: linkOpensNewTab(target),
           ...(preserveLocal ? { downloadAttribute: filename !== null, filename: filename || '' } : {}),
         }).catch(() => undefined)
