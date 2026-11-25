@@ -1,4 +1,6 @@
 //! IPC and Windows helpers for clients that never own download state.
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 pub use hls_protocol::*;
 pub mod core_ipc;
 pub mod core_spawn;

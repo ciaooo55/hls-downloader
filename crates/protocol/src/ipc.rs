@@ -559,14 +559,14 @@ pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {
 }
 
 pub fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, String> {
-    if frame.len() < 4 {
+    let &[b0, b1, b2, b3, ref payload @ ..] = frame else {
         return Err("Core pipe frame truncated".into());
-    }
-    let length = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
-    if length > V7_PIPE_MAX_FRAME || frame.len() - 4 != length {
+    };
+    let length = u32::from_le_bytes([b0, b1, b2, b3]) as usize;
+    if length > V7_PIPE_MAX_FRAME || payload.len() != length {
         return Err("Core pipe frame invalid length".into());
     }
-    serde_json::from_slice(&frame[4..]).map_err(|error| {
+    serde_json::from_slice(payload).map_err(|error| {
         format!(
             "Core pipe JSON invalid at line {}, column {}",
             error.line(),

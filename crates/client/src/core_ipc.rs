@@ -150,10 +150,13 @@ fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<
 #[cfg(windows)]
 struct OwnedWinHandle(windows_sys::Win32::Foundation::HANDLE);
 
-// Win32 pipe and event handles can be moved and signaled across threads.
 #[cfg(windows)]
+// SAFETY: `OwnedWinHandle` owns a Win32 kernel event or named-pipe `HANDLE`; transferring exclusive
+// handle ownership to another thread is supported by the Windows kernel.
 unsafe impl Send for OwnedWinHandle {}
 #[cfg(windows)]
+// SAFETY: Shared references to `OwnedWinHandle` only expose thread-safe kernel event signaling
+// (`SetEvent`/`ResetEvent`) and raw handle inspection while `Drop` requires `&mut self`.
 unsafe impl Sync for OwnedWinHandle {}
 
 #[cfg(windows)]
@@ -172,6 +175,8 @@ impl OwnedWinHandle {
 
     fn new_manual_reset_event() -> Result<Self, String> {
         use windows_sys::Win32::System::Threading::CreateEventW;
+        // SAFETY: Null security attributes and null name are valid optional inputs to `CreateEventW`
+        // for creating an anonymous manual-reset (`bManualReset == 1`), initially non-signaled event.
         let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
         Self::from_raw(handle).map_err(|error| format!("CreateEventW failed: {error}"))
     }
@@ -181,12 +186,15 @@ impl OwnedWinHandle {
     }
 
     fn set_event(&self) {
+        // SAFETY: `self.0` was validated non-null/non-`INVALID_HANDLE_VALUE` on construction and
+        // remains open until `Drop`; `SetEvent` is thread-safe on manual-reset event handles.
         unsafe {
             windows_sys::Win32::System::Threading::SetEvent(self.0);
         }
     }
 
     fn reset_event(&self) -> Result<(), String> {
+        // SAFETY: `self.0` is a live manual-reset event handle owned by `self`.
         let ok = unsafe { windows_sys::Win32::System::Threading::ResetEvent(self.0) };
         if ok == 0 {
             Err(format!(
@@ -204,6 +212,8 @@ impl Drop for OwnedWinHandle {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
         if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+            // SAFETY: `self` is the sole owner of `self.0` and all pending overlapped operations
+            // using it complete before `OverlappedPipe`/`NamedPipeServer` drops `OwnedWinHandle`.
             unsafe {
                 CloseHandle(self.0);
             }
@@ -302,8 +312,11 @@ fn finish_pending_overlapped(
         let wait_result = match stop_event {
             Some(stop_h) => {
                 let handles = [io_event, stop_h];
+                // SAFETY: Both `io_event` and `stop_h` are live manual-reset event handles owned
+                // by the caller/stop-handle for the duration of this call, and `handles` has len 2.
                 unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, wait_ms) }
             }
+            // SAFETY: `io_event` is a live manual-reset event handle owned by the caller.
             None => unsafe { WaitForSingleObject(io_event, wait_ms) },
         };
 
@@ -324,6 +337,7 @@ fn finish_pending_overlapped(
             continue;
         }
         if wait_result == WAIT_FAILED {
+            // SAFETY: `GetLastError` reads thread-local Win32 error state without pointer arguments.
             let err = unsafe { GetLastError() };
             cancel_reason = Some(OverlappedOutcome::OsError(err));
             break;
@@ -333,12 +347,17 @@ fn finish_pending_overlapped(
     }
 
     if cancel_reason.is_some() {
+        // SAFETY: `handle` is the live overlapped pipe handle and `overlapped` points to the exact
+        // `OVERLAPPED` structure passed to the in-flight `ReadFile`/`WriteFile`/`ConnectNamedPipe`.
         unsafe {
             CancelIoEx(handle, overlapped);
         }
     }
 
     let mut transferred = 0u32;
+    // SAFETY: Passing `bWait = 1` (`TRUE`) blocks until the kernel completes the overlapped IRP
+    // (whether naturally or via `CancelIoEx` above), guaranteeing the kernel never accesses stack
+    // `overlapped` or caller I/O buffers after `finish_pending_overlapped` returns.
     let ok = unsafe { GetOverlappedResult(handle, overlapped, &mut transferred, 1) };
     if ok != 0 {
         if matches!(cancel_reason, Some(OverlappedOutcome::Stopped)) {
@@ -347,6 +366,7 @@ fn finish_pending_overlapped(
         return OverlappedOutcome::Completed(transferred);
     }
 
+    // SAFETY: `GetLastError` reads thread-local Win32 error state after `GetOverlappedResult`.
     let err = unsafe { GetLastError() };
     if err == ERROR_MORE_DATA {
         if matches!(cancel_reason, Some(OverlappedOutcome::Stopped)) {
@@ -418,12 +438,19 @@ impl OverlappedPipe {
             }
         }
         if self.io_event.reset_event().is_err() {
+            // SAFETY: `GetLastError` reads thread-local Win32 error state after `ResetEvent`.
             return OverlappedOutcome::OsError(unsafe { GetLastError() });
         }
 
+        // SAFETY: `OVERLAPPED` is a plain C struct valid when zero-initialized with `hEvent` bound
+        // to `self.io_event` (uniquely used via `&mut self`).
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = self.io_event.raw();
         let to_read = buf.len().min(u32::MAX as usize) as u32;
+        // SAFETY: `self.handle` is a live `FILE_FLAG_OVERLAPPED` pipe handle, `buf` is writable for
+        // `to_read` bytes, `lpNumberOfBytesRead` is null as recommended for overlapped I/O, and
+        // both `buf` and `overlapped` stay alive until synchronous completion or `finish_pending_overlapped`
+        // awaits kernel IRP completion via `GetOverlappedResult(..., 1)`.
         let ok = unsafe {
             ReadFile(
                 self.handle.raw(),
@@ -435,11 +462,13 @@ impl OverlappedPipe {
         };
         if ok != 0 {
             let mut transferred = 0u32;
+            // SAFETY: `ReadFile` completed synchronously on `self.handle` with `overlapped`.
             let got =
                 unsafe { GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 1) };
             if got != 0 {
                 return OverlappedOutcome::Completed(transferred);
             }
+            // SAFETY: `GetLastError` reads thread-local Win32 error state.
             let err = unsafe { GetLastError() };
             if err == ERROR_MORE_DATA {
                 return OverlappedOutcome::Completed(transferred);
@@ -450,6 +479,7 @@ impl OverlappedPipe {
             return OverlappedOutcome::OsError(err);
         }
 
+        // SAFETY: `GetLastError` reads thread-local Win32 error state immediately after `ReadFile`.
         let err = unsafe { GetLastError() };
         match err {
             ERROR_IO_PENDING => finish_pending_overlapped(
@@ -464,8 +494,10 @@ impl OverlappedPipe {
             ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED => OverlappedOutcome::Eof,
             ERROR_MORE_DATA => {
                 let mut transferred = 0u32;
+                // SAFETY: `ERROR_MORE_DATA` indicates synchronous partial completion; `bWait = 1`
+                // reads the completed byte count from `overlapped`.
                 let _ = unsafe {
-                    GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 0)
+                    GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 1)
                 };
                 OverlappedOutcome::Completed(transferred)
             }
@@ -490,12 +522,18 @@ impl OverlappedPipe {
             }
         }
         if self.io_event.reset_event().is_err() {
+            // SAFETY: `GetLastError` reads thread-local Win32 error state after `ResetEvent`.
             return OverlappedOutcome::OsError(unsafe { GetLastError() });
         }
 
+        // SAFETY: `OVERLAPPED` is a plain C struct valid when zero-initialized with `hEvent` bound
+        // to `self.io_event` (uniquely used via `&mut self`).
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = self.io_event.raw();
         let to_write = buf.len().min(u32::MAX as usize) as u32;
+        // SAFETY: `self.handle` is a live `FILE_FLAG_OVERLAPPED` pipe handle, `buf` is readable for
+        // `to_write` bytes, and both `buf` and `overlapped` outlive the kernel IRP via either
+        // synchronous completion or `finish_pending_overlapped`'s `GetOverlappedResult(..., 1)`.
         let ok = unsafe {
             WriteFile(
                 self.handle.raw(),
@@ -507,11 +545,13 @@ impl OverlappedPipe {
         };
         if ok != 0 {
             let mut transferred = 0u32;
+            // SAFETY: `WriteFile` completed synchronously on `self.handle` with `overlapped`.
             let got =
                 unsafe { GetOverlappedResult(self.handle.raw(), &overlapped, &mut transferred, 1) };
             if got != 0 {
                 return OverlappedOutcome::Completed(transferred);
             }
+            // SAFETY: `GetLastError` reads thread-local Win32 error state.
             let err = unsafe { GetLastError() };
             if err == ERROR_BROKEN_PIPE || err == ERROR_PIPE_NOT_CONNECTED || err == ERROR_NO_DATA {
                 return OverlappedOutcome::Eof;
@@ -519,6 +559,7 @@ impl OverlappedPipe {
             return OverlappedOutcome::OsError(err);
         }
 
+        // SAFETY: `GetLastError` reads thread-local Win32 error state immediately after `WriteFile`.
         let err = unsafe { GetLastError() };
         match err {
             ERROR_IO_PENDING => finish_pending_overlapped(
@@ -856,6 +897,8 @@ struct OwnerPipeSd(*mut core::ffi::c_void);
 impl Drop for OwnerPipeSd {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: `self.0` was allocated by `ConvertStringSecurityDescriptorToSecurityDescriptorW`
+            // via `LocalAlloc` and is freed once when `OwnerPipeSd` drops after `serve_loop_inner` exits.
             unsafe {
                 windows_sys::Win32::Foundation::LocalFree(self.0);
             }
@@ -868,6 +911,8 @@ fn owner_pipe_sd() -> Option<OwnerPipeSd> {
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
     let sddl: Vec<u16> = "D:P(A;;GA;;;OW)(A;;GA;;;SY)\0".encode_utf16().collect();
     let mut sd = std::ptr::null_mut();
+    // SAFETY: `sddl` is a static NUL-terminated UTF-16 SDDL string, `1` is `SDDL_REVISION_1`, and
+    // `&mut sd` receives a `LocalAlloc`-backed security descriptor freed by `OwnerPipeSd::drop`.
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
@@ -955,6 +1000,7 @@ impl NamedPipeServer {
             return;
         }
         if let Some(event) = &self.stop_event {
+            // SAFETY: `event.raw()` is a live manual-reset event handle owned by `self.stop_event`.
             unsafe {
                 windows_sys::Win32::System::Threading::WaitForSingleObject(event.raw(), millis);
             }
@@ -1020,7 +1066,16 @@ impl NamedPipeServer {
                 return Err(error);
             }
         };
-        let wide_name = wide(&self.name);
+        let wide_name = match checked_wide(&self.name) {
+            Ok(wide_name) => wide_name,
+            Err(reason) => {
+                let error = format!("CreateNamedPipeW failed: {reason}");
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error.clone()));
+                }
+                return Err(error);
+            }
+        };
         let _exit_guard = ServerExitGuard(self.stop_handle());
         let mut is_first_instance = true;
 
@@ -1116,6 +1171,8 @@ impl NamedPipeServer {
         } else {
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED
         };
+        // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 pipe name without interior NULs, and
+        // `attrs` references `owner_sd.0`, which remains alive across `CreateNamedPipeW`.
         let raw_handle = unsafe {
             CreateNamedPipeW(
                 wide_name.as_ptr(),
@@ -1129,7 +1186,9 @@ impl NamedPipeServer {
             )
         };
         if raw_handle == INVALID_HANDLE_VALUE {
-            let error = format!("CreateNamedPipeW failed: {}", unsafe { GetLastError() });
+            // SAFETY: `GetLastError` reads thread-local Win32 error state after `CreateNamedPipeW`.
+            let last_error = unsafe { GetLastError() };
+            let error = format!("CreateNamedPipeW failed: {last_error}");
             if let Some(ready) = ready {
                 let _ = ready.send(Err(error.clone()));
             }
@@ -1153,8 +1212,12 @@ impl NamedPipeServer {
             }
         })?;
 
+        // SAFETY: `OVERLAPPED` is valid when zero-initialized with `hEvent` set to `connect_event`.
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = connect_event.raw();
+        // SAFETY: `handle` is a live `FILE_FLAG_OVERLAPPED` server pipe handle; when `ERROR_IO_PENDING`
+        // is returned, `finish_pending_overlapped` cancels and awaits `GetOverlappedResult(..., 1)`
+        // before `overlapped` or `handle` can be dropped.
         let connected = unsafe { ConnectNamedPipe(handle.raw(), &mut overlapped) } != 0;
         if connected {
             if let Some(ready) = ready {
@@ -1164,6 +1227,7 @@ impl NamedPipeServer {
             return Ok(PipeAcceptOutcome::Connected(pipe));
         }
 
+        // SAFETY: `GetLastError` reads thread-local Win32 error state after `ConnectNamedPipe`.
         let err = unsafe { GetLastError() };
         match err {
             ERROR_PIPE_CONNECTED => {
@@ -1271,8 +1335,12 @@ fn handle_pipe_stream(
 
 #[cfg(windows)]
 fn token_user_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u8>> {
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
+    use windows_sys::Win32::Security::{
+        GetLengthSid, GetTokenInformation, IsValidSid, TokenUser, TOKEN_USER,
+    };
     let mut size = 0u32;
+    // SAFETY: Null output buffer with length `0` queries the required byte size in `size` for the
+    // open `TOKEN_QUERY` handle `token`.
     unsafe {
         GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size);
     }
@@ -1280,6 +1348,8 @@ fn token_user_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u
         return None;
     }
     let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    let capacity_bytes = buffer.len() * std::mem::size_of::<usize>();
+    // SAFETY: `buffer` is pointer-aligned (`usize`) and holds at least `size` writable bytes.
     let ok = unsafe {
         GetTokenInformation(
             token,
@@ -1292,15 +1362,30 @@ fn token_user_sid(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u
     if ok == 0 {
         return None;
     }
+    // SAFETY: `GetTokenInformation` populated `buffer` with a valid, pointer-aligned `TOKEN_USER`.
     let user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
     if user.User.Sid.is_null() {
         return None;
     }
-    let sid_len = unsafe { windows_sys::Win32::Security::GetLengthSid(user.User.Sid) };
-    if sid_len == 0 {
+    // SAFETY: `user.User.Sid` points into `buffer`; `IsValidSid` verifies SID header/revision
+    // validity as required before calling `GetLengthSid`.
+    let valid_sid = unsafe { IsValidSid(user.User.Sid) } != 0;
+    if !valid_sid {
         return None;
     }
-    let sid = unsafe { std::slice::from_raw_parts(user.User.Sid.cast::<u8>(), sid_len as usize) };
+    // SAFETY: `IsValidSid` succeeded for `user.User.Sid`.
+    let sid_len = unsafe { GetLengthSid(user.User.Sid) } as usize;
+    let buf_start = buffer.as_ptr() as usize;
+    let sid_start = user.User.Sid as usize;
+    if sid_len == 0
+        || sid_start < buf_start
+        || sid_start.saturating_add(sid_len) > buf_start.saturating_add(capacity_bytes)
+    {
+        return None;
+    }
+    // SAFETY: `user.User.Sid` is non-null, validated by `IsValidSid`, and its `sid_len` bytes lie
+    // wholly within the initialized `buffer` allocation.
+    let sid = unsafe { std::slice::from_raw_parts(user.User.Sid.cast::<u8>(), sid_len) };
     Some(sid.to_vec())
 }
 
@@ -1314,7 +1399,9 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
     };
 
     let mut server_pid = 0u32;
-    if unsafe { GetNamedPipeServerProcessId(handle, &mut server_pid) } == 0 || server_pid == 0 {
+    // SAFETY: `handle` is an open client named-pipe handle and `&mut server_pid` is writable.
+    let got_pid = unsafe { GetNamedPipeServerProcessId(handle, &mut server_pid) };
+    if got_pid == 0 || server_pid == 0 {
         return Err(format!(
             "GetNamedPipeServerProcessId failed: {}",
             std::io::Error::last_os_error()
@@ -1324,13 +1411,19 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
         return Ok(());
     }
     let mut current_token = std::ptr::null_mut();
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut current_token) } == 0 {
+    // SAFETY: `GetCurrentProcess()` returns the current process pseudo-handle, and `&mut current_token`
+    // receives an owned `TOKEN_QUERY` handle closed immediately after reading its user SID.
+    let opened_current =
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut current_token) };
+    if opened_current == 0 {
         return Err("Unable to inspect current process token".into());
     }
     let current_sid = token_user_sid(current_token);
+    // SAFETY: `current_token` was opened by `OpenProcessToken` above and is closed once here.
     unsafe { CloseHandle(current_token) };
     let current_sid = current_sid.ok_or_else(|| "Unable to read current user SID".to_string())?;
 
+    // SAFETY: Opens a non-inheritable query handle to `server_pid`, or returns null on failure.
     let server_process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, server_pid) };
     if server_process.is_null() {
         return Err(format!(
@@ -1338,7 +1431,9 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
         ));
     }
     let mut server_token = std::ptr::null_mut();
+    // SAFETY: `server_process` is non-null and closed immediately after `OpenProcessToken`.
     let opened = unsafe { OpenProcessToken(server_process, TOKEN_QUERY, &mut server_token) } != 0;
+    // SAFETY: `server_process` is uniquely owned here and closed once.
     unsafe { CloseHandle(server_process) };
     if !opened {
         return Err(format!(
@@ -1346,6 +1441,7 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
         ));
     }
     let server_sid = token_user_sid(server_token);
+    // SAFETY: `server_token` was opened by a succeeded `OpenProcessToken` call and closed once here.
     unsafe { CloseHandle(server_token) };
     if server_sid.as_deref() != Some(current_sid.as_slice()) {
         return Err("Core pipe server belongs to a different user".into());
@@ -1369,9 +1465,12 @@ impl NamedPipeClient {
             FILE_GENERIC_WRITE, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
         };
         use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
-        let wide_name = wide(name);
+        let wide_name =
+            checked_wide(name).map_err(|reason| format!("CreateFileW pipe failed: {reason}"))?;
         let started = Instant::now();
         loop {
+            // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 pipe path without interior NULs;
+            // `CreateFileW` returns `INVALID_HANDLE_VALUE` on failure or a fresh overlapped handle.
             let raw_handle = unsafe {
                 CreateFileW(
                     wide_name.as_ptr(),
@@ -1399,6 +1498,7 @@ impl NamedPipeClient {
                 .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
             // WaitNamedPipe 不预留实例；其他客户端可能抢先打开，必须在同一总时限内重试。
             if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && remaining > 0 {
+                // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 pipe path live across the call.
                 if unsafe { WaitNamedPipeW(wide_name.as_ptr(), remaining) } != 0 {
                     continue;
                 }
@@ -1471,12 +1571,15 @@ impl Write for NamedPipeClient {
 }
 
 #[cfg(windows)]
-fn wide(value: &str) -> Vec<u16> {
+fn checked_wide(value: &str) -> Result<Vec<u16>, &'static str> {
+    if value.is_empty() || value.contains('\0') {
+        return Err("pipe name is empty or contains interior NUL");
+    }
     use std::os::windows::ffi::OsStrExt;
-    std::ffi::OsStr::new(value)
+    Ok(std::ffi::OsStr::new(value)
         .encode_wide()
         .chain(std::iter::once(0))
-        .collect()
+        .collect())
 }
 
 pub fn hello_request() -> CorePipeRequest {
@@ -3403,5 +3506,20 @@ mod tests {
         stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(50));
         worker.join().unwrap().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pipe_endpoints_reject_empty_or_interior_nul_names() {
+        assert!(NamedPipeClient::connect("", 10).is_err());
+        assert!(NamedPipeClient::connect("\\\\.\\pipe\\HLSDownloader\0trunc", 10).is_err());
+        let server = NamedPipeServer::new("\\\\.\\pipe\\HLSDownloader\0trunc");
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler = Arc::new(|_: CorePipeRequest| CorePipeResponse::Error {
+            request_id: None,
+            code: "unused".into(),
+            message: String::new(),
+        });
+        assert!(server.serve_loop(stop, handler).is_err());
     }
 }
