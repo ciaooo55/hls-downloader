@@ -14,16 +14,16 @@ pub(crate) struct Aes128CbcWriter<W> {
 
 impl<W: Write> Aes128CbcWriter<W> {
     pub(crate) fn new(writer: W, key: &[u8], iv: &[u8]) -> io::Result<Self> {
-        if key.len() != 16 || iv.len() != 16 {
+        let (Ok(key), Ok(previous)) = (<[u8; 16]>::try_from(key), <[u8; 16]>::try_from(iv)) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "AES-128 key/IV must be 16 bytes",
             ));
-        }
+        };
         Ok(Self {
             writer,
-            round_keys: expand_key(key),
-            previous: iv.try_into().unwrap(),
+            round_keys: expand_key(&key),
+            previous,
             pending: [0; 16],
             filled: 0,
         })
@@ -301,8 +301,8 @@ pub fn sha1_hex(bytes: &[u8]) -> String {
 
 fn expand_key(key: &[u8]) -> [u32; 44] {
     let mut w = [0u32; 44];
-    for i in 0..4 {
-        w[i] = u32::from_be_bytes(key[i * 4..i * 4 + 4].try_into().unwrap());
+    for (slot, part) in w.iter_mut().zip(key.as_chunks::<4>().0.iter().take(4)) {
+        *slot = u32::from_be_bytes(*part);
     }
     for i in 4..44 {
         let mut temp = w[i - 1];
@@ -399,8 +399,8 @@ fn sha256(message: &[u8]) -> [u8; 32] {
 
 fn sha256_compress(state: &mut [u32; 8], chunk: &[u8; 64]) {
     let mut w = [0u32; 64];
-    for i in 0..16 {
-        w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
+    for (slot, part) in w.iter_mut().zip(chunk.as_chunks::<4>().0) {
+        *slot = u32::from_be_bytes(*part);
     }
     for i in 16..64 {
         let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

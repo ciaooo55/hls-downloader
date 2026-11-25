@@ -359,8 +359,10 @@ fn drain_output(reader: &mut ScannerReader, output: &mut Vec<u8>) {
             use std::os::windows::io::AsRawHandle;
             use windows_sys::Win32::System::Pipes::PeekNamedPipe;
             let mut bytes = 0;
-            // The handle belongs to reader and bytes is writable for this call.
-            if unsafe {
+            // SAFETY: `reader` owns a live anonymous pipe handle for the duration of this
+            // call, optional output pointers are null with zero buffer length, and `bytes`
+            // is a valid writable `u32` stack variable.
+            let peeked = unsafe {
                 PeekNamedPipe(
                     reader.as_raw_handle(),
                     std::ptr::null_mut(),
@@ -369,9 +371,8 @@ fn drain_output(reader: &mut ScannerReader, output: &mut Vec<u8>) {
                     &mut bytes,
                     std::ptr::null_mut(),
                 )
-            } == 0
-                || bytes == 0
-            {
+            };
+            if peeked == 0 || bytes == 0 {
                 break;
             }
             buf.len().min(bytes as usize)

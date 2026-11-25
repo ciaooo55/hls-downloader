@@ -657,37 +657,42 @@ fn serve_growing_file(
             return Err("media server stopped".into());
         }
         let available = downloaded_range_end(root, cursor, total);
-        if head || available.is_some() {
-            // Open only for the ready slice (and before sending 200/206 headers)
-            // so Windows never holds a file handle across wait loops and missing
-            // files never emit misleading 200/206 headers followed by 0-byte EOF.
-            let mut file = if !head {
-                Some(File::open(path).map_err(|error| error.to_string())?)
-            } else {
-                None
-            };
+        if head {
             if !headers_sent {
                 let content_range = if range.is_some() {
                     format!("Content-Range: bytes {start}-{end}/{total}\r\n")
                 } else {
                     String::new()
                 };
-                write!(stream, "HTTP/1.1 {status} {}\r\n{content_range}Content-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-                    if status == 206 { "Partial Content" } else { "OK" }).map_err(|error| error.to_string())?;
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} {}\r\n{content_range}Content-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    if status == 206 { "Partial Content" } else { "OK" }
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        } else if let Some(available_end) = available {
+            // Open only for the ready slice (and before sending 200/206 headers)
+            // so Windows never holds a file handle across wait loops and missing
+            // files never emit misleading 200/206 headers followed by 0-byte EOF.
+            let mut file = File::open(path).map_err(|error| error.to_string())?;
+            if !headers_sent {
+                let content_range = if range.is_some() {
+                    format!("Content-Range: bytes {start}-{end}/{total}\r\n")
+                } else {
+                    String::new()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} {}\r\n{content_range}Content-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    if status == 206 { "Partial Content" } else { "OK" }
+                )
+                .map_err(|error| error.to_string())?;
                 headers_sent = true;
             }
-            if head {
-                return Ok(());
-            }
-            let count = (available.unwrap().min(end) - cursor + 1).min(1024 * 1024);
-            stream_bytes(
-                stream,
-                file.as_mut().unwrap(),
-                cursor,
-                count,
-                lifetime,
-                revoked,
-            )?;
+            let count = (available_end.min(end) - cursor + 1).min(1024 * 1024);
+            stream_bytes(stream, &mut file, cursor, count, lifetime, revoked)?;
             drop(file);
             cursor += count;
             if cursor > end {

@@ -244,8 +244,11 @@ fn strip_vtt_only_tags(payload: &str) -> String {
                 }
             }
         }
-        out.push(payload[index..].chars().next().unwrap());
-        index += payload[index..].chars().next().unwrap().len_utf8();
+        let Some(ch) = payload[index..].chars().next() else {
+            break;
+        };
+        out.push(ch);
+        index += ch.len_utf8();
     }
     out
 }
@@ -317,5 +320,8 @@ mod tests {
         assert!(srt.contains("2\n00:00:03,000 --> 00:00:04,000\nworld"));
         assert!(!srt.contains("<v"));
         assert!(!srt.contains("<c"));
+        // Unclosed `<` followed by multibyte UTF-8 text is preserved without panicking.
+        let unclosed = "WEBVTT\n\n00:00:05.000 --> 00:00:06.000\na < b 字幕😀\n";
+        assert!(webvtt_to_srt(unclosed).contains("a < b 字幕😀"));
     }
 }

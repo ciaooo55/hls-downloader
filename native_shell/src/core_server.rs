@@ -420,6 +420,7 @@ fn queue_reply_fits(events: &[crate::EventEnvelope]) -> bool {
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,

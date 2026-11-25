@@ -223,31 +223,39 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
 
+    /// # Safety
+    /// `pointer` must either be null or point to a valid NUL-terminated UTF-16 string
+    /// remaining live for the duration of this call (bounded to 512 UTF-16 code units).
     unsafe fn wide_text(pointer: *const u16) -> String {
         if pointer.is_null() {
             return String::new();
         }
         let mut len = 0usize;
-        while len < 512 && unsafe { *pointer.add(len) } != 0 {
-            len += 1;
-        }
-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(pointer, len) })
+        // SAFETY: Caller guarantees `pointer` addresses a valid NUL-terminated UTF-16 string;
+        // stepping one `u16` at a time stops at the first NUL or 512 units without over-reading.
+        let slice = unsafe {
+            while len < 512 && *pointer.add(len) != 0 {
+                len += 1;
+            }
+            std::slice::from_raw_parts(pointer, len)
+        };
+        String::from_utf16_lossy(slice)
     }
 
     let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
     let mut bytes = 16 * 1024u32;
-    let mut buffer = vec![0u8; bytes as usize];
-    let mut status = unsafe {
-        GetAdaptersAddresses(
-            AF_INET as u32,
-            flags,
-            std::ptr::null(),
-            buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>(),
-            &mut bytes,
-        )
-    };
-    if status == ERROR_BUFFER_OVERFLOW {
-        buffer.resize(bytes as usize, 0);
+    // Allocate `u64` words so the backing buffer satisfies the 8-byte alignment required
+    // by `IP_ADAPTER_ADDRESSES_LH` (`ULONGLONG` alignment union and embedded pointers).
+    let mut buffer = vec![0u64; (bytes as usize).div_ceil(std::mem::size_of::<u64>()).max(1)];
+    let mut status = ERROR_BUFFER_OVERFLOW;
+    for _ in 0..3 {
+        let words = (bytes as usize).div_ceil(std::mem::size_of::<u64>()).max(1);
+        if buffer.len() < words {
+            buffer.resize(words, 0);
+        }
+        bytes = u32::try_from(buffer.len() * std::mem::size_of::<u64>()).unwrap_or(u32::MAX);
+        // SAFETY: `buffer` is non-empty, 8-byte aligned (`align_of::<u64>() ==
+        // align_of::<IP_ADAPTER_ADDRESSES_LH>()`), and writable for `bytes` bytes.
         status = unsafe {
             GetAdaptersAddresses(
                 AF_INET as u32,
@@ -257,8 +265,11 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
                 &mut bytes,
             )
         };
+        if status != ERROR_BUFFER_OVERFLOW {
+            break;
+        }
     }
-    if status != NO_ERROR {
+    if status != NO_ERROR || bytes == 0 {
         return (
             primary_lan_ipv4()
                 .map(|address| vec![(address, 24)])
@@ -271,8 +282,13 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
     let mut tun_active = false;
     let mut adapter = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
     while !adapter.is_null() {
+        // SAFETY: `GetAdaptersAddresses` succeeded (`NO_ERROR`) into our 8-byte-aligned
+        // `buffer`, so `adapter` and every `Next` link form a valid linked list within `buffer`.
         let item = unsafe { &*adapter };
+        // SAFETY: `FriendlyName` and `Description` are either null or NUL-terminated UTF-16
+        // strings stored inside `buffer` by `GetAdaptersAddresses`.
         let name = unsafe { wide_text(item.FriendlyName) }.to_ascii_lowercase();
+        // SAFETY: Same lifetime and NUL-termination invariant as `FriendlyName`.
         let description = unsafe { wide_text(item.Description) }.to_ascii_lowercase();
         let tunnel = item.IfType == IF_TYPE_TUNNEL || tunnel_adapter_name(&name, &description);
         if item.OperStatus == IfOperStatusUp && tunnel {
@@ -288,27 +304,42 @@ fn lan_ipv4_state() -> (Vec<(Ipv4Addr, u8)>, bool) {
         {
             let mut unicast = item.FirstUnicastAddress;
             while !unicast.is_null() {
+                // SAFETY: `unicast` is a non-null node in `item`'s unicast linked list
+                // populated inside `buffer` by `GetAdaptersAddresses`.
                 let address = unsafe { &*unicast };
                 let socket = address.Address.lpSockaddr;
-                if !socket.is_null() && unsafe { (*socket).sa_family } == AF_INET {
-                    let ipv4 = unsafe { &*(socket.cast::<SOCKADDR_IN>()) };
-                    let octets = unsafe { ipv4.sin_addr.S_un.S_un_b };
-                    let value = Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4);
-                    let prefix = address.OnLinkPrefixLength.min(32);
-                    // 这里**不按地址的数字范围挑**，只按适配器本身挑——是不是环回口、
-                    // 是不是隧道口（TUN/TAP/Wintun/VPN/WSL/Hyper-V）、名字是不是虚拟，
-                    // 这些在上面已经判完了。理由：用户的局域网在哪个段是未知的，热点
-                    // 会发 100.64/10，公司会用 8.8.0.0/12，实验室甚至有 192.0.2.0/24。
-                    // 以前这里写着 `value.is_private()`，等于替所有用户断言"你的局域网
-                    // 一定在 RFC1918 里"——断言错的那天，表现就是"插着网线、电视开着，
-                    // 却一个设备都扫不到"，而界面只会说"没有发现设备"。
-                    // 前缀上限 30 保留：/8、/0 这类会把"扫同网段"变成永远做不完的动作。
-                    if !value.is_loopback()
-                        && !value.is_link_local()
-                        && prefix <= 30
-                        && !networks.contains(&(value, prefix))
-                    {
-                        networks.push((value, prefix));
+                let socket_len = usize::try_from(address.Address.iSockaddrLength).unwrap_or(0);
+                if !socket.is_null() && socket_len >= std::mem::size_of::<SOCKADDR_IN>() {
+                    // SAFETY: `socket` is non-null and `iSockaddrLength` covers at least
+                    // `size_of::<SOCKADDR_IN>()`, so reading `sa_family` and (when `AF_INET`)
+                    // the `SOCKADDR_IN` octets union inside `buffer` is valid and aligned.
+                    let ipv4_octets = unsafe {
+                        if (*socket).sa_family == AF_INET {
+                            let ipv4 = &*(socket.cast::<SOCKADDR_IN>());
+                            Some(ipv4.sin_addr.S_un.S_un_b)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(octets) = ipv4_octets {
+                        let value =
+                            Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4);
+                        let prefix = address.OnLinkPrefixLength.min(32);
+                        // 这里**不按地址的数字范围挑**，只按适配器本身挑——是不是环回口、
+                        // 是不是隧道口（TUN/TAP/Wintun/VPN/WSL/Hyper-V）、名字是不是虚拟，
+                        // 这些在上面已经判完了。理由：用户的局域网在哪个段是未知的，热点
+                        // 会发 100.64/10，公司会用 8.8.0.0/12，实验室甚至有 192.0.2.0/24。
+                        // 以前这里写着 `value.is_private()`，等于替所有用户断言"你的局域网
+                        // 一定在 RFC1918 里"——断言错的那天，表现就是"插着网线、电视开着，
+                        // 却一个设备都扫不到"，而界面只会说"没有发现设备"。
+                        // 前缀上限 30 保留：/8、/0 这类会把"扫同网段"变成永远做不完的动作。
+                        if !value.is_loopback()
+                            && !value.is_link_local()
+                            && prefix <= 30
+                            && !networks.contains(&(value, prefix))
+                        {
+                            networks.push((value, prefix));
+                        }
                     }
                 }
                 unicast = address.Next;
@@ -358,6 +389,8 @@ fn set_multicast_interface(socket: &UdpSocket, interface: Ipv4Addr) -> Result<()
     };
 
     let address = interface.octets();
+    // SAFETY: `socket` owns a live WinSock UDP `SOCKET` for the duration of `setsockopt`,
+    // and `address` is a 4-byte IPv4 `in_addr` buffer matching `IP_MULTICAST_IF`.
     let status = unsafe {
         setsockopt(
             socket.as_raw_socket() as usize,
@@ -3922,5 +3955,16 @@ mod tests {
         let err_big = http_post_lan(&url, "\"urn:test#Play\"", "<s/>").unwrap_err();
         assert!(err_big.contains("过大"), "{err_big}");
         worker.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn adapter_addresses_buffer_meets_win32_struct_alignment() {
+        use windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_ADDRESSES_LH;
+        assert!(
+            std::mem::align_of::<u64>() >= std::mem::align_of::<IP_ADAPTER_ADDRESSES_LH>(),
+            "u64 backing buffer must satisfy IP_ADAPTER_ADDRESSES_LH alignment"
+        );
+        let _ = lan_ipv4_networks();
     }
 }

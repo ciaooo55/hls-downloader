@@ -559,7 +559,10 @@ impl CoreCoordinator {
             return Err(format!("设置项 {key} 必须是文本"));
         }
         if key == "queue_active_days" {
-            validate_active_days(value.as_str().unwrap())?;
+            let days = value
+                .as_str()
+                .ok_or_else(|| format!("设置项 {key} 必须是文本"))?;
+            validate_active_days(days)?;
         }
         if key == "existing_file_policy"
             && !matches!(value.as_str(), Some("rename" | "overwrite" | "skip"))
@@ -919,6 +922,7 @@ mod tests {
             ("download_speed_schedule_kib", json!("128")),
             ("default_concurrency", json!(1_u64 << 32)),
             ("temp_dir", json!("temp\u{0}dir")),
+            ("queue_active_days", json!(123)),
         ] {
             assert!(
                 CoreCoordinator::validate_setting(key, &value).is_err(),
