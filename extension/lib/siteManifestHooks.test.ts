@@ -422,11 +422,15 @@ it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without 
   windowStub.fetch = vi.fn(async () => response)
   windowStub.__playinfo__ = playinfo
   const locationStub = { href: pageUrl }
+  const historyStub = {
+    pushState(_state: unknown, _title: string, url?: string | URL | null) { if (url) locationStub.href = String(url) },
+    replaceState(_state: unknown, _title: string, url?: string | URL | null) { if (url) locationStub.href = String(url) },
+  }
   vi.stubGlobal('defineContentScript', (config: unknown) => config)
   vi.stubGlobal('window', windowStub)
   vi.stubGlobal('location', locationStub)
   vi.stubGlobal('XMLHttpRequest', class extends EventTarget { open() {} })
-  vi.stubGlobal('history', { pushState() {}, replaceState() {} })
+  vi.stubGlobal('history', historyStub)
   vi.stubGlobal('Element', class { attachShadow() {} })
   vi.stubGlobal('CustomEvent', class extends Event {
     detail: unknown
@@ -439,9 +443,9 @@ it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without 
   const hook = await import('../entrypoints/hooks.content')
   ;(hook.default as any).main()
 
-  // Replay emits SSR window.__playinfo__ immediately.
+  // Replay emits SSR window.__playinfo__ immediately with audioUrl.
   windowStub.dispatchEvent(new Event('__hls_downloader_replay__'))
-  expect(events.some(event => event.url === video1080 && event.siteVideoId === 'BV1xx411c7mD' && event.inspection?.inspected === true)).toBe(true)
+  expect(events.some(event => event.url === video1080 && event.audioUrl === audio192 && event.siteVideoId === 'BV1xx411c7mD' && event.inspection?.inspected === true)).toBe(true)
 
   // Fetch of Bilibili playurl API also reports without consuming the original response.
   const fetched = await windowStub.fetch(playurl)
@@ -449,14 +453,26 @@ it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without 
   expect(await fetched.json()).toEqual(playinfo)
   expect(events.at(-1)).toMatchObject({
     url: video1080,
+    audioUrl: audio192,
     mimeType: 'video/mp4',
     siteVideoId: 'BV1xx411c7mD',
     sourcePageUrl: pageUrl,
     inspection: {
       inspected: true,
+      audioUrl: audio192,
+      filename: 'BV1xx411c7mD.mp4',
       duration: 185,
       height: 1080,
       quality: '1080p',
     },
   })
+
+  // SPA replaceState normalization (/en/video/BV... -> /video/BV...?vd_source=1) preserves buffered candidates on replay.
+  const redirectedUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/?vd_source=1'
+  delete windowStub.__playinfo__
+  historyStub.replaceState(null, '', redirectedUrl)
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  events.length = 0
+  windowStub.dispatchEvent(new Event('__hls_downloader_replay__'))
+  expect(events.some(event => event.url === video1080 && event.audioUrl === audio192 && event.sourcePageUrl === redirectedUrl)).toBe(true)
 })

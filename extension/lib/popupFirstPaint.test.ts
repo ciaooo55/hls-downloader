@@ -16,6 +16,10 @@ describe('popup first paint', () => {
   })
 
   it('ships a visible no-script/bootstrap surface instead of an empty root', () => {
+    const themeBoot = readFileSync(fileURLToPath(new URL('../public/theme-boot.js', import.meta.url)), 'utf8')
+    expect(html).toContain('<script src="/theme-boot.js"></script>')
+    expect(themeBoot).toContain("localStorage.getItem('hlsd_resolved_theme')")
+    expect(themeBoot).toContain("setAttribute('data-hlsd-theme', resolved)")
     expect(html).toContain('<main class="popup-boot"')
     expect(html).toContain('正在读取当前页面')
     expect(html).not.toContain('<div id="root"></div>')

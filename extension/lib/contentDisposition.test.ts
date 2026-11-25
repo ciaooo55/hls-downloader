@@ -33,4 +33,21 @@ describe('Content-Disposition filename parsing', () => {
     expect(parsed).toBe(prefix)
     expect(parsed.charCodeAt(parsed.length - 1)).not.toBeGreaterThanOrEqual(0xd800)
   })
+
+  it('decodes RFC 2047 Base64 and Quoted-Printable encoded-word filenames', () => {
+    // Base64 UTF-8: "中文测试.pdf"
+    expect(contentDispositionFilename('attachment; filename="=?UTF-8?B?5Lit5paH5rWL6K+VLnBkZg==?="'))
+      .toBe('中文测试.pdf')
+    // Multi-word Quoted-Printable UTF-8 with underscore space
+    expect(contentDispositionFilename('attachment; filename="=?UTF-8?Q?=E4=B8=AD?= =?UTF-8?Q?=E6=96=87_demo.mp4?="'))
+      .toBe('中文 demo.mp4')
+  })
+
+  it('recovers raw UTF-8 bytes exposed as Latin-1 in legacy filename= without breaking ISO-8859-1', () => {
+    // Raw UTF-8 bytes for "视频下载.mp4" interpreted byte-by-byte as Latin-1
+    const rawUtf8AsLatin1 = Array.from(new TextEncoder().encode('视频下载.mp4'), b => String.fromCharCode(b)).join('')
+    expect(contentDispositionFilename(`attachment; filename="${rawUtf8AsLatin1}"`)).toBe('视频下载.mp4')
+    // Valid ISO-8859-1 single-byte character (0xE9 = é) stays intact
+    expect(contentDispositionFilename('attachment; filename="caf\u00e9.pdf"')).toBe('café.pdf')
+  })
 })

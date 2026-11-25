@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shouldReportMediaResponse } from './manifestSniff'
-import { SITE_RESPONSE_LIMIT, bilibiliPageVideoId, bilibiliPlayinfoCandidates, isBilibiliFullTrackMseUrl, shouldInspectSiteResponse, siteManifestCandidates, sitePageVideoId, youtubePageVideoId } from './siteManifest'
+import { SITE_RESPONSE_LIMIT, bilibiliPageVideoId, bilibiliPlayinfoCandidates, extractBilibiliPlayinfo, isBilibiliAudioTrackMseUrl, isBilibiliFullTrackMseUrl, sameSiteVideoIdentity, shouldInspectSiteResponse, siteManifestCandidates, sitePageVideoId, youtubePageVideoId } from './siteManifest'
 
 const page = 'https://www.youtube.com/watch?v=video_1'
 const api = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
@@ -97,11 +97,14 @@ describe('scoped site player metadata', () => {
     expect(extracted).toHaveLength(1)
     expect(extracted[0]).toMatchObject({
       url: video1080,
+      audioUrl: audio192,
       mimeType: 'video/mp4',
       videoId: 'BV1xx411c7mD',
       inspection: {
         inspected: true,
         isLive: false,
+        audioUrl: audio192,
+        filename: 'BV1xx411c7mD.mp4',
         duration: 185,
         width: 1920,
         height: 1080,
@@ -109,8 +112,42 @@ describe('scoped site player metadata', () => {
       },
     })
     expect(extracted[0].inspection?.variants?.map(v => v.height)).toEqual([1080, 720])
+    expect(extracted[0].inspection?.variants?.every(v => v.audioUrl === audio192)).toBe(true)
     expect(extracted[0].inspection?.playbackUrls).toEqual(expect.arrayContaining([video1080, video720, audio192]))
     expect(bilibiliPlayinfoCandidates(cnPage, dashPayload)).toEqual(extracted)
+
+    // High-FPS tiering + standard AAC audio preference over flac/dolby + fallback when standard AAC is absent.
+    const video1080p60 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30116.m4s?deadline=1900000000'
+    const flacAudio = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30251.m4s?deadline=1900000000'
+    const dolbyAudio = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30250.m4s?deadline=1900000000'
+    const hiResWithStandard = extractBilibiliPlayinfo(cnPage, {
+      data: {
+        dash: {
+          duration: 60,
+          video: [
+            { id: 116, base_url: video1080p60, width: 1920, height: 1080, frame_rate: '60', bandwidth: 5_800_000, codecs: 'avc1.640032' },
+            { id: 80, base_url: video1080, width: 1920, height: 1080, frame_rate: '30', bandwidth: 3_000_000, codecs: 'avc1.640032' },
+          ],
+          audio: [{ id: 30280, base_url: audio192, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+          flac: { audio: { id: 30251, base_url: flacAudio, bandwidth: 980_000, codecs: 'fLaC' } },
+          dolby: { audio: [{ id: 30250, base_url: dolbyAudio, bandwidth: 640_000, codecs: 'ec-3' }] },
+        },
+      },
+    })
+    expect(hiResWithStandard[0].audioUrl).toBe(audio192)
+    expect(hiResWithStandard[0].inspection?.variants?.map(v => v.quality)).toEqual(['1080p60', '1080p'])
+
+    const flacOnly = extractBilibiliPlayinfo(cnPage, {
+      data: {
+        dash: {
+          duration: 60,
+          video: [{ id: 80, base_url: video1080, width: 1920, height: 1080, bandwidth: 3_000_000, codecs: 'avc1.640032' }],
+          audio: null,
+          flac: { audio: { id: 30251, base_url: flacAudio, bandwidth: 980_000, codecs: 'fLaC' } },
+        },
+      },
+    })
+    expect(flacOnly[0].audioUrl).toBe(flacAudio)
 
     // Progressive durl fallback (common on logged-out /en/video/ pages).
     const mp4Url = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-16.mp4?deadline=1900000000'
@@ -125,9 +162,14 @@ describe('scoped site player metadata', () => {
       inspection: { inspected: true, duration: 90, estimatedSize: 12_345_678 },
     })
 
-    // Full-track MSE video URL recognition excludes audio-only tracks and non-Bilibili hosts.
+    // Full-track MSE video/audio URL recognition and sameSiteVideoIdentity checks.
     expect(isBilibiliFullTrackMseUrl(video1080)).toBe(true)
     expect(isBilibiliFullTrackMseUrl(audio192)).toBe(false)
+    expect(isBilibiliAudioTrackMseUrl(audio192)).toBe(true)
+    expect(isBilibiliAudioTrackMseUrl(video1080)).toBe(false)
     expect(isBilibiliFullTrackMseUrl('https://cdn.test/upgcxcode/1/2/3-1-30080.m4s')).toBe(false)
+    expect(sameSiteVideoIdentity(cnPage, enPage)).toBe(true)
+    expect(sameSiteVideoIdentity(`${cnPage}?p=1`, `${cnPage}?p=2`)).toBe(false)
+    expect(sameSiteVideoIdentity('https://www.youtube.com/watch?v=video_1', 'https://www.youtube.com/watch?v=video_1&list=PL2')).toBe(false)
   })
 })

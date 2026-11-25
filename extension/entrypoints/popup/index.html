@@ -4,9 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>HLS Downloader</title>
+  <script src="/theme-boot.js"></script>
   <style>
-    html { color-scheme: light dark; background: #f2f3f6; }
-    body { margin: 0; width: 360px; background: #f2f3f6; color: #0c111d; font: 12px/1.45 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    html { color-scheme: light; background: #f2f3f6; }
+    body { margin: 0; min-width: 360px; width: 372px; max-width: 380px; background: #f2f3f6; color: #0c111d; font: 12px/1.45 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
     .popup-boot { display: flex; min-height: 196px; flex-direction: column; background: #f2f3f6; }
     .popup-boot__header { display: flex; height: 56px; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid #e2e5eb; background: #fff; }
     .popup-boot__header img { width: 30px; height: 30px; padding: 4px; box-sizing: border-box; border: 1px solid #e2e5eb; border-radius: 9px; background: #fff; box-shadow: 0 1px 2px rgba(16, 24, 40, .08); }
@@ -18,12 +19,25 @@
     .popup-boot__body > div { padding: 14px 18px; border: 1px solid #e2e5eb; border-radius: 10px; background: rgba(255, 255, 255, .86); }
     .popup-boot__body strong { display: block; margin-bottom: 4px; font-size: 13px; }
     .popup-boot__body span { color: #475467; font-size: 11.5px; }
+    html[data-hlsd-theme="dark"] { color-scheme: dark; background: #0f1115; }
+    html[data-hlsd-theme="dark"] body,
+    html[data-hlsd-theme="dark"] .popup-boot { background: #0f1115; color: #eef1f6; }
+    html[data-hlsd-theme="dark"] .popup-boot__header,
+    html[data-hlsd-theme="dark"] .popup-boot__header img { border-color: #2a2f39; background: #171a20; }
+    html[data-hlsd-theme="dark"] .popup-boot__status::before { background: #7aa2ff; }
+    html[data-hlsd-theme="dark"] .popup-boot__status,
+    html[data-hlsd-theme="dark"] .popup-boot__body span { color: #b6bcc8; }
+    html[data-hlsd-theme="dark"] .popup-boot__body > div { border-color: #2a2f39; background: rgba(23, 26, 32, .86); }
     @media (prefers-color-scheme: dark) {
-      html, body, .popup-boot { background: #0f1115; color: #eef1f6; }
-      .popup-boot__header, .popup-boot__header img { border-color: #2a2f39; background: #171a20; }
-      .popup-boot__status::before { background: #7aa2ff; }
-      .popup-boot__status, .popup-boot__body span { color: #b6bcc8; }
-      .popup-boot__body > div { border-color: #2a2f39; background: rgba(23, 26, 32, .86); }
+      html:not([data-hlsd-theme="light"]) { color-scheme: dark; background: #0f1115; }
+      html:not([data-hlsd-theme="light"]) body,
+      html:not([data-hlsd-theme="light"]) .popup-boot { background: #0f1115; color: #eef1f6; }
+      html:not([data-hlsd-theme="light"]) .popup-boot__header,
+      html:not([data-hlsd-theme="light"]) .popup-boot__header img { border-color: #2a2f39; background: #171a20; }
+      html:not([data-hlsd-theme="light"]) .popup-boot__status::before { background: #7aa2ff; }
+      html:not([data-hlsd-theme="light"]) .popup-boot__status,
+      html:not([data-hlsd-theme="light"]) .popup-boot__body span { color: #b6bcc8; }
+      html:not([data-hlsd-theme="light"]) .popup-boot__body > div { border-color: #2a2f39; background: rgba(23, 26, 32, .86); }
     }
     @media (prefers-reduced-motion: reduce) { .popup-boot__status::before { animation: none; } }
   </style>

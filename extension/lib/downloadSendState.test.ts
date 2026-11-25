@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, sendClickAction, sendStateFromHandoff, type SendState } from './downloadSendState'
+import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, canForceResend, sendClickAction, sendStateFromHandoff, type SendState } from './downloadSendState'
 
 describe('sendStateFromHandoff', () => {
   it('maps Core handoff and task facts to one visible state', () => {
@@ -33,5 +33,17 @@ describe('sendStateFromHandoff', () => {
       expect(SEND_LABELS[state].length).toBeGreaterThan(0)
       expect(SEND_TITLES[state].length).toBeGreaterThan(0)
     }
+  })
+
+  it('unlocks refresh/resend for ArmTaskRefresh, URL updates, and explicit resend affordances', () => {
+    expect(sendStateFromHandoff({ status: 'accepted', taskStatus: 'paused', taskErrorCode: 'refresh_armed' })).toBe('retry')
+    expect(sendClickAction('queued', { urlChanged: true })).toBe('send')
+    expect(sendClickAction('done', { urlChanged: true })).toBe('send')
+    expect(sendClickAction('recoverable', { cooldownElapsed: true })).toBe('send')
+    expect(canForceResend('queued')).toBe(true)
+    expect(canForceResend('done')).toBe(true)
+    expect(canForceResend('recoverable')).toBe(true)
+    expect(canForceResend('sending')).toBe(false)
+    expect(canForceResend('confirming')).toBe(false)
   })
 })

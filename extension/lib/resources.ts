@@ -12,6 +12,7 @@ export interface MediaVariant {
   height?: number
   bandwidth?: number
   quality?: string
+  audioUrl?: string
 }
 
 export interface MediaResource {
@@ -19,6 +20,7 @@ export interface MediaResource {
   url: string
   kind: ResourceKind
   mimeType?: string
+  audioUrl?: string
   size?: number
   /** Estimated bytes for an adaptive stream when a manifest exposes duration + bitrate. */
   estimatedSize?: number
@@ -71,6 +73,8 @@ export interface MediaResource {
   seenAt: number
 }
 
+export type DetectedResource = MediaResource
+
 export interface MediaAudioTrack { label: string; language: string; url?: string; default?: boolean }
 
 export function boundedConfidence(value: unknown, fallback = 0): number {
@@ -119,8 +123,11 @@ const AD_QUERY_KEYS = new Set(['ad', 'ads', 'advert', 'advertisement', 'preroll'
 const AD_QUERY_VALUE_KEYS = new Set(['type', 'kind', 'media', 'role', 'content', 'contenttype'])
 const NON_VIDEO_MANIFEST_SIGNAL = /(?:^|[\/_.-])(?:audio(?:only|track)?|subtitle(?:s)?|caption(?:s)?|thumbnail(?:s)?|thumb(?:s)?|sprite(?:s)?|storyboard(?:s)?|preview(?:s)?|iframe|trickplay|ad(?:s)?|advert(?:s|ising)?|preroll|midroll|postroll)(?:[\/_.-]|$)/i
 const NON_VIDEO_MANIFEST_QUERY = new Set(['audio', 'subtitle', 'subtitles', 'caption', 'captions', 'ad', 'ads', 'advertisement', 'iframe'])
-const GENERIC_MEDIA_NAME = /^(?:(?:video|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p)$/i
+const GENERIC_MEDIA_NAME = /^(?:(?:video|videoplayback|playback|stream|master|index|playlist|manifest|chunklist|media|output|download|file|vod|live)(?:[-_ ]*(?:\d{3,4}p(?:\d{2,3})?|low|medium|high|sd|hd|fhd|uhd|4k))?|(?:hls[-_ ]*)?(?:\d{3,4}p[-_ ]*)?(?:hls[-_ ]*)?(?:video[-_ ]*stream|视频流)?|(?:hls[-_ ]*)?\d{3,4}p(?:\d{2,3})?)$/i
 const OPAQUE_MEDIA_NAME = /^(?:[a-f0-9]{16,}|[a-z0-9_-]{28,})$/i
+const NUMERIC_SEGMENT_STEM = /^(?:seg[-_ ]?|chunk[-_ ]?|part[-_ ]?|frag[-_ ]?|bv[a-z0-9]{4,20})?\d+(?:[-_]\d+)*$/i
+const PLAYABLE_MEDIA_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|ts|m2ts|m4a|mp3|flac|wav|ogg|oga|opus|aac)(?:$|[?#])/i
+const KNOWN_MEDIA_FILE_EXT = /\.(mp4|m4v|m4s|cmfv|webm|mkv|mov|avi|flv|f4v|3gp|ts|m2ts|m4a|mp3|flac|wav|ogg|oga|opus|aac)$/i
 const PLAYBACK_DISCOVERY_GRACE_MS = 650
 
 function cleanName(value = '', pathValue = false): string {
@@ -156,12 +163,33 @@ export function looksLikeDownloadFile(value = ''): boolean {
   return DOWNLOAD_FILE_EXT.test(candidate.split(/[\\/]/).pop() || candidate)
 }
 
+export function isPlayableMediaResource(
+  resource: Pick<MediaResource, 'kind' | 'url' | 'mimeType' | 'filename'>,
+): boolean {
+  if (resource.kind === 'hls' || resource.kind === 'dash' || resource.kind === 'media') return true
+  if (resource.kind === 'magnet') return false
+  const mime = String(resource.mimeType || '').split(';', 1)[0].trim().toLowerCase()
+  if (mime.startsWith('video/') || mime.startsWith('audio/') || mime.includes('mpegurl') || mime.includes('dash+xml')) {
+    return true
+  }
+  const filename = String(resource.filename || '').trim()
+  if (filename && PLAYABLE_MEDIA_EXT.test(filename)) return true
+  try {
+    const pathname = decodeURIComponent(new URL(resource.url).pathname)
+    return PLAYABLE_MEDIA_EXT.test(pathname)
+  } catch {
+    return PLAYABLE_MEDIA_EXT.test(resource.url)
+  }
+}
+
 export function isGenericMediaName(value = ''): boolean {
   const name = cleanName(value, true)
   if (!name) return true
   const stem = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : name
   const compact = stem.replace(/\s+/g, '')
-  return GENERIC_MEDIA_NAME.test(stem) || OPAQUE_MEDIA_NAME.test(compact) || /^\d+$/.test(compact)
+  return GENERIC_MEDIA_NAME.test(stem)
+    || OPAQUE_MEDIA_NAME.test(compact)
+    || NUMERIC_SEGMENT_STEM.test(compact)
 }
 
 function urlNames(value = ''): string[] {
@@ -177,15 +205,102 @@ function urlNames(value = ''): string[] {
   }
 }
 
-export function suggestedResourceFilename(resource: Pick<MediaResource, 'kind' | 'url' | 'pageUrl' | 'title' | 'filename'>): string {
-  if (resource.kind !== 'hls' && resource.kind !== 'dash') return cleanName(resource.filename || resource.title || '', true)
-  const candidates = [
-    cleanName(resource.filename || '', true),
-    cleanName(resource.title || ''),
-    ...urlNames(resource.pageUrl),
-    ...urlNames(resource.url),
-  ].filter(Boolean)
-  return candidates.find(value => !isGenericMediaName(value)) || candidates[0] || 'download'
+function cleanMediaExtension(
+  resource: Pick<MediaResource, 'kind' | 'url' | 'filename' | 'mimeType' | 'audioUrl'>,
+): string {
+  if (resource.audioUrl) return '.mp4'
+  const extractExt = (raw = ''): string => {
+    const match = raw.split(/[?#]/, 1)[0].match(KNOWN_MEDIA_FILE_EXT)
+    if (!match) return ''
+    const ext = match[1].toLowerCase()
+    if (ext === 'm4s' || ext === 'cmfv' || ext === 'm4v') return '.mp4'
+    return `.${ext}`
+  }
+  const fromFilename = extractExt(resource.filename || '')
+  if (fromFilename) return fromFilename
+  try {
+    const fromUrl = extractExt(decodeURIComponent(new URL(resource.url).pathname))
+    if (fromUrl) return fromUrl
+  } catch {
+    const fromRawUrl = extractExt(resource.url)
+    if (fromRawUrl) return fromRawUrl
+  }
+  const mime = String(resource.mimeType || '').split(';', 1)[0].trim().toLowerCase()
+  if (mime === 'video/webm') return '.webm'
+  if (mime === 'video/x-matroska') return '.mkv'
+  if (mime === 'video/quicktime') return '.mov'
+  if (mime.startsWith('video/')) return '.mp4'
+  if (mime === 'audio/mpeg' || mime === 'audio/mp3') return '.mp3'
+  if (mime === 'audio/mp4' || mime === 'audio/x-m4a') return '.m4a'
+  if (mime === 'audio/flac') return '.flac'
+  if (mime === 'audio/wav' || mime === 'audio/x-wav') return '.wav'
+  if (mime === 'audio/opus') return '.opus'
+  if (mime === 'audio/ogg') return '.ogg'
+  if (mime === 'audio/aac') return '.aac'
+  return resource.kind === 'media' ? '.mp4' : ''
+}
+
+function buildStemWithExtension(stemRaw: string, ext: string): string {
+  const stripped = stemRaw.replace(KNOWN_MEDIA_FILE_EXT, '').replace(/[.\s]+$/, '')
+  if (!ext) return cleanName(stripped)
+  const budget = Math.max(1, 200 - ext.length)
+  let truncated = stripped.slice(0, budget).replace(/[\uD800-\uDBFF]$/, '').replace(/[. ]+$/, '')
+  if (!truncated) truncated = 'video'
+  return `${truncated}${ext}`
+}
+
+export function suggestedResourceFilename(
+  resource: Pick<MediaResource, 'kind' | 'url' | 'pageUrl' | 'title' | 'filename' | 'mimeType' | 'audioUrl'>,
+): string {
+  const hasSplitAudio = Boolean(resource.audioUrl && resource.audioUrl.trim())
+  if ((resource.kind === 'hls' || resource.kind === 'dash') && !hasSplitAudio) {
+    const candidates = [
+      cleanName(resource.filename || '', true),
+      cleanName(resource.title || ''),
+      ...urlNames(resource.pageUrl),
+      ...urlNames(resource.url),
+    ].filter(Boolean)
+    return candidates.find(value => !isGenericMediaName(value)) || candidates[0] || 'download'
+  }
+
+  let urlBasename = ''
+  try { urlBasename = cleanName(new URL(resource.url).pathname, true) } catch {}
+  const explicitFilename = cleanName(resource.filename || '', true)
+  const sanitizedTitle = cleanName(resource.title || '')
+  const genericLeaf = isGenericMediaName(explicitFilename || urlBasename)
+
+  if (hasSplitAudio || resource.kind === 'media' || (genericLeaf && Boolean(sanitizedTitle))) {
+    const ext = cleanMediaExtension(resource)
+    if (sanitizedTitle && !isGenericMediaName(sanitizedTitle)) {
+      return buildStemWithExtension(sanitizedTitle, ext)
+    }
+    if (explicitFilename && !isGenericMediaName(explicitFilename)) {
+      if (hasSplitAudio || /\.m4s$/i.test(explicitFilename)) {
+        return buildStemWithExtension(explicitFilename, '.mp4')
+      }
+      return explicitFilename
+    }
+    const pageFallback = urlNames(resource.pageUrl).find(value => !isGenericMediaName(value))
+    if (pageFallback) {
+      return buildStemWithExtension(pageFallback, ext)
+    }
+    if (explicitFilename) {
+      return hasSplitAudio || /\.m4s$/i.test(explicitFilename)
+        ? buildStemWithExtension(explicitFilename, '.mp4')
+        : explicitFilename
+    }
+    if (sanitizedTitle) {
+      return buildStemWithExtension(sanitizedTitle, ext)
+    }
+    if (urlBasename) {
+      return hasSplitAudio || /\.m4s$/i.test(urlBasename)
+        ? buildStemWithExtension(urlBasename, '.mp4')
+        : urlBasename
+    }
+    return ext ? `download${ext}` : 'download'
+  }
+
+  return cleanName(resource.filename || resource.title || '', true)
 }
 
 export function classifyResource(url: string, mimeType = ''): ResourceKind | null {
@@ -466,8 +581,12 @@ function hasAdvertSignal(value: string): boolean {
 }
 
 export function selectMediaVariant(resource: MediaResource, variant: MediaVariant): MediaResource {
+  const resolvedAudioUrl = variant.audioUrl || resource.audioUrl
   return {
-    ...resource, ...variant, variants: undefined,
+    ...resource,
+    ...variant,
+    ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
+    variants: undefined,
     manifestUrl: resource.kind === 'hls' || resource.kind === 'dash' ? resource.url : undefined,
     preferredBandwidth: variant.bandwidth || 0,
     preferredHeight: variant.height || 0,
@@ -822,6 +941,7 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
       method: newer.method || older.method,
       evidence: [...new Set([...(older.evidence || []), ...(newer.evidence || [])])].slice(-16),
       owner: newer.owner || older.owner,
+      audioUrl: newer.audioUrl || older.audioUrl,
       confidence: Math.max(boundedConfidence(older.confidence), boundedConfidence(newer.confidence)),
       replayContext: mergedReplayContext,
       variants: newer.variants?.length ? newer.variants : older.variants,
