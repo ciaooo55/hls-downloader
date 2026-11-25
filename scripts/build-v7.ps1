@@ -14,6 +14,9 @@ if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader
 $featureParity = Join-Path $repo 'config\release\feature-parity.json'
 $productVersion = [string](Get-Content -LiteralPath $featureParity -Raw -Encoding UTF8 | ConvertFrom-Json).product_version
 $moduleVersions = @(
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'crates\protocol\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'crates\client\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
+    ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_clients\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_shell\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     ([regex]::Match((Get-Content -LiteralPath (Join-Path $repo 'native_ui\Cargo.toml') -Raw -Encoding UTF8), '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value,
     [string](Get-Content -LiteralPath (Join-Path $repo 'extension\package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
@@ -83,7 +86,6 @@ $cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_B
 # offline toolchain instead of downloading and compiling the same inputs twice.
 if (-not $env:CARGO_HOME) { $env:CARGO_HOME=Join-Path $cacheRoot 'cargo' }
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'cargo-target' }
-if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = '1' }
 # Keep Corepack state under the same selected cache so relocation/cleanup do
 # not leave a second hidden tool state behind in the repository.
 $env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'

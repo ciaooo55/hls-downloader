@@ -19,16 +19,38 @@ function bilibiliHost(host: string): boolean {
   return host === 'bilibili.com' || host.endsWith('.bilibili.com')
 }
 
-function bilibiliMediaHost(host: string): boolean {
+function bilibiliDedicatedMediaHost(host: string): boolean {
   const normalized = host.toLowerCase()
   return normalized === 'bilivideo.com' || normalized.endsWith('.bilivideo.com')
     || normalized === 'bilivideo.cn' || normalized.endsWith('.bilivideo.cn')
     || normalized === 'bilivideo.net' || normalized.endsWith('.bilivideo.net')
     || normalized === 'hdslb.com' || normalized.endsWith('.hdslb.com')
-    || normalized === 'akamaized.net' || normalized.endsWith('.akamaized.net')
     || normalized === 'biliapi.net' || normalized.endsWith('.biliapi.net')
     || normalized === 'acgvideo.com' || normalized.endsWith('.acgvideo.com')
     || normalized === 'szbdyd.com' || normalized.endsWith('.szbdyd.com')
+}
+
+function akamaizedHost(host: string): boolean {
+  const normalized = host.toLowerCase()
+  return normalized === 'akamaized.net' || normalized.endsWith('.akamaized.net')
+}
+
+function bilibiliAkamaiMseUrl(parsed: URL): boolean {
+  const host = parsed.hostname.toLowerCase()
+  const pathAndQuery = `${parsed.pathname}${parsed.search}`.toLowerCase()
+  if (pathAndQuery.includes('/upgcxcode/') || pathAndQuery.includes('upos-')) return true
+  if (/(?:^|[/_?&=-])bili(?:bilibili|video|api|cdn|[/_?&=-]|$)/i.test(pathAndQuery)) return true
+  return /(?:^|\.)upos-/i.test(host) && /(?:^|\/)\d+-\d+-\d+\.m4s$/i.test(parsed.pathname)
+}
+
+function bilibiliMediaHost(host: string): boolean {
+  return bilibiliDedicatedMediaHost(host) || akamaizedHost(host)
+}
+
+function bilibiliMseTrackHost(parsed: URL): boolean {
+  if (bilibiliDedicatedMediaHost(parsed.hostname)) return true
+  if (akamaizedHost(parsed.hostname)) return bilibiliAkamaiMseUrl(parsed)
+  return false
 }
 
 const BILIBILI_PLAYURL_PATHS = new Set([
@@ -114,7 +136,7 @@ export function isBilibiliFullTrackMseUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return false
-    if (!bilibiliMediaHost(parsed.hostname)) return false
+    if (!bilibiliMseTrackHost(parsed)) return false
     if (!/\.m4s$/i.test(parsed.pathname)) return false
     return !BILIBILI_AUDIO_TRACK_ID.test(parsed.pathname)
   } catch {
@@ -127,7 +149,7 @@ export function isBilibiliAudioTrackMseUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return false
-    if (!bilibiliMediaHost(parsed.hostname)) return false
+    if (!bilibiliMseTrackHost(parsed)) return false
     return BILIBILI_AUDIO_TRACK_ID.test(parsed.pathname)
   } catch {
     return false
@@ -209,6 +231,60 @@ function extractTrackObjects(raw: unknown): Array<Record<string, unknown>> {
   return []
 }
 
+function normalizeBilibiliBvid(raw: unknown): string {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  return /^bv[A-Za-z0-9]{4,32}$/i.test(text) ? `BV${text.slice(2)}` : ''
+}
+
+function normalizeBilibiliNumericId(raw: unknown, prefix: 'av' | 'ep' | 'ss'): string {
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return String(raw)
+  if (typeof raw !== 'string') return ''
+  const match = new RegExp(`^(?:${prefix})?([1-9]\\d*)$`, 'i').exec(raw.trim())
+  return match?.[1] || ''
+}
+
+function bilibiliPayloadConflictsWithPage(
+  videoId: string,
+  containers: Array<Record<string, unknown> | null | undefined>,
+  streamUrls: Iterable<string> = [],
+): boolean {
+  const pageBvid = normalizeBilibiliBvid(videoId)
+  const pageAid = /^av\d+$/i.test(videoId) ? normalizeBilibiliNumericId(videoId, 'av') : ''
+  const pageEpId = /^ep\d+$/i.test(videoId) ? normalizeBilibiliNumericId(videoId, 'ep') : ''
+  const pageSeasonId = /^ss\d+$/i.test(videoId) ? normalizeBilibiliNumericId(videoId, 'ss') : ''
+
+  for (const obj of containers) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
+    if (pageBvid) {
+      const payloadBvid = normalizeBilibiliBvid(obj.bvid ?? obj.bv_id)
+      if (payloadBvid && payloadBvid !== pageBvid) return true
+    }
+    if (pageAid) {
+      const payloadAid = normalizeBilibiliNumericId(obj.aid ?? obj.avid, 'av')
+      if (payloadAid && payloadAid !== pageAid) return true
+    }
+    if (pageEpId) {
+      const payloadEpId = normalizeBilibiliNumericId(obj.ep_id ?? obj.epid, 'ep')
+      if (payloadEpId && payloadEpId !== pageEpId) return true
+    }
+    if (pageSeasonId) {
+      const payloadSeasonId = normalizeBilibiliNumericId(obj.season_id ?? obj.ssid, 'ss')
+      if (payloadSeasonId && payloadSeasonId !== pageSeasonId) return true
+    }
+  }
+
+  if (pageBvid) {
+    for (const rawUrl of streamUrls) {
+      try {
+        const parsed = new URL(rawUrl)
+        const streamBvid = normalizeBilibiliBvid(parsed.searchParams.get('bvid'))
+        if (streamBvid && streamBvid !== pageBvid) return true
+      } catch {}
+    }
+  }
+  return false
+}
+
 /** Extract Bilibili DASH/durl streams from `window.__playinfo__` or `playurl` JSON. */
 export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteManifestCandidate[] {
   const videoId = bilibiliPageVideoId(pageUrl)
@@ -232,6 +308,19 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
     || root
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return []
   const data = payload as Record<string, unknown>
+  const epInfoObj = (resultObj?.ep_info && typeof resultObj.ep_info === 'object' && !Array.isArray(resultObj.ep_info)
+    ? resultObj.ep_info as Record<string, unknown>
+    : null)
+    || (dataObj?.ep_info && typeof dataObj.ep_info === 'object' && !Array.isArray(dataObj.ep_info)
+      ? dataObj.ep_info as Record<string, unknown>
+      : null)
+  const viewInfoObj = (dataObj?.view_info && typeof dataObj.view_info === 'object' && !Array.isArray(dataObj.view_info)
+    ? dataObj.view_info as Record<string, unknown>
+    : null)
+    || (resultObj?.view_info && typeof resultObj.view_info === 'object' && !Array.isArray(resultObj.view_info)
+      ? resultObj.view_info as Record<string, unknown>
+      : null)
+  if (bilibiliPayloadConflictsWithPage(videoId, [root, dataObj, resultObj, data, epInfoObj, viewInfoObj])) return []
   const dash = data.dash && typeof data.dash === 'object' && !Array.isArray(data.dash)
     ? data.dash as Record<string, unknown>
     : null
@@ -338,6 +427,7 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
     }))
 
     if (!parsedVideos.length) return []
+    if (bilibiliPayloadConflictsWithPage(videoId, [], playbackUrls)) return []
     parsedVideos.sort((left, right) => right.height - left.height
       || Math.round(right.fps) - Math.round(left.fps)
       || codecPreference(right.codecs) - codecPreference(left.codecs)
@@ -393,6 +483,7 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
     if (!first || typeof first !== 'object' || Array.isArray(first)) return []
     const urls = bilibiliTrackUrls(first as Record<string, unknown>)
     if (!urls.length) return []
+    if (bilibiliPayloadConflictsWithPage(videoId, [], urls)) return []
     const size = Math.max(0, Math.floor(Number((first as Record<string, unknown>).size || 0)))
     const itemLengthMs = Number((first as Record<string, unknown>).length || 0)
     const duration = durationSeconds || (Number.isFinite(itemLengthMs) && itemLengthMs > 0 ? Math.round(itemLengthMs / 1000) : undefined)
@@ -428,7 +519,20 @@ export const bilibiliPlayinfoCandidates = extractBilibiliPlayinfo
 
 export function siteManifestCandidates(url: string, pageUrl: string, body: unknown): SiteManifestCandidate[] {
   if (!shouldInspectSiteResponse(url, pageUrl)) return []
-  if (bilibiliPageVideoId(pageUrl)) {
+  const biliVideoId = bilibiliPageVideoId(pageUrl)
+  if (biliVideoId) {
+    try {
+      const req = new URL(url)
+      const queryIds: Record<string, unknown> = {
+        bvid: req.searchParams.get('bvid') ?? undefined,
+        aid: req.searchParams.get('aid') ?? req.searchParams.get('avid') ?? undefined,
+        ep_id: req.searchParams.get('ep_id') ?? req.searchParams.get('epid') ?? undefined,
+        season_id: req.searchParams.get('season_id') ?? req.searchParams.get('ssid') ?? undefined,
+      }
+      if (bilibiliPayloadConflictsWithPage(biliVideoId, [queryIds])) return []
+    } catch {
+      return []
+    }
     return extractBilibiliPlayinfo(pageUrl, body)
   }
   if (typeof body === 'string') {

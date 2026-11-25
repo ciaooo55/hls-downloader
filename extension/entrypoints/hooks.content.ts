@@ -35,7 +35,8 @@ export default defineContentScript({
       return observation
     }
     const sourcePageUrl = () => location.href.split('#', 1)[0]
-    let lastObservedPageUrl = sourcePageUrl()
+    const initialSsrPageUrl = sourcePageUrl()
+    let lastObservedPageUrl = initialSsrPageUrl
     const pendingInspections = new Map<() => void, string>()
     const cancelObsoleteInspections = (preserveSameVideoFrom?: string) => {
       const pageUrl = sourcePageUrl()
@@ -126,6 +127,9 @@ export default defineContentScript({
     }
     const scanPageSiteMetadata = () => {
       const pageUrl = sourcePageUrl()
+      // SSR `window.__playinfo__` belongs strictly to the initial document URL;
+      // Bilibili SPA `pushState` leaves stale `__playinfo__` on `window` when switching videos.
+      if (!sameSiteVideoIdentity(initialSsrPageUrl, pageUrl)) return
       try {
         const playinfo = (window as unknown as { __playinfo__?: unknown }).__playinfo__
         if (!playinfo) return

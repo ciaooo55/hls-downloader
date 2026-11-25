@@ -1838,6 +1838,33 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.browser.downloads.cancel).toHaveBeenCalledWith(42)
   })
 
+  it('falls back to local browser download import instead of abandoning takeover when minimumBytes > 0 and cookies are unauthorized', async () => {
+    local.minimumBytes = 1 * 1024 * 1024
+    local.authorizedCookieHosts = []
+    item.url = item.finalUrl = 'https://cdn.test/releases/private-sdk.iso'
+    item.filename = 'C:\\Downloads\\private-sdk.iso'
+    item.state = 'in_progress'
+    item.totalBytes = 50 * 1024 * 1024
+    item.fileSize = 50 * 1024 * 1024
+
+    largeResumableResponse({ early: true, size: 50 * 1024 * 1024, cookieHeader: 'sid=unauth-session' })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+    await flush()
+
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+    expect(local['local-browser-download-handoffs']).toMatchObject([
+      { downloadId: 42 },
+    ])
+
+    item.state = 'complete'
+    listener(mocks.browser.downloads.onChanged)({ id: 42, state: { current: 'complete' } })
+    await flush()
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(true)
+  })
+
   it('accelerates large resumable files in Firefox onHeadersReceived even when minimumBytes > 0', async () => {
     vi.stubEnv('CHROME', '')
     vi.stubEnv('FIREFOX', 'true')

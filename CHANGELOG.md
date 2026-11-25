@@ -15,12 +15,12 @@
 - **双轨音视频并发下载与无损封装**：新增 `audio_url` 双轨并发传输与 FFmpeg 自动无损 `.mp4` 混流管线（原生支持 Bilibili `/ogv/player/playview` 及分离 `.m4s` 音视频合流），默认开启点播 HLS `.ts -> .mp4` 无损重封装并支持 FLAC-in-MP4 封装。
 - **浏览器 HTTP GET 直连多线程接管加速**：扩展将普通 HTTP/HTTPS `GET` 下载、HLS（`.m3u8`）、DASH（`.mpd`）及双轨流通过 Native Messaging 直接移交桌面 Rust Core 执行多连接分段加速；一次性 `POST` 表单与 `Blob` / `data:` 负载保留浏览器响应接收后再安全导入。
 - **扩展快捷授权、DRM 识别与常驻快捷栏**：新增一键 `[授权本站]` 站点 Cookie 授权横幅、常驻快捷设置栏、网页视频悬停一键画质胶囊（精确透传 `preferred_variant_id`）、搜索与分类筛选面板，以及 Widevine / PlayReady / SAMPLE-AES 受保护流识别提示与 YouTube MSE 分片噪声过滤。
-- **过期签名 URL 刷新续传**：支持保留已落盘分片与字节检查点刷新过期签名地址无缝续传，提供浏览器辅助刷新入口（`ArmTaskRefresh`）与轮换 CDN 签名链接去重识别。
+- **过期签名 URL 刷新续传与归一化去重**：支持保留已落盘分片与字节检查点刷新过期签名地址无缝续传，提供浏览器辅助刷新入口（`ArmTaskRefresh`）与客户端/服务端统一的预签名 URL 规范化去重识别（`canonical_resource_key`）。
 - **原生 FTP/FTPS 与 SFTP 代理隧道**：控制连接、被动数据连接及 `russh` SFTP 会话全面支持 HTTP CONNECT（Basic 鉴权）、SOCKS5/5h、SOCKS4/4a 与 Windows WinINet 按 URL 系统代理路由。
-- **工作台高频效率交互**：新增全局快捷键（`Ctrl+F` 搜索、`Ctrl+,` 设置、`Alt+I` 检视抽屉、`Space` 暂停/恢复）、通配符批量 URL 生成、工具栏限速胶囊、现代 COM 目录选择器、可拖拽交互任务列表滚动条，以及首次关闭至托盘时的系统原生气泡提示。
+- **工作台高频效率交互**：新增全局快捷键（`Ctrl+F` 搜索、`Ctrl+,` 设置、`Alt+I` 检视抽屉、`Space` 暂停/恢复）、通配符批量 URL 生成、工具栏一键限速与主题切换胶囊、现代 COM 目录选择器、可拖拽交互任务列表滚动条，以及首次关闭至托盘时的系统原生气泡提示。
 
 ### 变更 (Changed)
-- **旗舰级视觉体系与原生字体排版**：全面升级 **Fluent Graphite + Luminous Cobalt** 深浅双主题与双模式进度 HUD（详情视图 / 紧凑迷你条）；采用系统原生多字重 `Microsoft YaHei UI` 渲染（Regular + Bold 清晰度提升，安装包与运行体积缩减约 16.4 MB），统一二级弹窗系统原生标题栏，并在设置窗口对常用布尔开关启用即时自动保存（Live-Save）。
+- **旗舰级视觉体系与原生字体排版**：全面升级 **Fluent Graphite + Luminous Cobalt** 深浅双主题与双模式进度 HUD（详情视图 / 紧凑迷你条）；采用系统原生多字重 `Microsoft YaHei UI` 渲染（Regular + Bold 清晰度提升，安装包与运行体积缩减约 16.4 MB），统一二级弹窗系统原生标题栏；设置窗口（`SettingsWindow`）采用带未保存变更提示的统一事务化保存，日常限速与主题切换由主工作台工具栏胶囊一键直达。
 - **Core 原生 `WinHTTP` 优先传输与静默快下闭环**：分片拉取默认优先采用原生 `WinHTTP` 引擎并在命中 WAF 拦截（如 403）时自动回退 `curl-impersonate`；Core 端直接支持静默快速下载自动接收，并在后台交接事件到达时按需冷启动唤醒 Presenter。
 - **零轮询异步 IPC 与低功耗空闲态**：以 Win32 Overlapped Named Pipe I/O 取代轮询等待，消除空闲周期写盘开销，并持久化托盘主动退出标记以防浏览器后台探测意外拉起引擎。
 
@@ -29,10 +29,10 @@
 - 对齐 DASH 点播批量检查点刷盘策略（32 分片 / 64 MiB / 1 秒），修复 `WafCurlCache` 403 回退恢复与 `Alt` 点击绕过、页面链接批量提取等多项浏览器接管边缘场景。
 - 收紧浏览器辅助刷新链接（`ArmTaskRefresh`）双入口匹配校验（杜绝等待期内误覆盖无关标签页下载）并补齐 `admit_handoff` 路径 `audio_url` 协议与白名单校验。
 - 修复双轨 HTTP 下载单轨报错时误清双轨临时文件与断点状态的问题（仅在用户真实取消时清理，并在重试/续传时直接复用已下完轨道）。
-- 修复 HLS `select_audio_track` 忽略无独立 `URI` 的 `DEFAULT=YES` 内嵌原声 rendition 导致误混流外部评论音轨的问题；保留 `.kmz`、`.3mf` 等合法非危险 ZIP 容器后缀，并修复设置页即时布尔开关在队列满或报错后无法通过「保存设置」重试的问题。
+- 修复 HLS `select_audio_track` 忽略无独立 `URI` 的 `DEFAULT=YES` 内嵌原声 rendition 导致误混流外部评论音轨的问题；保留 `.kmz`、`.3mf` 等合法非危险 ZIP 容器后缀，并统一设置窗口事务化保存状态追踪以确保队列繁忙或校验报错后可正常点击「保存设置」重试。
 
 ### 安全 (Security)
-- **Win32 Job Object 子进程隔离**：通过 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 统一托管 FFmpeg、`curl-impersonate` 等子进程，主引擎退出或异常终止不留孤儿进程。
+- **Win32 Job Object 与无窗口子进程隔离**：通过 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 与 `CREATE_NO_WINDOW` 统一托管 FFmpeg、`curl-impersonate` 及外部 SFTP/SSH 辅助子进程生命周期，杜绝主引擎退出残留孤儿进程或闪现控制台黑窗。
 - **代理 Fail-Closed 与凭据保险库加固**：代理握手或鉴权失败严格拒绝直连回退；代理凭据统一纳入 Windows DPAPI 加密存储与日志脱敏，并强化自动更新单源签名校验与 SSRF / 重定向边界。
 - **全量生产代码 `unsafe` 与 `.unwrap()` 审计加固**：启用 `#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]` 为生产 `unsafe` 块与 `unsafe impl` 补齐 `// SAFETY:` 不变量说明，并清理生产代码路径中的未受保护 `.unwrap()`。
 

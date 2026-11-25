@@ -33,6 +33,10 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   let pageUrl = ''
   let invalidated = false
   let reporting = false
+  let inventoryQueued = false
+  let forceNextReport = false
+  let hadReportedPlayers = false
+  let inventoryTimer: ReturnType<typeof setTimeout> | undefined
   let clockTimer: ReturnType<typeof setInterval> | undefined
   const send = (message: Record<string, unknown>) => browser.runtime.sendMessage(message)
   const button = (text: string, click: () => void) => {
@@ -184,26 +188,47 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
     document.documentElement.append(host)
     players.set(media, { id, host, button: start, caption, source, status: state, options, back, next, earlier, later, hold, starting: false, startError: '' })
   }
-  const inventory = async () => {
-    if (invalidated || reporting) return
+  const scheduleInventory = () => {
+    clearTimeout(inventoryTimer)
+    inventoryTimer = undefined
+    if (invalidated) return
+    const active = Boolean(selected && !['stopped', 'failed'].includes(status))
+    if (players.size === 0 && !active) return
+    inventoryTimer = setTimeout(() => {
+      inventoryTimer = undefined
+      void inventory()
+    }, active || allowed && players.size > 0 ? 2000 : 10_000)
+  }
+  const inventory = async (forceReport = false) => {
+    if (invalidated) return
+    if (reporting) {
+      inventoryQueued = true
+      if (forceReport) forceNextReport = true
+      return
+    }
     reporting = true
     try {
       for (const [media, ui] of players) if (!media.isConnected) { ui.host.remove(); players.delete(media) }
-      const values = [...players].map(([media, ui]) => {
-        const rect = media.getBoundingClientRect()
-        const audioTracks = (media as any).audioTracks
-        const tracks = audioTracks ? Array.from(audioTracks as ArrayLike<{ label: string; language: string }>).map(t => t.label || t.language || '音轨') : []
-        return { mediaId: ui.id, label: media.getAttribute('aria-label') || media.title || document.title || '网页播放器',
-          playing: !media.paused && !media.ended, area: rect.width * rect.height, tracks }
-      })
-      const response = await send({ type: 'subtitle-players', players: values })
-      if (invalidated) return
-      if (response?.ok) {
-        settings = subtitleSettings(response.settings); allowed = response.allowed === true
-        if (cueLanguages && cueLanguages !== `${settings.source}:${settings.target}`) { cues.clear(); live = undefined }
-        const nextPage = subtitlePage(response.pageUrl)
-        if (pageUrl && nextPage !== pageUrl) { cues.clear(); live = undefined }
-        pageUrl = nextPage
+      const shouldReport = players.size > 0 || hadReportedPlayers || forceReport || forceNextReport
+      forceNextReport = false
+      if (shouldReport) {
+        const values = [...players].map(([media, ui]) => {
+          const rect = media.getBoundingClientRect()
+          const audioTracks = (media as any).audioTracks
+          const tracks = audioTracks ? Array.from(audioTracks as ArrayLike<{ label: string; language: string }>).map(t => t.label || t.language || '音轨') : []
+          return { mediaId: ui.id, label: media.getAttribute('aria-label') || media.title || document.title || '网页播放器',
+            playing: !media.paused && !media.ended, area: rect.width * rect.height, tracks }
+        })
+        hadReportedPlayers = values.length > 0
+        const response = await send({ type: 'subtitle-players', players: values })
+        if (invalidated) return
+        if (response?.ok) {
+          settings = subtitleSettings(response.settings); allowed = response.allowed === true
+          if (cueLanguages && cueLanguages !== `${settings.source}:${settings.target}`) { cues.clear(); live = undefined }
+          const nextPage = subtitlePage(response.pageUrl)
+          if (pageUrl && nextPage !== pageUrl) { cues.clear(); live = undefined }
+          pageUrl = nextPage
+        }
       }
       if (selected && (!selected.isConnected || selected.currentSrc !== sourceUrl)) {
         const media = selected
@@ -220,7 +245,17 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         selected = undefined; sessionId = ''; cues.clear(); live = undefined
       }
       render()
-    } catch {} finally { reporting = false }
+    } catch {} finally {
+      reporting = false
+      if (inventoryQueued && !invalidated) {
+        const forced = forceNextReport
+        inventoryQueued = false
+        forceNextReport = false
+        void inventory(forced)
+      } else {
+        scheduleInventory()
+      }
+    }
   }
   function render() {
     if (invalidated) return
@@ -296,7 +331,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   const listener = (message: any, sender: { id?: string }, respond: (value: unknown) => void) => {
     if (sender.id !== browser.runtime.id) return
     if (message?.type === 'subtitle-policy') { void updatePolicy(); return }
-    if (message?.type === 'subtitle-inventory') { void inventory(); return }
+    if (message?.type === 'subtitle-inventory') { void inventory(true); return }
     if (message?.type === 'subtitle-select') {
       const media = [...players].find(([, ui]) => ui.id === message.mediaId)?.[0]
       if (!media?.isConnected) { respond({ ok: false, error: '播放器已移除，请重新选择' }); return }
@@ -383,23 +418,18 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
   browser.runtime.onMessage.addListener(listener)
   document.addEventListener('play', onPlay, true)
   document.addEventListener('playing', onPlay, true)
+  document.addEventListener('loadedmetadata', onPlay, true)
   document.addEventListener('fullscreenchange', render)
   window.addEventListener('scroll', render, { passive: true })
   window.addEventListener('resize', render)
-  let inventoryTimer: ReturnType<typeof setTimeout> | undefined
-  const scheduleInventory = () => {
-    if (invalidated) return
-    const active = selected && !['stopped', 'failed'].includes(status)
-    inventoryTimer = setTimeout(() => { void inventory().finally(scheduleInventory) }, active || allowed && players.size > 0 ? 2000 : 10_000)
-  }
   document.querySelectorAll<HTMLMediaElement>('video,audio').forEach(add)
-  void inventory()
-  scheduleInventory()
+  if (players.size > 0) void inventory()
   ctx.onInvalidated(() => {
     invalidated = true; clearTimeout(inventoryTimer); clearInterval(clockTimer)
     releaseStopCapture(); browser.runtime.onMessage.removeListener(listener)
     detachSelectedListeners()
     document.removeEventListener('play', onPlay, true); document.removeEventListener('playing', onPlay, true)
+    document.removeEventListener('loadedmetadata', onPlay, true)
     document.removeEventListener('fullscreenchange', render); window.removeEventListener('scroll', render); window.removeEventListener('resize', render)
     for (const ui of players.values()) ui.host.remove()
   })
