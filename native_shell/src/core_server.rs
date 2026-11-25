@@ -46,10 +46,7 @@ impl CoreServer {
                 }
             }
         })));
-        let update_root = hls_client::update_install::update_root();
-        if update_root.join("last-install-result.json").is_file()
-            || update_root.join("last-install-result.json.part").is_file()
-        {
+        if hls_client::update_install::has_pending_install_result() {
             server.presenter_bridge.mark_install_result_pending();
         }
         Ok(server)

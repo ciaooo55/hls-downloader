@@ -830,6 +830,7 @@ impl NativeHostSession {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
+            spec_override: None,
         })?;
         self.handoff_status(&json!({"handoff_id": id}))
     }
