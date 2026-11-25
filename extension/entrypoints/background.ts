@@ -242,7 +242,7 @@ async function evaluateAcceleratedBrowserDownload(
   }
   const cookies = await checkAcceleratedDownloadCookies(chain, resource, config.authorizedCookieHosts)
   if (!cookies.ok) {
-    return { accelerate: false, leaveInBrowser: minThreshold > 0 }
+    return { accelerate: false }
   }
   if (ctrlForce) {
     return { accelerate: true, desktopReady: true, resourceCookies: cookies.resourceCookies }

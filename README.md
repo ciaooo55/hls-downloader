@@ -55,7 +55,7 @@ Windows x64 用户请前往 [GitHub Releases](https://github.com/ciaooo55/hls-do
 | --- | --- |
 | ⚡ **多线程加速与断点续传**<br>支持 HTTP Range 动态尾块拆分、断点恢复、全局与单任务限速，以及签名链接过期后的刷新续传（保留已下载进度）。 | 🎬 **流媒体与双轨无损合流**<br>支持点播/直播 HLS（`.m3u8`）、DASH（`.mpd`）及音视频分离双轨流（如 Bilibili `.m4s`），支持精确画质选择与 FFmpeg 无损 `.mp4` 封装。 |
 | 🌐 **顺滑的浏览器接管**<br>提供网页视频悬停一键画质胶囊、弹窗搜索筛选与批量下载，支持标准确认弹窗与一键静默快速下载。 | 🧠 **独立 Rust Core 守护**<br>Core 独立持有 SQLite 状态与 DPAPI 加密凭据，并通过 Win32 Job Object 托管子进程，界面退出或异常不留孤儿进程。 |
-| 📦 **全协议统一队列**<br>HTTP/HTTPS、HLS/DASH、FTP/FTPS、SFTP（含 HTTP/SOCKS 代理隧道）与 BitTorrent/Magnet 共享同一套命名队列与计划调度。 | 🧩 **高效桌面工作台**<br>配备可折叠底部任务检视抽屉（实时速度曲线与分片状态图）、通配符批量建任务、抓站同步、远程 ZIP 预览与 CLI 工具。 |
+| 📦 **全协议统一队列**<br>HTTP/HTTPS、HLS/DASH、FTP/FTPS、SFTP（含 HTTP/SOCKS 代理隧道）与 BitTorrent/Magnet 共享同一套命名队列与计划调度。 | 🧩 **高效桌面工作台**<br>配备可折叠右侧任务检视抽屉（实时速度曲线与分片状态图）、通配符批量建任务、抓站同步、远程 ZIP 预览与 CLI 工具。 |
 | 📺 **边播边下与局域网投屏**<br>内置 `libmpv` 浮层与画中画播放器，支持兼容流媒体与 Range 文件边下边播，并可推送至局域网 DLNA / Chromecast / TVBox 设备。 | 🛟 **稳健安装与升级回滚**<br>安装与升级流程自动协调运行中进程、注册 Native Messaging Host，并在异常时支持安全回滚以保护已有数据。 |
 
 ## 🔌 支持范围

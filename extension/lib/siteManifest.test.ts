@@ -197,4 +197,58 @@ describe('scoped site player metadata', () => {
       videoId: 'ep778899',
     })
   })
+
+  it('rejects conflicting Bilibili video/episode identifiers and non-Bilibili akamaized.net DASH segments', () => {
+    const pageA = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const pageB = 'https://www.bilibili.com/video/BV1yy411c7mE/'
+    const avPage = 'https://www.bilibili.com/video/av170001/'
+    const bangumiPage = 'https://www.bilibili.com/bangumi/play/ep778899'
+    const videoUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+    const audioUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+    const baseDash = {
+      duration: 60,
+      video: [{ id: 80, baseUrl: videoUrl, width: 1920, height: 1080, bandwidth: 3_000_000, codecs: 'avc1.640032' }],
+      audio: [{ id: 30280, baseUrl: audioUrl, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+    }
+
+    // Payload bvid/aid/ep_id conflicting with pageUrl must be rejected.
+    expect(extractBilibiliPlayinfo(pageB, { data: { bvid: 'BV1xx411c7mD', dash: baseDash } })).toEqual([])
+    expect(extractBilibiliPlayinfo(pageB, { result: { bvid: 'BV1xx411c7mD', dash: baseDash } })).toEqual([])
+    expect(extractBilibiliPlayinfo(avPage, { data: { aid: 999999, dash: baseDash } })).toEqual([])
+    expect(extractBilibiliPlayinfo(bangumiPage, { result: { ep_id: 112233, video_info: { dash: baseDash } } })).toEqual([])
+    expect(extractBilibiliPlayinfo(pageB, {
+      data: {
+        dash: {
+          ...baseDash,
+          video: [{ id: 80, baseUrl: `${videoUrl}&bvid=BV1xx411c7mD`, width: 1920, height: 1080, bandwidth: 3_000_000 }],
+        },
+      },
+    })).toEqual([])
+
+    // Matching identifiers (including AV/BV coexistence on a BV page) remain accepted.
+    expect(extractBilibiliPlayinfo(pageA, { data: { bvid: 'BV1xx411c7mD', aid: 170001, dash: baseDash } })).toHaveLength(1)
+    expect(extractBilibiliPlayinfo(avPage, { data: { aid: 170001, dash: baseDash } })).toHaveLength(1)
+    expect(extractBilibiliPlayinfo(bangumiPage, { result: { ep_id: 778899, video_info: { dash: baseDash } } })).toHaveLength(1)
+
+    // Stale playurl API request query for Video A arriving after SPA pushState to Video B must be rejected.
+    expect(siteManifestCandidates(
+      'https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1xx411c7mD&cid=123',
+      pageB,
+      { code: 0, data: { dash: baseDash } },
+    )).toEqual([])
+
+    // Shared Akamai CDN (.akamaized.net): accept Bilibili UPOS/upgcxcode paths, reject generic non-Bilibili DASH .m4s segments.
+    expect(isBilibiliFullTrackMseUrl('https://upos-hz-mirrorakam.akamaized.net/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000')).toBe(true)
+    expect(isBilibiliAudioTrackMseUrl('https://upos-hz-mirrorakam.akamaized.net/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000')).toBe(true)
+    expect(isBilibiliFullTrackMseUrl('https://edge.akamaized.net/upgcxcode/9/8/777-1-30080.m4s')).toBe(true)
+    for (const nonBiliAkamaiUrl of [
+      'https://vod-dash.akamaized.net/dash/1080p/segment-0001.m4s',
+      'https://a1234.akamaized.net/hls/live/200000/channel/chunk_42.m4s',
+      'https://mobility-media.akamaized.net/visibility/track-30080.m4s',
+      'https://akamaized.net/video/init-0.m4s',
+    ]) {
+      expect(isBilibiliFullTrackMseUrl(nonBiliAkamaiUrl)).toBe(false)
+      expect(isBilibiliAudioTrackMseUrl(nonBiliAkamaiUrl.replace('.m4s', '-30280.m4s'))).toBe(false)
+    }
+  })
 })

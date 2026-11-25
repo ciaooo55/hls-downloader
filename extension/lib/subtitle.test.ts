@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
+import { browser } from 'wxt/browser'
 import { SubtitlePcm } from './subtitlePcm'
 import { captureSubtitleAudio, waitForSubtitleAudio } from './subtitleAudio'
+import { installSubtitleContent } from './subtitleContent'
 import { subtitleAllowed, subtitleReadyEnd, subtitleSettings, visibleSubtitle } from './subtitleSettings'
 import { parseHlsManifest } from './hlsManifest'
 import { prefetchSubtitleAudio, subtitleWindowEnd } from './subtitlePrefetch'
 
-vi.mock('wxt/browser', () => ({ browser: { runtime: { getURL: (path: string) => `moz-extension://fixture/${path}` } } }))
+vi.mock('wxt/browser', () => ({
+  browser: {
+    runtime: {
+      id: 'test-ext',
+      getURL: (path: string) => `moz-extension://fixture/${path}`,
+      sendMessage: vi.fn(),
+      onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+    },
+  },
+}))
 
 function audioFixture(module: Promise<void>) {
   const track = { stop: vi.fn() }
@@ -221,5 +232,93 @@ describe('字幕的实际行为边界', () => {
     expect(info.audioTracks).toHaveLength(2)
     expect(info.audioTracks[0]).toMatchObject({ language: 'en', default: true, url: 'https://media.example/audio/en.m3u8?token=secret' })
     expect(info.audioTracks[1].url).toBeUndefined()
+  })
+
+  it('无媒体元素的页面不启动 10 秒 subtitle-players 轮询，发现后轮询并在移除后发一次清空即停', async () => {
+    vi.useFakeTimers()
+    class FakeMediaElement {
+      isConnected = true
+      paused = true
+      ended = false
+      title = 'Demo Video'
+      currentSrc = 'https://video.example/play.mp4'
+      currentTime = 0
+      duration = 60
+      playbackRate = 1
+      readyState = 4
+      seeking = false
+      getAttribute() { return null }
+      getBoundingClientRect() { return { left: 0, top: 0, bottom: 200, width: 640, height: 360 } }
+      addEventListener() {}
+      removeEventListener() {}
+      querySelectorAll() { return [] }
+    }
+    const makeNode = (tag = 'div'): any => ({
+      tagName: tag.toUpperCase(),
+      dataset: {},
+      style: {},
+      hidden: false,
+      disabled: false,
+      open: false,
+      textContent: '',
+      title: '',
+      parentElement: null as any,
+      setAttribute() {},
+      addEventListener() {},
+      removeEventListener() {},
+      append(...children: any[]) { children.forEach(c => { if (c && typeof c === 'object') c.parentElement = this }) },
+      remove() { this.parentElement = null },
+      attachShadow() { return makeNode('shadow') },
+    })
+    const docEl = makeNode('html')
+    const fakeDocument = {
+      title: 'Non-Media Page',
+      documentElement: docEl,
+      fullscreenElement: null,
+      createElement: (tag: string) => makeNode(tag),
+      querySelectorAll: () => [] as any[],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }
+    const fakeWindow = { addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    vi.stubGlobal('HTMLMediaElement', FakeMediaElement)
+    vi.stubGlobal('document', fakeDocument)
+    vi.stubGlobal('window', fakeWindow)
+    vi.stubGlobal('innerHeight', 800)
+
+    const sendMock = browser.runtime.sendMessage as unknown as ReturnType<typeof vi.fn>
+    sendMock.mockClear()
+    sendMock.mockResolvedValue({ ok: true, allowed: false, settings: subtitleSettings(null), pageUrl: 'https://video.example/watch' })
+
+    let invalidate!: () => void
+    try {
+      const discover = installSubtitleContent({ onInvalidated: cb => { invalidate = cb } }, () => undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sendMock).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+
+      // Discovering the first media element reports immediately and starts the 10s poll.
+      const video = new FakeMediaElement() as unknown as HTMLMediaElement
+      discover(video as unknown as ParentNode)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sendMock).toHaveBeenCalledTimes(1)
+      expect(sendMock.mock.calls[0][0]).toMatchObject({ type: 'subtitle-players', players: [expect.objectContaining({ label: 'Demo Video' })] })
+      expect(vi.getTimerCount()).toBe(1)
+
+      // Removing the media element sends a single empty cleanup update on the next tick, then stops all timers.
+      ;(video as unknown as { isConnected: boolean }).isConnected = false
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(sendMock).toHaveBeenCalledTimes(2)
+      expect(sendMock.mock.calls[1][0]).toEqual({ type: 'subtitle-players', players: [] })
+      expect(vi.getTimerCount()).toBe(0)
+
+      // Advancing further fires zero additional IPC calls.
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(sendMock).toHaveBeenCalledTimes(2)
+    } finally {
+      invalidate?.()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
   })
 })

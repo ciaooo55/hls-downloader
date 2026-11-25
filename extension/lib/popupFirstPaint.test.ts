@@ -13,6 +13,8 @@ describe('popup first paint', () => {
     expect(css).toMatch(/article\s*\{[^}]*min-width:\s*0;/)
     expect(css).toMatch(/\.brand\s*>\s*div\s*\{[^}]*min-width:\s*0;/)
     expect(css).toMatch(/\.brand img,\s*\.header-actions\s*\{[^}]*flex-shrink:\s*0;/)
+    expect(html).toMatch(/body\s*\{[^}]*min-width:\s*360px;\s*width:\s*360px;\s*max-width:\s*360px;/)
+    expect(css).toMatch(/body\s*\{[^}]*width:\s*360px;\s*min-width:\s*360px;\s*max-width:\s*360px;/)
   })
 
   it('ships a visible no-script/bootstrap surface instead of an empty root', () => {

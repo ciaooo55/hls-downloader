@@ -419,7 +419,8 @@ it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without 
     },
   })
   const windowStub = new EventTarget() as EventTarget & { fetch: typeof fetch; __playinfo__?: unknown }
-  windowStub.fetch = vi.fn(async () => response)
+  const fetchMock = vi.fn(async () => response)
+  windowStub.fetch = fetchMock
   windowStub.__playinfo__ = playinfo
   const locationStub = { href: pageUrl }
   const historyStub = {
@@ -475,4 +476,47 @@ it('extracts Bilibili __playinfo__ and playurl JSON on /en/video/ pages without 
   events.length = 0
   windowStub.dispatchEvent(new Event('__hls_downloader_replay__'))
   expect(events.some(event => event.url === video1080 && event.audioUrl === audio192 && event.sourcePageUrl === redirectedUrl)).toBe(true)
+
+  // SPA pushState to a new BV video ignores stale SSR window.__playinfo__ from Video A while capturing Video B's playurl fetch.
+  windowStub.__playinfo__ = playinfo
+  const nextVideoPage = 'https://www.bilibili.com/video/BV1yy411c7mE/'
+  const nextPlayurl = 'https://api.bilibili.com/x/player/wbi/playurl?bvid=BV1yy411c7mE&cid=456'
+  const nextVideo1080 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/9/9/456-1-30080.m4s?deadline=1900000000'
+  const nextAudio192 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/9/9/456-1-30280.m4s?deadline=1900000000'
+  events.length = 0
+  historyStub.pushState(null, '', nextVideoPage)
+  await new Promise<void>(resolve => queueMicrotask(resolve))
+  windowStub.dispatchEvent(new Event('__hls_downloader_replay__'))
+  expect(events).toEqual([])
+
+  const nextPayload = {
+    code: 0,
+    data: {
+      dash: {
+        duration: 95,
+        video: [{ id: 80, baseUrl: nextVideo1080, width: 1920, height: 1080, bandwidth: 3_100_000, codecs: 'avc1.640032' }],
+        audio: [{ id: 30280, baseUrl: nextAudio192, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+      },
+    },
+  }
+  const nextResponse = new Response(JSON.stringify(nextPayload), { headers: { 'content-type': 'application/json' } })
+  Object.defineProperty(nextResponse, 'url', { value: nextPlayurl })
+  const cloneNext = nextResponse.clone.bind(nextResponse)
+  Object.defineProperty(nextResponse, 'clone', {
+    value: () => {
+      const copy = cloneNext()
+      Object.defineProperty(copy, 'url', { value: nextPlayurl })
+      return copy
+    },
+  })
+  fetchMock.mockResolvedValueOnce(nextResponse)
+  const fetchedNext = await windowStub.fetch(nextPlayurl)
+  expect(await fetchedNext.json()).toEqual(nextPayload)
+  expect(events).toHaveLength(1)
+  expect(events[0]).toMatchObject({
+    url: nextVideo1080,
+    audioUrl: nextAudio192,
+    siteVideoId: 'BV1yy411c7mE',
+    sourcePageUrl: nextVideoPage,
+  })
 })
