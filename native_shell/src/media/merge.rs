@@ -223,7 +223,7 @@ pub(crate) fn mux_av_with_offset(
     if !subtitles.is_empty() {
         command.args(["-c:s", "mov_text"]);
     }
-    command.args(["-movflags", "+faststart"]);
+    command.args(["-movflags", "+faststart", "-strict", "-2"]);
     run_ffmpeg_to_output(
         &mut command,
         output,
@@ -1087,5 +1087,63 @@ mod tests {
             mux_map_args(true, 2),
             vec!["-map", "0:v:0?", "-map", "1:a:0", "-map", "2:s:0", "-map", "3:s:0"]
         );
+    }
+
+    #[test]
+    fn mux_av_passes_experimental_strict_flag_for_flac_in_mp4() {
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("hls-mux-flac-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("video.mp4");
+        let audio = dir.join("audio.flac");
+        let output = dir.join("muxed.mp4");
+        let control = dir.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let video_ok = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x64:d=0.4:r=10",
+                "-c:v",
+                "mpeg4",
+            ])
+            .arg(&video)
+            .status()
+            .is_ok_and(|status| status.success());
+        let audio_ok = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
+                "-t",
+                "0.4",
+                "-c:a",
+                "flac",
+            ])
+            .arg(&audio)
+            .status()
+            .is_ok_and(|status| status.success());
+
+        if video_ok && audio_ok {
+            mux_av(&video, Some(&audio), &[], &output, &control).unwrap();
+            let bytes = fs::read(&output).unwrap();
+            assert!(bytes.len() > 16);
+            assert_eq!(&bytes[4..8], b"ftyp");
+        }
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -1,12 +1,13 @@
 //! Resident v7 Core: unique SQLite owner serving UI and Native Messaging.
 
+use crate::core_service::{PresenterBridge, PresenterWakeMode};
 use crate::{
     default_core_bind, default_v7_database_path, serve_tcp_listener, CoreCommand, CoreCoordinator,
     CoreEvent, CorePipeRequest, CorePipeResponse, PersistentCore, V7_PROTOCOL_NAME,
     V7_PROTOCOL_VERSION,
 };
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -16,10 +17,11 @@ pub struct CoreServer {
     coordinator: CoreCoordinator,
     notify: Arc<(Mutex<u64>, Condvar)>,
     stop: Arc<AtomicBool>,
+    stop_signal: Arc<(Mutex<bool>, Condvar)>,
     #[cfg(windows)]
     pipe_stops: Arc<Mutex<Vec<crate::NamedPipeStopHandle>>>,
     torrent_probe_active: Arc<AtomicBool>,
-    event_subscribers: Arc<AtomicUsize>,
+    presenter_bridge: Arc<PresenterBridge>,
     subtitles: Arc<crate::subtitle_translate::SubtitleService>,
 }
 
@@ -27,6 +29,23 @@ impl CoreServer {
     pub fn open_default() -> Result<Self, String> {
         let database_path = default_v7_database_path();
         let server = Self::open_path(database_path)?;
+        server.set_presenter_waker(Some(Arc::new(|mode| {
+            let Some(root) = crate::install_root() else {
+                return;
+            };
+            match mode {
+                PresenterWakeMode::BackgroundToast => {
+                    if let Err(error) = crate::core_spawn::ensure_presenter(&root) {
+                        eprintln!("presenter wake (background) failed: {error}");
+                    }
+                }
+                PresenterWakeMode::Workbench => {
+                    if !crate::spawn_desktop_ui(&root, None) {
+                        eprintln!("presenter wake (workbench) failed");
+                    }
+                }
+            }
+        })));
         server.restore_install_result();
         Ok(server)
     }
@@ -58,19 +77,26 @@ impl CoreServer {
     pub fn from_coordinator(coordinator: CoreCoordinator) -> Result<Self, String> {
         coordinator.recover_startup()?;
         let notify = coordinator.event_notify()?;
+        let presenter_bridge = coordinator.lock()?.presenter_bridge();
         let stop = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new((Mutex::new(false), Condvar::new()));
         spawn_torrent_watch(coordinator.clone(), Arc::clone(&stop));
-        spawn_clipboard_watch(coordinator.clone(), Arc::clone(&stop));
+        spawn_clipboard_watch(
+            coordinator.clone(),
+            Arc::clone(&presenter_bridge),
+            Arc::clone(&stop),
+        );
         spawn_queue_scheduler(coordinator.clone(), Arc::clone(&stop));
         crate::crawl::spawn(coordinator.clone(), Arc::clone(&stop));
         Ok(Self {
             coordinator,
             notify,
             stop,
+            stop_signal,
             #[cfg(windows)]
             pipe_stops: Arc::new(Mutex::new(Vec::new())),
             torrent_probe_active: Arc::new(AtomicBool::new(false)),
-            event_subscribers: Arc::new(AtomicUsize::new(0)),
+            presenter_bridge,
             subtitles: Arc::new(crate::subtitle_translate::SubtitleService::default()),
         })
     }
@@ -83,8 +109,35 @@ impl CoreServer {
         Arc::clone(&self.stop)
     }
 
+    pub fn wait_until_stopped(&self, timeout: Duration) -> bool {
+        if self.stop.load(Ordering::Acquire) {
+            return true;
+        }
+        let Ok(guard) = self.stop_signal.0.lock() else {
+            return self.stop.load(Ordering::Acquire);
+        };
+        if *guard || self.stop.load(Ordering::Acquire) {
+            return true;
+        }
+        let (guard, _) = self
+            .stop_signal
+            .1
+            .wait_timeout(guard, timeout)
+            .unwrap_or_else(|e| e.into_inner());
+        *guard || self.stop.load(Ordering::Acquire)
+    }
+
     pub fn has_event_subscribers(&self) -> bool {
-        self.event_subscribers.load(Ordering::Acquire) > 0
+        self.presenter_bridge.has_subscribers()
+    }
+
+    pub fn set_presenter_waker(&self, waker: Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>) {
+        self.presenter_bridge.set_waker(waker);
+    }
+
+    pub fn queue_ui_show(&self, surface: &str) {
+        self.presenter_bridge
+            .queue_ui_show(surface, Duration::from_secs(15));
     }
 
     pub fn emit_ui_show(&self, surface: &str) -> Result<(), String> {
@@ -111,6 +164,7 @@ impl CoreServer {
         stop_event_waiters(
             &self.notify,
             &self.stop,
+            &self.stop_signal,
             #[cfg(windows)]
             &self.pipe_stops,
         );
@@ -148,18 +202,18 @@ impl CoreServer {
             Ok(Err(error)) => {
                 pipe_stop.signal();
                 let _ = worker.join();
-                Err(format!("bind v7 Core named pipe: {error}"))
+                Err(format!("bind Core named pipe: {error}"))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 stop_on_startup_failure.store(true, Ordering::SeqCst);
                 pipe_stop.signal();
                 let _ = worker.join();
-                Err("v7 Core named pipe startup timed out".into())
+                Err("Core named pipe startup timed out".into())
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 pipe_stop.signal();
                 let _ = worker.join();
-                Err("v7 Core named pipe startup thread exited before ready".into())
+                Err("Core named pipe startup thread exited before ready".into())
             }
         }
     }
@@ -173,13 +227,14 @@ impl CoreServer {
             #[cfg(windows)]
             {
                 let stop = self.stop_handle();
+                let stop_signal = Arc::clone(&self.stop_signal);
                 let notify = Arc::clone(&self.notify);
                 let pipe_stops = Arc::clone(&self.pipe_stops);
                 let worker = thread::spawn(move || {
                     let result = pipe_worker
                         .join()
-                        .map_err(|_| "v7 Core named pipe listener panicked".to_string())?;
-                    stop_event_waiters(&notify, &stop, &pipe_stops);
+                        .map_err(|_| "Core named pipe listener panicked".to_string())?;
+                    stop_event_waiters(&notify, &stop, &stop_signal, &pipe_stops);
                     result
                 });
                 return Ok((default_core_bind()?, worker));
@@ -187,12 +242,13 @@ impl CoreServer {
             #[cfg(not(windows))]
             {
                 let stop = self.stop_handle();
+                let stop_signal = Arc::clone(&self.stop_signal);
                 let notify = Arc::clone(&self.notify);
                 let worker = thread::spawn(move || {
                     while !stop.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(50));
                     }
-                    stop_event_waiters(&notify, &stop);
+                    stop_event_waiters(&notify, &stop, &stop_signal);
                     Ok(())
                 });
                 return Ok((default_core_bind()?, worker));
@@ -202,10 +258,10 @@ impl CoreServer {
         // TCP loopback clients deliberately use the same configured endpoint.
         // Falling back to an ephemeral port would make the Core appear healthy
         // while every client keeps retrying the original address.
-        let listener = TcpListener::bind(bind).map_err(|error| format!("bind v7 Core: {error}"))?;
+        let listener = TcpListener::bind(bind).map_err(|error| format!("bind Core: {error}"))?;
         let addr = listener
             .local_addr()
-            .map_err(|error| format!("v7 Core local addr: {error}"))?;
+            .map_err(|error| format!("Core local addr: {error}"))?;
         #[cfg(windows)]
         {
             let tcp_worker = self.serve(listener);
@@ -213,11 +269,11 @@ impl CoreServer {
             let worker = thread::spawn(move || {
                 let tcp_result = tcp_worker
                     .join()
-                    .map_err(|_| "v7 Core TCP listener panicked".to_string())?;
+                    .map_err(|_| "Core TCP listener panicked".to_string())?;
                 signal_pipe_stops(&pipe_stops);
                 let pipe_result = pipe_worker
                     .join()
-                    .map_err(|_| "v7 Core named pipe listener panicked".to_string())?;
+                    .map_err(|_| "Core named pipe listener panicked".to_string())?;
                 tcp_result.and(pipe_result)
             });
             Ok((addr, worker))
@@ -228,6 +284,7 @@ impl CoreServer {
 
     pub fn serve(&self, listener: TcpListener) -> thread::JoinHandle<Result<(), String>> {
         let stop = Arc::clone(&self.stop);
+        let stop_signal = Arc::clone(&self.stop_signal);
         let handler = self.transport_handler();
         let notify = Arc::clone(&self.notify);
         #[cfg(windows)]
@@ -237,6 +294,7 @@ impl CoreServer {
             stop_event_waiters(
                 &notify,
                 &stop,
+                &stop_signal,
                 #[cfg(windows)]
                 &pipe_stops,
             );
@@ -247,6 +305,7 @@ impl CoreServer {
     pub fn handler(&self) -> Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> {
         let handler = self.transport_handler();
         let stop = self.stop_handle();
+        let stop_signal = Arc::clone(&self.stop_signal);
         let notify = Arc::clone(&self.notify);
         #[cfg(windows)]
         let pipe_stops = Arc::clone(&self.pipe_stops);
@@ -263,6 +322,7 @@ impl CoreServer {
                 stop_event_waiters(
                     &notify,
                     &stop,
+                    &stop_signal,
                     #[cfg(windows)]
                     &pipe_stops,
                 );
@@ -277,10 +337,11 @@ impl CoreServer {
         let coordinator = self.coordinator.clone();
         let notify = Arc::clone(&self.notify);
         let stop = Arc::clone(&self.stop);
+        let stop_signal = Arc::clone(&self.stop_signal);
         #[cfg(windows)]
         let pipe_stops = Arc::clone(&self.pipe_stops);
         let torrent_probe_active = Arc::clone(&self.torrent_probe_active);
-        let event_subscribers = Arc::clone(&self.event_subscribers);
+        let presenter_bridge = Arc::clone(&self.presenter_bridge);
         let subtitles = Arc::clone(&self.subtitles);
         Arc::new(move |request| {
             if matches!(
@@ -308,28 +369,14 @@ impl CoreServer {
                 &coordinator,
                 &notify,
                 &stop,
+                &stop_signal,
                 #[cfg(windows)]
                 &pipe_stops,
                 &torrent_probe_active,
-                &event_subscribers,
+                &presenter_bridge,
                 request,
             )
         })
-    }
-}
-
-struct EventSubscriberGuard(Arc<AtomicUsize>);
-
-impl EventSubscriberGuard {
-    fn enter(counter: &Arc<AtomicUsize>) -> Self {
-        counter.fetch_add(1, Ordering::AcqRel);
-        Self(Arc::clone(counter))
-    }
-}
-
-impl Drop for EventSubscriberGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -377,9 +424,10 @@ fn dispatch(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &Arc<AtomicBool>,
+    stop_signal: &Arc<(Mutex<bool>, Condvar)>,
     #[cfg(windows)] pipe_stops: &Arc<Mutex<Vec<crate::NamedPipeStopHandle>>>,
     torrent_probe_active: &Arc<AtomicBool>,
-    event_subscribers: &Arc<AtomicUsize>,
+    presenter_bridge: &Arc<PresenterBridge>,
     request: CorePipeRequest,
 ) -> CorePipeResponse {
     match request {
@@ -489,7 +537,7 @@ fn dispatch(
                 CorePipeResponse::Error {
                     request_id: None,
                     code: "protocol_mismatch".into(),
-                    message: "v7 Core protocol mismatch".into(),
+                    message: "Core protocol mismatch".into(),
                 }
             }
         }
@@ -545,7 +593,7 @@ fn dispatch(
                                 message,
                             };
                         }
-                        let had_subscribers = event_subscribers.load(Ordering::Acquire) > 0;
+                        let had_subscribers = presenter_bridge.has_subscribers();
                         if let Ok(shutdown_events) = coordinator
                             .lock()
                             .and_then(|mut core| core.emit(CoreEvent::Shutdown))
@@ -556,7 +604,7 @@ fn dispatch(
                             // Give attached presenters a brief flush window to receive
                             // CoreEvent::Shutdown before stopping the IPC listener.
                             let deadline = std::time::Instant::now() + Duration::from_millis(60);
-                            while event_subscribers.load(Ordering::Acquire) > 0
+                            while presenter_bridge.has_subscribers()
                                 && std::time::Instant::now() < deadline
                             {
                                 thread::sleep(Duration::from_millis(5));
@@ -569,6 +617,7 @@ fn dispatch(
                         .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
                     {
                         let stop = Arc::clone(stop);
+                        let stop_signal = Arc::clone(stop_signal);
                         let notify = Arc::clone(notify);
                         #[cfg(windows)]
                         let pipe_stops = Arc::clone(pipe_stops);
@@ -577,6 +626,7 @@ fn dispatch(
                             stop_event_waiters(
                                 &notify,
                                 &stop,
+                                &stop_signal,
                                 #[cfg(windows)]
                                 &pipe_stops,
                             );
@@ -618,7 +668,8 @@ fn dispatch(
             coordinator,
             notify,
             stop,
-            event_subscribers,
+            presenter_bridge,
+            false,
             after_sequence,
             timeout_ms,
         ) {
@@ -721,7 +772,8 @@ fn dispatch(
             coordinator,
             notify,
             stop,
-            event_subscribers,
+            presenter_bridge,
+            true,
             after_sequence,
             timeout_ms,
         ) {
@@ -1001,6 +1053,7 @@ fn signal_pipe_stops(pipe_stops: &Mutex<Vec<crate::NamedPipeStopHandle>>) {
 fn stop_event_waiters(
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &AtomicBool,
+    stop_signal: &Arc<(Mutex<bool>, Condvar)>,
     #[cfg(windows)] pipe_stops: &Mutex<Vec<crate::NamedPipeStopHandle>>,
 ) {
     {
@@ -1008,21 +1061,62 @@ fn stop_event_waiters(
         stop.store(true, Ordering::SeqCst);
         notify.1.notify_all();
     }
+    if let Ok(mut stopped) = stop_signal.0.lock() {
+        *stopped = true;
+        stop_signal.1.notify_all();
+    }
     #[cfg(windows)]
     signal_pipe_stops(pipe_stops);
+}
+
+fn flush_pending_presenter_events(
+    coordinator: &CoreCoordinator,
+    presenter_bridge: &PresenterBridge,
+) -> Result<(), String> {
+    let pending = presenter_bridge.take_ready_events();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut core = coordinator.lock()?;
+    for event in pending {
+        let _ = core.emit(event)?;
+    }
+    Ok(())
+}
+
+fn deliver_clipboard_offer(
+    coordinator: &CoreCoordinator,
+    presenter_bridge: &PresenterBridge,
+    urls: Vec<String>,
+) {
+    if urls.is_empty() {
+        return;
+    }
+    if presenter_bridge.has_subscribers() {
+        let _ = coordinator
+            .lock()
+            .and_then(|mut core| core.emit(CoreEvent::ClipboardOffer { urls }));
+    } else {
+        presenter_bridge.queue_clipboard_offer(urls, Duration::from_secs(30));
+        presenter_bridge.wake(PresenterWakeMode::BackgroundToast);
+    }
 }
 
 fn wait_events(
     coordinator: &CoreCoordinator,
     notify: &Arc<(Mutex<u64>, Condvar)>,
     stop: &AtomicBool,
-    event_subscribers: &Arc<AtomicUsize>,
+    presenter_bridge: &Arc<PresenterBridge>,
+    flush_ui_queue: bool,
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Result<hls_protocol::EventBatch, String> {
-    let _subscriber = EventSubscriberGuard::enter(event_subscribers);
+    let _subscriber = presenter_bridge.enter_subscriber();
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
+        if flush_ui_queue {
+            flush_pending_presenter_events(coordinator, presenter_bridge)?;
+        }
         // 不能持有通知锁读取 Core：提交事件的锁顺序是 Core → 通知锁。
         let observed = match notify.0.lock() {
             Ok(sequence) => *sequence,
@@ -1117,7 +1211,11 @@ fn spawn_torrent_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
     });
 }
 
-fn spawn_clipboard_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
+fn spawn_clipboard_watch(
+    coordinator: CoreCoordinator,
+    presenter_bridge: Arc<PresenterBridge>,
+    stop: Arc<AtomicBool>,
+) {
     thread::spawn(move || {
         let mut previous = String::new();
         while !stop.load(Ordering::SeqCst) {
@@ -1131,9 +1229,7 @@ fn spawn_clipboard_watch(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                         previous = text.clone();
                         let urls = crate::clipboard_download_urls(&text);
                         if !urls.is_empty() {
-                            let _ = coordinator
-                                .lock()
-                                .and_then(|mut core| core.emit(CoreEvent::ClipboardOffer { urls }));
+                            deliver_clipboard_offer(&coordinator, &presenter_bridge, urls);
                         }
                     }
                 }
@@ -1221,16 +1317,17 @@ mod tests {
     fn in_memory_core_does_not_bootstrap_from_disk() {
         let server = CoreServer::in_memory().unwrap();
         let core = server.coordinator().core();
-        let legal = core
+        let persisted_version = core
             .lock()
             .unwrap()
             .store()
-            .setting_bool("legal_terms_accepted", false)
+            .setting_string("legal_terms_version", "")
             .unwrap();
         assert!(
-            !legal,
-            "in_memory Core must not import config.json or force the legal gate"
+            persisted_version.is_empty(),
+            "in_memory Core must not import config.json or persist bootstrap rows"
         );
+        assert!(server.coordinator().settings().unwrap().legal_accepted);
         server.shutdown();
     }
 
@@ -1305,22 +1402,33 @@ mod tests {
         assert!(matches!(
             initial,
             CorePipeResponse::Settings {
+                hls_remux_ts_to_mp4: true,
+                ..
+            }
+        ));
+        let disabled = (server.handler())(CorePipeRequest::StoreSettings {
+            request_id: 91,
+            values: BTreeMap::from([("hls_remux_ts_to_mp4".into(), Value::Bool(false))]),
+        });
+        assert!(matches!(
+            disabled,
+            CorePipeResponse::Settings {
                 hls_remux_ts_to_mp4: false,
                 ..
             }
         ));
-        let saved = (server.handler())(CorePipeRequest::StoreSettings {
-            request_id: 91,
+        let reenabled = (server.handler())(CorePipeRequest::StoreSettings {
+            request_id: 92,
             values: BTreeMap::from([("hls_remux_ts_to_mp4".into(), Value::Bool(true))]),
         });
         assert!(matches!(
-            saved,
+            reenabled,
             CorePipeResponse::Settings {
                 hls_remux_ts_to_mp4: true,
                 ..
             }
         ));
-        let loaded = (server.handler())(CorePipeRequest::LoadSettings { request_id: 92 });
+        let loaded = (server.handler())(CorePipeRequest::LoadSettings { request_id: 93 });
         assert!(matches!(
             loaded,
             CorePipeResponse::Settings {
@@ -1328,6 +1436,69 @@ mod tests {
                 ..
             }
         ));
+        server.shutdown();
+    }
+
+    #[test]
+    fn cold_start_ui_events_wake_presenter_and_replay_on_first_wait_events() {
+        let _ = crate::power_action::cancel();
+        let server = CoreServer::in_memory().unwrap();
+        let wakes = Arc::new(Mutex::new(Vec::new()));
+        let wakes_clone = Arc::clone(&wakes);
+        server.set_presenter_waker(Some(Arc::new(move |mode| {
+            wakes_clone.lock().unwrap().push(mode);
+        })));
+
+        // 1. ClipboardOffer when no Presenter subscriber is attached:
+        deliver_clipboard_offer(
+            server.coordinator(),
+            &server.presenter_bridge,
+            vec!["https://cdn.test/clip.mp4".into()],
+        );
+        // 2. Cold-start tray NewDownload queued before workbench attaches:
+        server.queue_ui_show("new_download");
+        // 3. PowerActionPending scheduled when no Presenter subscriber is attached:
+        crate::power_action::schedule_with_title("shutdown", "movie.mp4", 30).unwrap();
+        server.presenter_bridge.mark_power_action_pending();
+        server
+            .presenter_bridge
+            .wake(PresenterWakeMode::BackgroundToast);
+
+        assert_eq!(
+            *wakes.lock().unwrap(),
+            vec![
+                PresenterWakeMode::BackgroundToast,
+                PresenterWakeMode::BackgroundToast
+            ]
+        );
+
+        // Simulate Presenter booting, reading snapshot_state(), and entering WaitEvents:
+        let baseline = server.coordinator().latest_sequence().unwrap();
+        let response = (server.handler())(CorePipeRequest::WaitEvents {
+            request_id: 55,
+            after_sequence: baseline,
+            timeout_ms: 50,
+        });
+        let events = match response {
+            CorePipeResponse::Events { events, .. } => events,
+            other => panic!("unexpected WaitEvents response: {other:?}"),
+        };
+        assert!(events.iter().any(|e| matches!(
+            &e.event,
+            CoreEvent::PowerActionPending { action, title, .. }
+                if action == "shutdown" && title == "movie.mp4"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            &e.event,
+            CoreEvent::ClipboardOffer { urls }
+                if urls == &vec!["https://cdn.test/clip.mp4".to_string()]
+        )));
+        assert!(events.iter().any(|e| matches!(
+            &e.event,
+            CoreEvent::UiShow { surface } if surface == "new_download"
+        )));
+
+        let _ = crate::power_action::cancel();
         server.shutdown();
     }
 

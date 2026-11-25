@@ -223,7 +223,7 @@ pub fn ensure_core_running(
         std::thread::sleep(std::time::Duration::from_millis(150));
     }
     Err(format!(
-        "v7 Core did not become ready: {}",
+        "Core did not become ready: {}",
         last_error.unwrap_or_else(|| "no connection attempt was made".to_string())
     ))
 }

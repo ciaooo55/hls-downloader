@@ -1121,24 +1121,15 @@ fn fetch_bytes_with_transport(
     if !http_fetch_url_allowed(url) {
         return Err(EngineError::Failed("url must be http(s)".into()));
     }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let dir =
-        std::env::temp_dir().join(format!("hls-fetch-bytes-{}-{}", std::process::id(), stamp));
-    fs::create_dir_all(&dir).map_err(|err| EngineError::Failed(err.to_string()))?;
-    let control = dir.join("control");
-    fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
-    // 子请求继承下载任务的控制文件；不得把父任务的暂停状态重写成 run。
+    // 子请求继承下载任务的控制文件；无任务上下文时不创建临时目录或控制文件（curl 路径按需懒创建）。
     let control = crate::net_policy::current_throttle_context()
         .map(|context| context.control)
         .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(control);
+        .unwrap_or_default();
     let job = Job {
         url: url.to_string(),
         headers: headers.clone(),
-        output: dir.join("body"),
+        output: PathBuf::new(),
         connections: 1,
         chunk_bytes: 64 * 1024,
         total: 0,
@@ -1149,7 +1140,7 @@ fn fetch_bytes_with_transport(
         etag: String::new(),
         last_modified: String::new(),
         control,
-        progress: dir.join("progress.json"),
+        progress: PathBuf::new(),
         method: "GET".into(),
         body_path: PathBuf::new(),
         mirrors: Vec::new(),
@@ -1159,70 +1150,66 @@ fn fetch_bytes_with_transport(
         installer_download: false,
         origin_boundary: String::new(),
     };
-    let result = (|| {
-        let fetched = if browser_first {
-            fetch_browser_first(&job, None)?
-        } else {
-            fetch(&job, None)?
-        };
-        let status = fetched.status;
-        if !(200..300).contains(&status) && status != 304 {
+    let fetched = if browser_first {
+        fetch_browser_first(&job, None)?
+    } else {
+        fetch(&job, None)?
+    };
+    let status = fetched.status;
+    if !(200..300).contains(&status) && status != 304 {
+        check_job_control(&job)?;
+        return Ok((status, Vec::new(), fetched.final_url));
+    }
+    let expected_length = if matches!(status, 200 | 206) {
+        full_entity_length(&fetched)?
+    } else {
+        fetched.content_length
+    };
+    if status != 304
+        && limit.is_some_and(|limit| expected_length.is_some_and(|length| length > limit))
+    {
+        return Err(EngineError::Failed(
+            "metadata response exceeds byte limit".into(),
+        ));
+    }
+    let mut body = Vec::new();
+    let mut reader = fetched
+        .body
+        .take(limit.map_or(u64::MAX, |limit| limit.saturating_add(1)));
+    let mut buffer = [0; 64 * 1024];
+    let mut last_control = Instant::now();
+    loop {
+        if last_control.elapsed() >= Duration::from_millis(50) {
             check_job_control(&job)?;
-            return Ok((status, Vec::new(), fetched.final_url));
+            last_control = Instant::now();
         }
-        let expected_length = if matches!(status, 200 | 206) {
-            full_entity_length(&fetched)?
-        } else {
-            fetched.content_length
-        };
-        if status != 304
-            && limit.is_some_and(|limit| expected_length.is_some_and(|length| length > limit))
-        {
+        let count = reader.read(&mut buffer).map_err(|error| {
+            check_job_control(&job)
+                .err()
+                .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+        })?;
+        if count == 0 {
+            break;
+        }
+        if limit.is_some_and(|limit| body.len() as u64 + count as u64 > limit) {
             return Err(EngineError::Failed(
                 "metadata response exceeds byte limit".into(),
             ));
         }
-        let mut body = Vec::new();
-        let mut reader = fetched
-            .body
-            .take(limit.map_or(u64::MAX, |limit| limit.saturating_add(1)));
-        let mut buffer = [0; 64 * 1024];
-        let mut last_control = Instant::now();
-        loop {
-            if last_control.elapsed() >= Duration::from_millis(50) {
-                check_job_control(&job)?;
-                last_control = Instant::now();
-            }
-            let count = reader.read(&mut buffer).map_err(|error| {
-                check_job_control(&job)
-                    .err()
-                    .unwrap_or_else(|| EngineError::Failed(error.to_string()))
-            })?;
-            if count == 0 {
-                break;
-            }
-            if limit.is_some_and(|limit| body.len() as u64 + count as u64 > limit) {
-                return Err(EngineError::Failed(
-                    "metadata response exceeds byte limit".into(),
-                ));
-            }
-            crate::net_policy::consume(count, || check_job_control(&job))?;
-            body.extend_from_slice(&buffer[..count]);
-        }
-        if matches!(status, 200 | 206)
-            && expected_length.is_some_and(|expected| expected != body.len() as u64)
-        {
-            return Err(EngineError::Failed(format!(
-                "incomplete response body: received {} bytes, expected {}",
-                body.len(),
-                expected_length.unwrap()
-            )));
-        }
-        check_job_control(&job)?;
-        Ok((status, body, fetched.final_url))
-    })();
-    let _ = fs::remove_dir_all(dir);
-    result
+        crate::net_policy::consume(count, || check_job_control(&job))?;
+        body.extend_from_slice(&buffer[..count]);
+    }
+    if matches!(status, 200 | 206)
+        && expected_length.is_some_and(|expected| expected != body.len() as u64)
+    {
+        return Err(EngineError::Failed(format!(
+            "incomplete response body: received {} bytes, expected {}",
+            body.len(),
+            expected_length.unwrap()
+        )));
+    }
+    check_job_control(&job)?;
+    Ok((status, body, fetched.final_url))
 }
 
 /// Distinguish retryable transport failures from terminal disk/decryption errors.
@@ -1363,82 +1350,69 @@ fn fetch_bytes_range_with_transport(
     let end = start
         .checked_add(length - 1)
         .ok_or_else(|| EngineError::RangeUnsupported("byte range overflows".into()))?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let dir =
-        std::env::temp_dir().join(format!("hls-fetch-range-{}-{}", std::process::id(), stamp));
-    fs::create_dir_all(&dir).map_err(|err| EngineError::Failed(err.to_string()))?;
-    let result = (|| {
-        let control = dir.join("control");
-        fs::write(&control, "run").map_err(|err| EngineError::Failed(err.to_string()))?;
-        let control = task_control
-            .map(Path::to_path_buf)
-            .or_else(|| {
-                crate::net_policy::current_throttle_context()
-                    .map(|context| context.control)
-                    .filter(|path| !path.as_os_str().is_empty())
-            })
-            .unwrap_or(control);
-        let job = Job {
-            url: url.to_string(),
-            headers: headers.clone(),
-            output: dir.join("body"),
-            connections: 1,
-            chunk_bytes: 64 * 1024,
-            total: 0,
-            sequential: true,
-            resume_from: 0,
-            proxy: proxy.to_string(),
-            resource_key: url.to_string(),
-            etag: String::new(),
-            last_modified: String::new(),
-            control,
-            progress: dir.join("progress.json"),
-            method: "GET".into(),
-            body_path: PathBuf::new(),
-            mirrors: Vec::new(),
-            replay_json: String::new(),
-            curl_body_limit: Some(length),
-            range_stop: None,
-            installer_download: false,
-            origin_boundary: String::new(),
-        };
-        let fetched = fetch_exact_range(&job, start, end, browser_first)?;
-        let mut body = Vec::new();
-        // 多读一个字节用于判定超长；每块读取时继续遵守暂停与限速。
-        let mut reader = fetched.body.take(length.saturating_add(1));
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            check_job_control(&job)?;
-            let count = reader.read(&mut buffer).map_err(|error| {
-                check_job_control(&job)
-                    .err()
-                    .unwrap_or_else(|| EngineError::Failed(error.to_string()))
-            })?;
-            if count == 0 {
-                break;
-            }
-            if count as u64 > length - body.len() as u64 {
-                return Err(EngineError::Failed(
-                    "byte range response exceeds requested length".into(),
-                ));
-            }
-            crate::net_policy::consume(count, || check_job_control(&job))?;
-            body.extend_from_slice(&buffer[..count]);
-        }
-        if body.len() as u64 != length {
-            return Err(EngineError::Failed(format!(
-                "incomplete response body: byte range length {} != {length}",
-                body.len()
-            )));
-        }
+    let control = task_control
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            crate::net_policy::current_throttle_context()
+                .map(|context| context.control)
+                .filter(|path| !path.as_os_str().is_empty())
+        })
+        .unwrap_or_default();
+    let job = Job {
+        url: url.to_string(),
+        headers: headers.clone(),
+        output: PathBuf::new(),
+        connections: 1,
+        chunk_bytes: 64 * 1024,
+        total: 0,
+        sequential: true,
+        resume_from: 0,
+        proxy: proxy.to_string(),
+        resource_key: url.to_string(),
+        etag: String::new(),
+        last_modified: String::new(),
+        control,
+        progress: PathBuf::new(),
+        method: "GET".into(),
+        body_path: PathBuf::new(),
+        mirrors: Vec::new(),
+        replay_json: String::new(),
+        curl_body_limit: Some(length),
+        range_stop: None,
+        installer_download: false,
+        origin_boundary: String::new(),
+    };
+    let fetched = fetch_exact_range(&job, start, end, browser_first)?;
+    let mut body = Vec::new();
+    // 多读一个字节用于判定超长；每块读取时继续遵守暂停与限速。
+    let mut reader = fetched.body.take(length.saturating_add(1));
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
         check_job_control(&job)?;
-        Ok(body)
-    })();
-    let _ = fs::remove_dir_all(dir);
-    result
+        let count = reader.read(&mut buffer).map_err(|error| {
+            check_job_control(&job)
+                .err()
+                .unwrap_or_else(|| EngineError::Failed(error.to_string()))
+        })?;
+        if count == 0 {
+            break;
+        }
+        if count as u64 > length - body.len() as u64 {
+            return Err(EngineError::Failed(
+                "byte range response exceeds requested length".into(),
+            ));
+        }
+        crate::net_policy::consume(count, || check_job_control(&job))?;
+        body.extend_from_slice(&buffer[..count]);
+    }
+    if body.len() as u64 != length {
+        return Err(EngineError::Failed(format!(
+            "incomplete response body: byte range length {} != {length}",
+            body.len()
+        )));
+    }
+    check_job_control(&job)?;
+    Ok(body)
 }
 
 fn fetch_exact_range(
@@ -3460,37 +3434,96 @@ fn fetch(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     Ok(first)
 }
 
+fn is_tls_handshake_error(url: &str, error: &EngineError) -> bool {
+    if !url
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("https://")
+    {
+        return false;
+    }
+    let EngineError::Failed(message) = error else {
+        return false;
+    };
+    if let Some(code) = message
+        .strip_prefix("WinHttpSendRequest ")
+        .and_then(|rest| rest.trim().parse::<u32>().ok())
+    {
+        return matches!(code, 12030 | 12037..=12062 | 12152 | 12157 | 12175);
+    }
+    let lower = message.to_ascii_lowercase();
+    lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("handshake")
+        || lower.contains("certificate")
+        || lower.contains("secure")
+}
+
 fn fetch_browser_first(job: &Job, range: Option<&str>) -> Result<FetchResult, EngineError> {
     let _network = set_media_network_scope(Some(entry_network_scope(&job.url, &job.proxy)));
-    let browser_eligible = job.url.to_ascii_lowercase().starts_with("https://")
-        && job.method.eq_ignore_ascii_case("GET");
-    if browser_eligible && !proxy_needs_curl(&job.proxy) {
-        if let Some(result) = fetch_curl_follow(job, range) {
-            match result {
-                Ok(fetched)
-                    if (200..400).contains(&fetched.status)
-                        || terminal_non_fallback_status(fetched.status) =>
-                {
-                    return Ok(fetched);
+    let mut prepared = job.clone();
+    apply_browser_profile(&mut prepared.headers);
+    if proxy_needs_curl(&job.proxy) {
+        return fetch_follow(&prepared, range);
+    }
+    let origin = http_origin(&job.url).unwrap_or_default();
+    let mut tried_curl = false;
+    if !origin.is_empty() && waf_curl_cache_hit(&origin) {
+        match fetch_curl_follow(&prepared, range) {
+            Some(Ok(fetched))
+                if (200..400).contains(&fetched.status)
+                    || matches!(fetched.status, 401 | 404 | 410 | 451) =>
+            {
+                if !(200..400).contains(&fetched.status) {
+                    waf_curl_cache_invalidate(&origin);
                 }
-                Ok(fetched) if fetched.status == 403 => {
-                    // Browser-impersonated curl already attempted the request; allow at most
-                    // one native TLS fallback in case fingerprint handling differs, without
-                    // re-entering `fetch()` (which could invoke curl a second time).
-                    let mut prepared = job.clone();
-                    apply_browser_profile(&mut prepared.headers);
-                    return match fetch_follow(&prepared, range) {
-                        Ok(native) if (200..400).contains(&native.status) => Ok(native),
-                        Err(error @ (EngineError::Pause | EngineError::Cancel)) => Err(error),
-                        Ok(_) | Err(_) => Ok(fetched),
-                    };
-                }
-                Err(error @ (EngineError::Pause | EngineError::Cancel)) => return Err(error),
-                Ok(_) | Err(_) => {}
+                return Ok(fetched);
+            }
+            Some(Ok(_)) => {
+                tried_curl = true;
+                waf_curl_cache_invalidate(&origin);
+            }
+            Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => return Err(error),
+            Some(Err(_)) | None => {
+                waf_curl_cache_invalidate(&origin);
             }
         }
     }
-    fetch(job, range)
+    match fetch_follow(&prepared, range) {
+        Ok(first) => {
+            if !matches!(first.status, 403 | 429 | 503) || tried_curl {
+                return Ok(first);
+            }
+            match fetch_curl_follow(&prepared, range) {
+                Some(Ok(via_curl)) => {
+                    if (200..400).contains(&via_curl.status) && !origin.is_empty() {
+                        waf_curl_cache_record(origin);
+                    }
+                    Ok(via_curl)
+                }
+                Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => Err(error),
+                Some(Err(_)) | None => Ok(first),
+            }
+        }
+        Err(first_error) => {
+            if matches!(first_error, EngineError::Pause | EngineError::Cancel)
+                || tried_curl
+                || !is_tls_handshake_error(&job.url, &first_error)
+            {
+                return Err(first_error);
+            }
+            match fetch_curl_follow(&prepared, range) {
+                Some(Ok(via_curl)) => {
+                    if (200..400).contains(&via_curl.status) && !origin.is_empty() {
+                        waf_curl_cache_record(origin);
+                    }
+                    Ok(via_curl)
+                }
+                Some(Err(error @ (EngineError::Pause | EngineError::Cancel))) => Err(error),
+                Some(Err(_)) | None => Err(first_error),
+            }
+        }
+    }
 }
 
 fn validate_download_destination(job: &Job, url: &str) -> Result<(), EngineError> {
@@ -3832,114 +3865,94 @@ pub(crate) fn read_metadata(
     limit: u64,
     origin: Option<&str>,
 ) -> Result<MetadataResponse, String> {
-    let root = if spec.work_dir.is_empty() {
-        std::env::temp_dir()
-    } else {
-        PathBuf::from(&spec.work_dir)
+    let control = crate::net_policy::current_throttle_context()
+        .map(|c| c.control)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_default();
+    let mut job = Job {
+        url: spec.url.clone(),
+        headers: spec.headers.clone().into_iter().collect(),
+        output: PathBuf::new(),
+        connections: 1,
+        chunk_bytes: 64 * 1024,
+        total: 0,
+        sequential: true,
+        resume_from: 0,
+        proxy: spec.proxy.clone(),
+        resource_key: spec.url.clone(),
+        etag: spec.etag.clone(),
+        last_modified: spec.last_modified.clone(),
+        control,
+        progress: PathBuf::new(),
+        method: if spec.request_method == "HEAD" {
+            "HEAD"
+        } else {
+            "GET"
+        }
+        .into(),
+        body_path: PathBuf::new(),
+        mirrors: Vec::new(),
+        replay_json: String::new(),
+        curl_body_limit: Some(limit),
+        range_stop: None,
+        installer_download: false,
+        origin_boundary: spec.origin_boundary.clone(),
     };
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let dir = root.join(format!("metadata-{}-{stamp}", std::process::id()));
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let result = (|| {
-        let control = crate::net_policy::current_throttle_context()
-            .map(|c| c.control)
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| dir.join("control"));
-        if !control.exists() {
-            fs::write(&control, "run").map_err(|e| e.to_string())?;
-        }
-        let mut job = Job {
-            url: spec.url.clone(),
-            headers: spec.headers.clone().into_iter().collect(),
-            output: dir.join("body"),
-            connections: 1,
-            chunk_bytes: 64 * 1024,
-            total: 0,
-            sequential: true,
-            resume_from: 0,
-            proxy: spec.proxy.clone(),
-            resource_key: spec.url.clone(),
-            etag: spec.etag.clone(),
-            last_modified: spec.last_modified.clone(),
-            control,
-            progress: dir.join("progress"),
-            method: if spec.request_method == "HEAD" {
-                "HEAD"
-            } else {
-                "GET"
+    apply_browser_profile(&mut job.headers);
+    let fetched = fetch_follow_restricted(&job, range, origin, None).map_err(|e| e.to_string())?;
+    if range.is_some() && fetched.status != 206 {
+        return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
+    }
+    require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
+    let has_body = job.method != "HEAD" && fetched.status != 304;
+    if has_body && fetched.content_length.is_some_and(|n| n > limit) {
+        return Err("元数据超过读取上限".into());
+    }
+    let parsed_range = fetched
+        .content_range
+        .as_deref()
+        .and_then(parse_content_range);
+    let mut body = Vec::new();
+    let status = fetched.status;
+    let content_length = fetched.content_length;
+    let expected = if has_body { content_length } else { None };
+    let etag = fetched.etag.clone();
+    let last_modified = fetched.last_modified.clone();
+    let mut reader = fetched.body;
+    let mut buffer = [0; 16 * 1024];
+    if has_body {
+        loop {
+            check_job_control(&job).map_err(|e| e.to_string())?;
+            let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
+                .min(buffer.len() as u64) as usize;
+            if want == 0 {
+                return Err("元数据超过读取上限".into());
             }
-            .into(),
-            body_path: PathBuf::new(),
-            mirrors: Vec::new(),
-            replay_json: String::new(),
-            curl_body_limit: Some(limit),
-            range_stop: None,
-            installer_download: false,
-            origin_boundary: spec.origin_boundary.clone(),
-        };
-        apply_browser_profile(&mut job.headers);
-        let fetched =
-            fetch_follow_restricted(&job, range, origin, None).map_err(|e| e.to_string())?;
-        if range.is_some() && fetched.status != 206 {
-            return Err("远程 ZIP 不支持 Range 或资源已变化，请先完整下载后预览".into());
-        }
-        require_response_identity(&job, &fetched).map_err(|e| e.to_string())?;
-        let has_body = job.method != "HEAD" && fetched.status != 304;
-        if has_body && fetched.content_length.is_some_and(|n| n > limit) {
-            return Err("元数据超过读取上限".into());
-        }
-        let parsed_range = fetched
-            .content_range
-            .as_deref()
-            .and_then(parse_content_range);
-        let mut body = Vec::new();
-        let status = fetched.status;
-        let content_length = fetched.content_length;
-        let expected = if has_body { content_length } else { None };
-        let etag = fetched.etag.clone();
-        let last_modified = fetched.last_modified.clone();
-        let mut reader = fetched.body;
-        let mut buffer = [0; 16 * 1024];
-        if has_body {
-            loop {
-                check_job_control(&job).map_err(|e| e.to_string())?;
-                let want = (limit.saturating_add(1).saturating_sub(body.len() as u64))
-                    .min(buffer.len() as u64) as usize;
-                if want == 0 {
-                    return Err("元数据超过读取上限".into());
-                }
-                let n = reader
-                    .read(&mut buffer[..want])
-                    .map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                crate::net_policy::consume(n, || check_job_control(&job))
-                    .map_err(|e| e.to_string())?;
-                body.extend_from_slice(&buffer[..n]);
-                if body.len() as u64 > limit {
-                    return Err("元数据超过读取上限".into());
-                }
+            let n = reader
+                .read(&mut buffer[..want])
+                .map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            crate::net_policy::consume(n, || check_job_control(&job)).map_err(|e| e.to_string())?;
+            body.extend_from_slice(&buffer[..n]);
+            if body.len() as u64 > limit {
+                return Err("元数据超过读取上限".into());
             }
         }
-        if expected.is_some_and(|n| n != body.len() as u64) {
-            return Err("元数据响应不完整".into());
-        }
-        Ok(MetadataResponse {
-            status,
-            final_url: fetched.final_url,
-            body,
-            range: parsed_range,
-            etag,
-            last_modified,
-            content_length,
-        })
-    })();
-    let _ = fs::remove_dir_all(dir);
-    result
+    }
+    if expected.is_some_and(|n| n != body.len() as u64) {
+        return Err("元数据响应不完整".into());
+    }
+    Ok(MetadataResponse {
+        status,
+        final_url: fetched.final_url,
+        body,
+        range: parsed_range,
+        etag,
+        last_modified,
+        content_length,
+    })
 }
 
 fn apply_redirect_method(
@@ -11126,6 +11139,8 @@ mod tests {
         let server_hits = Arc::clone(&native_hits);
         thread::spawn(move || {
             while let Ok((mut stream, _)) = listener.accept() {
+                let mut scratch = [0u8; 512];
+                let _ = stream.read(&mut scratch);
                 server_hits.fetch_add(1, Ordering::SeqCst);
                 let _ = stream.write_all(
                     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -11189,34 +11204,193 @@ mod tests {
             path
         };
 
-        let origin_url = format!("https://127.0.0.1:{}/", addr.port());
+        let http_origin_url = format!("http://127.0.0.1:{}/", addr.port());
+        let https_origin_url = format!("https://127.0.0.1:{}/", addr.port());
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((http_origin_url.clone(), script.clone()));
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((https_origin_url.clone(), script));
+
+        // 1. Uncached origin: native transport runs first, receives terminal 404,
+        //    and must NOT spawn curl-impersonate.
+        let uncached_url = format!("{http_origin_url}missing.m4s");
+        let (mut uncached_job, dir1) = temp_job(&uncached_url, true, 0, 1);
+        uncached_job.method = "GET".into();
+        let fetched = fetch_browser_first(&uncached_job, None).unwrap();
+        assert_eq!(fetched.status, 404);
+        assert_eq!(
+            native_hits.load(Ordering::SeqCst),
+            1,
+            "uncached segment fetch must try fast in-process native HTTP first"
+        );
+        assert_eq!(
+            fs::read_to_string(&curl_log).unwrap().lines().count(),
+            0,
+            "terminal 404 from primary native transport must not fall back to curl"
+        );
+
+        // 2. WAF-cached origin: curl runs first, receives terminal 404,
+        //    and must NOT fall back to native HTTP.
+        let https_origin_key = http_origin(&https_origin_url).unwrap();
+        waf_curl_cache_record(https_origin_key.clone());
+        let cached_url = format!("{https_origin_url}missing.m4s");
+        let (mut cached_job, dir2) = temp_job(&cached_url, true, 0, 1);
+        cached_job.method = "GET".into();
+        let fetched_cached = fetch_browser_first(&cached_job, None).unwrap();
+        assert_eq!(fetched_cached.status, 404);
+        assert_eq!(
+            fs::read_to_string(&curl_log).unwrap().lines().count(),
+            1,
+            "WAF-cached origin must execute curl once on terminal 404"
+        );
+        assert_eq!(
+            native_hits.load(Ordering::SeqCst),
+            1,
+            "terminal 404 from WAF-cached curl must not fall back to native HTTP"
+        );
+        waf_curl_cache_invalidate(&https_origin_key);
+
+        TEST_CURL_OVERRIDES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(item, _)| item != &http_origin_url && item != &https_origin_url);
+        let _ = fs::remove_dir_all(dir1);
+        let _ = fs::remove_dir_all(dir2);
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn fetch_browser_first_prefers_native_and_caches_waf_curl_fallback() {
+        let mode = Arc::new(AtomicUsize::new(200));
+        let server_mode = Arc::clone(&mode);
+        let native_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&native_hits);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut scratch = [0u8; 512];
+                let _ = stream.read(&mut scratch);
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                match server_mode.load(Ordering::SeqCst) {
+                    200 => {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nnative",
+                        );
+                    }
+                    code => {
+                        let reply = format!(
+                            "HTTP/1.1 {code} Challenge\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        let _ = stream.write_all(reply.as_bytes());
+                    }
+                }
+            }
+        });
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let case_dir = std::env::temp_dir().join(format!("hls-browser-first-waf-{stamp}"));
+        fs::create_dir_all(&case_dir).unwrap();
+        let curl_log = case_dir.join("curl-hits.txt");
+        fs::write(&curl_log, "").unwrap();
+        fs::write(
+            case_dir.join("head"),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
+        )
+        .unwrap();
+
+        #[cfg(windows)]
+        let script = {
+            let path = case_dir.join("fake-curl.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\n\
+                 setlocal\r\n\
+                 set \"D=%~dp0\"\r\n\
+                 echo hit>>\"%D%curl-hits.txt\"\r\n\
+                 :loop\r\n\
+                 if \"%~1\"==\"\" goto out\r\n\
+                 if \"%~1\"==\"--dump-header\" (\r\n\
+                   copy /y \"%D%head\" \"%~2\" >nul\r\n\
+                 )\r\n\
+                 shift\r\n\
+                 goto loop\r\n\
+                 :out\r\n\
+                 <nul set /p =curl\r\n\
+                 exit /b 0\r\n",
+            )
+            .unwrap();
+            path
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt;
+            let path = case_dir.join("fake-curl.sh");
+            fs::write(
+                &path,
+                "#!/bin/sh\n\
+                 d=\"$(dirname \"$0\")\"\n\
+                 echo hit >> \"$d/curl-hits.txt\"\n\
+                 h=; p=\n\
+                 for a in \"$@\"; do [ \"$p\" = \"--dump-header\" ] && h=\"$a\"; p=\"$a\"; done\n\
+                 cat \"$d/head\" > \"$h\"\n\
+                 printf 'curl'\n\
+                 exit 0\n",
+            )
+            .unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+
+        let origin_url = format!("http://127.0.0.1:{}/", addr.port());
+        let origin_key = http_origin(&origin_url).unwrap();
+        waf_curl_cache_invalidate(&origin_key);
         TEST_CURL_OVERRIDES
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push((origin_url.clone(), script));
 
-        let url = format!("{origin_url}missing.m4s");
-        let (mut job, dir) = temp_job(&url, true, 0, 1);
-        job.method = "GET".into();
+        // Normal 200 OK segment: zero curl processes spawned!
+        let seg1 = format!("{origin_url}seg1.ts");
+        let (status, body, _) =
+            fetch_bytes_with_transport(&seg1, &HashMap::new(), "", true, Some(1024)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"native");
+        assert_eq!(native_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(fs::read_to_string(&curl_log).unwrap().lines().count(), 0);
 
-        let fetched = fetch_browser_first(&job, None).unwrap();
-        assert_eq!(fetched.status, 404);
-        assert_eq!(
-            fs::read_to_string(&curl_log).unwrap().lines().count(),
-            1,
-            "curl must execute once on terminal 404"
-        );
-        assert_eq!(
-            native_hits.load(Ordering::SeqCst),
-            0,
-            "terminal 404 from primary browser transport must not fall back to native HTTP"
-        );
+        // WAF 429/503/403 challenge: native hits 503, falls back to curl, caches origin!
+        mode.store(503, Ordering::SeqCst);
+        let seg2 = format!("{origin_url}seg2.ts");
+        let (status, body, _) =
+            fetch_bytes_with_transport(&seg2, &HashMap::new(), "", true, Some(1024)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"curl");
+        assert_eq!(native_hits.load(Ordering::SeqCst), 2);
+        assert_eq!(fs::read_to_string(&curl_log).unwrap().lines().count(), 1);
+        assert!(waf_curl_cache_hit(&origin_key));
 
+        // Next segment on the WAF-flagged origin goes straight to curl with 0 native hits!
+        let seg3 = format!("{origin_url}seg3.ts");
+        let (status, body, _) =
+            fetch_bytes_with_transport(&seg3, &HashMap::new(), "", true, Some(1024)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"curl");
+        assert_eq!(native_hits.load(Ordering::SeqCst), 2);
+        assert_eq!(fs::read_to_string(&curl_log).unwrap().lines().count(), 2);
+
+        waf_curl_cache_invalidate(&origin_key);
         TEST_CURL_OVERRIDES
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .retain(|(item, _)| item != &origin_url);
-        let _ = fs::remove_dir_all(dir);
         let _ = fs::remove_dir_all(case_dir);
     }
 }

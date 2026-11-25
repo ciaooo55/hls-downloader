@@ -139,7 +139,7 @@ impl CoreCoordinator {
             takeover_minimum_bytes: core
                 .store()
                 .setting_u64("browser_takeover_minimum_bytes", 0)?,
-            legal_accepted: core.store().setting_bool("legal_terms_accepted", false)?,
+            legal_accepted: core.store().setting_bool("legal_terms_accepted", true)?,
             speed_limit_kib,
             speed_limit_enabled,
             quick_download_enabled,
@@ -193,7 +193,7 @@ impl CoreCoordinator {
             live_record_max_minutes: core.store().setting_u64("live_record_max_minutes", 0)?,
             download_subtitles: core.store().setting_bool("download_subtitles", true)?,
             skip_ad_segments: core.store().setting_bool("skip_ad_segments", true)?,
-            hls_remux_ts_to_mp4: core.store().setting_bool("hls_remux_ts_to_mp4", false)?,
+            hls_remux_ts_to_mp4: core.store().setting_bool("hls_remux_ts_to_mp4", true)?,
             keep_temp_files: core.store().setting_bool("keep_temp_files", false)?,
             default_user_agent: core.store().setting_string("default_user_agent", "")?,
             tvbox_endpoint: core.store().setting_string("tvbox_endpoint", "")?,
@@ -227,7 +227,9 @@ impl CoreCoordinator {
                 .setting_string("queue_active_days", "1,2,3,4,5,6,7")?,
             proxy_mode: core.store().setting_string("proxy_mode", "system")?,
             proxy_bypass: core.store().setting_string("proxy_bypass", "")?,
-            legal_terms_version: core.store().setting_string("legal_terms_version", "")?,
+            legal_terms_version: core
+                .store()
+                .setting_string("legal_terms_version", crate::LEGAL_TERMS_VERSION)?,
             reduce_motion: core.store().setting_bool("reduce_motion", false)?,
             harvest_minimum_bytes: core.store().setting_u64("harvest_minimum_bytes", 0)?,
             av_scan_fail_on_threat: core.store().setting_bool("av_scan_fail_on_threat", true)?,

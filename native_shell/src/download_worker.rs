@@ -715,15 +715,73 @@ impl CoreCoordinator {
         Ok(Some(events))
     }
 
-    pub(crate) fn admit_handoff(&self, handoff_json: &str) -> Result<String, String> {
-        let has_armed = self
-            .armed_refresh
-            .lock()
-            .ok()
-            .is_some_and(|guard| guard.is_some());
-        if !has_armed {
-            return self.lock()?.admit_handoff(handoff_json);
+    fn prepare_quick_handoff_spec(
+        &self,
+        offer: &crate::ResourceOffer,
+    ) -> Result<Option<TaskSpec>, String> {
+        let settings = self.settings()?;
+        if !settings.quick_download_enabled
+            || self.require_legal().is_err()
+            || !PersistentCore::offer_eligible_for_quick_accept(offer)
+        {
+            return Ok(None);
         }
+        let filename = if !offer.filename.trim().is_empty() {
+            offer.filename.clone()
+        } else {
+            offer
+                .url
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(&offer.url)
+                .rsplit('/')
+                .find(|part| !part.is_empty())
+                .unwrap_or("download")
+                .to_string()
+        };
+        let base_spec = match self.apply_defaults_to_spec_inner(
+            TaskSpec {
+                url: offer.url.clone(),
+                resource_kind: offer.resource_kind,
+                local_source_path: offer.local_source_path.clone(),
+                title: if offer.title.trim().is_empty() {
+                    filename.clone()
+                } else {
+                    offer.title.clone()
+                },
+                filename,
+                queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                request_method: offer.request_method.clone(),
+                mime_type: offer.mime_type.clone(),
+                credential_ref: offer.credential_ref.clone(),
+                replay_context_ref: offer.replay_context_ref.clone(),
+                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                    .then_some(offer.size),
+                preferred_bandwidth: offer.preferred_bandwidth,
+                preferred_height: offer.preferred_height,
+                preferred_variant_id: offer.preferred_variant_id.clone(),
+                source_page_url: offer.source_page_url.clone(),
+                audio_url: offer.audio_url.clone(),
+                resource_key: offer.resource_key.clone(),
+                ..Default::default()
+            },
+            false,
+        ) {
+            Ok(spec) => spec,
+            Err(_) => return Ok(None),
+        };
+        let expanded = match self.expand_create(base_spec) {
+            Ok(mut list) if list.len() == 1 => list.pop().unwrap(),
+            _ => return Ok(None),
+        };
+        let sealed = match seal_spec_secrets(self, expanded) {
+            Ok(spec) => spec,
+            Err(_) => return Ok(None),
+        };
+        Ok(Some(sealed))
+    }
+
+    pub(crate) fn admit_handoff(&self, handoff_json: &str) -> Result<String, String> {
         let mut original: crate::contract::BrowserHandoff = serde_json::from_str(handoff_json)
             .map_err(|error| format!("decode browser handoff: {error}"))?;
         let mut handoff = crate::url_credentials::redact_urls(original.clone())?;
@@ -734,6 +792,21 @@ impl CoreCoordinator {
             || handoff.task_id.is_some()
         {
             return Err("浏览器交接初始状态无效".into());
+        }
+        let has_armed = self
+            .armed_refresh
+            .lock()
+            .ok()
+            .is_some_and(|guard| guard.is_some());
+        if !has_armed {
+            let quick_spec = self.prepare_quick_handoff_spec(&original.offer)?;
+            let (encoded, quick_task_id) = self
+                .lock()?
+                .admit_handoff_with_quick_spec(handoff_json, quick_spec)?;
+            if quick_task_id.is_some() {
+                let _ = self.start_next_queued(false);
+            }
+            return Ok(encoded);
         }
         let (armed_task_id, encoded) = {
             let mut core = self.lock()?;
@@ -778,7 +851,15 @@ impl CoreCoordinator {
                 None
             };
             let Some(armed_task_id) = armed_task_id else {
-                return core.admit_handoff(handoff_json);
+                drop(core);
+                let quick_spec = self.prepare_quick_handoff_spec(&original.offer)?;
+                let (encoded, quick_task_id) = self
+                    .lock()?
+                    .admit_handoff_with_quick_spec(handoff_json, quick_spec)?;
+                if quick_task_id.is_some() {
+                    let _ = self.start_next_queued(false);
+                }
+                return Ok(encoded);
             };
             let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
             if !crate::net_policy::url_allowed(original.offer.url.trim(), &allowed_hosts) {
@@ -3159,7 +3240,7 @@ fn run_task_with_throttle(
                     guard.store().setting_bool("skip_ad_segments", true)?,
                     guard.store().setting_bool("download_subtitles", true)?,
                     guard.store().setting_u64("live_record_max_minutes", 0)?,
-                    guard.store().setting_bool("hls_remux_ts_to_mp4", false)?,
+                    guard.store().setting_bool("hls_remux_ts_to_mp4", true)?,
                 )
             };
             let url = spec.url.clone();
@@ -4942,15 +5023,28 @@ fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> R
     if crate::power_action::pending().is_some() {
         return Ok(());
     }
-    crate::power_action::schedule(&action, 30)?;
-    let _ = core
-        .lock()
-        .map_err(|_| "v7 Core mutex poisoned".to_string())?
-        .emit(CoreEvent::PowerActionPending {
+    crate::power_action::schedule_with_title(&action, &title, 30)?;
+    let bridge = {
+        let mut guard = core
+            .lock()
+            .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+        let bridge = guard.presenter_bridge();
+        let has_subscribers = bridge.has_subscribers();
+        let _ = guard.emit(CoreEvent::PowerActionPending {
             action,
             title,
             delay_seconds: 30,
         });
+        if !has_subscribers {
+            bridge.mark_power_action_pending();
+            Some(bridge)
+        } else {
+            None
+        }
+    };
+    if let Some(bridge) = bridge {
+        bridge.wake(crate::core_service::PresenterWakeMode::BackgroundToast);
+    }
     Ok(())
 }
 

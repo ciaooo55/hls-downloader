@@ -4977,6 +4977,13 @@ fn completed_snapshot_keeps_its_saved_output_when_marker_is_unreadable_or_remove
 #[test]
 fn legal_gate_blocks_create_and_start_until_accepted() {
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    assert!(
+        coordinator.settings().unwrap().legal_accepted,
+        "fresh in-memory CoreSettings must default legal_accepted to true"
+    );
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(false))
+        .unwrap();
     let create = coordinator.dispatch(CoreCommand::CreateTask {
         spec: TaskSpec {
             url: "https://cdn.test/gated.bin".into(),
@@ -6841,6 +6848,12 @@ fn shutdown_waits_for_checkpoints_and_recovers_only_interrupted_tasks() {
         fs::create_dir_all(&root).unwrap();
         let db = root.join("core.sqlite3");
         let coordinator = CoreCoordinator::new(PersistentCore::open(&db).unwrap());
+        coordinator
+            .lock()
+            .unwrap()
+            .store_mut()
+            .set_setting("legal_terms_accepted", false)
+            .unwrap();
         coordinator
             .lock()
             .unwrap()
