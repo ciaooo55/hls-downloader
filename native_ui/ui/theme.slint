@@ -1,4 +1,3 @@
-import "../fonts/NotoSansCJKsc-Regular.otf";
 import { Palette, LineEdit, ScrollView, ComboBox } from "std-widgets.slint";
 
 export global Tokens {
@@ -12,7 +11,8 @@ export global Tokens {
     out property <duration> motion-fast: reduce-motion ? 1ms : 90ms;
     // 面板展开、提示出现等“回应用户操作”的过渡；减少动态效果时同样降到 1ms。
     out property <duration> motion-slow: reduce-motion ? 1ms : 220ms;
-    out property <string> type-face: "Noto Sans CJK SC";
+    // 采用 Windows 原生多字重 UI 字体（含 Regular / Bold 真实字重与中英排印提示，其他平台由 Parley 自动回退系统无衬线字体）。
+    out property <string> type-face: "Microsoft YaHei UI";
     // 现代冷灰岩（Cool Slate）与澄澈钴蓝（Crisp Cobalt）桌面设计令牌体系。
     // 保持 rail / canvas / surface / dialog 清晰海拔层级，严格通过 WCAG AA 对比度门禁。
     out property <length> control-height: 34px;
@@ -446,8 +446,8 @@ export component FadePanel inherits Rectangle {
     }
     init => { self.enter(); }
     changed page => { self.enter(); }
-    opacity: Tokens.reduce-motion || entered ? 1 : 0;
-    visible: self.opacity > 0;
+    // 切换分组时保持 visible 为真（以 0.01 起淡入），避免 16ms 过渡窗内把子树从 UIA 树临时摘除。
+    opacity: Tokens.reduce-motion || entered ? 1 : 0.01;
     animate opacity { duration: entered ? Tokens.motion : 0ms; easing: ease-out; }
     reveal := Timer { interval: 16ms; running: !Tokens.reduce-motion && !root.entered; triggered => { root.entered = true; } }
     @children
@@ -517,23 +517,22 @@ export component ScrollCue inherits Rectangle {
     in-out property <length> viewport-y;
     in property <length> viewport-height;
     in property <length> visible-height;
+    in property <bool> interactive: false;
     callback scrolled(length);
     private property <length> maximum: root.viewport-height - root.visible-height;
     private property <length> track: max(1px, root.height - 24px);
     private property <length> thumb: root.maximum <= 0px ? 0px : max(min(22px, root.height), root.track * (root.visible-height / max(1px, root.viewport-height)));
-    private property <bool> active-bar: scroll-touch.pressed || scroll-touch.has-hover;
     width: 14px;
     visible: root.maximum > 0.5px;
-    Rectangle {
-        x: parent.width - (root.active-bar ? 9px : 7px);
-        width: root.active-bar ? 6px : 3.5px;
+    thumb-bar := Rectangle {
+        x: parent.width - 7px;
+        width: 3.5px;
         border-radius: self.width / 2;
         y: 12px + (root.track - root.thumb) * Math.clamp(-root.viewport-y / max(1px, root.maximum), 0, 1);
         height: root.thumb;
-        background: scroll-touch.pressed ? Tokens.accent : scroll-touch.has-hover ? Tokens.muted.with-alpha(0.78) : (Tokens.dark ? Tokens.faint.with-alpha(0.76) : Tokens.muted.with-alpha(0.45));
-        animate width, x, background { duration: Tokens.motion-fast; easing: ease-out; }
+        background: Tokens.dark ? Tokens.faint.with-alpha(0.76) : Tokens.muted.with-alpha(0.45);
     }
-    scroll-touch := TouchArea {
+    if root.interactive: TouchArea {
         mouse-cursor: pointer;
         pointer-event(event) => {
             if root.maximum > 0.5px && (event.kind == PointerEventKind.down || (event.kind == PointerEventKind.move && self.pressed)) {

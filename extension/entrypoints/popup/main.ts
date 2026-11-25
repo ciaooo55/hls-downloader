@@ -757,7 +757,7 @@ async function main() {
     const extra = el('div', 'resource-extra')
     extra.append(copyBtn, castBtn, pushBtn)
     more.append(summary, extra)
-    actionCol.append(downloadBtn, resendBtn, more)
+    actionCol.append(downloadBtn, more)
     article.append(body, actionCol)
 
     const state: PopupCardState = {
@@ -953,6 +953,7 @@ async function main() {
       setAttrIfChanged(state.downloadBtn, 'aria-busy', 'false')
       setAttrIfChanged(state.downloadBtn, 'title', 'DRM 加密保护 · 不支持直接下载')
       state.resendBtn.hidden = true
+      if (state.resendBtn.parentElement) state.resendBtn.remove()
       state.castBtn.hidden = true
       state.pushBtn.hidden = true
       return
@@ -973,7 +974,13 @@ async function main() {
     state.downloadBtn.classList.toggle('busy', sendPending)
     setAttrIfChanged(state.downloadBtn, 'aria-busy', String(sendPending))
     setAttrIfChanged(state.downloadBtn, 'title', sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列')
-    state.resendBtn.hidden = !canForceResend(sendState)
+    const showResend = canForceResend(sendState)
+    state.resendBtn.hidden = !showResend
+    if (showResend) {
+      if (!state.resendBtn.parentElement) state.downloadBtn.after(state.resendBtn)
+    } else if (state.resendBtn.parentElement) {
+      state.resendBtn.remove()
+    }
 
     // Contextual Action Hygiene: 仅对可播放流媒体/音视频展示投屏与 TVBox 按钮（未配置 TVBox 时隐藏）
     const playableMedia = isPlayableMediaResource(selected)

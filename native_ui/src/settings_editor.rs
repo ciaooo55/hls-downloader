@@ -439,6 +439,47 @@ impl SettingsEditor {
         }
         Ok(changes)
     }
+
+    /// Extracts a single non-destructive boolean toggle so switching it applies
+    /// immediately to Core without prematurely submitting or clearing unsaved
+    /// text, numeric, proxy, credential, or site-rule drafts.
+    pub fn take_instant_bool_change(&mut self, key: &str) -> Option<BTreeMap<String, Value>> {
+        if !is_instant_bool_setting(key) {
+            return None;
+        }
+        let value = self.dirty.remove(key)?;
+        let single = BTreeMap::from([(key.to_owned(), value.clone())]);
+        let mapped = storage_changes(&self.values, &single);
+        self.values.insert(key.to_owned(), value);
+        Some(mapped)
+    }
+}
+
+/// Non-destructive boolean preferences that apply immediately on toggle.
+/// Security-sensitive toggles (`av_scan_*`) and schedule toggles coupled with
+/// `HH:mm` clock inputs keep explicit confirmation via "保存设置".
+pub fn is_instant_bool_setting(key: &str) -> bool {
+    matches!(
+        key,
+        "auto_category"
+            | "clipboard_watch"
+            | "resume_interrupted"
+            | "start_on_login"
+            | "completion_sound_enabled"
+            | "progress_window_enabled"
+            | "complete_popup_enabled"
+            | "speed_limit_enabled"
+            | "allow_duplicate"
+            | "keep_temp_files"
+            | "download_subtitles"
+            | "skip_ad_segments"
+            | "hls_remux_ts_to_mp4"
+            | "torrent_watch_enabled"
+            | "bt_enable_dht"
+            | "takeover_enabled"
+            | "quick_download_enabled"
+            | "reduce_motion"
+    )
 }
 
 fn validate_setting_text(key: &str, text: &str) -> Result<(), String> {
@@ -612,5 +653,67 @@ mod tests {
         assert!(FIELDS
             .iter()
             .any(|(group, key, _)| *group == "浏览器" && *key == "quick_download_enabled"));
+    }
+
+    #[test]
+    fn instant_bool_toggles_apply_single_key_and_preserve_unsaved_text_or_sensitive_drafts() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let parent = crate::WorkbenchWindow::new().unwrap();
+        let response: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "quick_download_enabled": false,
+            "clipboard_watch": true,
+            "hls_remux_ts_to_mp4": true,
+            "av_scan_enabled": false,
+            "schedule_enabled": false,
+            "default_concurrency": 8,
+            "legal_accepted": true,
+            "speed_limit_kib": 0,
+            "download_dir": "D:\\Downloads"
+        }))
+        .unwrap();
+        let mut editor = SettingsEditor::new(&response, &parent).unwrap();
+
+        // Draft an unsaved numeric setting and a security-sensitive boolean setting.
+        editor.edit("default_concurrency", "12").unwrap();
+        editor.edit("av_scan_enabled", "true").unwrap();
+        editor.edit("schedule_enabled", "true").unwrap();
+        assert_eq!(editor.take_instant_bool_change("default_concurrency"), None);
+        assert_eq!(editor.take_instant_bool_change("av_scan_enabled"), None);
+        assert_eq!(editor.take_instant_bool_change("schedule_enabled"), None);
+
+        // Toggling a non-destructive boolean extracts only that mapped Core key.
+        editor.edit("quick_download_enabled", "true").unwrap();
+        let first = editor
+            .take_instant_bool_change("quick_download_enabled")
+            .expect("quick_download_enabled should apply immediately");
+        assert_eq!(
+            first,
+            BTreeMap::from([("browser_quick_download_enabled".into(), Value::from(true))])
+        );
+        assert!(!editor.dirty.contains_key("quick_download_enabled"));
+
+        // Toggling it right back to false also emits a fresh instant update.
+        editor.edit("quick_download_enabled", "false").unwrap();
+        let second = editor
+            .take_instant_bool_change("quick_download_enabled")
+            .expect("toggling back should also apply immediately");
+        assert_eq!(
+            second,
+            BTreeMap::from([("browser_quick_download_enabled".into(), Value::from(false))])
+        );
+
+        // Unsaved numeric/security/schedule drafts remain intact for explicit "保存设置".
+        let explicit = editor.storage_changes().unwrap();
+        assert_eq!(explicit["default_concurrency"], Value::from(12));
+        assert_eq!(explicit["av_scan_enabled"], Value::from(true));
+        assert_eq!(
+            explicit["download_speed_schedule_enabled"],
+            Value::from(true)
+        );
+        assert!(!explicit.contains_key("browser_quick_download_enabled"));
     }
 }

@@ -72,7 +72,7 @@ export component SettingsWindow inherits Window {
                                 clicked => { root.action("preview_sound"); }
                             }
                         }
-                        if field.kind == "choice": HotComboBox { model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
+                        if field.kind == "choice": HotComboBox { a11y-label: field.label; model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
                         if field.kind == "text" || field.kind == "number" || field.kind == "directory": HorizontalLayout {
                             spacing: Tokens.control-gap;
                             LineEdit { text <=> field.value; height: Tokens.control-height; accessible-label: field.label; edited(value) => { root.edited(field.key, value); } }
