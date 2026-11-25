@@ -124,7 +124,7 @@ fn sync_tray_state_if_changed(
 }
 
 fn wake_or_open_workbench(server: &hls_native_shell::CoreServer, surface: &str) {
-    if server.has_event_subscribers() {
+    if server.has_ui_subscribers() {
         match server.emit_ui_show(surface) {
             Ok(()) => return,
             Err(error) => eprintln!("tray ui show ({surface}) failed: {error}"),
@@ -446,16 +446,19 @@ fn main() -> ExitCode {
                         hls_native_shell::v7_pipe_name()
                     );
                 }
-                match worker.join() {
+                let exit_code = match worker.join() {
                     Ok(Ok(())) => ExitCode::SUCCESS,
                     Ok(Err(error)) => {
                         eprintln!("{error}");
                         ExitCode::from(1)
                     }
                     Err(_) => ExitCode::from(1),
-                }
+                };
+                server.shutdown_and_flush();
+                exit_code
             }
             Err(error) => {
+                server.shutdown_and_flush();
                 hls_native_shell::record_runtime_log(
                     "core_start_failed",
                     serde_json::json!({"stage":"bind_ipc"}),

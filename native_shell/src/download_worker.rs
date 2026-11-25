@@ -11,7 +11,7 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use hls_client::request_validation::reserved_dos_device_name;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -29,7 +29,7 @@ use paths::{initialize_torrent_selection, write_torrent_selection};
 use settings::validate_queue_profiles;
 pub use settings::{CoreSettings, PUBLIC_SETTING_KEYS};
 
-const DEFAULT_COOKIE_CREDENTIAL_REF: &str = "settings:default-cookie";
+pub(crate) use crate::store::DEFAULT_COOKIE_CREDENTIAL_REF;
 const MAX_REPLAY_BODY_BYTES: usize = 128 * 1024;
 const HANDOFF_PRESENTER_LEASE_MS: u64 = 15_000;
 const ARMED_TASK_REFRESH_TTL: Duration = Duration::from_secs(5 * 60);
@@ -195,6 +195,7 @@ pub(crate) fn hydrate_replay_headers(
     core: &Arc<Mutex<PersistentCore>>,
     mut spec: TaskSpec,
 ) -> Result<(TaskSpec, String), String> {
+    let is_default_cookie = spec.credential_ref.as_deref() == Some(DEFAULT_COOKIE_CREDENTIAL_REF);
     let blob = {
         let locked = core
             .lock()
@@ -205,12 +206,38 @@ pub(crate) fn hydrate_replay_headers(
         };
         locked.store().load_credential(credential_ref)?
     };
-    let blob = blob.ok_or_else(|| "请求凭据不存在，请重新获取站点凭据".to_string())?;
+    let Some(blob) = blob else {
+        if is_default_cookie {
+            spec.credential_ref = None;
+            return Ok((spec, String::new()));
+        }
+        return Err("请求凭据不存在，请重新获取站点凭据".to_string());
+    };
+    if is_default_cookie && blob.trim().is_empty() {
+        spec.credential_ref = None;
+        return Ok((spec, String::new()));
+    }
     let plain = CredentialVault
         .unprotect(&blob)
         .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
+    if is_default_cookie && plain.trim().is_empty() {
+        spec.credential_ref = None;
+        return Ok((spec, String::new()));
+    }
     let context = serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
         .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?;
+    if is_default_cookie
+        && context
+            .get("cookie")
+            .and_then(Value::as_str)
+            .is_none_or(|cookie| cookie.trim().is_empty())
+        && context.get("request_headers").is_none()
+        && context.get("request_contexts").is_none()
+        && context.get("request_body").is_none()
+    {
+        spec.credential_ref = None;
+        return Ok((spec, String::new()));
+    }
     match context.get("request_headers") {
         None | Some(Value::Object(_)) => {}
         Some(Value::String(text)) => {
@@ -354,10 +381,25 @@ pub(crate) fn safe_filename(filename: &str, url: &str) -> String {
     }
 }
 
+struct ScopedSetEntry {
+    set: Arc<Mutex<BTreeSet<String>>>,
+    key: String,
+}
+
+impl Drop for ScopedSetEntry {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.set.lock() {
+            guard.remove(&self.key);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CoreCoordinator {
     core: Arc<Mutex<PersistentCore>>,
     active: Arc<Mutex<HashSet<String>>>,
+    deleting_tasks: Arc<Mutex<BTreeSet<String>>>,
+    in_flight_handoffs: Arc<Mutex<BTreeSet<String>>>,
     retries: Arc<Mutex<HashMap<String, u32>>>,
     update_shutdown: Arc<AtomicBool>,
     settings_cache: Arc<RwLock<Option<settings::CachedSettings>>>,
@@ -387,6 +429,8 @@ impl CoreCoordinator {
         Self {
             core: Arc::new(Mutex::new(core)),
             active: Arc::new(Mutex::new(HashSet::new())),
+            deleting_tasks: Arc::new(Mutex::new(BTreeSet::new())),
+            in_flight_handoffs: Arc::new(Mutex::new(BTreeSet::new())),
             retries: Arc::new(Mutex::new(HashMap::new())),
             update_shutdown: Arc::new(AtomicBool::new(false)),
             settings_cache: Arc::new(RwLock::new(None)),
@@ -395,6 +439,40 @@ impl CoreCoordinator {
             #[cfg(test)]
             worker_wait_started: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn enter_deleting_task(&self, task_id: &str) -> Result<ScopedSetEntry, String> {
+        let mut set = self
+            .deleting_tasks
+            .lock()
+            .map_err(|_| "deleting task registry poisoned".to_string())?;
+        set.insert(task_id.to_string());
+        Ok(ScopedSetEntry {
+            set: Arc::clone(&self.deleting_tasks),
+            key: task_id.to_string(),
+        })
+    }
+
+    fn is_task_deleting(&self, task_id: &str) -> Result<bool, String> {
+        Ok(self
+            .deleting_tasks
+            .lock()
+            .map_err(|_| "deleting task registry poisoned".to_string())?
+            .contains(task_id))
+    }
+
+    fn enter_in_flight_handoff(&self, handoff_id: &str) -> Result<ScopedSetEntry, String> {
+        let mut set = self
+            .in_flight_handoffs
+            .lock()
+            .map_err(|_| "in-flight handoff registry poisoned".to_string())?;
+        if !set.insert(handoff_id.to_string()) {
+            return Err("接管请求正在处理中".into());
+        }
+        Ok(ScopedSetEntry {
+            set: Arc::clone(&self.in_flight_handoffs),
+            key: handoff_id.to_string(),
+        })
     }
 
     pub(crate) fn invalidate_settings_cache(&self) {
@@ -439,21 +517,18 @@ impl CoreCoordinator {
     }
 
     pub fn default_cookie_configured(&self) -> Result<bool, String> {
-        Ok(self
-            .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)?
-            .is_some_and(|value| !value.is_empty()))
+        self.lock()?.store().default_cookie_configured()
     }
 
     pub fn set_default_cookie(&self, cookie: &str) -> Result<(), String> {
         if cookie.len() > 16 * 1024 || cookie.contains(['\r', '\n', '\0']) {
             return Err("默认 Cookie 格式无效或长度超过 16 KiB".into());
         }
-        let protected = if cookie.trim().is_empty() {
-            String::new()
-        } else {
-            let replay = serde_json::json!({ "cookie": cookie.trim() }).to_string();
-            CredentialVault.protect(&replay)?
-        };
+        if cookie.trim().is_empty() {
+            return self.delete_credential(DEFAULT_COOKIE_CREDENTIAL_REF);
+        }
+        let replay = serde_json::json!({ "cookie": cookie.trim() }).to_string();
+        let protected = CredentialVault.protect(&replay)?;
         self.store_credential(DEFAULT_COOKIE_CREDENTIAL_REF, &protected, "default_cookie")
     }
 
@@ -762,6 +837,9 @@ impl CoreCoordinator {
 
     fn auto_resume_refreshed_task(&self, task_id: &str) -> Result<Vec<EventEnvelope>, String> {
         let mut events = Vec::new();
+        if let Ok(mut map) = self.retries.lock() {
+            map.remove(task_id);
+        }
         if self.worker_is_active(task_id)? {
             events.extend(self.dispatch_inner(CoreCommand::TaskAction {
                 task_id: task_id.to_string(),
@@ -933,10 +1011,13 @@ impl CoreCoordinator {
             .ok()
             .is_some_and(|guard| guard.is_some());
         if !has_armed {
-            let quick_spec = self.prepare_quick_handoff_spec(&original.offer)?;
+            let quick_policy = match self.prepare_quick_handoff_spec(&original.offer)? {
+                Some(spec) => crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec)),
+                None => crate::core_service::QuickHandoffPolicy::Disabled,
+            };
             let (encoded, quick_task_id) = self
                 .lock()?
-                .admit_handoff_with_quick_spec(handoff_json, quick_spec)?;
+                .admit_handoff_with_quick_spec(handoff_json, quick_policy)?;
             if quick_task_id.is_some() {
                 let _ = self.start_next_queued(false);
             }
@@ -990,10 +1071,13 @@ impl CoreCoordinator {
             };
             let Some((armed_task_id, current)) = armed_task_id else {
                 drop(core);
-                let quick_spec = self.prepare_quick_handoff_spec(&original.offer)?;
+                let quick_policy = match self.prepare_quick_handoff_spec(&original.offer)? {
+                    Some(spec) => crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec)),
+                    None => crate::core_service::QuickHandoffPolicy::Disabled,
+                };
                 let (encoded, quick_task_id) = self
                     .lock()?
-                    .admit_handoff_with_quick_spec(handoff_json, quick_spec)?;
+                    .admit_handoff_with_quick_spec(handoff_json, quick_policy)?;
                 if quick_task_id.is_some() {
                     let _ = self.start_next_queued(false);
                 }
@@ -1416,6 +1500,9 @@ impl CoreCoordinator {
                     action: "delete".into(),
                 })?);
             }
+            let _ = self
+                .lock()
+                .and_then(|mut core| core.store_mut().gc_orphan_credentials(60_000));
             return Ok(events);
         }
         if let CoreCommand::SaveSiteProfile { task_id } = command {
@@ -1521,6 +1608,7 @@ impl CoreCoordinator {
             allow_duplicate,
             start_paused,
             queue_id,
+            spec_override,
         } = command
         {
             return self.accept_handoff_command(
@@ -1531,6 +1619,7 @@ impl CoreCoordinator {
                 allow_duplicate,
                 start_paused,
                 queue_id,
+                spec_override,
             );
         }
         if let CoreCommand::RejectHandoff {
@@ -1538,13 +1627,18 @@ impl CoreCoordinator {
             suppress_site_kind,
         } = command
         {
+            let _handoff_guard = self.enter_in_flight_handoff(&handoff_id)?;
             if suppress_site_kind {
                 self.persist_handoff_suppression(&handoff_id)?;
             }
-            return self.dispatch_inner(CoreCommand::RejectHandoff {
+            let events = self.dispatch_inner(CoreCommand::RejectHandoff {
                 handoff_id,
                 suppress_site_kind,
-            });
+            })?;
+            let _ = self
+                .lock()
+                .and_then(|mut core| core.store_mut().gc_orphan_credentials(60_000));
+            return Ok(events);
         }
         if let CoreCommand::PresentHandoff {
             handoff_id,
@@ -1741,10 +1835,23 @@ impl CoreCoordinator {
     }
 
     fn dispatch_created(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
+        self.dispatch_created_for_handoff(spec, None)
+    }
+
+    fn dispatch_created_for_handoff(
+        &self,
+        spec: TaskSpec,
+        expected_handoff_id: Option<&str>,
+    ) -> Result<Vec<EventEnvelope>, String> {
         let start_paused = spec.start_paused;
         let mut spec = seal_spec_secrets(self, spec)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
+            if let Some(handoff_id) = expected_handoff_id {
+                if core.pending_handoff(handoff_id).is_none() {
+                    return Err("接管请求不存在或已过期".into());
+                }
+            }
             let lookup = crate::url_credentials::redact_urls(spec.clone())?;
             let duplicate = if lookup.local_source_path.is_none() && !lookup.allow_duplicate {
                 Self::duplicate_of(&core, &lookup)
@@ -1875,10 +1982,14 @@ impl CoreCoordinator {
     }
 
     fn dispatch_inner(&self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
+        let mut _deleting_guard = None;
         if let CoreCommand::TaskAction { task_id, action } = &command {
             if matches!(action.as_str(), "start" | "resume" | "retry") {
                 if self.update_shutdown.load(Ordering::SeqCst) {
                     return Err("下载引擎正在准备退出，暂不启动新任务".into());
+                }
+                if self.is_task_deleting(task_id)? {
+                    return Err("任务正在删除中".into());
                 }
                 self.require_legal()?;
             }
@@ -1930,6 +2041,9 @@ impl CoreCoordinator {
                     delta: 1,
                 });
             }
+            if action == "delete_files" || action == "delete" {
+                _deleting_guard = Some(self.enter_deleting_task(task_id)?);
+            }
             if action == "delete_files" {
                 self.clear_armed_refresh_for_task(task_id);
                 self.cancel_and_wait(task_id)?;
@@ -1949,10 +2063,13 @@ impl CoreCoordinator {
                 }
             }
             if action == "delete_files" {
-                return self.lock()?.handle(CoreCommand::TaskAction {
+                let mut core = self.lock()?;
+                let events = core.handle(CoreCommand::TaskAction {
                     task_id: task_id.clone(),
                     action: "delete".into(),
-                });
+                })?;
+                let _ = core.store_mut().gc_orphan_credentials(60_000);
+                return Ok(events);
             }
         }
         if let CoreCommand::SetSetting { key, value } = command {
@@ -2002,7 +2119,7 @@ impl CoreCoordinator {
         if matches!(command, CoreCommand::ConfirmPowerAction) {
             let confirmed = crate::power_action::confirm()?;
             return self.lock()?.emit(CoreEvent::Toast {
-                level: if confirmed { "success" } else { "info" }.into(),
+                level: "power_action_cleared".into(),
                 message: if confirmed {
                     "已执行完成后电源动作"
                 } else {
@@ -2014,7 +2131,7 @@ impl CoreCoordinator {
         if matches!(command, CoreCommand::CancelPowerAction) {
             let canceled = crate::power_action::cancel();
             return self.lock()?.emit(CoreEvent::Toast {
-                level: "info".into(),
+                level: "power_action_cleared".into(),
                 message: if canceled {
                     "已取消完成后电源动作".into()
                 } else {
@@ -2047,26 +2164,25 @@ impl CoreCoordinator {
             let deferred = core
                 .snapshot(task_id)
                 .filter(|task| task.available_actions.iter().any(|item| item == action))
-                .filter(|task| {
+                .is_some_and(|task| {
                     !task_schedule_allowed(task)
                         || !queue_profiles
                             .iter()
                             .find(|profile| profile.id == task.queue_id)
                             .is_some_and(queue_profile_allowed)
-                })
-                .map(|task| (task.downloaded_bytes, task.total_bytes));
-            if let Some((downloaded_bytes, total_bytes)) = deferred {
-                return core.handle(CoreCommand::UpdateProgress {
-                    task_id: task_id.into(),
-                    downloaded_bytes,
-                    total_bytes,
-                    speed_bytes_per_sec: 0,
-                    stage: "waiting".into(),
-                    status: "queued".into(),
                 });
+            if deferred {
+                if let Ok(mut map) = self.retries.lock() {
+                    map.remove(task_id);
+                }
+                return core.defer_start_action(task_id, action);
             }
         }
         let mut start_accepted = false;
+        let is_delete_action = matches!(
+            &command,
+            CoreCommand::TaskAction { action, .. } if action == "delete"
+        );
         let events = {
             let mut core = self
                 .core
@@ -2082,6 +2198,9 @@ impl CoreCoordinator {
                     });
                 }
                 if start_accepted {
+                    if let Ok(mut map) = self.retries.lock() {
+                        map.remove(task_id);
+                    }
                     if let Some(spec) = core.task_spec(task_id).cloned() {
                         let paths = TaskPaths::for_task(task_id, &spec)?;
                         paths.prepare()?;
@@ -2107,7 +2226,11 @@ impl CoreCoordinator {
                     }
                 }
             }
-            core.handle(command)?
+            let events = core.handle(command)?;
+            if is_delete_action {
+                let _ = core.store_mut().gc_orphan_credentials(60_000);
+            }
+            events
         };
         if start_accepted {
             if let Some(task_id) = task_id {
@@ -2129,6 +2252,11 @@ impl CoreCoordinator {
                 .active
                 .lock()
                 .map_err(|_| "download worker registry poisoned".to_string())?
+                .clone();
+            let deleting_ids = self
+                .deleting_tasks
+                .lock()
+                .map_err(|_| "deleting task registry poisoned".to_string())?
                 .clone();
             let tasks = self.raw_tasks()?;
             let mut profiles = self.settings()?.queue_profiles;
@@ -2153,6 +2281,7 @@ impl CoreCoordinator {
                             && task.status == "queued"
                             && (!scheduled_only || !task.scheduled_start_at.is_empty())
                             && !active_ids.contains(&task.task_id)
+                            && !deleting_ids.contains(&task.task_id)
                             && task_schedule_allowed(task)
                     })
                     .collect();
@@ -2167,10 +2296,12 @@ impl CoreCoordinator {
     }
 
     pub fn recover_startup(&self) -> Result<(), String> {
-        let resume = self
-            .lock()?
-            .store()
-            .setting_bool("resume_interrupted_on_startup", false)?;
+        let resume = {
+            let mut core = self.lock()?;
+            let _ = core.store_mut().gc_orphan_credentials(3_600_000);
+            core.store()
+                .setting_bool("resume_interrupted_on_startup", false)?
+        };
         if self.update_shutdown.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -2686,7 +2817,9 @@ impl CoreCoordinator {
         allow_duplicate: bool,
         start_paused: bool,
         queue_id: String,
+        spec_override: Option<Box<TaskSpec>>,
     ) -> Result<Vec<EventEnvelope>, String> {
+        let _handoff_guard = self.enter_in_flight_handoff(&handoff_id)?;
         self.require_legal()?;
         let download_dir = download_dir.trim().to_string();
         let trust_download_dir = trusted_ui && !download_dir.is_empty();
@@ -2714,43 +2847,58 @@ impl CoreCoordinator {
             filename
         };
         let queue_id = queue_id.trim().to_string();
-        let spec = self.apply_defaults_to_spec_inner(
-            TaskSpec {
-                url: offer.url.clone(),
-                resource_kind: offer.resource_kind,
-                local_source_path: offer.local_source_path.clone(),
-                title: if offer.title.trim().is_empty() {
-                    filename.clone()
-                } else {
-                    offer.title.clone()
-                },
-                filename,
-                download_dir,
-                start_paused,
-                queue_id: if queue_id.is_empty() {
-                    crate::DEFAULT_QUEUE_ID.into()
-                } else {
-                    queue_id
-                },
-                allow_duplicate: trusted_ui && allow_duplicate,
-                preserve_existing_output: trusted_ui && allow_duplicate,
-                request_method: offer.request_method.clone(),
-                mime_type: offer.mime_type.clone(),
-                credential_ref: offer.credential_ref.clone(),
-                replay_context_ref: offer.replay_context_ref.clone(),
-                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
-                    .then_some(offer.size),
-                preferred_bandwidth: offer.preferred_bandwidth,
-                preferred_height: offer.preferred_height,
-                preferred_variant_id: offer.preferred_variant_id.clone(),
-                source_page_url: offer.source_page_url.clone(),
-                audio_url: offer.audio_url.clone(),
-                resource_key: offer.resource_key.clone(),
-                ..Default::default()
+        let mut raw_spec = TaskSpec {
+            url: offer.url.clone(),
+            resource_kind: offer.resource_kind,
+            local_source_path: offer.local_source_path.clone(),
+            title: if offer.title.trim().is_empty() {
+                filename.clone()
+            } else {
+                offer.title.clone()
             },
-            trust_download_dir,
-        )?;
-        let mut events = self.create_prepared_task(spec)?;
+            filename,
+            download_dir,
+            start_paused,
+            queue_id: if queue_id.is_empty() {
+                crate::DEFAULT_QUEUE_ID.into()
+            } else {
+                queue_id
+            },
+            allow_duplicate: trusted_ui && allow_duplicate,
+            preserve_existing_output: trusted_ui && allow_duplicate,
+            request_method: offer.request_method.clone(),
+            mime_type: offer.mime_type.clone(),
+            credential_ref: offer.credential_ref.clone(),
+            replay_context_ref: offer.replay_context_ref.clone(),
+            expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                .then_some(offer.size),
+            preferred_bandwidth: offer.preferred_bandwidth,
+            preferred_height: offer.preferred_height,
+            preferred_variant_id: offer.preferred_variant_id.clone(),
+            source_page_url: offer.source_page_url.clone(),
+            audio_url: offer.audio_url.clone(),
+            resource_key: offer.resource_key.clone(),
+            ..Default::default()
+        };
+        if let Some(override_spec) = spec_override {
+            let override_trimmed = override_spec.url.trim();
+            if !override_trimmed.is_empty() {
+                drop_cross_origin_task_secrets(&mut raw_spec, &offer.url, override_trimmed);
+            }
+            crate::core_runtime::merge_handoff_spec_override(
+                &mut raw_spec,
+                &offer.url,
+                *override_spec,
+            );
+        }
+        let spec = self.apply_defaults_to_spec_inner(raw_spec, trust_download_dir)?;
+        let expanded = self.expand_create(spec)?;
+        let mut events = Vec::new();
+        for (index, item) in expanded.into_iter().enumerate() {
+            let guard_id = (index == 0).then_some(handoff_id.as_str());
+            events.extend(self.dispatch_created_for_handoff(item, guard_id)?);
+        }
+        self.start_next_queued(false)?;
         let task_id = events.iter().find_map(|envelope| match &envelope.event {
             CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
                 Some(snapshot.task_id.clone())
@@ -3004,6 +3152,9 @@ impl CoreCoordinator {
         if self.update_shutdown.load(Ordering::SeqCst) {
             return Err("下载引擎正在准备覆盖升级，暂不启动新任务".into());
         }
+        if self.is_task_deleting(&task_id)? {
+            return Ok(());
+        }
         let spec = self.lock()?.task_spec(&task_id).cloned();
         if let Some(spec) = spec.as_ref() {
             if !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
@@ -3028,7 +3179,7 @@ impl CoreCoordinator {
         }
         // 状态检查、控制初始化和 worker 注册共用 core 锁，暂停不能漏掉尚未注册的启动。
         let mut core = self.lock()?;
-        if self.update_shutdown.load(Ordering::SeqCst) {
+        if self.update_shutdown.load(Ordering::SeqCst) || self.is_task_deleting(&task_id)? {
             return Ok(());
         }
         let status = core.snapshot(&task_id).map(|task| task.status.clone());
@@ -3097,28 +3248,42 @@ impl CoreCoordinator {
         thread::spawn(move || {
             let result = run_task_with_progress(Arc::clone(&core), &task_id);
             if let Err(error) = result {
-                let status = if error == "paused" {
-                    "paused"
-                } else if error == "canceled" {
+                let control = core
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.task_spec(&task_id).cloned())
+                    .and_then(|spec| TaskPaths::for_task(&task_id, &spec).ok())
+                    .map(|paths| crate::http_engine::read_control(&paths.control))
+                    .unwrap_or(crate::http_engine::Control::Run);
+                let status = if matches!(control, crate::http_engine::Control::Cancel)
+                    || error == "canceled"
+                {
                     "canceled"
+                } else if matches!(control, crate::http_engine::Control::Pause) || error == "paused"
+                {
+                    "paused"
                 } else {
                     "failed"
-                };
-                let attempt = if status == "failed" {
-                    let mut map = retries.lock().unwrap_or_else(|error| error.into_inner());
-                    let slot = map.entry(task_id.clone()).or_insert(0);
-                    *slot += 1;
-                    *slot
-                } else {
-                    0
                 };
                 let relay_core = Arc::clone(&core);
                 // 结束事件的文件事实同样在取锁前采集（任务登记已随 worker 返回而注销）。
                 let _facts = crate::progress_facts::prepare_for(&core, &task_id);
+                let mut reported_failure_attempt = None;
                 let _ = core.lock().map(|mut core| {
                     // 先应用中继中排队的最后一次周期进度，结束状态基于最新字节数。
                     crate::progress_relay::flush_task_locked(&relay_core, &mut core, &task_id);
-                    let current = core.snapshot(&task_id).cloned().unwrap_or_default();
+                    let Some(current) = core.snapshot(&task_id).cloned() else {
+                        return;
+                    };
+                    if matches!(
+                        current.status.as_str(),
+                        "canceled" | "cancelled" | "completed" | "done"
+                    ) {
+                        return;
+                    }
+                    if current.status == "paused" && status != "canceled" {
+                        return;
+                    }
                     let downloaded = current.downloaded_bytes;
                     let total = current.total_bytes;
                     let stage = if status == "paused" {
@@ -3129,6 +3294,12 @@ impl CoreCoordinator {
                         "finished".to_string()
                     };
                     if status == "failed" {
+                        let attempt = {
+                            let mut map = retries.lock().unwrap_or_else(|error| error.into_inner());
+                            let slot = map.entry(task_id.clone()).or_insert(0);
+                            *slot = current.error_attempt.max(*slot).saturating_add(1);
+                            *slot
+                        };
                         let (url, has_credential_ref) = core
                             .task_spec(&task_id)
                             .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
@@ -3149,6 +3320,7 @@ impl CoreCoordinator {
                             }),
                         );
                         let _ = core.report_failure(&task_id, failure);
+                        reported_failure_attempt = Some(attempt);
                     } else {
                         let _ = core.handle(CoreCommand::UpdateProgress {
                             task_id: task_id.clone(),
@@ -3162,7 +3334,7 @@ impl CoreCoordinator {
                     // 常驻 Core 的启动器可能已关闭诊断管道；日志写失败不能污染任务锁。
                     let _ = writeln!(std::io::stderr(), "v7 task {task_id} {status}: {error}");
                 });
-                if status == "failed" {
+                if let Some(attempt) = reported_failure_attempt {
                     let max = coordinator
                         .lock()
                         .ok()
@@ -3179,11 +3351,27 @@ impl CoreCoordinator {
                         && extract_http_status(&error)
                             .is_none_or(crate::http_engine::retryable_http_status)
                     {
-                        let (downloaded, total) = current_progress(&core, &task_id);
-                        let _ =
-                            mark_progress(&core, &task_id, downloaded, total, "waiting", "queued");
+                        let _ = core.lock().map(|mut core| {
+                            let Some(snap) = core.snapshot(&task_id).cloned() else {
+                                return;
+                            };
+                            if matches!(
+                                snap.status.as_str(),
+                                "paused" | "canceled" | "cancelled" | "completed" | "done"
+                            ) {
+                                return;
+                            }
+                            let _ = core.handle(CoreCommand::UpdateProgress {
+                                task_id: task_id.clone(),
+                                downloaded_bytes: snap.downloaded_bytes,
+                                total_bytes: snap.total_bytes,
+                                speed_bytes_per_sec: 0,
+                                stage: "waiting".into(),
+                                status: "queued".into(),
+                            });
+                        });
                     }
-                } else if status != "paused" {
+                } else if status == "canceled" {
                     if let Ok(mut map) = retries.lock() {
                         map.remove(&task_id);
                     }
@@ -4120,9 +4308,6 @@ fn run_dual_track_http_file(
     })();
 
     let user_canceled_before_join = matches!(
-        download_result.as_ref().map_err(String::as_str),
-        Err("canceled")
-    ) || matches!(
         crate::http_engine::read_control(&paths.control),
         crate::http_engine::Control::Cancel
     );
@@ -4136,15 +4321,16 @@ fn run_dual_track_http_file(
     let audio_joined = audio_worker.map(thread::JoinHandle::join);
 
     if let Err(error) = download_result {
+        let control_after_join = crate::http_engine::read_control(&paths.control);
         let user_canceled = user_canceled_before_join
-            || matches!(
-                crate::http_engine::read_control(&paths.control),
-                crate::http_engine::Control::Cancel
-            );
+            || matches!(control_after_join, crate::http_engine::Control::Cancel);
         if user_canceled {
             cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
             let _ = fs::remove_file(&merged_mp4);
             return Err("canceled".into());
+        }
+        if matches!(control_after_join, crate::http_engine::Control::Pause) || error == "paused" {
+            return Err("paused".into());
         }
         return Err(error);
     }
@@ -4202,14 +4388,15 @@ fn run_dual_track_http_file(
         &paths.control,
         0.0,
     ) {
-        if error == "canceled"
-            || matches!(
-                crate::http_engine::read_control(&paths.control),
-                crate::http_engine::Control::Cancel
-            )
-        {
+        let control_after_mux = crate::http_engine::read_control(&paths.control);
+        if matches!(control_after_mux, crate::http_engine::Control::Cancel) {
             cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
             let _ = fs::remove_file(&merged_mp4);
+            return Err("canceled".into());
+        }
+        if matches!(control_after_mux, crate::http_engine::Control::Pause) || error == "paused" {
+            let _ = fs::remove_file(&merged_mp4);
+            return Err("paused".into());
         }
         return Err(error);
     }
@@ -4231,12 +4418,11 @@ fn run_dual_track_http_file(
                 }
             }
         }
-        Err(error)
-            if error == "canceled"
-                || matches!(
-                    crate::http_engine::read_control(&paths.control),
-                    crate::http_engine::Control::Cancel
-                ) =>
+        Err(_)
+            if matches!(
+                crate::http_engine::read_control(&paths.control),
+                crate::http_engine::Control::Cancel
+            ) =>
         {
             cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
             let _ = fs::remove_file(&merged_mp4);
@@ -4272,13 +4458,16 @@ fn run_http_file(
     let (sender, receiver) = mpsc::channel();
     let (initial_bytes, _) = current_progress(&core, task_id);
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
-    let worker_job = job.clone();
+    let worker_abort = Arc::new(AtomicBool::new(false));
+    let mut worker_job = job.clone();
+    worker_job.range_stop = Some(Arc::clone(&worker_abort));
     let throttle = crate::net_policy::current_throttle_context();
     let worker = thread::spawn(move || {
         let result =
             crate::net_policy::with_throttle_context(throttle, || run_job_report(&worker_job));
         let _ = sender.send(result);
     });
+    let mut worker_finished = false;
     let result = (|| loop {
         let result = receiver.recv_timeout(Duration::from_millis(200));
         if spec.filename.trim().is_empty() {
@@ -4291,6 +4480,7 @@ fn run_http_file(
         }
         match result {
             Ok(result) => {
+                worker_finished = true;
                 let report = result.map_err(|error| match error {
                     crate::http_engine::EngineError::RangeUnsupported(message)
                         if !message.starts_with("resource identity changed:") =>
@@ -4337,13 +4527,14 @@ fn run_http_file(
             }
         }
     })();
-    if result.is_err()
-        && matches!(
+    if !worker_finished && result.is_err() {
+        worker_abort.store(true, Ordering::SeqCst);
+        if matches!(
             crate::http_engine::read_control(&paths.control),
             crate::http_engine::Control::Run
-        )
-    {
-        let _ = paths.set_control("cancel");
+        ) {
+            let _ = paths.set_control("cancel");
+        }
     }
     let joined = worker.join();
     result.and_then(|()| joined.map_err(|_| "download HTTP worker panicked".into()))
@@ -5361,13 +5552,13 @@ fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> R
             .lock()
             .map_err(|_| "v7 Core mutex poisoned".to_string())?;
         let bridge = guard.presenter_bridge();
-        let has_subscribers = bridge.has_subscribers();
+        let has_ui_subscribers = bridge.has_ui_subscribers();
         let _ = guard.emit(CoreEvent::PowerActionPending {
             action,
             title,
             delay_seconds: 30,
         });
-        if !has_subscribers {
+        if !has_ui_subscribers {
             bridge.mark_power_action_pending();
             Some(bridge)
         } else {
@@ -5724,15 +5915,29 @@ fn seal_spec_secrets(
             protected_headers.insert(key, Value::String(value));
         }
     }
+    let new_cookie = protected_headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("cookie"))
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_string);
     let mut context = if let Some(credential_ref) = spec.credential_ref.as_deref() {
-        let blob = coordinator
-            .load_credential(credential_ref)?
-            .ok_or_else(|| "请求凭据不存在，请重新获取站点凭据".to_string())?;
-        let plain = CredentialVault
-            .unprotect(&blob)
-            .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
-        serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
-            .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?
+        let is_default_cookie = credential_ref == DEFAULT_COOKIE_CREDENTIAL_REF;
+        match coordinator.load_credential(credential_ref)? {
+            None if is_default_cookie => serde_json::Map::new(),
+            None => return Err("请求凭据不存在，请重新获取站点凭据".to_string()),
+            Some(blob) if is_default_cookie && blob.trim().is_empty() => serde_json::Map::new(),
+            Some(blob) => {
+                let plain = CredentialVault
+                    .unprotect(&blob)
+                    .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
+                if is_default_cookie && plain.trim().is_empty() {
+                    serde_json::Map::new()
+                } else {
+                    serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
+                        .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?
+                }
+            }
+        }
     } else {
         serde_json::Map::new()
     };
@@ -5743,8 +5948,11 @@ fn seal_spec_secrets(
         None => serde_json::Map::new(),
         _ => return Err("请求凭据中的请求头已损坏，请重新获取站点凭据".into()),
     };
-    existing_headers.extend(protected_headers);
+    crate::credentials::merge_protected_headers(&mut existing_headers, protected_headers);
     context.insert("request_headers".into(), Value::Object(existing_headers));
+    if let Some(cookie) = new_cookie {
+        crate::credentials::overwrite_replay_cookie(&mut context, &spec.url, &cookie);
+    }
     let json = Value::Object(context).to_string();
     let blob = if cfg!(windows) {
         CredentialVault.protect(&json)?
@@ -7074,20 +7282,28 @@ fn refresh_task_request(
     if cookie.len() > 16 * 1024 || cookie.contains(['\r', '\n', '\0']) {
         return Err("Cookie 格式无效或长度超过 16 KiB".into());
     }
+    if coordinator.lock()?.task_spec(task_id).is_none() {
+        return Err(format!("unknown task {task_id}"));
+    }
+    let mut events = Vec::new();
+    if coordinator.worker_is_active(task_id)? {
+        let can_pause = coordinator
+            .lock()?
+            .snapshot(task_id)
+            .is_some_and(|task| task.available_actions.iter().any(|item| item == "pause"));
+        if can_pause {
+            events.extend(coordinator.dispatch_inner(CoreCommand::TaskAction {
+                task_id: task_id.to_string(),
+                action: "pause".into(),
+            })?);
+        }
+        coordinator.wait_for_worker_stop(task_id)?;
+    }
     let current = coordinator
         .lock()?
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
-    let next_action = coordinator
-        .lock()?
-        .snapshot(task_id)
-        .cloned()
-        .and_then(|task| {
-            ["resume", "retry", "start"]
-                .into_iter()
-                .find(|candidate| task.available_actions.iter().any(|item| item == candidate))
-        });
     let mut spec = current.clone();
     if spec.resource_key.trim().is_empty() && spec.local_source_path.is_none() {
         spec.resource_key = crate::http_engine::canonical_url_key(&current.url);
@@ -7098,22 +7314,22 @@ fn refresh_task_request(
         spec.headers.insert("Cookie".into(), cookie.trim().into());
         spec = seal_spec_secrets(coordinator, spec)?;
     }
-    coordinator.lock()?.replace_spec(task_id, spec)?;
-    let mut events = coordinator.lock()?.emit(CoreEvent::Toast {
+    if let Ok(mut map) = coordinator.retries.lock() {
+        map.remove(task_id);
+    }
+    coordinator
+        .lock()?
+        .replace_spec_clearing_error(task_id, spec)?;
+    events.extend(coordinator.lock()?.emit(CoreEvent::Toast {
         level: "refresh".into(),
         message: if cookie.trim().is_empty() {
             "已更新下载地址".into()
         } else {
             "已更新下载地址和站点凭据".into()
         },
-    })?;
+    })?);
     if auto_resume {
-        if let Some(action) = next_action {
-            events.extend(coordinator.dispatch_inner(CoreCommand::TaskAction {
-                task_id: task_id.to_string(),
-                action: action.into(),
-            })?);
-        }
+        events.extend(coordinator.auto_resume_refreshed_task(task_id)?);
     }
     Ok(events)
 }
