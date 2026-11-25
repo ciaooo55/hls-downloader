@@ -38,9 +38,60 @@ fn with_media_headers<R>(
     crate::with_replay_json(&context, run)
 }
 
+/// RFC 3986 §5.2.4 `remove_dot_segments` on the path component of a URI.
+fn remove_dot_segments(path: &str) -> String {
+    let mut input = path;
+    let mut output = String::with_capacity(path.len());
+    while !input.is_empty() {
+        if let Some(rest) = input.strip_prefix("../") {
+            input = rest;
+        } else if let Some(rest) = input.strip_prefix("./") {
+            input = rest;
+        } else if input.starts_with("/./") {
+            input = &input[2..];
+        } else if input == "/." {
+            input = "/";
+        } else if input.starts_with("/../") {
+            input = &input[3..];
+            if let Some(slash) = output.rfind('/') {
+                output.truncate(slash);
+            } else {
+                output.clear();
+            }
+        } else if input == "/.." {
+            input = "/";
+            if let Some(slash) = output.rfind('/') {
+                output.truncate(slash);
+            } else {
+                output.clear();
+            }
+        } else if input == "." || input == ".." {
+            break;
+        } else {
+            let next_slash = if let Some(after_leading) = input.strip_prefix('/') {
+                after_leading.find('/').map(|idx| idx + 1)
+            } else {
+                input.find('/')
+            };
+            match next_slash {
+                Some(idx) => {
+                    output.push_str(&input[..idx]);
+                    input = &input[idx..];
+                }
+                None => {
+                    output.push_str(input);
+                    break;
+                }
+            }
+        }
+    }
+    output
+}
+
 /// Resolve a playlist/manifest URI against `base`. Absolute schemes other than
 /// http(s) (file, javascript, data, skd, …) are dropped so fetch/mux never
-/// follow them. Relative paths keep the existing origin/directory join.
+/// follow them. Relative paths keep the existing origin/directory join with
+/// RFC 3986 §5.2.4 dot-segment normalization.
 pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
     let reference = reference.trim().trim_start_matches('\u{feff}');
     if reference.is_empty()
@@ -62,13 +113,37 @@ pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
         } else {
             "http"
         };
-        return inherit_access_query(base, &format!("{scheme}://{rest}"));
+        let (authority_and_path, suffix) = match rest.find(['?', '#']) {
+            Some(idx) => (&rest[..idx], &rest[idx..]),
+            None => (rest, ""),
+        };
+        let resolved = match authority_and_path.find('/') {
+            Some(slash) => {
+                let authority = &authority_and_path[..slash];
+                let normalized = remove_dot_segments(&authority_and_path[slash..]);
+                format!("{scheme}://{authority}{normalized}{suffix}")
+            }
+            None => format!("{scheme}://{authority_and_path}{suffix}"),
+        };
+        return inherit_access_query(base, &resolved);
     }
     if reference.starts_with('#') {
         return format!("{}{reference}", base.split('#').next().unwrap_or(base));
     }
     let clean_base = base.split(['?', '#']).next().unwrap_or(base);
     if reference.starts_with('?') {
+        if let Some(scheme_end) = clean_base.find("://") {
+            let authority_start = scheme_end + 3;
+            if let Some(rel_slash) = clean_base[authority_start..].find('/') {
+                let origin_end = authority_start + rel_slash;
+                let origin = &clean_base[..origin_end];
+                let normalized_base = remove_dot_segments(&clean_base[origin_end..]);
+                return inherit_access_query(
+                    base,
+                    &format!("{origin}{normalized_base}{reference}"),
+                );
+            }
+        }
         return inherit_access_query(base, &format!("{clean_base}{reference}"));
     }
     if let Some(scheme_end) = clean_base.find("://") {
@@ -78,16 +153,21 @@ pub(crate) fn resolve_http_uri(base: &str, reference: &str) -> String {
             .map(|index| authority_start + index);
         let origin_end = path_start.unwrap_or(clean_base.len());
         let origin = &clean_base[..origin_end];
-        if reference.starts_with('/') {
-            return inherit_access_query(base, &format!("{origin}{reference}"));
-        }
-        let directory = path_start
-            .map(|_| {
-                let dir_end = clean_base.rfind('/').unwrap_or(origin_end);
-                &clean_base[..dir_end]
-            })
-            .unwrap_or(clean_base);
-        return inherit_access_query(base, &format!("{directory}/{reference}"));
+        let base_path = &clean_base[origin_end..];
+        let (ref_path, ref_suffix) = match reference.find(['?', '#']) {
+            Some(idx) => (&reference[..idx], &reference[idx..]),
+            None => (reference, ""),
+        };
+        let merged_path = if ref_path.starts_with('/') {
+            ref_path.to_string()
+        } else if base_path.is_empty() {
+            format!("/{ref_path}")
+        } else {
+            let dir_end = base_path.rfind('/').map_or(0, |idx| idx + 1);
+            format!("{}{ref_path}", &base_path[..dir_end])
+        };
+        let normalized_path = remove_dot_segments(&merged_path);
+        return inherit_access_query(base, &format!("{origin}{normalized_path}{ref_suffix}"));
     }
     String::new()
 }
@@ -211,6 +291,7 @@ pub use hls::{
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::resolve_http_uri;
 
@@ -283,6 +364,45 @@ mod tests {
                 "seg.ts"
             ),
             "https://cdn.example/seg.ts?s=abc&e=123&_t=nonce"
+        );
+    }
+
+    #[test]
+    fn resolve_http_uri_removes_rfc3986_dot_segments_and_preserves_signed_queries() {
+        let base = "https://cdn.example/live/room42/sub/master.m3u8?Policy=eyJ_&Signature=A+B%2FC~D-&Key-Pair-Id=K1";
+        assert_eq!(
+            resolve_http_uri(base, "../video/./seg-01.ts?child=1%2F..%2F2#frag/../end"),
+            "https://cdn.example/live/room42/video/seg-01.ts?child=1%2F..%2F2&Policy=eyJ_&Signature=A+B%2FC~D-&Key-Pair-Id=K1#frag/../end"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/a/b/c/./../../g", "../d/./e/../f/"),
+            "https://cdn.example/d/f/"
+        );
+        assert_eq!(
+            resolve_http_uri(
+                "https://cdn.example/a/b/index.m3u8",
+                "../../../../../root.ts"
+            ),
+            "https://cdn.example/root.ts"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/a/b/index.m3u8", "."),
+            "https://cdn.example/a/b/"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/a/b/index.m3u8", ".."),
+            "https://cdn.example/a/"
+        );
+        assert_eq!(
+            resolve_http_uri("https://cdn.example/a/b/index.m3u8", "/x/y/../z/."),
+            "https://cdn.example/x/z/"
+        );
+        assert_eq!(
+            resolve_http_uri(
+                "https://cdn.example/a/b/index.m3u8",
+                "//edge.example/p/q/../r.ts?sig=raw+tok=="
+            ),
+            "https://edge.example/p/r.ts?sig=raw+tok=="
         );
     }
 }
