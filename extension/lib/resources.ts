@@ -1,5 +1,5 @@
 import { isAuthenticationNavigation, isLikelyDownloadUrl } from './clickIntent'
-import { isCommonMediaStreamUrl } from './manifestSniff'
+import { isCommonMediaStreamUrl, isMseMediaSliceUrl } from './manifestSniff'
 import { httpOrigin } from './requestChain'
 import { removeRawQueryParameters } from './urlQuery'
 
@@ -53,6 +53,8 @@ export interface MediaResource {
   lowLatencyLive?: boolean
   /** The inspected live window currently exposes only LL-HLS partial segments. */
   partOnlyLive?: boolean
+  /** True when adaptive manifest declares Widevine / PlayReady / FairPlay / SAMPLE-AES DRM. */
+  drmProtected?: boolean
   /** Distinguishes verified manifest metadata from URL/MIME-only detection. */
   inspected?: boolean
   manifestType?: 'master' | 'media'
@@ -101,7 +103,7 @@ export interface DownloadClickIntent {
 const MEDIA_EXT = /\.(m3u8|mpd|mp4|webm|mkv|mov|avi|m4a|mp3|flac|wav|torrent|zip|7z|rar|exe|msi|pdf)(?:$|[?#])/i
 // Ordinary downloads the desktop already owns. MEDIA_EXT stays narrower so
 // page sniffing does not promote every .docx/.apk request into the media HUD.
-const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|cab|bin|jar)(?:$|[?#])/i
+const DOWNLOAD_FILE_EXT = /\.(?:m3u8?|mpd|mp4|m4v|webm|mkv|mov|avi|flv|f4v|3gp|m4a|mp3|flac|wav|ogg|opus|aac|torrent|metalink|meta4|zip|7z|rar|tar|tgz|gz|bz2|xz|zst|iso|img|exe|msi|msix|appx|apk|appimage|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|csv|vsix|nupkg|whl|safetensors|gguf|onnx|cab|bin|jar)(?:$|[?#])/i
 // Keep this narrower than MEDIA_EXT: archive and installer downloads can
 // legitimately use terse `s`/`e` application parameters, while these paths
 // are actual media or adaptive manifests whose signatures are known to rotate.
@@ -732,10 +734,34 @@ export function isUsefulResource(resource: MediaResource): boolean {
     resource.evidence?.includes('site_player_metadata')
     || resource.evidence?.includes('mse_full_track'),
   )
-  if (!confirmedFullTrack && (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || ''))) return false
+  if (!confirmedFullTrack && (SEGMENT_EXT.test(resource.url) || SEGMENT_MIME.test(resource.mimeType || '') || isMseMediaSliceUrl(resource.url))) return false
   if (SEGMENT_PATH.test(path) && (!resource.size || resource.size < 8 * 1024 * 1024)) return false
   if (hasAdvertSignal(resource.url) && (!resource.duration || resource.duration < 60) && (!resource.size || resource.size < 20 * 1024 * 1024)) return false
   return true
+}
+
+/**
+ * Resources shown in the Popup default view (`showCandidates === false`).
+ *
+ * Includes playback-confirmed media, high-confidence inspected adaptive
+ * manifests (`.m3u8`, `.mpd`), Bilibili dual-track metadata, and direct
+ * `<audio>` / `<video>` element streams even when paused or scrolled off-screen.
+ */
+export function isDefaultPopupResource(resource: MediaResource): boolean {
+  const evidence = resource.evidence || []
+  if (evidence.includes('playback_confirmed')) return true
+  if ((resource.kind === 'hls' || resource.kind === 'dash') && resource.inspected === true) {
+    return !isNonVideoManifest(resource)
+  }
+  if (evidence.includes('site_player_metadata') || evidence.includes('mse_full_track')) return true
+  if (resource.kind === 'media' && (
+    evidence.includes('current_src')
+    || Boolean(resource.mimeType?.toLowerCase().startsWith('audio/'))
+    || /\.(?:mp3|flac|wav|m4a|aac|ogg|oga|opus)(?:$|[?#])/i.test(resource.url)
+  )) {
+    return true
+  }
+  return false
 }
 
 export function resourceRank(resource: MediaResource): number {
@@ -936,6 +962,7 @@ export function compactResources(resources: MediaResource[], limit = 40, separat
     byKey.set(key, {
       ...older,
       ...newer,
+      ...(older.drmProtected || newer.drmProtected ? { drmProtected: true } : {}),
       ...(mergedHeaders !== undefined ? { requestHeaders: mergedHeaders } : {}),
       statusCode: newer.statusCode ?? older.statusCode,
       method: newer.method || older.method,
@@ -1155,6 +1182,10 @@ export function shouldTakeover(input: {
   // left in the browser so favicons and tiny export responses are not captured.
   if (input.minimumBytes > 0 && Number(input.size) > 0 && Number(input.size) < input.minimumBytes) return false
   return true
+}
+
+export function isSiteHostExcluded(host: string, excludedHosts: string[]): boolean {
+  return Boolean(host) && isExcludedHost(host, excludedHosts)
 }
 
 export function pageIdentity(value = ''): string {

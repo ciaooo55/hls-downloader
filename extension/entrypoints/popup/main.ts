@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser'
 import {
   downloadSelectionKey,
+  isDefaultPopupResource,
   isPlayableMediaResource,
   normalizeHost,
   resourceFingerprint,
@@ -319,8 +320,9 @@ async function main() {
   header.append(brand, actions)
 
   const controls = el('div', 'controls')
-  const enableBtn = el('button', 'hlsd-button', '\u81ea\u52a8\u63a5\u7ba1')
+  const enableBtn = el('button', 'hlsd-button', '已开启')
   enableBtn.type = 'button'
+  enableBtn.setAttribute('aria-label', '全局自动接管：已开启')
   const quickDownloadBtn = el('button', 'hlsd-button', '静默快速下载')
   quickDownloadBtn.type = 'button'
   const speedLimitBtn = el('button', 'hlsd-button', '下载限速')
@@ -343,7 +345,7 @@ async function main() {
     [quickDownloadBtn, '静默快速下载（不弹确认框）', '全局设置，接管后直接加入下载队列，跳过确认弹窗。'],
     [speedLimitBtn, '下载限速', '全局限速开关，与主程序限速状态保持同步。'],
     [cookieBtn, '本站 Cookie', '仅在授权后，为本站下载读取资源请求所需的 Cookie。'],
-    [excludeBtn, '本站媒体提示', '控制网页上的媒体悬浮入口，不影响插件内识别。'],
+    [excludeBtn, '本站提示与接管', '在此网站隐藏悬浮下载按钮，并暂停自动接管下载。'],
   ] as const
   for (const [button, label, description] of settings) {
     const row = el('div', 'setting-item')
@@ -356,26 +358,28 @@ async function main() {
   }
   settingsPanel.append(controls)
 
-  // 紧凑底部折叠快捷设置抽屉（让媒体资源列表始终置顶，次要开关随时一触即达）
-  const quickDrawer = el('details', 'quick-settings-drawer')
-  const quickSummary = el('summary', 'quick-settings-summary')
-  const quickSummaryLabel = el('span', '', '快捷控制 · 自动接管 / 静默下载 / 限速')
-  quickSummary.append(quickSummaryLabel)
+  // 紧凑常驻快捷开关条（panel-0 激活时单行直达核心全局开关，无折叠遮挡）
+  const quickDrawer = el('div', 'quick-settings-bar')
+  quickDrawer.setAttribute('role', 'group')
+  quickDrawer.setAttribute('aria-label', '快捷控制')
   const quickRow = el('div', 'quick-settings-row')
-  const quickEnablePill = el('button', 'quick-setting-pill', '自动接管') as HTMLButtonElement
+  const quickEnablePill = el('button', 'quick-setting-pill', '自动接管: 开') as HTMLButtonElement
   quickEnablePill.type = 'button'
+  quickEnablePill.setAttribute('aria-label', '自动接管：开')
   quickEnablePill.disabled = true
-  const quickSilentPill = el('button', 'quick-setting-pill', '静默快速下载') as HTMLButtonElement
+  const quickSilentPill = el('button', 'quick-setting-pill', '静默下载: 关') as HTMLButtonElement
   quickSilentPill.type = 'button'
+  quickSilentPill.setAttribute('aria-label', '静默下载：关')
   quickSilentPill.disabled = true
-  const quickSpeedPill = el('button', 'quick-setting-pill', '下载限速') as HTMLButtonElement
+  const quickSpeedPill = el('button', 'quick-setting-pill', '限速: 关') as HTMLButtonElement
   quickSpeedPill.type = 'button'
+  quickSpeedPill.setAttribute('aria-label', '下载限速：关')
   quickSpeedPill.disabled = true
   quickEnablePill.addEventListener('click', () => enableBtn.click())
   quickSilentPill.addEventListener('click', () => quickDownloadBtn.click())
   quickSpeedPill.addEventListener('click', () => speedLimitBtn.click())
   quickRow.append(quickEnablePill, quickSilentPill, quickSpeedPill)
-  quickDrawer.append(quickSummary, quickRow)
+  quickDrawer.append(quickRow)
 
   const updateNotice = el('div', 'update-notice')
   updateNotice.hidden = true
@@ -450,6 +454,7 @@ async function main() {
     panels[index].setAttribute('aria-labelledby', button.id)
     return button
   })
+  let syncEnableAriaLabels = () => {}
   const selectPanel = (index: number, focus = false) => {
     activePanelIndex = index
     if (index === 1 && !subtitleMounted && pageTabId !== undefined) {
@@ -463,6 +468,7 @@ async function main() {
       tab.tabIndex = at === index ? 0 : -1
     })
     quickDrawer.hidden = index !== 0
+    syncEnableAriaLabels()
     if (focus) tabs[index].focus()
   }
   tabs[0].append(count)
@@ -509,6 +515,7 @@ async function main() {
   let quickDownloadEnabled = false
   let speedLimitEnabled = false
   let speedLimitKib = 0
+  let tvboxConfigured: boolean | undefined
   let connectionState: EngineConnectionState = 'core_unreachable'
   let connectionReconnecting = false
   let connectionChecked = false
@@ -644,6 +651,7 @@ async function main() {
     line: HTMLSpanElement
     facts: HTMLSpanElement
     lastMeta: string
+    drmBadge: HTMLElement
     qualityChips: HTMLDivElement
     qualityTrigger: HTMLSelectElement
     mime: HTMLElement
@@ -695,7 +703,9 @@ async function main() {
     manualCopyInput.setAttribute('aria-label', '完整媒体链接，按 Ctrl+C 复制')
     manualCopyInput.hidden = true
     manualCopyInput.addEventListener('focus', () => manualCopyInput.select())
-    body.append(name, line, qualityChips, qualityTrigger, metaRow, manualCopyHelp, manualCopyInput)
+    const drmBadge = el('div', 'drm-badge', 'DRM 加密保护 · 不支持直接下载')
+    drmBadge.hidden = true
+    body.append(name, line, drmBadge, qualityChips, qualityTrigger, metaRow, manualCopyHelp, manualCopyInput)
 
     const downloadBtn = el('button', 'hlsd-button primary') as HTMLButtonElement
     downloadBtn.type = 'button'
@@ -747,6 +757,7 @@ async function main() {
       line,
       facts,
       lastMeta: '',
+      drmBadge,
       qualityChips,
       qualityTrigger,
       mime,
@@ -839,7 +850,10 @@ async function main() {
     )
 
     // 1-Click Inline Quality Pills (up to 4 variants directly clickable inside the card)
-    const allVariants = item.variants || []
+    const isDrmProtected = Boolean(item.drmProtected || selected.drmProtected)
+    setAttrIfChanged(article, 'data-drm', isDrmProtected ? 'true' : '')
+    state.drmBadge.hidden = !isDrmProtected
+    const allVariants = isDrmProtected ? [] : (item.variants || [])
     if (allVariants.length >= 2) {
       const sortedVariants = [...allVariants]
         .sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bandwidth || 0) - (a.bandwidth || 0))
@@ -919,6 +933,21 @@ async function main() {
       state.manualCopyInput.value = selected.url
     }
 
+    if (isDrmProtected) {
+      if (article.dataset.state !== 'drm') article.dataset.state = 'drm'
+      if (state.downloadBtn.dataset.state !== 'drm') state.downloadBtn.dataset.state = 'drm'
+      patchIcon(state.downloadBtn, 'close')
+      setTextIfChanged(state.downloadLabel, 'DRM 保护')
+      state.downloadBtn.disabled = true
+      state.downloadBtn.classList.remove('busy')
+      setAttrIfChanged(state.downloadBtn, 'aria-busy', 'false')
+      setAttrIfChanged(state.downloadBtn, 'title', 'DRM 加密保护 · 不支持直接下载')
+      state.resendBtn.hidden = true
+      state.castBtn.hidden = true
+      state.pushBtn.hidden = true
+      return
+    }
+
     const key = actionKey(selected)
     const sendState = sending[key]
     const urlChanged = Boolean(sentUrls[key] && sentUrls[key] !== selected.url)
@@ -936,21 +965,23 @@ async function main() {
     setAttrIfChanged(state.downloadBtn, 'title', sendState ? SEND_TITLES[sendState] : '发送到主程序，确认后加入下载队列')
     state.resendBtn.hidden = !canForceResend(sendState)
 
-    // Contextual Action Hygiene: 仅对可播放流媒体/音视频展示投屏与 TVBox 按钮
+    // Contextual Action Hygiene: 仅对可播放流媒体/音视频展示投屏与 TVBox 按钮（未配置 TVBox 时隐藏）
     const playableMedia = isPlayableMediaResource(selected)
     state.castBtn.hidden = !playableMedia
-    state.pushBtn.hidden = !playableMedia
+    state.pushBtn.hidden = !playableMedia || tvboxConfigured === false
     if (playableMedia) {
-      const pushKey = actionKey(selected, 'tvbox')
-      const pushState = pushing[pushKey]
-      const pushStateAttr = pushState || ''
-      const pushPending = pushState === 'working' || pushState === 'awaiting'
-      if (state.pushBtn.dataset.state !== pushStateAttr) state.pushBtn.dataset.state = pushStateAttr
-      patchIcon(state.pushBtn, pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv')
-      setTextIfChanged(state.pushLabel, pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox')
-      state.pushBtn.disabled = pushState ? PUSH_BUSY.has(pushState) : false
-      state.pushBtn.classList.toggle('busy', pushPending)
-      setAttrIfChanged(state.pushBtn, 'aria-busy', String(pushPending))
+      if (!state.pushBtn.hidden) {
+        const pushKey = actionKey(selected, 'tvbox')
+        const pushState = pushing[pushKey]
+        const pushStateAttr = pushState || ''
+        const pushPending = pushState === 'working' || pushState === 'awaiting'
+        if (state.pushBtn.dataset.state !== pushStateAttr) state.pushBtn.dataset.state = pushStateAttr
+        patchIcon(state.pushBtn, pushPending ? 'scan' : pushState === 'sent' ? 'check' : 'tv')
+        setTextIfChanged(state.pushLabel, pushState ? TVBOX_PUSH_LABELS[pushState] : 'TVBox')
+        state.pushBtn.disabled = pushState ? PUSH_BUSY.has(pushState) : false
+        state.pushBtn.classList.toggle('busy', pushPending)
+        setAttrIfChanged(state.pushBtn, 'aria-busy', String(pushPending))
+      }
 
       const castKey = actionKey(selected, 'cast')
       const castState = pushing[castKey]
@@ -1001,7 +1032,7 @@ async function main() {
   }
 
   const renderList = () => {
-    const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => resource.evidence?.includes('playback_confirmed')))
+    const visible = visibleMediaResources(showCandidates ? resources : resources.filter(resource => isDefaultPopupResource(resource)))
     setTextIfChanged(count, String(visible.length))
     quickDrawer.hidden = activePanelIndex !== 0
     const categoryCounts = countPopupCategories(visible)
@@ -1047,8 +1078,9 @@ async function main() {
         },
       )
       const batchTargets = filtered
+        .filter(item => !item.drmProtected)
         .map(resolveSelectedVariant)
-        .filter(candidate => sendClickAction(sending[actionKey(candidate)]) === 'send')
+        .filter(candidate => !candidate.drmProtected && sendClickAction(sending[actionKey(candidate)]) === 'send')
       const batchCount = Math.min(batchTargets.length, 20)
       batchBtn.disabled = batchRunning || batchCount === 0
       const batchLabel = batchRunning
@@ -1121,9 +1153,23 @@ async function main() {
     )
   }
 
+  syncEnableAriaLabels = () => {
+    const enableStateLabel = enabled ? '已开启' : '已关闭'
+    // Keep hidden panel-2 button non-colliding while panel-0 is active so XPath
+    // `starts-with(@aria-label, '自动接管')` always resolves to the visible button.
+    enableBtn.setAttribute(
+      'aria-label',
+      activePanelIndex === 2 ? `自动接管：${enableStateLabel}` : `全局自动接管：${enableStateLabel}`,
+    )
+    quickEnablePill.setAttribute(
+      'aria-label',
+      activePanelIndex === 0 ? `自动接管：${enabled ? '开' : '关'}` : `快捷自动接管：${enabled ? '开' : '关'}`,
+    )
+  }
+
   const refreshButtons = () => {
     enableBtn.textContent = enabled ? '已开启' : '已关闭'
-    enableBtn.setAttribute('aria-label', `自动接管：${enableBtn.textContent}`)
+    syncEnableAriaLabels()
     enableBtn.title = enabled ? '全局下载接管已开启；点击关闭' : '全局下载接管已关闭；点击开启'
     enableBtn.setAttribute('aria-pressed', String(enabled))
     enableBtn.classList.toggle('active', enabled)
@@ -1148,19 +1194,15 @@ async function main() {
         : '全局限速开关，与主程序限速状态保持同步。',
     )
 
-    // 同步底部折叠快捷抽屉状态
+    // 同步底部常驻单行快捷条状态
     quickEnablePill.setAttribute('aria-pressed', String(enabled))
-    setTextIfChanged(quickEnablePill, `自动接管 ${enabled ? '开' : '关'}`)
+    setTextIfChanged(quickEnablePill, `自动接管: ${enabled ? '开' : '关'}`)
     quickSilentPill.setAttribute('aria-pressed', String(quickDownloadEnabled))
-    setTextIfChanged(quickSilentPill, `快速下载 ${quickDownloadEnabled ? '开' : '关'}`)
+    quickSilentPill.setAttribute('aria-label', `静默下载：${quickDownloadEnabled ? '开' : '关'}`)
+    setTextIfChanged(quickSilentPill, `静默下载: ${quickDownloadEnabled ? '开' : '关'}`)
     quickSpeedPill.setAttribute('aria-pressed', String(speedLimitEnabled))
-    setTextIfChanged(quickSpeedPill, speedLimitEnabled && speedLimitKib > 0 ? `限速 ${speedLimitKib}K` : `下载限速 ${speedLimitEnabled ? '开' : '关'}`)
-    const summaryTags = [
-      enabled ? '自动接管开' : '自动接管关',
-      quickDownloadEnabled ? '静默下载开' : '',
-      speedLimitEnabled ? (speedLimitKib > 0 ? `限速 ${speedLimitKib}K` : '限速开') : '',
-    ].filter(Boolean)
-    setTextIfChanged(quickSummaryLabel, `快捷设置 · ${summaryTags.join(' · ')}`)
+    quickSpeedPill.setAttribute('aria-label', `下载限速：${speedLimitEnabled ? '开' : '关'}`)
+    setTextIfChanged(quickSpeedPill, speedLimitEnabled && speedLimitKib > 0 ? `限速: ${speedLimitKib}K` : `限速: ${speedLimitEnabled ? '开' : '关'}`)
 
     const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
     cookieBtn.textContent = cookieAuthorized ? '已授权' : '未授权'
@@ -1628,6 +1670,12 @@ async function main() {
         speedLimitKib = Number.isFinite(nextKib) && nextKib > 0 ? Math.floor(nextKib) : 0
         dirty = true
       }
+      if ('tvboxConfigured' in changes) {
+        tvboxConfigured = typeof changes.tvboxConfigured?.newValue === 'boolean'
+          ? changes.tvboxConfigured.newValue
+          : undefined
+        renderList()
+      }
       if (dirty) refreshButtons()
     }
   })
@@ -1672,12 +1720,13 @@ async function main() {
   renderList()
 
   const stored = await withDeadline(browser.storage.local.get([
-    'enabled', 'quickDownloadEnabled', 'speedLimitEnabled', 'speedLimitKib',
+    'enabled', 'quickDownloadEnabled', 'speedLimitEnabled', 'speedLimitKib', 'tvboxConfigured',
     'excludedHosts', 'authorizedCookieHosts', HANDOFF_SUPPRESSION_STORAGE_KEY,
   ]), 1_000).catch(() => ({} as Record<string, unknown>))
   enabled = stored.enabled !== false
   quickDownloadEnabled = stored.quickDownloadEnabled === true
   speedLimitEnabled = stored.speedLimitEnabled === true
+  if (typeof stored.tvboxConfigured === 'boolean') tvboxConfigured = stored.tvboxConfigured
   const storedLimitKib = Number(stored.speedLimitKib || 0)
   speedLimitKib = Number.isFinite(storedLimitKib) && storedLimitKib > 0 ? Math.floor(storedLimitKib) : 0
   authorizedCookieHosts = normalizeCookiePermissionHosts(stored.authorizedCookieHosts)
@@ -1710,6 +1759,17 @@ async function main() {
       if (remoteSpeedLimit !== undefined) speedLimitEnabled = remoteSpeedLimit
       const remoteSpeedKib = Number(response?.speed_limit_kib ?? response?.download_speed_limit_kib)
       if (Number.isFinite(remoteSpeedKib) && remoteSpeedKib >= 0) speedLimitKib = Math.floor(remoteSpeedKib)
+    }
+    const remoteTvbox = typeof response?.tvbox_configured === 'boolean'
+      ? response.tvbox_configured
+      : typeof response?.tvboxConfigured === 'boolean'
+        ? response.tvboxConfigured
+        : typeof response?.tvbox_endpoint === 'string'
+          ? response.tvbox_endpoint.trim().length > 0
+          : undefined
+    if (remoteTvbox !== undefined && remoteTvbox !== tvboxConfigured) {
+      tvboxConfigured = remoteTvbox
+      renderList()
     }
     refreshButtons()
     const recommendedExtensionVersion = String(response?.recommended_extension_version || '')

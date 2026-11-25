@@ -19,10 +19,12 @@ describe('download click intent', () => {
     const page = 'https://github.com/ciaooo55/codex-account-switcher/releases/tag/v0.13.14'
     expect(isDirectDownloadLink('https://github.com/ciaooo55/codex-account-switcher/releases/download/v0.13.14/Codex-Account-Switcher-Portable-0.13.14.exe', page, false)).toBe(true)
     expect(isDirectDownloadLink('https://github.com/owner/repo/blob/main/archive.zip', page, false)).toBe(false)
-    expect(isDirectDownloadLink('https://site.test/manual.pdf', 'https://site.test/page', false)).toBe(false)
-    expect(isDirectDownloadLink('https://site.test/video.mp4', 'https://site.test/page', false)).toBe(false)
-    expect(isDirectDownloadLink('https://site.test/manual.pdf', 'https://site.test/page', true)).toBe(true)
-    expect(isDirectDownloadLink('https://other.test/video.mp4', 'https://site.test/page', true)).toBe(false)
+    expect(isDirectDownloadLink('https://site.test/manual.pdf', 'https://site.test/page', false)).toBe(true)
+    expect(isDirectDownloadLink('https://site.test/video.mp4', 'https://site.test/page', false)).toBe(true)
+    expect(isDirectDownloadLink('https://site.test/model.safetensors', 'https://site.test/page', false)).toBe(true)
+    expect(isDirectDownloadLink('https://site.test/photo.png', 'https://site.test/page', false)).toBe(false)
+    expect(isDirectDownloadLink('https://site.test/photo.png', 'https://site.test/page', true)).toBe(true)
+    expect(isDirectDownloadLink('https://other.test/photo.png', 'https://site.test/page', true)).toBe(false)
     expect(isDirectDownloadLink('javascript:download()', page, true)).toBe(false)
   })
   it('accepts explicit download and save controls', () => {

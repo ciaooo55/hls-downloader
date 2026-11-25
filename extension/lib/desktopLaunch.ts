@@ -116,7 +116,7 @@ function failureView(failure: LaunchFailure, detail: string): LaunchView {
         actions: ['retry', 'repair'],
       }
     case 'launch_status_lost':
-      return { tone: 'error', title: '无法确认工作台是否已打开', detail: '下载引擎的启动记录已失效，请重新打开。', actions: ['retry'] }
+      return { tone: 'error', title: '无法确认工作台是否已打开', detail: '桌面端尚未就绪，请重新打开。', actions: ['retry'] }
     case 'timeout':
       return {
         tone: 'error',

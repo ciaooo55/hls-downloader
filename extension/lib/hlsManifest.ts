@@ -26,6 +26,8 @@ export interface HlsManifestInfo {
   lowLatencyLive?: boolean
   /** The current live window contains PART tags but no completed EXTINF segment. */
   partOnlyLive?: boolean
+  /** True when playlist keys declare FairPlay / Widevine / PlayReady / SAMPLE-AES DRM. */
+  drmProtected?: boolean
 }
 
 function parseAttributes(line: string): Map<string, string> {
@@ -107,8 +109,31 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
   let completeDuration = true
   let completeSegments = 0
   let partialSegments = 0
+  let drmProtected = false
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
+    if (line.startsWith('#EXT-X-KEY:') || line.startsWith('#EXT-X-SESSION-KEY:')) {
+      const prefix = line.startsWith('#EXT-X-SESSION-KEY:') ? '#EXT-X-SESSION-KEY:' : '#EXT-X-KEY:'
+      const attrs = parseAttributes(line.slice(prefix.length))
+      const method = (attrs.get('METHOD') || '').toUpperCase()
+      const keyformat = (attrs.get('KEYFORMAT') || '').toLowerCase()
+      const keyUri = (attrs.get('URI') || '').toLowerCase()
+      if (
+        method === 'SAMPLE-AES'
+        || method === 'SAMPLE-AES-CTR'
+        || method === 'SAMPLE-AES-CENC'
+        || method === 'ISO-23001-7'
+        || keyUri.startsWith('skd://')
+        || keyformat.includes('com.apple.streamingkeydelivery')
+        || keyformat.includes('edef8ba9-79d6-4ace-a3c8-27dcd51d21ed')
+        || keyformat.includes('widevine')
+        || keyformat.includes('9a04f079-9840-4286-ab92-e65be0885f95')
+        || keyformat.includes('playready')
+        || keyformat.includes('fairplay')
+      ) {
+        drmProtected = true
+      }
+    }
     if (line.startsWith('#EXT-X-MEDIA:')) {
       const attrs = parseAttributes(line.slice('#EXT-X-MEDIA:'.length))
       const uri = attrs.get('URI') || ''
@@ -224,6 +249,7 @@ export function parseHlsManifest(text: string, baseUrl: string): HlsManifestInfo
     isLive,
     lowLatencyLive,
     partOnlyLive,
+    ...(drmProtected ? { drmProtected: true } : {}),
   }
 }
 

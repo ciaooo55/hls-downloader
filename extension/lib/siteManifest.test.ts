@@ -171,5 +171,30 @@ describe('scoped site player metadata', () => {
     expect(sameSiteVideoIdentity(cnPage, enPage)).toBe(true)
     expect(sameSiteVideoIdentity(`${cnPage}?p=1`, `${cnPage}?p=2`)).toBe(false)
     expect(sameSiteVideoIdentity('https://www.youtube.com/watch?v=video_1', 'https://www.youtube.com/watch?v=video_1&list=PL2')).toBe(false)
+
+    // Bilibili Bangumi /ogv/player/playview (`data.video_info.dash`) and Course `/cheese/play/ep...` support.
+    const bangumiPage = 'https://www.bilibili.com/bangumi/play/ep778899'
+    const cheesePage = 'https://www.bilibili.com/cheese/play/ep112233'
+    expect(shouldInspectSiteResponse('https://api.bilibili.com/ogv/player/playview?ep_id=778899', bangumiPage, 'application/json')).toBe(true)
+    expect(shouldInspectSiteResponse('https://api.bilibili.com/pugv/player/web/playurl?ep_id=112233', cheesePage, 'application/json')).toBe(true)
+    const ogvExtracted = extractBilibiliPlayinfo(bangumiPage, {
+      code: 0,
+      data: {
+        video_info: {
+          timelength: 120_000,
+          dash: {
+            duration: 120,
+            video: [{ id: 80, base_url: video1080, width: 1920, height: 1080, bandwidth: 3_000_000, codecs: 'avc1.640032' }],
+            audio: [{ id: 30280, base_url: audio192, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+          },
+        },
+      },
+    })
+    expect(ogvExtracted).toHaveLength(1)
+    expect(ogvExtracted[0]).toMatchObject({
+      url: video1080,
+      audioUrl: audio192,
+      videoId: 'ep778899',
+    })
   })
 })
