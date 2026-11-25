@@ -709,6 +709,7 @@ fn spawn_player_child() -> Result<PlayerChild, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("启动播放器进程失败: {error}"))?;
+    crate::job_object::assign_child(&process);
     let mut stdin = process
         .stdin
         .take()

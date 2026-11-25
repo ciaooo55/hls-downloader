@@ -87,7 +87,39 @@ pub fn remote_resource_url_allowed(url: &str) -> bool {
         || lower.starts_with("magnet:")
 }
 
-fn is_ephemeral_query_param(key: &str) -> bool {
+fn is_bilibili_or_ws_signed_context(host: &str, path: &str, query: &str) -> bool {
+    let host_bare = host.trim().trim_matches('.').to_ascii_lowercase();
+    let is_bili_host = ["bilivideo.com", "bilivideo.cn", "hdslb.com", "bilibili.com"]
+        .into_iter()
+        .any(|domain| {
+            host_bare == domain
+                || host_bare
+                    .strip_suffix(domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+        || host_bare.contains("upos-");
+    if is_bili_host {
+        return true;
+    }
+    let path_lower = path.to_ascii_lowercase();
+    if path_lower.contains("/upgcxcode/") || path_lower.contains("upos-") {
+        return true;
+    }
+    query
+        .split('&')
+        .filter(|part| !part.is_empty())
+        .any(|part| {
+            let key = part.split_once('=').map_or(part, |(k, _)| k).trim();
+            key.eq_ignore_ascii_case("uparams") || key.eq_ignore_ascii_case("wssecret")
+        })
+}
+
+fn is_ephemeral_query_param(
+    key: &str,
+    host: &str,
+    path: &str,
+    has_scoped_stream_sig: bool,
+) -> bool {
     let lower = key.trim().to_ascii_lowercase();
     if lower.starts_with("x-amz-")
         || lower.starts_with("x-oss-")
@@ -97,7 +129,7 @@ fn is_ephemeral_query_param(key: &str) -> bool {
     {
         return true;
     }
-    matches!(
+    if matches!(
         lower.as_str(),
         "token"
             | "sig"
@@ -116,27 +148,12 @@ fn is_ephemeral_query_param(key: &str) -> bool {
             | "wssecret"
             | "wstime"
             | "auth_key"
-            | "key"
             | "policy"
             | "ossaccesskeyid"
             | "awsaccesskeyid"
             | "googleaccessid"
             | "security-token"
             | "key-pair-id"
-            | "trid"
-            | "mid"
-            | "gen"
-            | "os"
-            | "og"
-            | "platform"
-            | "orderid"
-            | "logo"
-            | "uparams"
-            | "uipk"
-            | "nbs"
-            | "oi"
-            | "mcdnid"
-            | "buvid"
             | "sv"
             | "se"
             | "sp"
@@ -157,7 +174,30 @@ fn is_ephemeral_query_param(key: &str) -> bool {
             | "q-signature"
             | "q-header-list"
             | "q-url-param-list"
-    )
+    ) {
+        return true;
+    }
+    if matches!(
+        lower.as_str(),
+        "key"
+            | "trid"
+            | "mid"
+            | "gen"
+            | "os"
+            | "og"
+            | "platform"
+            | "orderid"
+            | "logo"
+            | "uparams"
+            | "uipk"
+            | "nbs"
+            | "oi"
+            | "mcdnid"
+            | "buvid"
+    ) {
+        return has_scoped_stream_sig || is_bilibili_or_ws_signed_context(host, path, "");
+    }
+    false
 }
 
 /// Derives a stable canonical identity for an HTTP(S) resource URL so that
@@ -224,10 +264,11 @@ pub fn canonical_resource_key(url: &str) -> String {
         }
     };
 
+    let host_lower = host.to_ascii_lowercase();
     let mut out = String::with_capacity(without_fragment.len());
     out.push_str(scheme);
     out.push_str("://");
-    out.push_str(&host.to_ascii_lowercase());
+    out.push_str(&host_lower);
     if let Some(port) = non_default_port {
         out.push(':');
         out.push_str(&port.to_string());
@@ -235,6 +276,7 @@ pub fn canonical_resource_key(url: &str) -> String {
     out.push_str(path);
 
     if let Some(query) = query_opt {
+        let has_scoped_stream_sig = is_bilibili_or_ws_signed_context(&host_lower, path, query);
         let mut kept: Vec<(&str, Option<&str>)> = query
             .split('&')
             .filter(|part| !part.is_empty())
@@ -243,7 +285,8 @@ pub fn canonical_resource_key(url: &str) -> String {
                     Some((k, v)) => (k, Some(v)),
                     None => (part, None),
                 };
-                (!is_ephemeral_query_param(k)).then_some((k, v))
+                (!is_ephemeral_query_param(k, &host_lower, path, has_scoped_stream_sig))
+                    .then_some((k, v))
             })
             .collect();
         if !kept.is_empty() {
@@ -381,6 +424,58 @@ mod tests {
         assert_eq!(
             canonical_resource_key(" ftp://files.example.org/pub/archive.tar.gz#readme "),
             "ftp://files.example.org/pub/archive.tar.gz"
+        );
+    }
+
+    #[test]
+    fn canonical_resource_key_scopes_bilibili_and_key_params_away_from_generic_hosts() {
+        let win_dl = "https://example.com/download?os=win&platform=x64&token=t1";
+        let mac_dl = "https://example.com/download?os=mac&platform=arm64&token=t2";
+        assert_eq!(
+            canonical_resource_key(win_dl),
+            "https://example.com/download?os=win&platform=x64"
+        );
+        assert_eq!(
+            canonical_resource_key(mac_dl),
+            "https://example.com/download?os=mac&platform=arm64"
+        );
+        assert_ne!(
+            canonical_resource_key(win_dl),
+            canonical_resource_key(mac_dl)
+        );
+
+        let key_a = "https://example.com/get?key=fileA&expires=100";
+        let key_b = "https://example.com/get?key=fileB&expires=200";
+        assert_eq!(
+            canonical_resource_key(key_a),
+            "https://example.com/get?key=fileA"
+        );
+        assert_ne!(canonical_resource_key(key_a), canonical_resource_key(key_b));
+
+        let ws_signed_1 =
+            "https://cdn.example.com/vod/1080p.mp4?wsSecret=sec1&wsTime=111&key=k1&id=ep1";
+        let ws_signed_2 =
+            "https://cdn.example.com/vod/1080p.mp4?wsSecret=sec2&wsTime=222&key=k2&id=ep1";
+        assert_eq!(
+            canonical_resource_key(ws_signed_1),
+            "https://cdn.example.com/vod/1080p.mp4?id=ep1"
+        );
+        assert_eq!(
+            canonical_resource_key(ws_signed_1),
+            canonical_resource_key(ws_signed_2)
+        );
+
+        let akam_bili_1 =
+            "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/01/02/30080.m4s?os=akam&platform=pc&trid=1&key=a&buvid=b1";
+        let akam_bili_2 =
+            "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/01/02/30080.m4s?os=bcache&platform=html5&trid=2&key=b&buvid=b2";
+        assert_eq!(
+            canonical_resource_key(akam_bili_1),
+            "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/01/02/30080.m4s"
+        );
+        assert_eq!(
+            canonical_resource_key(akam_bili_1),
+            canonical_resource_key(akam_bili_2)
         );
     }
 }

@@ -398,11 +398,22 @@ impl Drop for TorrentProbeSlot {
 }
 
 fn bootstrap_store(coordinator: &CoreCoordinator) -> Result<(), String> {
-    coordinator.set_setting("legal_terms_accepted", serde_json::json!(true))?;
-    coordinator.set_setting(
-        "legal_terms_version",
-        serde_json::json!(crate::LEGAL_TERMS_VERSION),
-    )?;
+    let settings = coordinator.settings()?;
+    let (stored_accepted, stored_version) = {
+        let core = coordinator.lock()?;
+        (
+            core.store().setting_bool("legal_terms_accepted", false)?,
+            core.store().setting_string("legal_terms_version", "")?,
+        )
+    };
+    if !settings.legal_accepted || !stored_accepted {
+        coordinator.set_setting("legal_terms_accepted", serde_json::json!(true))?;
+    } else if stored_version != crate::LEGAL_TERMS_VERSION {
+        coordinator.set_setting(
+            "legal_terms_version",
+            serde_json::json!(crate::LEGAL_TERMS_VERSION),
+        )?;
+    }
     Ok(())
 }
 
@@ -1336,6 +1347,15 @@ mod tests {
     fn product_bootstrap_removes_the_obsolete_first_run_legal_blocker() {
         let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
         bootstrap_store(&coordinator).unwrap();
+        let seq_after_first = coordinator.lock().unwrap().latest_sequence();
+        assert!(seq_after_first >= 1);
+        // Second cold-start bootstrap with up-to-date settings must skip redundant SQLite writes.
+        bootstrap_store(&coordinator).unwrap();
+        let seq_after_second = coordinator.lock().unwrap().latest_sequence();
+        assert_eq!(
+            seq_after_first, seq_after_second,
+            "warm-start bootstrap_store must not re-write unchanged legal settings"
+        );
         let core = coordinator.core();
         let core = core.lock().unwrap();
         assert!(core
