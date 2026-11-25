@@ -10,6 +10,8 @@
 mod sys_time {
     use crate::local_time::LocalTimeFields;
     #[link(name = "kernel32")]
+    // SAFETY: `GetLocalTime` is the standard `kernel32` `stdcall` export taking a
+    // writable `SYSTEMTIME` pointer, which matches `#[repr(C)] LocalTimeFields` (8 `u16`s).
     unsafe extern "system" {
         pub(crate) fn GetLocalTime(time: *mut LocalTimeFields);
     }
@@ -1050,6 +1052,7 @@ fn local_weekday_iso() -> u8 {
     #[cfg(windows)]
     {
         let mut now = crate::local_time::LocalTimeFields::default();
+        // SAFETY: `now` is a valid initialized `#[repr(C)]` `SYSTEMTIME`-compatible stack slot.
         unsafe { sys_time::GetLocalTime(&mut now) };
         now.iso_weekday()
     }
@@ -1078,6 +1081,7 @@ fn chrono_minutes_now() -> u32 {
     #[cfg(windows)]
     {
         let mut now = crate::local_time::LocalTimeFields::default();
+        // SAFETY: `now` is a valid initialized `#[repr(C)]` `SYSTEMTIME`-compatible stack slot.
         unsafe { sys_time::GetLocalTime(&mut now) };
         now.minutes_since_midnight()
     }

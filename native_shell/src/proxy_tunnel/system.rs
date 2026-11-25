@@ -17,7 +17,11 @@ struct ProxyList {
     entries: *mut ProxyInfo,
 }
 
+const MAX_PROXY_HOST_UTF16_UNITS: usize = 1024;
+
 #[link(name = "wininet")]
+// SAFETY: `InternetGetProxyForUrl` and `InternetFreeProxyInfoList` match the `wininet.dll`
+// `stdcall` ABI for `INTERNET_PROXY_INFO_LIST` / `INTERNET_PROXY_INFO_EX`.
 unsafe extern "system" {
     fn InternetGetProxyForUrl(session: *const c_void, url: *const u16, list: *mut ProxyList)
         -> u32;
@@ -25,6 +29,9 @@ unsafe extern "system" {
 }
 
 pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String> {
+    if target_url.chars().any(char::is_control) {
+        return Err("目标地址无效".into());
+    }
     let (scheme, rest) = target_url.split_once("://").ok_or("目标地址无效")?;
     let scheme = scheme.trim().to_ascii_lowercase();
     if scheme.is_empty() {
@@ -80,27 +87,41 @@ pub(super) fn lookup(target_url: &str, allow_https: bool) -> Result<Option<Strin
 }
 
 fn lookup_url(url: &str, allow_https: bool) -> Result<Option<String>, String> {
+    if url.contains('\0') {
+        return Err("目标地址无效".into());
+    }
     let url: Vec<_> = url.encode_utf16().chain(Some(0)).collect();
     let mut list = ProxyList {
         count: 0,
         entries: ptr::null_mut(),
     };
-    // A null session asks WinINet to use the current user's default configuration.
+    // SAFETY: Null session requests the current user's WinINet proxy configuration,
+    // `url` is a NUL-terminated UTF-16 buffer without interior NULs, and `list` is a
+    // valid writable `INTERNET_PROXY_INFO_LIST` struct.
     let status = unsafe { InternetGetProxyForUrl(ptr::null(), url.as_ptr(), &mut list) };
     if status != 0 {
         return Err(format!("Windows 系统代理解析失败（{status}）"));
     }
-    let result = if list.count == 0 || list.entries.is_null() {
+    struct ProxyListGuard(ProxyList);
+    impl Drop for ProxyListGuard {
+        fn drop(&mut self) {
+            // SAFETY: `InternetGetProxyForUrl` succeeded (`ERROR_SUCCESS`), so WinINet owns
+            // `self.0` until `InternetFreeProxyInfoList` releases it exactly once.
+            unsafe {
+                InternetFreeProxyInfoList(&mut self.0);
+            }
+        }
+    }
+    let guard = ProxyListGuard(list);
+    if guard.0.count == 0 || guard.0.entries.is_null() {
         Err("Windows 系统代理未返回路由".into())
     } else {
-        // WinINet owns the entries and their NUL-terminated host names until free.
-        let entries = unsafe { std::slice::from_raw_parts(list.entries, list.count as usize) };
+        // SAFETY: WinINet populated `guard.0.entries` with `guard.0.count` contiguous
+        // `ProxyInfo` elements that remain valid until `guard` drops at scope exit.
+        let entries =
+            unsafe { std::slice::from_raw_parts(guard.0.entries, guard.0.count as usize) };
         select_route(entries, allow_https)
-    };
-    unsafe {
-        InternetFreeProxyInfoList(&mut list);
     }
-    result
 }
 
 pub(super) fn select_route(
@@ -135,14 +156,20 @@ fn route(entry: &ProxyInfo, allow_https: bool) -> Result<Option<String>, String>
     if entry.host.is_null() || entry.port == 0 {
         return Err("Windows 系统代理地址无效".into());
     }
-    let host = unsafe {
-        let mut len = 0;
-        while *entry.host.add(len) != 0 {
+    // SAFETY: `entry.host` is a non-null `PCWSTR` owned by WinINet (or a NUL-terminated
+    // test fixture buffer) that stays valid for the duration of `route`. We cap the scan
+    // at `MAX_PROXY_HOST_UTF16_UNITS` and reject missing NUL terminators before slicing.
+    let host_units = unsafe {
+        let mut len = 0usize;
+        while len < MAX_PROXY_HOST_UTF16_UNITS && *entry.host.add(len) != 0 {
             len += 1;
         }
-        String::from_utf16(std::slice::from_raw_parts(entry.host, len))
-    }
-    .map_err(|_| "Windows 系统代理主机名无效")?;
+        if len == MAX_PROXY_HOST_UTF16_UNITS {
+            return Err("Windows 系统代理主机名无效".into());
+        }
+        std::slice::from_raw_parts(entry.host, len)
+    };
+    let host = String::from_utf16(host_units).map_err(|_| "Windows 系统代理主机名无效")?;
     let host = host.trim_matches(['[', ']']);
     if !super::valid_host(host) {
         return Err("Windows 系统代理主机名无效".into());

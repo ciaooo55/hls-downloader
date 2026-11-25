@@ -450,6 +450,19 @@ mod system_tests {
         );
         assert!(lookup_candidates("not-a-url").is_err());
         assert!(lookup_candidates("sftp://user@/path").is_err());
+        assert!(lookup_candidates("https://evil.example\0.good.example/a").is_err());
+
+        // Host buffer lacking a NUL terminator within MAX_PROXY_HOST_UTF16_UNITS fails closed
+        // without over-reading past the bounded scan window.
+        let unterminated = vec![u16::from(b'a'); 1030];
+        let entries = [ProxyInfo {
+            proxy: 1,
+            bypass: 0,
+            scheme: 3,
+            host: unterminated.as_ptr(),
+            port: 8080,
+        }];
+        assert!(select_route(&entries, false).is_err());
     }
 
     #[test]

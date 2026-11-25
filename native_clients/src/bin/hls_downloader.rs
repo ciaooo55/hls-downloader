@@ -2,6 +2,7 @@
     all(windows, not(debug_assertions), not(test)),
     windows_subsystem = "windows"
 )]
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
 
 use std::{
     env,
@@ -16,12 +17,16 @@ fn main() {
         }
         #[cfg(windows)]
         if !env::args_os().any(|arg| arg == "--self-test") {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let title: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
+            let message: Vec<u16> = error
+                .encode_utf16()
+                .filter(|&unit| unit != 0)
+                .chain(std::iter::once(0))
+                .collect();
+            // SAFETY: `title` and `message` are valid NUL-terminated UTF-16 buffers with no
+            // interior NULs that outlive the modal `MessageBoxW` call; null owner window is valid.
             unsafe {
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    MessageBoxW, MB_ICONERROR, MB_OK,
-                };
-                let title: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
-                let message: Vec<u16> = format!("{error}\0").encode_utf16().collect();
                 MessageBoxW(
                     std::ptr::null_mut(),
                     message.as_ptr(),

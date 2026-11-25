@@ -56,12 +56,15 @@ fn power_thread() -> Option<&'static mpsc::Sender<()>> {
 
 #[cfg(windows)]
 fn apply_execution_state(active: bool) {
+    use windows_sys::Win32::System::Power::SetThreadExecutionState;
+    let mut flags = ES_CONTINUOUS;
+    if active {
+        flags |= ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED;
+    }
+    // SAFETY: `SetThreadExecutionState` takes thread-scoped `EXECUTION_STATE` bitflags
+    // with no pointers or handle transfers; invoked on the dedicated `v7-sleep-inhibit`
+    // worker thread so `ES_CONTINUOUS` state stays bound to a single persistent thread.
     unsafe {
-        use windows_sys::Win32::System::Power::SetThreadExecutionState;
-        let mut flags = ES_CONTINUOUS;
-        if active {
-            flags |= ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED;
-        }
         if SetThreadExecutionState(flags) == 0 && active {
             SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
         }

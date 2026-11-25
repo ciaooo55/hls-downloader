@@ -122,13 +122,22 @@ pub fn clear_std_handle_inheritance() -> Result<(), String> {
         std::io::stdout().as_raw_handle(),
         std::io::stderr().as_raw_handle(),
     ] {
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
         let mut flags = 0u32;
-        if !handle.is_null()
-            && handle != INVALID_HANDLE_VALUE
-            && unsafe { GetHandleInformation(handle, &mut flags) } != 0
-            && (flags & HANDLE_FLAG_INHERIT) != 0
-            && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
-        {
+        // SAFETY: `handle` is non-null, not `INVALID_HANDLE_VALUE`, and comes from the
+        // current process's standard handle table (`GetStdHandle` via `io::std*`); `&mut flags`
+        // is a valid, aligned writable `u32`. Invalid/pseudo handles simply fail with `0`.
+        let got_info = unsafe { GetHandleInformation(handle, &mut flags) };
+        if got_info == 0 || (flags & HANDLE_FLAG_INHERIT) == 0 {
+            continue;
+        }
+        // SAFETY: `GetHandleInformation` just confirmed `handle` is a valid kernel handle in
+        // this process; clearing `HANDLE_FLAG_INHERIT` mutates only handle metadata without
+        // closing or invalidating the underlying standard stream handle.
+        let cleared = unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+        if cleared == 0 {
             return Err(format!(
                 "Unable to isolate standard handles: {}",
                 std::io::Error::last_os_error()

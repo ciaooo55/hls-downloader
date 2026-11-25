@@ -6,7 +6,10 @@ use std::sync::{Mutex, OnceLock, RwLock};
 
 pub(crate) fn hls_input_options(command: &mut Command) {
     static SUPPORT: OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> = OnceLock::new();
-    let mut cache = SUPPORT.get_or_init(Mutex::default).lock().unwrap();
+    let mut cache = SUPPORT
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let supported = *cache
         .entry(PathBuf::from(command.get_program()))
         .or_insert_with(|| {

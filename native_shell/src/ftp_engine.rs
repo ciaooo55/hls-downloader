@@ -185,11 +185,7 @@ pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
     }
     let (_, rest) = url.split_once("://").ok_or("not an FTP URL")?;
     let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let (userinfo, hostport) = if auth.contains('@') {
-        auth.rsplit_once('@').unwrap()
-    } else {
-        ("anonymous:", auth)
-    };
+    let (userinfo, hostport) = auth.rsplit_once('@').unwrap_or(("anonymous:", auth));
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
     let user = percent_decode(user)?;
     let password = percent_decode(password)?;

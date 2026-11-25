@@ -201,10 +201,10 @@ impl Workbench {
                 WorkbenchJob::Request(request) => request.request_id(),
             };
             let result = (|| {
-                if client.is_none() {
-                    client = Some(CoreIpcClient::connect()?);
-                }
-                let client = client.as_mut().unwrap();
+                let client = match client.as_mut() {
+                    Some(existing) => existing,
+                    None => client.insert(CoreIpcClient::connect()?),
+                };
                 match job {
                     WorkbenchJob::Request(request) => client.request(&request),
                     WorkbenchJob::Snapshot(request_id) => client.snapshot_state_with_browser().map(
@@ -2016,13 +2016,18 @@ impl Workbench {
                         self.render();
                     }
                 }
-                if self
-                    .queue_save
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|save| save.request_id == request_id)
-                {
-                    let save = self.queue_save.borrow_mut().take().unwrap();
+                let completed_queue_save = {
+                    let mut pending = self.queue_save.borrow_mut();
+                    if pending
+                        .as_ref()
+                        .is_some_and(|save| save.request_id == request_id)
+                    {
+                        pending.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(save) = completed_queue_save {
                     if let Some(editor) = self.queues.borrow().as_ref() {
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("success".into());
@@ -2697,6 +2702,11 @@ impl Workbench {
             if matches!(action.as_str(), "save" | "assign") {
                 match editor.values() {
                     Ok((profiles, queue_id)) => {
+                        let Ok(encoded_profiles) = serde_json::to_value(profiles) else {
+                            editor.window.set_status_tone("error".into());
+                            editor.window.set_status("无法序列化队列配置".into());
+                            return;
+                        };
                         let id = this.id();
                         let assignment = (action == "assign").then(|| {
                             (
@@ -2706,7 +2716,7 @@ impl Workbench {
                         });
                         let values = std::collections::BTreeMap::from([(
                             "queue_profiles".to_owned(),
-                            serde_json::to_value(profiles).unwrap(),
+                            encoded_profiles,
                         )]);
                         if this.request(CorePipeRequest::StoreSettings {
                             request_id: id,
@@ -3255,7 +3265,8 @@ pub(crate) fn extract_curl_probe_url(raw: &str) -> Option<String> {
         }
         let mut token = String::new();
         if ch == '\'' || ch == '"' {
-            let quote = chars.next().unwrap();
+            let quote = ch;
+            chars.next();
             while let Some(c) = chars.next() {
                 if c == '\\' && quote == '"' {
                     if let Some(escaped) = chars.next() {

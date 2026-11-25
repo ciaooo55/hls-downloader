@@ -231,6 +231,10 @@ fn verify_installer_authenticode(
     };
 
     let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    if path_wide[..path_wide.len() - 1].contains(&0) {
+        return Err("升级安装包路径包含无效空字符".into());
+    }
+    // SAFETY: `WINTRUST_FILE_INFO` is a plain C struct for which all-zero initialization is valid.
     let mut file: WINTRUST_FILE_INFO = unsafe { std::mem::zeroed() };
     file.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
     file.pcwszFilePath = path_wide.as_ptr();
@@ -238,6 +242,7 @@ fn verify_installer_authenticode(
         file.hFile = package.as_raw_handle();
     }
 
+    // SAFETY: `WINTRUST_DATA` is a plain C struct/union for which all-zero initialization is valid.
     let mut trust: WINTRUST_DATA = unsafe { std::mem::zeroed() };
     trust.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
     trust.dwUIChoice = WTD_UI_NONE;
@@ -248,6 +253,9 @@ fn verify_installer_authenticode(
     trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_DISABLE_MD2_MD4;
     let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
 
+    // SAFETY: `action` is a valid `GUID`, `trust` is initialized for `WTD_CHOICE_FILE`, and
+    // `file` (`path_wide` + optional open `package` file handle) outlives both `WinVerifyTrust`
+    // calls (`WTD_STATEACTION_VERIFY` and the paired `WTD_STATEACTION_CLOSE` below).
     let status = unsafe {
         WinVerifyTrust(
             std::ptr::null_mut(),
@@ -264,6 +272,8 @@ fn verify_installer_authenticode(
         ))
     };
     trust.dwStateAction = WTD_STATEACTION_CLOSE;
+    // SAFETY: Releases any provider state allocated in `trust.hWVTStateData` by the preceding
+    // `WTD_STATEACTION_VERIFY` call, as required on both success and failure paths.
     unsafe {
         WinVerifyTrust(
             std::ptr::null_mut(),
@@ -296,29 +306,38 @@ fn verify_release_signer(state: windows_sys::Win32::Foundation::HANDLE) -> Resul
     if state.is_null() {
         return Err("无法读取已验证的 Authenticode provider 状态".into());
     }
+    // SAFETY: `state` is the non-null `hWVTStateData` from a succeeded `WinVerifyTrust` call and
+    // remains open until `verify_installer_authenticode` runs `WTD_STATEACTION_CLOSE`.
     let provider = unsafe { WTHelperProvDataFromStateData(state) };
     if provider.is_null() {
         return Err("无法读取已验证的 Authenticode provider 状态".into());
     }
+    // SAFETY: `provider` is a live `CRYPT_PROVIDER_DATA` pointer owned by `state`; `as_ref()`
+    // converts a non-null `CRYPT_PROVIDER_SGNR` pointer into a shared reference bounded by this scope.
     let signer = unsafe { WTHelperGetProvSignerFromChain(provider, 0, 0, 0).as_ref() }
         .ok_or("无法读取已验证的 Authenticode 主签名者")?;
     if signer.csCertChain == 0 || signer.pasCertChain.is_null() {
         return Err("已验证的 Authenticode 签名者缺少证书".into());
     }
+    // SAFETY: `signer.csCertChain > 0` and `signer.pasCertChain` is non-null, so element 0 of the
+    // WinTrust certificate chain array (the leaf `CRYPT_PROVIDER_CERT`) is valid to read.
     let leaf = unsafe { (*signer.pasCertChain).pCert };
     let mut hash = [0u8; 20];
     let mut size = hash.len() as u32;
-    if leaf.is_null()
-        || unsafe {
-            CertGetCertificateContextProperty(
-                leaf,
-                CERT_SHA1_HASH_PROP_ID,
-                hash.as_mut_ptr().cast(),
-                &mut size,
-            )
-        } == 0
-        || size as usize != hash.len()
-    {
+    if leaf.is_null() {
+        return Err("无法读取 Authenticode leaf 证书指纹".into());
+    }
+    // SAFETY: `leaf` is a non-null `CERT_CONTEXT` owned by the live WinTrust state, and `hash` is
+    // a 20-byte writable SHA-1 buffer matching `size`.
+    let got_hash = unsafe {
+        CertGetCertificateContextProperty(
+            leaf,
+            CERT_SHA1_HASH_PROP_ID,
+            hash.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if got_hash == 0 || size as usize != hash.len() {
         return Err("无法读取 Authenticode leaf 证书指纹".into());
     }
     let candidate = hash
@@ -508,8 +527,17 @@ fn read_optional_msi_property(path: &Path, property: &str) -> Result<Option<Stri
     const ERROR_SUCCESS: u32 = 0;
     const ERROR_MORE_DATA: u32 = 234;
 
+    if property.contains('\0') {
+        return Err("MSI 属性名包含无效空字符".into());
+    }
     let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    if path_wide[..path_wide.len() - 1].contains(&0) {
+        return Err("MSI 路径包含无效空字符".into());
+    }
     let mut database: MSIHANDLE = 0;
+    // SAFETY: `path_wide` is a valid NUL-terminated UTF-16 path with no interior NULs, `null()` is
+    // the Win32 `MSIDBOPEN_READONLY` (`(LPCWSTR)0`) persistence constant, and `&mut database`
+    // receives an `MSIHANDLE` closed unconditionally at the end of this function.
     let opened = unsafe { MsiOpenDatabaseW(path_wide.as_ptr(), std::ptr::null(), &mut database) };
     if opened != ERROR_SUCCESS {
         return Err(format!("无法读取 MSI 数据库（错误 {opened}）"));
@@ -521,15 +549,21 @@ fn read_optional_msi_property(path: &Path, property: &str) -> Result<Option<Stri
     let query_wide: Vec<u16> = OsStr::new(&query).encode_wide().chain(Some(0)).collect();
     let mut view: MSIHANDLE = 0;
     let result = (|| {
+        // SAFETY: `database` is an open read-only `MSIHANDLE`, `query_wide` is a NUL-terminated
+        // UTF-16 SQL query without interior NULs, and `&mut view` receives an `MSIHANDLE` closed below.
         let status = unsafe { MsiDatabaseOpenViewW(database, query_wide.as_ptr(), &mut view) };
         if status != ERROR_SUCCESS {
             return Err(format!("无法读取 MSI {property}（错误 {status}）"));
         }
+        // SAFETY: `view` is the open `MSIHANDLE` returned by `MsiDatabaseOpenViewW`; `0` indicates
+        // no parameter record is bound.
         let status = unsafe { MsiViewExecute(view, 0) };
         if status != ERROR_SUCCESS {
             return Err(format!("无法执行 MSI {property} 查询（错误 {status}）"));
         }
         let mut record: MSIHANDLE = 0;
+        // SAFETY: `view` has been executed and `&mut record` is a valid out-pointer for the fetched
+        // `MSIHANDLE`, closed unconditionally when `status == ERROR_SUCCESS`.
         let status = unsafe { MsiViewFetch(view, &mut record) };
         if status == windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS {
             return Ok(None);
@@ -540,6 +574,9 @@ fn read_optional_msi_property(path: &Path, property: &str) -> Result<Option<Stri
         let value = (|| {
             let mut required = 0u32;
             let mut empty = 0u16;
+            // SAFETY: Per `MsiRecordGetStringW` contract, passing a non-null 1-`WCHAR` buffer
+            // (`&mut empty`) with `required == 0` writes only the NUL terminator to `empty` and
+            // stores the character count (excluding NUL) in `required`.
             let first = unsafe { MsiRecordGetStringW(record, 1, &mut empty, &mut required) };
             if first != ERROR_MORE_DATA && first != ERROR_SUCCESS {
                 return Err(format!("无法读取 MSI {property}（错误 {first}）"));
@@ -550,19 +587,25 @@ fn read_optional_msi_property(path: &Path, property: &str) -> Result<Option<Stri
             }
             let mut buffer = vec![0u16; required as usize + 1];
             let mut capacity = buffer.len() as u32;
+            // SAFETY: `buffer` has `capacity` (`required + 1`) writable `u16` elements for the
+            // string plus trailing NUL, and `record` is live.
             let status =
                 unsafe { MsiRecordGetStringW(record, 1, buffer.as_mut_ptr(), &mut capacity) };
             if status != ERROR_SUCCESS {
                 return Err(format!("无法读取 MSI {property}（错误 {status}）"));
             }
-            Ok(String::from_utf16_lossy(&buffer[..capacity as usize]))
+            let written = (capacity as usize).min(buffer.len());
+            Ok(String::from_utf16_lossy(&buffer[..written]))
         })();
+        // SAFETY: `record` was returned by a succeeded `MsiViewFetch` and is closed once here.
         unsafe { MsiCloseHandle(record) };
         value.map(Some)
     })();
     if view != 0 {
+        // SAFETY: `view` is a live `MSIHANDLE` opened by `MsiDatabaseOpenViewW` and closed once.
         unsafe { MsiCloseHandle(view) };
     }
+    // SAFETY: `database` is a live `MSIHANDLE` opened by `MsiOpenDatabaseW` and closed once.
     unsafe { MsiCloseHandle(database) };
     result
 }
@@ -787,6 +830,8 @@ fn msiexec_command(args: &[OsString]) -> Result<std::process::Command, String> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     let mut directory = vec![0u16; 32768];
+    // SAFETY: `directory` provides `directory.len()` writable `u16` units; `GetSystemDirectoryW`
+    // returns `0` on failure or `>= directory.len()` if truncated, both rejected below.
     let length =
         unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) } as usize;
     if length == 0 || length >= directory.len() {
@@ -948,6 +993,8 @@ fn process_running_in_install_root(pid: u32, install_root: &Path) -> bool {
     if pid == 0 || pid == std::process::id() || install_root.as_os_str().is_empty() {
         return false;
     }
+    // SAFETY: `OpenProcess` opens a fresh process kernel handle with non-inheritable query/sync
+    // access (`0`), or returns null if `pid` does not exist or is inaccessible.
     let handle = unsafe {
         OpenProcess(
             SYNCHRONIZE_ACCESS | PROCESS_QUERY_LIMITED_INFORMATION,
@@ -958,12 +1005,19 @@ fn process_running_in_install_root(pid: u32, install_root: &Path) -> bool {
     if handle.is_null() {
         return false;
     }
+    // SAFETY: `handle` is non-null and open with `SYNCHRONIZE` access; timeout `0` polls exit
+    // state without blocking.
     let running = unsafe { WaitForSingleObject(handle, 0) == WAIT_TIMEOUT };
     let belongs = if running {
         let mut image = vec![0u16; 32768];
         let mut length = image.len() as u32;
-        if unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) } != 0 {
-            let path = PathBuf::from(OsString::from_wide(&image[..length as usize]));
+        // SAFETY: `handle` has `PROCESS_QUERY_LIMITED_INFORMATION`, `image` has `length` (`32768`)
+        // writable `u16` elements, and on success `length` holds the character count `< 32768`.
+        let got_name =
+            unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) };
+        if got_name != 0 {
+            let written = (length as usize).min(image.len());
+            let path = PathBuf::from(OsString::from_wide(&image[..written]));
             path_is_under_install_root(&path, install_root)
         } else {
             false
@@ -971,6 +1025,7 @@ fn process_running_in_install_root(pid: u32, install_root: &Path) -> bool {
     } else {
         false
     };
+    // SAFETY: `handle` is uniquely owned by this function and closed once before returning.
     unsafe { CloseHandle(handle) };
     belongs
 }
@@ -1019,15 +1074,23 @@ fn request_process_window_close(pid: u32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
     };
+    /// # Safety
+    /// Invoked synchronously by `EnumWindows` with a top-level `HWND` and an integer `pid` packed
+    /// in `data` (never dereferenced as a pointer).
     unsafe extern "system" fn callback(window: HWND, data: LPARAM) -> BOOL {
         let mut owner = 0u32;
+        // SAFETY: `window` was supplied by `EnumWindows` and `&mut owner` is a valid writable `u32`.
         unsafe { GetWindowThreadProcessId(window, &mut owner) };
         if owner == data as u32 {
+            // SAFETY: `PostMessageW` posts an asynchronous integer-only `WM_CLOSE` message and
+            // safely ignores windows that closed concurrently.
             unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
         }
         1
     }
     if pid != 0 {
+        // SAFETY: `callback` is an `extern "system"` `WNDENUMPROC` that interprets `pid as isize`
+        // purely as a `u32` value.
         unsafe { EnumWindows(Some(callback), pid as isize) };
     }
 }
@@ -1061,12 +1124,17 @@ fn terminate_auxiliary_processes(install_root: &Path) {
         OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     };
+    // SAFETY: `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)` takes no pointers and returns
+    // `INVALID_HANDLE_VALUE` on failure or an owned snapshot handle closed below.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
+    if snapshot.is_null() || snapshot == INVALID_HANDLE_VALUE {
         return;
     }
+    // SAFETY: `PROCESSENTRY32W` is a plain C struct for which all-zero initialization is valid once
+    // `dwSize` is set to `size_of::<PROCESSENTRY32W>()` before `Process32FirstW`.
     let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    // SAFETY: `snapshot` is a valid process snapshot handle and `entry.dwSize` matches its layout.
     let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
     while more {
         let end = entry
@@ -1079,6 +1147,8 @@ fn terminate_auxiliary_processes(install_root: &Path) {
             name.as_str(),
             "hlsdownloaderpresenter.exe" | "hlsdownloadernativehost.exe"
         ) {
+            // SAFETY: Opens a non-inheritable handle to `entry.th32ProcessID`, returning null if
+            // the process already exited or access is denied.
             let handle = unsafe {
                 OpenProcess(
                     PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
@@ -1089,10 +1159,14 @@ fn terminate_auxiliary_processes(install_root: &Path) {
             if !handle.is_null() {
                 let mut image = vec![0u16; 32768];
                 let mut length = image.len() as u32;
-                if unsafe { QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) }
-                    != 0
-                {
-                    let path = PathBuf::from(OsString::from_wide(&image[..length as usize]));
+                // SAFETY: `handle` is non-null with `PROCESS_QUERY_LIMITED_INFORMATION`, and `image`
+                // provides `length` (`32768`) writable `u16` elements.
+                let got_image = unsafe {
+                    QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length)
+                };
+                if got_image != 0 {
+                    let written = (length as usize).min(image.len());
+                    let path = PathBuf::from(OsString::from_wide(&image[..written]));
                     if should_terminate_auxiliary_process(
                         &path,
                         install_root,
@@ -1100,18 +1174,23 @@ fn terminate_auxiliary_processes(install_root: &Path) {
                         std::process::id(),
                     ) {
                         request_process_window_close(entry.th32ProcessID);
+                        // SAFETY: `handle` was opened with `PROCESS_TERMINATE` and verified to
+                        // belong to an auxiliary executable inside `install_root`.
                         unsafe {
                             TerminateProcess(handle, 0);
                         }
                     }
                 }
+                // SAFETY: `handle` is uniquely owned by this loop iteration and closed once here.
                 unsafe {
                     CloseHandle(handle);
                 }
             }
         }
+        // SAFETY: `snapshot` remains valid and `entry.dwSize` is preserved across iterations.
         more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
     }
+    // SAFETY: `snapshot` is uniquely owned by this function and closed once after enumeration.
     unsafe { CloseHandle(snapshot) };
 }
 

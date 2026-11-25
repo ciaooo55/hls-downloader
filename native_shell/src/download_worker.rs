@@ -771,7 +771,10 @@ impl CoreCoordinator {
             Err(_) => return Ok(None),
         };
         let expanded = match self.expand_create(base_spec) {
-            Ok(mut list) if list.len() == 1 => list.pop().unwrap(),
+            Ok(mut list) if list.len() == 1 => match list.pop() {
+                Some(spec) => spec,
+                None => return Ok(None),
+            },
             _ => return Ok(None),
         };
         let sealed = match seal_spec_secrets(self, expanded) {
@@ -6793,12 +6796,18 @@ fn open_path(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
+        if path.as_os_str().encode_wide().any(|unit| unit == 0) {
+            return Err("打开目标包含无效空字符".into());
+        }
         let file: Vec<u16> = path
             .as_os_str()
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
         let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        // SAFETY: Both `operation` and `file` are NUL-terminated UTF-16 buffers without
+        // interior NULs that outlive `ShellExecuteW`, and optional parameter/directory
+        // pointers are null.
         let result = unsafe {
             windows_sys::Win32::UI::Shell::ShellExecuteW(
                 std::ptr::null_mut(),
@@ -6816,7 +6825,9 @@ fn open_path(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
+        if path.to_string_lossy().contains('\0') {
+            return Err("打开目标包含无效空字符".into());
+        }
         Err("当前系统不支持打开文件".into())
     }
 }

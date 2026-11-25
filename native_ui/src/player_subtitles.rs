@@ -138,7 +138,7 @@ impl Default for PlayerSubtitles {
 
 impl PlayerSubtitles {
     pub fn enabled(&self) -> bool {
-        self.input.lock().unwrap().enabled
+        self.input.lock().unwrap_or_else(|e| e.into_inner()).enabled
     }
 
     pub fn toggle(&mut self) {
@@ -150,42 +150,58 @@ impl PlayerSubtitles {
             std::thread::spawn(move || run(input, output, receiver));
             self.started = true;
         }
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         input.enabled = !input.enabled;
         input.revision += 1;
-        self.output.lock().unwrap().cues.clear();
+        self.output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cues
+            .clear();
         let _ = self.wake.try_send(());
     }
 
     pub fn update(&self, playback: Playback) {
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         if playback.generation != input.playback.generation {
             input.revision += 1;
             input.pause = PauseControl::default();
-            self.output.lock().unwrap().cues.clear();
+            self.output
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cues
+                .clear();
             let _ = self.wake.try_send(());
         }
         input.playback = playback;
     }
 
     pub fn reset(&self) {
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         input.revision += 1;
-        self.output.lock().unwrap().cues.clear();
+        self.output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cues
+            .clear();
         let _ = self.wake.try_send(());
     }
 
     pub fn suspend(&self) {
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         input.revision += 1;
         input.playback.buffering = true;
-        self.output.lock().unwrap().cues.clear();
+        self.output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cues
+            .clear();
         let _ = self.wake.try_send(());
     }
 
     pub fn display(&self, position: f64) -> (String, String) {
-        let input = self.input.lock().unwrap();
-        let output = self.output.lock().unwrap();
+        let input = self.input.lock().unwrap_or_else(|e| e.into_inner());
+        let output = self.output.lock().unwrap_or_else(|e| e.into_inner());
         if input.enabled && output.revision == input.revision {
             let notice = if input.pause.owned && output.prefetch {
                 format!(
@@ -203,7 +219,7 @@ impl PlayerSubtitles {
 
     pub fn user_control(&self, action: &str) {
         if matches!(action, "pause" | "resume" | "play" | "stop") {
-            let mut input = self.input.lock().unwrap();
+            let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
             input.pause.owned = false;
             input.pause.user_paused = action == "pause";
         }
@@ -211,8 +227,8 @@ impl PlayerSubtitles {
 
     /// Return an absolute pause state; the caller sends a generation-bound command.
     pub fn playback_action(&self, position: f64) -> Option<bool> {
-        let mut input = self.input.lock().unwrap();
-        let output = self.output.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
+        let output = self.output.lock().unwrap_or_else(|e| e.into_inner());
         if input.playback.generation == 0
             || input.pause.user_paused
             || input.pause.pending.is_some()
@@ -247,13 +263,13 @@ impl PlayerSubtitles {
     }
 
     pub fn playback_command_sent(&self, request_id: u64, paused: bool) {
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         input.pause.owned = paused;
         input.pause.pending = Some(request_id);
     }
 
     pub fn playback_response(&self, request_id: u64, success: bool) -> bool {
-        let mut input = self.input.lock().unwrap();
+        let mut input = self.input.lock().unwrap_or_else(|e| e.into_inner());
         if input.pause.pending != Some(request_id) {
             return false;
         }
@@ -268,7 +284,7 @@ impl PlayerSubtitles {
 
 impl Drop for PlayerSubtitles {
     fn drop(&mut self) {
-        self.input.lock().unwrap().closed = true;
+        self.input.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         let _ = self.wake.try_send(());
     }
 }
@@ -330,7 +346,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
     let mut failed = None;
     loop {
         let (closed, enabled, revision, playback) = {
-            let input = input.lock().unwrap();
+            let input = input.lock().unwrap_or_else(|e| e.into_inner());
             (
                 input.closed,
                 input.enabled,
@@ -359,46 +375,48 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
             && (session.is_some() || !playback.buffering)
         {
             let result = (|| -> Result<(), String> {
-                if client.is_none() {
-                    client = Some(CoreIpcClient::connect()?);
-                }
-                let client = client.as_mut().unwrap();
-                if session.is_none() {
-                    let config = request(client, json!({"action":"configuration"}))?;
-                    if config["has_key"] != true {
-                        return Err("请在设置 → 字幕翻译中配置 API Key".into());
+                let client = match client.as_mut() {
+                    Some(existing) => existing,
+                    None => client.insert(CoreIpcClient::connect()?),
+                };
+                let session = match session.as_mut() {
+                    Some(existing) => existing,
+                    None => {
+                        let config = request(client, json!({"action":"configuration"}))?;
+                        if config["has_key"] != true {
+                            return Err("请在设置 → 字幕翻译中配置 API Key".into());
+                        }
+                        let preferences = &config["preferences"];
+                        let prefetch = preferences["prefetch"].as_bool().unwrap_or(false);
+                        let offset = preferences["offset"].as_f64().unwrap_or(0.0);
+                        let id = format!("{owner}-{revision}");
+                        request(
+                            client,
+                            json!({"action":"start", "session_id":id, "owner":owner,
+                            "source":preferences["source"].as_str().unwrap_or("auto"),
+                            "target":preferences["target"].as_str().unwrap_or("zh"),
+                            "player_generation":playback.generation, "epoch":revision}),
+                        )?;
+                        *output.lock().unwrap_or_else(|e| e.into_inner()) = Captions {
+                            revision,
+                            notice: "字幕翻译连接中…".into(),
+                            cues: Vec::new(),
+                            offset,
+                            show_source: preferences["showSource"].as_bool().unwrap_or(true),
+                            prefetch,
+                            ready_ranges: Vec::new(),
+                        };
+                        session.insert(Session {
+                            id,
+                            revision,
+                            sequence: 0,
+                            next_audio: subtitle_media_position(playback.position, offset),
+                            pending: None,
+                            prefetch,
+                            offset,
+                        })
                     }
-                    let preferences = &config["preferences"];
-                    let prefetch = preferences["prefetch"].as_bool().unwrap_or(false);
-                    let offset = preferences["offset"].as_f64().unwrap_or(0.0);
-                    let id = format!("{owner}-{revision}");
-                    request(
-                        client,
-                        json!({"action":"start", "session_id":id, "owner":owner,
-                        "source":preferences["source"].as_str().unwrap_or("auto"),
-                        "target":preferences["target"].as_str().unwrap_or("zh"),
-                        "player_generation":playback.generation, "epoch":revision}),
-                    )?;
-                    *output.lock().unwrap() = Captions {
-                        revision,
-                        notice: "字幕翻译连接中…".into(),
-                        cues: Vec::new(),
-                        offset,
-                        show_source: preferences["showSource"].as_bool().unwrap_or(true),
-                        prefetch,
-                        ready_ranges: Vec::new(),
-                    };
-                    session = Some(Session {
-                        id,
-                        revision,
-                        sequence: 0,
-                        next_audio: subtitle_media_position(playback.position, offset),
-                        pending: None,
-                        prefetch,
-                        offset,
-                    });
-                }
-                let session = session.as_mut().unwrap();
+                };
                 let poll = request(
                     client,
                     json!({"action":"poll", "session_id":session.id, "owner":owner, "after_sequence":session.sequence}),
@@ -415,7 +433,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 }
                 session.sequence = poll["latest_sequence"].as_u64().unwrap_or(session.sequence);
                 if let Some(events) = poll["events"].as_array() {
-                    let mut output = output.lock().unwrap();
+                    let mut output = output.lock().unwrap_or_else(|e| e.into_inner());
                     if output.accept(events) {
                         session.pending = None;
                         output.notice.clear();
@@ -434,7 +452,10 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 };
                 let position = subtitle_media_position(playback.position, session.offset);
                 let ready_ahead = if session.prefetch && session.pending.is_none() {
-                    output.lock().unwrap().ready_ahead(position)
+                    output
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .ready_ahead(position)
                 } else {
                     0.0
                 };
@@ -475,7 +496,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 }
                 // UI changes are sampled again after the potentially slow decoder.
                 // Late PCM may never be submitted to a replacement timeline.
-                let current = input.lock().unwrap();
+                let current = input.lock().unwrap_or_else(|e| e.into_inner());
                 if current.closed || !current.enabled || current.revision != revision {
                     return Ok(());
                 }
@@ -506,7 +527,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 }
                 client = None;
                 failed = Some(revision);
-                *output.lock().unwrap() = Captions {
+                *output.lock().unwrap_or_else(|e| e.into_inner()) = Captions {
                     revision,
                     notice: error,
                     ..Default::default()
@@ -871,5 +892,34 @@ mod tests {
         let mut pending = 18.0;
         rewind_next_audio_on_missing_gap(true, true, 0.0, 14.5, &mut pending);
         assert_eq!(pending, 18.0);
+    }
+
+    #[test]
+    fn poisoned_mutexes_recover_cleanly_across_player_subtitle_lifecycle() {
+        let subtitles = PlayerSubtitles::default();
+        let poison_input = subtitles.input.clone();
+        let poison_output = subtitles.output.clone();
+        let _ = std::thread::spawn(move || {
+            let _in_guard = poison_input.lock().unwrap();
+            let _out_guard = poison_output.lock().unwrap();
+            panic!("simulate worker panic while holding subtitle locks");
+        })
+        .join();
+        assert!(subtitles.input.is_poisoned());
+        assert!(subtitles.output.is_poisoned());
+
+        assert!(!subtitles.enabled());
+        subtitles.update(Playback {
+            generation: 3,
+            duration: 20.0,
+            speed: 1.0,
+            ..Default::default()
+        });
+        subtitles.user_control("pause");
+        assert_eq!(subtitles.playback_action(1.0), None);
+        subtitles.reset();
+        subtitles.suspend();
+        assert_eq!(subtitles.display(1.0), (String::new(), String::new()));
+        drop(subtitles);
     }
 }

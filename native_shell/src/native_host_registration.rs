@@ -238,9 +238,17 @@ fn set_default_value_for_sid(
     };
 
     let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
+    let value_str = value.to_string_lossy();
+    if full_key.contains('\0') || value_str.contains('\0') {
+        return Err("Native Host registry path or manifest path contains NUL".into());
+    }
     let key_wide = wide(&full_key);
-    let value_wide = wide(&value.to_string_lossy());
+    let value_wide = wide(&value_str);
+    let byte_len = u32::try_from(value_wide.len() * std::mem::size_of::<u16>())
+        .map_err(|_| "Native Host manifest path exceeds registry size limit".to_string())?;
     let mut handle = null_mut();
+    // SAFETY: `key_wide` is a NUL-terminated UTF-16 subkey without interior NULs, optional
+    // class/security/disposition pointers are null, and `handle` is a writable `HKEY` slot.
     let create = unsafe {
         RegCreateKeyExW(
             user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
@@ -260,12 +268,12 @@ fn set_default_value_for_sid(
             create,
         ));
     }
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            value_wide.as_ptr().cast::<u8>(),
-            value_wide.len() * std::mem::size_of::<u16>(),
-        )
-    };
+    // SAFETY: `value_wide` is a live `Vec<u16>` with `byte_len` initialized bytes; viewing
+    // `u16` elements as `[u8]` for `RegSetValueExW` has alignment 1 and no padding bytes.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(value_wide.as_ptr().cast::<u8>(), byte_len as usize) };
+    // SAFETY: `handle` is an open `HKEY` with `KEY_SET_VALUE` access, a null value name
+    // targets the key's default `(Default)` value, and `bytes` is a NUL-terminated `REG_SZ`.
     let set = unsafe {
         RegSetValueExW(
             handle,
@@ -273,9 +281,10 @@ fn set_default_value_for_sid(
             0,
             REG_SZ,
             bytes.as_ptr(),
-            bytes.len() as u32,
+            byte_len,
         )
     };
+    // SAFETY: `handle` was opened by `RegCreateKeyExW` above and is closed unconditionally.
     unsafe {
         RegCloseKey(handle);
     }
@@ -297,8 +306,13 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
     };
 
     let full_key = user_sid.map_or_else(|| key.to_string(), |sid| format!(r"{sid}\{key}"));
+    if full_key.contains('\0') {
+        return Err("Native Host registry path contains NUL".into());
+    }
     let key_wide = wide(&full_key);
     let mut bytes = 0u32;
+    // SAFETY: `key_wide` is a NUL-terminated UTF-16 subkey, `pvData` is null to query the
+    // required buffer byte length, and `bytes` is a writable `u32` output slot.
     let size_result = unsafe {
         RegGetValueW(
             user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
@@ -319,7 +333,13 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
             size_result,
         ));
     }
-    let mut buffer = vec![0u16; (bytes as usize).div_ceil(std::mem::size_of::<u16>())];
+    let units = (bytes as usize).div_ceil(std::mem::size_of::<u16>()).max(1);
+    let mut buffer = vec![0u16; units];
+    let mut capacity_bytes = u32::try_from(buffer.len() * std::mem::size_of::<u16>())
+        .map_err(|_| "Native Host registry value exceeds size limit".to_string())?;
+    // SAFETY: `buffer` is a non-empty writable `u16` allocation of `capacity_bytes` bytes;
+    // `RegGetValueW` with `RRF_RT_REG_SZ` writes a NUL-terminated UTF-16 string and updates
+    // `capacity_bytes` to the number of bytes written (or returns an error if resized).
     let read_result = unsafe {
         RegGetValueW(
             user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
@@ -328,7 +348,7 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
             RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
             null_mut(),
             buffer.as_mut_ptr().cast(),
-            &mut bytes,
+            &mut capacity_bytes,
         )
     };
     if read_result != 0 {
@@ -337,6 +357,7 @@ fn default_value_for_sid(key: &str, user_sid: Option<&str>) -> Result<Option<Pat
             read_result,
         ));
     }
+    buffer.truncate((capacity_bytes as usize) / std::mem::size_of::<u16>());
     while buffer.last() == Some(&0) {
         buffer.pop();
     }
@@ -405,6 +426,8 @@ fn delete_owned_key(
     // 打开父键时仅请求删除/枚举/查询权限（不使用 HKEY_USERS 上的 KEY_ALL_ACCESS），
     // 确保标准用户卸载/修复也能删除自身注册项，并保持 64 位视图一致。
     let mut parent = null_mut();
+    // SAFETY: `parent_wide` is a NUL-terminated UTF-16 subkey without interior NULs and
+    // `parent` is a writable `HKEY` output slot.
     let open = unsafe {
         RegOpenKeyExW(
             user_sid.map_or(HKEY_CURRENT_USER, |_| HKEY_USERS),
@@ -423,7 +446,9 @@ fn delete_owned_key(
             open,
         ));
     }
+    // SAFETY: `parent` is an open `HKEY` and `leaf_wide` is a NUL-terminated UTF-16 subkey name.
     let result = unsafe { RegDeleteKeyExW(parent, leaf_wide.as_ptr(), KEY_WOW64_64KEY, 0) };
+    // SAFETY: `parent` was opened by `RegOpenKeyExW` above and is closed unconditionally.
     unsafe {
         RegCloseKey(parent);
     }

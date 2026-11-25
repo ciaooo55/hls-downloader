@@ -1442,7 +1442,11 @@ fn live_period_begin(periods: &[DashPeriod], active: Option<&DashPeriod>) -> Res
         if periods.iter().all(|period| period.start.is_some()) {
             return Ok(periods
                 .iter()
-                .position(|period| period.start.unwrap() > start)
+                .position(|period| {
+                    period
+                        .start
+                        .is_some_and(|period_start| period_start > start)
+                })
                 .unwrap_or(periods.len()));
         }
     }
@@ -2270,7 +2274,11 @@ fn download_dash_primary(
                                     break;
                                 };
                                 let (rep, path) = if is_audio {
-                                    (audio.unwrap(), &audio_planned[index])
+                                    let Some(audio_rep) = audio else {
+                                        record_error("DASH audio representation missing".into());
+                                        break;
+                                    };
+                                    (audio_rep, &audio_planned[index])
                                 } else {
                                     (track, &planned[index])
                                 };
@@ -3499,7 +3507,7 @@ fn expand_timeline(
     let mut number = start_number;
     let mut clock = 0u64;
     // 固定时长模板没有 SegmentTimeline，按 Period 的边界展开，保留最后一个短分片。
-    if timeline.is_none() {
+    let Some(timeline) = timeline else {
         if let (Some(seconds), Some(duration)) = (
             period_duration,
             template_attr("duration").and_then(|value| value.parse::<u64>().ok()),
@@ -3532,8 +3540,7 @@ fn expand_timeline(
             }
         }
         return Ok(media);
-    }
-    let timeline = timeline.unwrap();
+    };
     let timescale = template_attr("timescale")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
@@ -7323,5 +7330,37 @@ mod tests {
         assert!(!root.join("seg-0001-init.mp4").exists());
         assert!(!root.join("seg-0002-period.m4s").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_period_begin_tracks_rotated_periods_and_rejects_ambiguous_timelines() {
+        let periods = vec![
+            DashPeriod {
+                id: Some("p2".into()),
+                start: Some(20.0),
+            },
+            DashPeriod {
+                id: Some("p3".into()),
+                start: Some(40.0),
+            },
+        ];
+        let expired_active = DashPeriod {
+            id: Some("p1".into()),
+            start: Some(0.0),
+        };
+        assert_eq!(
+            live_period_begin(&periods, Some(&expired_active)).unwrap(),
+            0
+        );
+        let mid_active = DashPeriod {
+            id: Some("p1b".into()),
+            start: Some(30.0),
+        };
+        assert_eq!(live_period_begin(&periods, Some(&mid_active)).unwrap(), 1);
+        let unanchored = vec![DashPeriod {
+            id: Some("p2".into()),
+            start: None,
+        }];
+        assert!(live_period_begin(&unanchored, Some(&expired_active)).is_err());
     }
 }

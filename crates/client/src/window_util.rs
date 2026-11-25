@@ -22,6 +22,8 @@ pub fn window_handle_by_title(title: &str) -> Option<i64> {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
+        // SAFETY: `title` was verified non-empty and free of interior `'\0'`, so `wide` is a valid
+        // NUL-terminated UTF-16 string that outlives `FindWindowW`; null class matches any class.
         let hwnd = unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
                 std::ptr::null(),
@@ -51,6 +53,8 @@ pub fn window_work_area_size_by_title(title: &str) -> Option<(u32, u32)> {
         };
 
         let hwnd = window_handle_by_title(title)? as HWND;
+        // SAFETY: `hwnd` is non-null (`window_handle_by_title` filters null handles), and
+        // `MonitorFromWindow` safely validates window handles in user32.
         let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
         if monitor.is_null() {
             return None;
@@ -67,7 +71,10 @@ pub fn window_work_area_size_by_title(title: &str) -> Option<(u32, u32)> {
             rcWork: empty_rect(),
             dwFlags: 0,
         };
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        // SAFETY: `monitor` is non-null and `info` is a valid writable `MONITORINFO` with `cbSize`
+        // initialized to `size_of::<MONITORINFO>()`.
+        let got_info = unsafe { GetMonitorInfoW(monitor, &mut info) };
+        if got_info == 0 {
             return None;
         }
         let width = u32::try_from(info.rcWork.right - info.rcWork.left).ok()?;
@@ -90,6 +97,9 @@ pub fn begin_caption_drag(title: &str) -> bool {
         const WM_SYSCOMMAND: u32 = 0x0112;
         const SC_MOVE: usize = 0xF010;
         const HTCAPTION: usize = 2;
+        // SAFETY: `hwnd` is non-null (`window_handle_by_title` filters null), `WM_SYSCOMMAND` with
+        // `SC_MOVE | HTCAPTION` passes integer parameters only (no pointers), and user32 validates
+        // window handle liveness on message dispatch.
         unsafe {
             windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
             windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
@@ -113,6 +123,9 @@ pub fn center_window_by_title(title: &str) -> bool {
 }
 
 pub fn center_window(raw_hwnd: i64) -> bool {
+    if raw_hwnd == 0 {
+        return false;
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{HWND, RECT};
@@ -131,9 +144,14 @@ pub fn center_window(raw_hwnd: i64) -> bool {
             bottom: 0,
         };
         let mut rect = empty_rect();
-        if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        // SAFETY: `hwnd` is non-null (`raw_hwnd != 0`) and `&mut rect` is a valid writable `RECT`;
+        // user32 returns `0` if `hwnd` is not a valid live window handle.
+        let got_rect = unsafe { GetWindowRect(hwnd, &mut rect) };
+        if got_rect == 0 {
             return false;
         }
+        // SAFETY: `GetWindowRect` succeeded for `hwnd`, and `MonitorFromWindow` safely queries the
+        // nearest display monitor handle.
         let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
         if monitor.is_null() {
             return false;
@@ -144,7 +162,10 @@ pub fn center_window(raw_hwnd: i64) -> bool {
             rcWork: empty_rect(),
             dwFlags: 0,
         };
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        // SAFETY: `monitor` is non-null and `info` is a valid writable `MONITORINFO` with `cbSize`
+        // set to `size_of::<MONITORINFO>()`.
+        let got_monitor = unsafe { GetMonitorInfoW(monitor, &mut info) };
+        if got_monitor == 0 {
             return false;
         }
         let width = rect.right - rect.left;
@@ -159,6 +180,8 @@ pub fn center_window(raw_hwnd: i64) -> bool {
             info.rcWork.bottom - info.rcWork.top,
             height,
         );
+        // SAFETY: `hwnd` is non-null and user32 validates handle liveness; `hWndInsertAfter` is
+        // ignored under `SWP_NOZORDER`.
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -188,6 +211,9 @@ pub fn activate_window_by_title(title: &str) -> bool {
 }
 
 pub fn activate_window(raw_hwnd: i64) -> bool {
+    if raw_hwnd == 0 {
+        return false;
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -197,6 +223,9 @@ pub fn activate_window(raw_hwnd: i64) -> bool {
         };
 
         let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
+        // SAFETY: `hwnd` is non-null (`raw_hwnd != 0`); all user32 calls below pass only value
+        // arguments (`GWL_EXSTYLE`, `HWND_TOPMOST`/`HWND_NOTOPMOST`, integer flags) and user32
+        // validates window handle liveness, returning `0` on stale/invalid handles.
         unsafe {
             // Slint 已声明置顶的弹窗必须保留该状态；否则主界面下一次获得焦点就会遮住它。
             let was_topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
@@ -244,6 +273,9 @@ pub fn hide_window_from_taskbar_by_title(title: &str) -> bool {
 }
 
 pub fn hide_window_from_taskbar(raw_hwnd: i64) -> bool {
+    if raw_hwnd == 0 {
+        return false;
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
@@ -254,6 +286,9 @@ pub fn hide_window_from_taskbar(raw_hwnd: i64) -> bool {
         };
 
         let hwnd = raw_hwnd as windows_sys::Win32::Foundation::HWND;
+        // SAFETY: `hwnd` is non-null (`raw_hwnd != 0`). `SetLastError(0)` is paired immediately
+        // before both `GetWindowLongPtrW` and `SetWindowLongPtrW` (`GWL_EXSTYLE` stores bitflags,
+        // never pointers) so a `0` return is disambiguated via `GetLastError()`.
         unsafe {
             SetLastError(0);
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -305,6 +340,8 @@ pub fn os_reduce_motion() -> bool {
     {
         const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
         let mut enabled: i32 = 1;
+        // SAFETY: `SPI_GETCLIENTAREAANIMATION` writes a Win32 `BOOL` (`i32`) into `pvParam`, and
+        // `&mut enabled` is a valid, aligned writable `i32` for the duration of the call.
         let ok = unsafe {
             windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
                 SPI_GETCLIENTAREAANIMATION,
@@ -370,5 +407,8 @@ mod tests {
     fn empty_or_truncated_window_titles_are_rejected() {
         assert!(window_handle_by_title("").is_none());
         assert!(window_handle_by_title("HLS Downloader\0other").is_none());
+        assert!(!center_window(0));
+        assert!(!activate_window(0));
+        assert!(!hide_window_from_taskbar(0));
     }
 }

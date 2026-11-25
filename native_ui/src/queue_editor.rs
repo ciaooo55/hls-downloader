@@ -120,14 +120,15 @@ impl QueueEditor {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos();
-                let number = (1..)
+                let next_slot = self.profiles.len() + 1;
+                let number = (1..=next_slot)
                     .find(|n| {
                         !self
                             .profiles
                             .iter()
                             .any(|profile| profile.name == format!("新队列 {n}"))
                     })
-                    .unwrap();
+                    .unwrap_or(next_slot);
                 self.profiles.push(QueueProfile {
                     id: format!("queue-{nonce:x}"),
                     name: format!("新队列 {number}"),

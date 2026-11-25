@@ -124,27 +124,40 @@ fn windows_downloads_folder() -> Option<PathBuf> {
     };
 
     // 系统 API 会跟随用户移动后的“下载”文件夹，不能从用户名或安装目录拼接。
-    unsafe {
-        let mut path = std::ptr::null_mut();
-        let result = SHGetKnownFolderPath(
+    let mut path = std::ptr::null_mut();
+    // SAFETY: `&FOLDERID_Downloads` is a static `KNOWNFOLDERID` reference, `hToken` is null
+    // (current user), and `&mut path` is a valid out-pointer receiving a CoTaskMem-allocated
+    // NUL-terminated UTF-16 string.
+    let result = unsafe {
+        SHGetKnownFolderPath(
             &FOLDERID_Downloads,
             KF_FLAG_DONT_VERIFY as u32,
             std::ptr::null_mut(),
             &mut path,
-        );
-        let folder = if result >= 0 && !path.is_null() {
-            let mut len = 0;
+        )
+    };
+    let folder = if result >= 0 && !path.is_null() {
+        let mut len = 0;
+        // SAFETY: When `SHGetKnownFolderPath` succeeds (`result >= 0`) and `path` is non-null,
+        // Windows guarantees `path` points to a valid NUL-terminated UTF-16 buffer allocated
+        // with `CoTaskMemAlloc` that remains valid until `CoTaskMemFree` below.
+        unsafe {
             while *path.add(len) != 0 {
                 len += 1;
             }
             (len > 0)
                 .then(|| PathBuf::from(OsString::from_wide(std::slice::from_raw_parts(path, len))))
-        } else {
-            None
-        };
+        }
+    } else {
+        None
+    };
+    // SAFETY: `SHGetKnownFolderPath` requires the caller to pass `path` to `CoTaskMemFree`
+    // whether the call succeeded or failed (`CoTaskMemFree(null)` is a documented no-op),
+    // and `folder` has already copied the UTF-16 units into an owned `PathBuf`.
+    unsafe {
         CoTaskMemFree(path.cast());
-        folder
     }
+    folder
 }
 
 fn env_override(key: &str) -> Option<PathBuf> {

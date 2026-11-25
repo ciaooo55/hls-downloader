@@ -46,21 +46,99 @@ impl CredentialVault {
     }
 }
 
+#[cfg(any(windows, test))]
+fn zeroize_bytes(bytes: &mut [u8]) {
+    for byte in bytes {
+        // SAFETY: `byte` is a valid, aligned mutable reference into `bytes`.
+        // `write_volatile` prevents dead-store elimination before buffer drop/free.
+        unsafe {
+            std::ptr::write_volatile(byte, 0);
+        }
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(windows)]
+struct InputZeroizeGuard(Vec<u8>);
+
+#[cfg(windows)]
+impl Drop for InputZeroizeGuard {
+    fn drop(&mut self) {
+        zeroize_bytes(&mut self.0);
+    }
+}
+
+#[cfg(windows)]
+struct DpapiBlobGuard {
+    blob: windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB,
+    zeroize_on_drop: bool,
+}
+
+#[cfg(windows)]
+impl DpapiBlobGuard {
+    fn new(zeroize_on_drop: bool) -> Self {
+        Self {
+            blob: windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB {
+                cbData: 0,
+                pbData: std::ptr::null_mut(),
+            },
+            zeroize_on_drop,
+        }
+    }
+
+    fn as_slice(&self) -> Result<&[u8], String> {
+        if self.blob.cbData == 0 {
+            return Ok(&[]);
+        }
+        if self.blob.pbData.is_null() {
+            return Err("DPAPI returned null buffer with non-zero length".into());
+        }
+        // SAFETY: `self.blob.pbData` was allocated by `CryptProtectData`/`CryptUnprotectData`,
+        // verified non-null above, and remains valid for `self.blob.cbData` bytes until `Drop`.
+        Ok(unsafe { std::slice::from_raw_parts(self.blob.pbData, self.blob.cbData as usize) })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for DpapiBlobGuard {
+    fn drop(&mut self) {
+        if !self.blob.pbData.is_null() {
+            if self.zeroize_on_drop && self.blob.cbData > 0 {
+                // SAFETY: `pbData` is non-null and valid for `cbData` writable bytes allocated
+                // by DPAPI (`LocalAlloc`) and exclusively owned by `self` during `Drop`.
+                let buf = unsafe {
+                    std::slice::from_raw_parts_mut(self.blob.pbData, self.blob.cbData as usize)
+                };
+                zeroize_bytes(buf);
+            }
+            // SAFETY: `pbData` was allocated by DPAPI via `LocalAlloc` and has not yet been freed;
+            // nulling `pbData` ensures idempotence.
+            unsafe {
+                windows_sys::Win32::Foundation::LocalFree(self.blob.pbData.cast());
+            }
+            self.blob.pbData = std::ptr::null_mut();
+            self.blob.cbData = 0;
+        }
+    }
+}
+
 #[cfg(windows)]
 fn protect_windows(value: &[u8]) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+    use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Security::Cryptography::{
         CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
-    let mut input = value.to_vec();
+    let cb_data = u32::try_from(value.len())
+        .map_err(|_| "DPAPI credential payload is too large".to_string())?;
+    let mut input = InputZeroizeGuard(value.to_vec());
     let source = CRYPT_INTEGER_BLOB {
-        cbData: input.len() as u32,
-        pbData: input.as_mut_ptr(),
+        cbData: cb_data,
+        pbData: input.0.as_mut_ptr(),
     };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
+    let mut output = DpapiBlobGuard::new(false);
+    // SAFETY: `source` points to `input.0` which is live for `cb_data` bytes across the call;
+    // optional entropy/prompt pointers are null; `&mut output.blob` is a valid writable `DATA_BLOB`
+    // whose `pbData` (if any is allocated) is freed by `DpapiBlobGuard::drop`.
     let ok = unsafe {
         CryptProtectData(
             &source,
@@ -69,37 +147,36 @@ fn protect_windows(value: &[u8]) -> Result<String, String> {
             std::ptr::null(),
             std::ptr::null(),
             CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
+            &mut output.blob,
         )
     };
     if ok == 0 {
-        return Err(format!("CryptProtectData failed: {}", unsafe {
-            GetLastError()
-        }));
+        // SAFETY: `GetLastError` reads thread-local Win32 error state with no pointer preconditions.
+        let err = unsafe { GetLastError() };
+        return Err(format!("CryptProtectData failed: {err}"));
     }
-    let encrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
-    let encoded = format!("{PREFIX}{}", encode_hex(encrypted));
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    Ok(encoded)
+    let encrypted = output.as_slice()?;
+    Ok(format!("{PREFIX}{}", encode_hex(encrypted)))
 }
 
 #[cfg(windows)]
 fn unprotect_windows(value: &[u8]) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+    use windows_sys::Win32::Foundation::GetLastError;
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    let cb_data = u32::try_from(value.len())
+        .map_err(|_| "DPAPI credential payload is too large".to_string())?;
     let mut input = value.to_vec();
     let source = CRYPT_INTEGER_BLOB {
-        cbData: input.len() as u32,
+        cbData: cb_data,
         pbData: input.as_mut_ptr(),
     };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
+    let mut output = DpapiBlobGuard::new(true);
+    // SAFETY: `source` points to `input` which is live for `cb_data` bytes across the call;
+    // optional description/entropy/prompt pointers are null; `&mut output.blob` is a valid
+    // writable `DATA_BLOB` whose decrypted `pbData` is volatile-zeroized and freed by
+    // `DpapiBlobGuard::drop` on both success and error paths.
     let ok = unsafe {
         CryptUnprotectData(
             &source,
@@ -108,21 +185,18 @@ fn unprotect_windows(value: &[u8]) -> Result<String, String> {
             std::ptr::null(),
             std::ptr::null(),
             CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
+            &mut output.blob,
         )
     };
     if ok == 0 {
-        return Err(format!("CryptUnprotectData failed: {}", unsafe {
-            GetLastError()
-        }));
+        // SAFETY: `GetLastError` reads thread-local Win32 error state with no pointer preconditions.
+        let err = unsafe { GetLastError() };
+        return Err(format!("CryptUnprotectData failed: {err}"));
     }
-    let plaintext = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
-    let value = String::from_utf8(plaintext.to_vec())
-        .map_err(|error| format!("DPAPI credential is not UTF-8: {error}"));
-    unsafe {
-        LocalFree(output.pbData.cast());
-    }
-    value
+    let plaintext = output.as_slice()?;
+    std::str::from_utf8(plaintext)
+        .map(str::to_owned)
+        .map_err(|error| format!("DPAPI credential is not UTF-8: {error}"))
 }
 
 fn encode_hex(value: &[u8]) -> String {
@@ -182,6 +256,13 @@ mod tests {
     fn hex_codec_roundtrips() {
         let value = b"credential\0blob";
         assert_eq!(decode_hex(&encode_hex(value)).unwrap(), value);
+    }
+
+    #[test]
+    fn zeroize_bytes_clears_sensitive_buffer_in_place() {
+        let mut secret = *b"Authorization: Bearer top-secret";
+        zeroize_bytes(&mut secret);
+        assert!(secret.iter().all(|&byte| byte == 0));
     }
 
     #[cfg(windows)]

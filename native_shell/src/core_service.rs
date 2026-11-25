@@ -27,6 +27,7 @@ struct PendingPresenterQueue {
 pub struct PresenterBridge {
     subscribers: AtomicUsize,
     pending: Mutex<PendingPresenterQueue>,
+    #[allow(clippy::type_complexity)]
     waker: Mutex<Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>>,
 }
 

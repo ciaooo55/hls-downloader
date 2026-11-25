@@ -1,4 +1,6 @@
 //! Console client. The resident Core owns all task state and transfers.
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 use hls_native_clients::{
     install_root, spawn_core, CoreCommand, CoreEvent, CoreIpcClient, CorePipeRequest,
     CorePipeResponse, CrawlRequest, CrawlSpec, EventEnvelope, ResourceKind, TaskSnapshot, TaskSpec,
@@ -478,8 +480,10 @@ fn run(args: &[String]) -> Result<Value> {
                 .find(|p| p.id == args[2])
                 .ok_or_else(|| rejected("队列不存在，请使用队列 ID"))?;
             profile.enabled = args[1] == "start";
+            let serialized_profiles =
+                serde_json::to_value(&profiles).map_err(|_| rejected("无法序列化队列设置"))?;
             client
-                .store_setting("queue_profiles", serde_json::to_value(&profiles).unwrap())
+                .store_setting("queue_profiles", serialized_profiles)
                 .map_err(|error| core_failure(error, "无法保存队列"))?;
             let mut failed = Vec::new();
             for task in client

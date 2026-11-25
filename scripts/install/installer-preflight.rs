@@ -1,4 +1,5 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -203,6 +204,8 @@ mod windows {
     struct OwnedHandle(Handle);
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
+            // SAFETY: `OwnedHandle` is constructed only from valid, non-null, non-`INVALID_HANDLE_VALUE`
+            // kernel handles (`OpenProcess` or `CreateToolhelp32Snapshot`) and closes `self.0` once.
             unsafe {
                 CloseHandle(self.0);
             }
@@ -219,17 +222,22 @@ mod windows {
     fn image(handle: Handle) -> Result<PathBuf, String> {
         let mut buffer = vec![0u16; 32768];
         let mut length = buffer.len() as u32;
-        if unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } == 0 {
+        // SAFETY: `handle` is a live process handle opened with `QUERY` (`PROCESS_QUERY_LIMITED_INFORMATION`)
+        // access, and `buffer` has `length` (`32768`) writable `u16` elements.
+        let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) };
+        if ok == 0 {
             return Err(format!(
                 "读取进程路径失败: {}",
                 std::io::Error::last_os_error()
             ));
         }
         use std::os::windows::ffi::OsStringExt;
-        let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+        let written = (length as usize).min(buffer.len());
+        let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..written]));
         std::fs::canonicalize(path).map_err(|error| format!("无法确认进程实际路径: {error}"))
     }
     fn open(pid: u32, access: u32) -> Result<Option<OwnedHandle>, String> {
+        // SAFETY: `OpenProcess` opens a non-inheritable process handle or returns null on failure.
         let handle = unsafe { OpenProcess(access | QUERY | SYNCHRONIZE, 0, pid) };
         if handle.is_null() {
             let error = std::io::Error::last_os_error();
@@ -240,19 +248,25 @@ mod windows {
             return Err(format!("无法检查进程 {pid}: {error}"));
         }
         let handle = OwnedHandle(handle);
+        // SAFETY: `handle.0` is non-null and opened with `SYNCHRONIZE` access; `0` polls exit status.
         if unsafe { WaitForSingleObject(handle.0, 0) } == 0 {
             return Ok(None);
         }
         Ok(Some(handle))
     }
     fn processes(root: &Path) -> Result<Vec<Process>, String> {
+        // SAFETY: `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS == 2, 0)` takes no pointers and
+        // returns `INVALID_HANDLE_VALUE` (`-1`) on error or a fresh snapshot handle.
         let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
-        if snapshot as isize == -1 {
+        if snapshot.is_null() || snapshot as isize == -1 {
             return Err(format!("无法枚举进程: {}", std::io::Error::last_os_error()));
         }
         let snapshot = OwnedHandle(snapshot);
+        // SAFETY: `ProcessEntry` is `#[repr(C)]` matching `PROCESSENTRY32W`, valid when zeroed
+        // with `size` initialized before `Process32FirstW`.
         let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
         entry.size = std::mem::size_of::<ProcessEntry>() as u32;
+        // SAFETY: `snapshot.0` is a live process snapshot handle and `entry.size` is initialized.
         let mut available = unsafe { Process32FirstW(snapshot.0, &mut entry) };
         let mut result = Vec::new();
         while available != 0 {
@@ -282,11 +296,17 @@ mod windows {
                         // Process teardown can revoke image queries before the
                         // process object becomes signaled. Wait on this handle
                         // briefly rather than treating that exit as denial.
-                        Err(_) if unsafe { WaitForSingleObject(handle.0, 500) } == 0 => {}
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            // SAFETY: `handle.0` is a live `SYNCHRONIZE` process handle owned by `handle`.
+                            let exited = unsafe { WaitForSingleObject(handle.0, 500) } == 0;
+                            if !exited {
+                                return Err(error);
+                            }
+                        }
                     }
                 }
             }
+            // SAFETY: `snapshot.0` remains open and `entry.size` remains valid across iterations.
             available = unsafe { Process32NextW(snapshot.0, &mut entry) };
         }
         if std::io::Error::last_os_error().raw_os_error() != Some(18) {
@@ -299,36 +319,61 @@ mod windows {
             // Recheck the handle: a reused PID must not target another installation.
             let path = match image(handle.0) {
                 Ok(path) => path,
-                Err(_) if unsafe { WaitForSingleObject(handle.0, 500) } == 0 => return Ok(()),
-                Err(error) => return Err(error),
+                Err(error) => {
+                    // SAFETY: `handle.0` is a live `SYNCHRONIZE` process handle owned by `handle`.
+                    if unsafe { WaitForSingleObject(handle.0, 500) } == 0 {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
             };
             if !belongs_to(&path, root) || normalized(&path) != normalized(&process.path) {
                 return Err(format!("进程 {} 身份已变化，未停止该进程", process.pid));
             }
-            if unsafe { TerminateProcess(handle.0, 1) } == 0
-                && unsafe { WaitForSingleObject(handle.0, 0) } != 0
-            {
-                return Err(format!(
-                    "无法停止进程 {}: {}",
-                    process.pid,
-                    std::io::Error::last_os_error()
-                ));
+            // SAFETY: `handle.0` is a live handle opened with `TERMINATE | SYNCHRONIZE` whose image
+            // path was just verified to match `process.path` under `root`.
+            let terminated = unsafe { TerminateProcess(handle.0, 1) } != 0;
+            if !terminated {
+                // SAFETY: `handle.0` has `SYNCHRONIZE` access; `0` polls whether it exited concurrently.
+                let already_exited = unsafe { WaitForSingleObject(handle.0, 0) } == 0;
+                if !already_exited {
+                    return Err(format!(
+                        "无法停止进程 {}: {}",
+                        process.pid,
+                        std::io::Error::last_os_error()
+                    ));
+                }
             }
         }
         Ok(())
     }
+    /// # Safety
+    /// Invoked synchronously by `EnumWindows` on the `shutdown` thread while `data` points to an
+    /// immutable `Vec<u32>` living on `shutdown`'s stack frame.
     unsafe extern "system" fn close_window(window: Handle, data: isize) -> i32 {
-        let pids = &*(data as *const Vec<u32>);
+        // SAFETY: `shutdown` passes `&desktops as *const Vec<u32> as isize` to synchronous
+        // `EnumWindows`, so `data` is a valid aligned shared reference for every callback invocation.
+        let pids = unsafe { &*(data as *const Vec<u32>) };
         let mut pid = 0;
-        GetWindowThreadProcessId(window, &mut pid);
-        if pids.contains(&pid) {
-            PostMessageW(window, 0x0010, 0, 0);
+        // SAFETY: `window` was supplied by `EnumWindows` and `&mut pid` is a valid writable `u32`;
+        // `PostMessageW` posts `WM_CLOSE` (`0x0010`) asynchronously with integer arguments.
+        unsafe {
+            GetWindowThreadProcessId(window, &mut pid);
+            if pids.contains(&pid) {
+                PostMessageW(window, 0x0010, 0, 0);
+            }
         }
         1
     }
     fn read_memory(process: Handle, address: usize, buffer: &mut [u16]) -> Option<()> {
+        if address == 0 || buffer.is_empty() {
+            return None;
+        }
         let size = std::mem::size_of_val(buffer);
         let mut read = 0;
+        // SAFETY: `process` is a live process handle opened with `PROCESS_VM_READ`, `buffer` is
+        // writable for `size` bytes, and `&mut read` is a valid out-pointer; `ReadProcessMemory`
+        // safely fails with `0` if `address..address + size` is unmapped in the target process.
         let ok = unsafe {
             ReadProcessMemory(
                 process,
@@ -358,6 +403,8 @@ mod windows {
         let process = open(pid, VM_READ | QUERY_INFORMATION).ok()??;
         // PROCESS_BASIC_INFORMATION: the PEB address is the second pointer.
         let mut basic = [0usize; 6];
+        // SAFETY: `process.0` has `PROCESS_QUERY_INFORMATION` access, and `basic` (`[usize; 6]`,
+        // 48 bytes on x64) matches `PROCESS_BASIC_INFORMATION` (`ProcessBasicInformation == 0`).
         let status = unsafe {
             NtQueryInformationProcess(
                 process.0,
@@ -372,8 +419,14 @@ mod windows {
         }
         // x64 PEB.ProcessParameters, then Environment and EnvironmentSize.
         let parameters = read_pointer(process.0, basic[1].checked_add(0x20)?)?;
+        if parameters == 0 {
+            return None;
+        }
         let environment = read_pointer(process.0, parameters.checked_add(0x80)?)?;
         let size = read_pointer(process.0, parameters.checked_add(0x3f0)?)?.min(1 << 20);
+        if environment == 0 || size < 2 {
+            return None;
+        }
         let mut block = vec![0u16; size / 2];
         read_memory(process.0, environment, &mut block)?;
         Some(block)
@@ -400,8 +453,13 @@ mod windows {
         };
         let path = match image(owner.0) {
             Ok(path) => path,
-            Err(_) if unsafe { WaitForSingleObject(owner.0, 500) } == 0 => return Ok(None),
-            Err(error) => return Err(error),
+            Err(error) => {
+                // SAFETY: `owner.0` is a live `SYNCHRONIZE` process handle owned by `owner`.
+                if unsafe { WaitForSingleObject(owner.0, 500) } == 0 {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
         };
         if normalized(&path) != normalized(&process.path) {
             return Err(format!("Core {} 的进程身份已变化", process.pid));
@@ -443,13 +501,17 @@ mod windows {
                     continue;
                 };
                 let mut pid = 0;
-                if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } != 0
-                    && pid == process.pid
-                    && unsafe { WaitForSingleObject(owner.0, 0) } == 258
-                {
+                // SAFETY: `pipe` is an open named-pipe `File`, `&mut pid` is a valid writable `u32`,
+                // and `owner.0` is a live `SYNCHRONIZE` process handle (`258` == `WAIT_TIMEOUT`).
+                let verified_owner =
+                    unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } != 0
+                        && pid == process.pid
+                        && unsafe { WaitForSingleObject(owner.0, 0) } == 258;
+                if verified_owner {
                     return Ok(Some((owner, pipe)));
                 }
             }
+            // SAFETY: `owner.0` is a live `SYNCHRONIZE` process handle; `0` polls exit status.
             if unsafe { WaitForSingleObject(owner.0, 0) } == 0 {
                 return Ok(None);
             }
@@ -475,7 +537,9 @@ mod windows {
             // std::fs::File can translate an empty nonblocking Windows pipe
             // into a zero-byte read. Wait for actual bytes before reading.
             let mut available = 0u32;
-            if unsafe {
+            // SAFETY: `pipe` is an open named-pipe `File`, buffer/count pointers are null with
+            // `buffer_size == 0`, and `&mut available` is a valid writable `u32`.
+            let peek_ok = unsafe {
                 PeekNamedPipe(
                     pipe.as_raw_handle(),
                     std::ptr::null_mut(),
@@ -484,8 +548,8 @@ mod windows {
                     &mut available,
                     std::ptr::null_mut(),
                 )
-            } == 0
-            {
+            };
+            if peek_ok == 0 {
                 return Err(format!(
                     "Core 检查点回执连接结束: {}",
                     std::io::Error::last_os_error()
@@ -515,10 +579,18 @@ mod windows {
         frame.extend_from_slice(REQUEST);
         // The checked handle carries both the command and its reply. No second
         // connection can select a pipe from a different Core after verification.
-        if unsafe {
-            SetNamedPipeHandleState(pipe.as_raw_handle(), &1, std::ptr::null(), std::ptr::null())
-        } == 0
-        {
+        const PIPE_NOWAIT_MODE: u32 = 1;
+        // SAFETY: `pipe` is an open named-pipe client `File`, `&PIPE_NOWAIT_MODE` is a valid `u32`
+        // pointer for the call duration, and optional collection pointers are null.
+        let state_ok = unsafe {
+            SetNamedPipeHandleState(
+                pipe.as_raw_handle(),
+                &PIPE_NOWAIT_MODE,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if state_ok == 0 {
             return Err(format!(
                 "无法设置 Core 管道等待模式: {}",
                 std::io::Error::last_os_error()
@@ -546,7 +618,9 @@ mod windows {
         drop(pipe);
         let wait = deadline
             .saturating_duration_since(Instant::now())
-            .as_millis() as u32;
+            .as_millis()
+            .min(u32::MAX as u128) as u32;
+        // SAFETY: `owner.0` is a live `SYNCHRONIZE` process handle for the verified Core process.
         if unsafe { WaitForSingleObject(owner.0, wait) } != 0 {
             return Err("Core 保存检查点后未退出，旧安装和用户数据已保留".into());
         }
@@ -591,6 +665,8 @@ mod windows {
             .map(|p| p.pid)
             .collect();
         if !desktops.is_empty() {
+            // SAFETY: `EnumWindows` invokes `close_window` synchronously on this thread while
+            // `desktops` remains alive and unmutated on this stack frame.
             unsafe {
                 EnumWindows(close_window, &desktops as *const Vec<u32> as isize);
             }

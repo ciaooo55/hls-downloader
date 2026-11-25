@@ -199,13 +199,13 @@ impl SubtitleService {
         if id.is_empty() || id.len() > 160 || owner.is_empty() || owner.len() > 160 {
             return Err("字幕会话身份无效".into());
         }
-        let mut sessions = self.sessions.lock().map_err(|_| "字幕会话锁不可用")?;
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if string(request, "action") == "start" {
             sessions.retain(|_, s| {
-                s.state
-                    .lock()
-                    .map(|s| !matches!(s.status, "stopped" | "failed"))
-                    .unwrap_or(false)
+                !matches!(
+                    s.state.lock().unwrap_or_else(|e| e.into_inner()).status,
+                    "stopped" | "failed"
+                )
             });
             if sessions.contains_key(id) {
                 return Err("字幕会话已存在".into());
@@ -213,10 +213,10 @@ impl SubtitleService {
             let active_count = sessions
                 .values()
                 .filter(|s| {
-                    s.state
-                        .lock()
-                        .map(|s| !matches!(s.status, "stopping" | "stopped" | "failed"))
-                        .unwrap_or(false)
+                    !matches!(
+                        s.state.lock().unwrap_or_else(|e| e.into_inner()).status,
+                        "stopping" | "stopped" | "failed"
+                    )
                 })
                 .count();
             if active_count >= 4 {
@@ -304,7 +304,7 @@ impl SubtitleService {
                             manual,
                         ))
                     });
-                let mut locked = state.lock().unwrap();
+                let mut locked = state.lock().unwrap_or_else(|e| e.into_inner());
                 match result {
                     Ok(()) => locked.status = "stopped",
                     Err(error) => {
@@ -327,7 +327,7 @@ impl SubtitleService {
         }
         let action = string(request, "action");
         {
-            let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+            let mut state = session.state.lock().unwrap_or_else(|e| e.into_inner());
             if matches!(action, "commit" | "audio" | "prepare_audio")
                 && request["epoch"].as_u64() != Some(state.epoch)
             {
@@ -365,20 +365,17 @@ impl SubtitleService {
                 let state = session.state.clone();
                 drop(sessions);
                 let cancelled = || {
-                    let state = state.lock().unwrap();
+                    let state = state.lock().unwrap_or_else(|e| e.into_inner());
                     state.epoch != epoch
                         || matches!(state.status, "stopping" | "stopped" | "failed")
                         || state.last_seen.elapsed() > Duration::from_secs(35)
                 };
                 if let Some(generation) = player_generation {
                     core.player_subtitle_audio(generation, position, seconds, cancelled)
+                } else if let Some(source) = source.as_ref() {
+                    crate::subtitle_audio_source::decode(source, position, seconds, cancelled)
                 } else {
-                    crate::subtitle_audio_source::decode(
-                        &source.unwrap(),
-                        position,
-                        seconds,
-                        cancelled,
-                    )
+                    Err("当前会话使用播放器实时采集".into())
                 }
             }
             "commit" => {
@@ -439,7 +436,7 @@ impl SubtitleService {
                     .get("epoch")
                     .and_then(Value::as_u64)
                     .ok_or("字幕时间轴无效")?;
-                let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+                let mut state = session.state.lock().unwrap_or_else(|e| e.into_inner());
                 if epoch <= state.epoch || matches!(state.status, "failed" | "stopped" | "stopping")
                 {
                     return Err("字幕重置请求已过期".into());
@@ -458,7 +455,7 @@ impl SubtitleService {
                     .get("after_sequence")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
-                let state = session.state.lock().unwrap();
+                let state = session.state.lock().unwrap_or_else(|e| e.into_inner());
                 // Chromium 的 Native Messaging 单条返回上限为 1 MiB。
                 let events = state
                     .events
@@ -477,8 +474,7 @@ impl SubtitleService {
                 )
             }
             "stop" => {
-                let session = sessions.get(id).unwrap();
-                let mut state = session.state.lock().map_err(|_| "字幕状态不可用")?;
+                let mut state = session.state.lock().unwrap_or_else(|e| e.into_inner());
                 if !matches!(state.status, "stopped" | "failed") {
                     state.status = "stopping";
                     session.stop.notify_one();
@@ -490,14 +486,12 @@ impl SubtitleService {
     }
 
     pub(crate) fn stop_all(&self) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            for (_, session) in std::mem::take(&mut *sessions) {
-                if let Ok(mut state) = session.state.lock() {
-                    if !matches!(state.status, "stopped" | "failed") {
-                        state.status = "stopping";
-                        session.stop.notify_one();
-                    }
-                }
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, session) in std::mem::take(&mut *sessions) {
+            let mut state = session.state.lock().unwrap_or_else(|e| e.into_inner());
+            if !matches!(state.status, "stopped" | "failed") {
+                state.status = "stopping";
+                session.stop.notify_one();
             }
         }
     }
@@ -774,10 +768,10 @@ async fn run(
     state: Arc<Mutex<State>>,
     manual: bool,
 ) -> Result<(), String> {
-    let mut epoch = state.lock().unwrap().epoch;
+    let mut epoch = state.lock().unwrap_or_else(|e| e.into_inner()).epoch;
     'connection: loop {
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             if matches!(state.status, "stopped" | "stopping") {
                 return Ok(());
             }
@@ -834,12 +828,12 @@ async fn run(
         };
         let ready = ready_result.map_err(|_| "字幕服务初始化超时")?;
         ready?;
-        if state.lock().unwrap().status == "stopped" {
+        if state.lock().unwrap_or_else(|e| e.into_inner()).status == "stopped" {
             let _ = socket.close(None).await;
             return Ok(());
         }
         {
-            let mut session_state = state.lock().unwrap();
+            let mut session_state = state.lock().unwrap_or_else(|e| e.into_inner());
             if session_state.status != "stopping" {
                 session_state.status = "running";
             }
@@ -851,7 +845,9 @@ async fn run(
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
         let mut last_received = Instant::now();
         loop {
-            if state.lock().unwrap().status == "stopping" && input.is_empty() {
+            if state.lock().unwrap_or_else(|e| e.into_inner()).status == "stopping"
+                && input.is_empty()
+            {
                 // 预取尾部是尚未提交的未来音频；停止时丢弃，避免结束会话又生成一个无时间范围的响应。
                 if manual && decoder.uncommitted.take().is_some() {
                     send(&mut socket, json!({"type": "input_audio_buffer.clear"})).await?;
@@ -881,7 +877,7 @@ async fn run(
             tokio::select! {
                 message = input.recv() => match message {
                     Some(Input::Audio { pcm, position, rate, epoch: audio_epoch }) => {
-                        if state.lock().unwrap().status == "stopped" { let _ = socket.close(None).await; return Ok(()); }
+                        if state.lock().unwrap_or_else(|e| e.into_inner()).status == "stopped" { let _ = socket.close(None).await; return Ok(()); }
                         if audio_epoch != epoch { continue; }
                         if manual { decoder.manual_audio(pcm.len(), position, rate)?; }
                         else { decoder.audio(pcm.len(), position, rate); }
@@ -913,7 +909,7 @@ async fn run(
                     }
                 },
                 _ = heartbeat.tick() => {
-                    if state.lock().unwrap().last_seen.elapsed() > Duration::from_secs(35) { return Ok(()); }
+                    if state.lock().unwrap_or_else(|e| e.into_inner()).last_seen.elapsed() > Duration::from_secs(35) { return Ok(()); }
                     if last_received.elapsed() > Duration::from_secs(30) { return Err("字幕连接无响应，请重新开始".into()); }
                     tokio::time::timeout(Duration::from_secs(5), socket.send(Message::Ping(Vec::new().into())))
                         .await.map_err(|_| "字幕心跳超时")?.map_err(|_| "字幕连接中断")?;
@@ -945,7 +941,7 @@ fn accept_event(
             .into();
     }
     if let Some(cue) = decoder.decode(event) {
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
         if state.epoch == epoch {
             state.push(cue);
         }
@@ -976,7 +972,7 @@ fn accept_event(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             if state.epoch == epoch {
                 if !text.is_empty() {
                     state.push(json!({"type":"cue", "id":format!("window-{start:.6}"),
@@ -1772,5 +1768,62 @@ mod tests {
             )
             .unwrap_err();
         assert!(reset_err.contains("已停止"), "{reset_err}");
+    }
+
+    #[test]
+    fn poisoned_session_state_mutex_does_not_panic_poll_or_stop() {
+        let service = SubtitleService::default();
+        let core = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        let state = Arc::new(Mutex::new(State {
+            status: "running",
+            error: String::new(),
+            epoch: 3,
+            sequence: 1,
+            events: VecDeque::from([json!({"type": "cue", "sequence": 1, "text": "ok"})]),
+            last_seen: Instant::now(),
+        }));
+        let poison_target = state.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poison_target.lock().unwrap();
+            panic!("inject poison");
+        });
+        assert!(state.lock().is_err());
+
+        let (tx, _rx) = mpsc::channel(1);
+        service.sessions.lock().unwrap().insert(
+            "poisoned-session".into(),
+            Session {
+                owner: "owner".into(),
+                input: tx,
+                stop: Arc::new(Notify::new()),
+                state: state.clone(),
+                audio_source: None,
+                player_generation: None,
+                decode_active: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        let mut decoder = Decoder::default();
+        decoder.audio(8000, 0.0, 1.0);
+        accept_event(
+            &json!({"type": "conversation.item.input_audio_transcription.completed", "item_id": "u1", "transcript": "hello"}),
+            &mut decoder,
+            &state,
+            3,
+        )
+        .unwrap();
+        let polled = service
+            .dispatch(
+                &core,
+                &json!({"action": "poll", "session_id": "poisoned-session", "owner": "owner", "after_sequence": 0}),
+            )
+            .unwrap();
+        assert_eq!(polled["latest_sequence"], 2);
+        let stopped = service
+            .dispatch(
+                &core,
+                &json!({"action": "stop", "session_id": "poisoned-session", "owner": "owner"}),
+            )
+            .unwrap();
+        assert_eq!(stopped["status"], "stopping");
     }
 }

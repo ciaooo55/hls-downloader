@@ -1405,22 +1405,24 @@ fn dispatch_session_message_inner<S>(
         !is_explicit_autostart_op(op) && is_shutdown()
     };
     for attempt in 0..2 {
-        if session.is_none() {
-            // Evaluate policy right before reconnecting so a tray quit written
-            // while an earlier in-flight request was hitting the closing pipe
-            // still blocks autostart on retry.
-            let policy = policy_for(message, &mut is_user_shutdown);
-            match open(policy) {
-                Ok(connected) => *session = Some(connected),
-                Err(error) => {
-                    eprintln!("Core still unavailable: {error}");
-                    let shutdown_flag = report_user_shutdown(&mut is_user_shutdown)
-                        || error.contains("(user_shutdown)");
-                    return core_unreachable_response_with(shutdown_flag);
+        let active = match session.as_mut() {
+            Some(active) => active,
+            None => {
+                // Evaluate policy right before reconnecting so a tray quit written
+                // while an earlier in-flight request was hitting the closing pipe
+                // still blocks autostart on retry.
+                let policy = policy_for(message, &mut is_user_shutdown);
+                match open(policy) {
+                    Ok(connected) => session.insert(connected),
+                    Err(error) => {
+                        eprintln!("Core still unavailable: {error}");
+                        let shutdown_flag = report_user_shutdown(&mut is_user_shutdown)
+                            || error.contains("(user_shutdown)");
+                        return core_unreachable_response_with(shutdown_flag);
+                    }
                 }
             }
-        }
-        let active = session.as_mut().unwrap();
+        };
         match dispatch(active, message) {
             Ok(value) => {
                 let transport_failed = value

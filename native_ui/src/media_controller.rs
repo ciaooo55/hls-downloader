@@ -99,17 +99,15 @@ impl MediaController {
             let mut client = None;
             while let Ok((request_id, task_id, seconds)) = jobs.recv() {
                 let result = (|| {
-                    if client.is_none() {
-                        client = Some(CoreIpcClient::connect()?);
-                    }
-                    client
-                        .as_mut()
-                        .unwrap()
-                        .request(&CorePipeRequest::PlayerThumbnail {
-                            request_id,
-                            task_id,
-                            seconds: Some(seconds),
-                        })
+                    let active = match client.as_mut() {
+                        Some(existing) => existing,
+                        None => client.insert(CoreIpcClient::connect()?),
+                    };
+                    active.request(&CorePipeRequest::PlayerThumbnail {
+                        request_id,
+                        task_id,
+                        seconds: Some(seconds),
+                    })
                 })();
                 if result.is_err() {
                     client = None;

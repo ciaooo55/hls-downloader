@@ -30,6 +30,10 @@ impl Drop for CoreLaunchGuard {
             depth.set(depth.get().saturating_sub(1));
         });
         if let Some(handle) = self.0.take() {
+            // SAFETY: `CoreLaunchGuard` wraps a raw `HANDLE` (`*mut c_void`, which is `!Send`),
+            // so `Drop` runs on the same thread that acquired `handle` via `WaitForSingleObject`
+            // in `lock_core_launch`. `self.0.take()` ensures `ReleaseMutex` and `CloseHandle`
+            // execute at most once for this owned handle.
             unsafe {
                 windows_sys::Win32::System::Threading::ReleaseMutex(handle);
                 windows_sys::Win32::Foundation::CloseHandle(handle);
@@ -63,12 +67,15 @@ pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
 
     // Core 的实例锁在进程进入 main 后才建立；浏览器必须在启动进程前协调，避免同时加载多个 Core。
     let name = session_mutex_name("Local\\HLSDownloader.v7.launch");
+    // SAFETY: `name` is a NUL-terminated UTF-16 buffer with no interior NULs that outlives
+    // `CreateMutexW`, and null security attributes select the default process security descriptor.
     let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
     if handle.is_null() {
-        return Err(format!("create Core launch mutex: {}", unsafe {
-            GetLastError()
-        }));
+        // SAFETY: `GetLastError` reads thread-local Win32 error state without pointer arguments.
+        let err = unsafe { GetLastError() };
+        return Err(format!("create Core launch mutex: {err}"));
     }
+    // SAFETY: `handle` was verified non-null above and remains open across `WaitForSingleObject`.
     let wait = unsafe { WaitForSingleObject(handle, 10_000) };
     if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
         LAUNCH_LOCK_DEPTH.with(|depth| depth.set(1));
@@ -82,6 +89,8 @@ pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
             std::io::Error::last_os_error()
         )
     };
+    // SAFETY: `handle` was not transferred to `CoreLaunchGuard`, so we close our newly opened
+    // mutex handle exactly once before returning the wait failure.
     unsafe { CloseHandle(handle) };
     Err(error)
 }
@@ -176,11 +185,16 @@ fn claim_session_mutex(
     use windows_sys::Win32::System::Threading::CreateMutexW;
     let name = session_mutex_name(base);
     // Existence marks the instance. The profile file supplies the exclusive lock.
+    // SAFETY: `name` is a NUL-terminated UTF-16 slice live for the duration of `CreateMutexW`;
+    // null security attributes select default security.
     let raw = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    // SAFETY: `GetLastError` reads thread-local Win32 error state immediately after `CreateMutexW`.
     let error = unsafe { GetLastError() };
     if raw.is_null() {
         return Err(format!("CreateMutexW {target} failed: {error}"));
     }
+    // SAFETY: `CreateMutexW` returned a non-null, newly opened mutex kernel handle (even when
+    // `ERROR_ALREADY_EXISTS` is set); `OwnedHandle` becomes its sole owner and closes it on drop.
     let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
     if error == ERROR_ALREADY_EXISTS {
         return Err(already_running_error(target));
@@ -194,10 +208,14 @@ pub fn presenter_is_running() -> bool {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::OpenMutexW;
         let name = session_mutex_name("Local\\HLSDownloader.v7.presenter");
+        // SAFETY: `name` is a NUL-terminated UTF-16 buffer with no interior NULs; `OpenMutexW`
+        // returns either null or a newly opened `SYNCHRONIZE` handle owned by this function.
         let handle = unsafe { OpenMutexW(0x00100000, 0, name.as_ptr()) };
         if handle.is_null() {
             return false;
         }
+        // SAFETY: `handle` is non-null and uniquely owned here; closing it immediately releases
+        // our probe reference without affecting the presenter's handle.
         unsafe { CloseHandle(handle) };
         true
     }
@@ -255,7 +273,12 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
         LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
     use windows_sys::Win32::System::IO::OVERLAPPED;
+    // SAFETY: `OVERLAPPED` is a plain C struct of integers/pointers for which an all-zero bit
+    // pattern represents offset 0 and a null event handle.
     let mut overlapped: OVERLAPPED = unsafe { zeroed() };
+    // SAFETY: `file` is an open synchronous `std::fs::File` (not opened with `FILE_FLAG_OVERLAPPED`)
+    // and `LOCKFILE_FAIL_IMMEDIATELY` completes synchronously, so the kernel never accesses
+    // `overlapped` after `LockFileEx` returns.
     let ok = unsafe {
         LockFileEx(
             file.as_raw_handle(),
@@ -267,6 +290,7 @@ fn try_exclusive_lock(file: &File) -> Result<(), String> {
         )
     };
     if ok == 0 {
+        // SAFETY: `GetLastError` reads thread-local Win32 error state without pointer arguments.
         let error = unsafe { GetLastError() };
         return Err(lock_failure(error));
     }

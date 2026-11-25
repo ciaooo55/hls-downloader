@@ -92,6 +92,8 @@ struct MpvEvent {
 
 fn mpv_has_shutdown(session: &MpvSession) -> bool {
     loop {
+        // SAFETY: `session.handle` is a live `mpv_handle` serialized under `Player::inner`;
+        // `mpv_wait_event` returns a pointer valid until the next call on `session.handle`.
         let event = unsafe { (session.wait_event)(session.handle, 0.0).as_ref() };
         match event.map(|event| event.event_id) {
             Some(1) => return true,
@@ -101,17 +103,25 @@ fn mpv_has_shutdown(session: &MpvSession) -> bool {
     }
 }
 
+// SAFETY: `mpv_handle` is thread-safe across threads when externally serialized by
+// `Player::inner` (`Mutex<Backend>`), and Win32 `HMODULE` has process-wide validity.
 unsafe impl Send for MpvSession {}
 
 impl Drop for MpvSession {
     fn drop(&mut self) {
         if !self.handle.is_null() {
+            // SAFETY: `self.handle` was created by `mpv_create` from `self.module` and is
+            // destroyed synchronously via `mpv_terminate_destroy` before unloading the DLL.
             unsafe { (self.terminate)(self.handle) };
             self.handle = std::ptr::null_mut();
         }
         #[cfg(windows)]
-        unsafe {
-            windows_sys::Win32::Foundation::FreeLibrary(self.module);
+        if !self.module.is_null() {
+            // SAFETY: `self.module` was opened by `LoadLibraryExW` and is freed only after
+            // `mpv_terminate_destroy` has joined all internal libmpv threads.
+            unsafe {
+                windows_sys::Win32::Foundation::FreeLibrary(self.module);
+            }
         }
     }
 }
@@ -187,6 +197,8 @@ impl Player {
         };
         if has_input {
             loop {
+                // SAFETY: `session.handle` is a live `mpv_handle` guarded by `self.inner`;
+                // the returned `MpvEvent` pointer stays valid until the next `wait_event`.
                 let event = unsafe { (session.wait_event)(session.handle, 0.05).as_ref() };
                 match event.map(|event| event.event_id) {
                     Some(7) => break,
@@ -472,10 +484,14 @@ impl Player {
             };
             let mut inner = self.inner.lock().map_err(|_| "player lock")?;
             let mut slot = self.embed_wid.lock().map_err(|_| "player embed lock")?;
-            if unsafe { IsWindow(parent as _) } == 0 {
+            // SAFETY: `IsWindow` safely validates an arbitrary candidate `HWND` value.
+            let parent_valid = unsafe { IsWindow(parent as _) } != 0;
+            if !parent_valid {
                 return Err("播放器宿主已关闭".into());
             }
             // 使用宿主的 DPI 模式创建和移动子 HWND，坐标与原生宿主的像素矩形一致。
+            // SAFETY: `parent` was verified as a live window above, and both HiDPI context
+            // functions accept opaque handle tokens and return null on invalid input.
             let previous_dpi =
                 unsafe { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent as _)) };
             if previous_dpi.is_null() {
@@ -484,6 +500,8 @@ impl Player {
             struct RestoreDpi(windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT);
             impl Drop for RestoreDpi {
                 fn drop(&mut self) {
+                    // SAFETY: `self.0` is the non-null thread DPI context returned by
+                    // `SetThreadDpiAwarenessContext` on this exact thread.
                     unsafe {
                         SetThreadDpiAwarenessContext(self.0);
                     }
@@ -491,8 +509,12 @@ impl Player {
             }
             let _dpi = RestoreDpi(previous_dpi);
             if let Some(wid) = *slot {
-                if unsafe { IsWindow(wid as _) } != 0 {
+                // SAFETY: `IsWindow` safely checks whether the cached child `HWND` still exists.
+                let wid_valid = unsafe { IsWindow(wid as _) } != 0;
+                if wid_valid {
                     // 调整尺寸、主界面和画中画之间切换，只移动同一个视频子窗口。
+                    // SAFETY: Both `wid` and `parent` are validated live `HWND`s, and `x/y/w/h`
+                    // were range-checked above (`1..=16384`).
                     unsafe {
                         if GetParent(wid as _) != parent as _ {
                             SetLastError(0);
@@ -528,6 +550,8 @@ impl Player {
             let host = create_child_host_parent(parent, x, y, w, h)?;
             if matches!(*inner, Backend::Mpv(_)) {
                 if let Err(error) = self.command_locked(&mut inner, &format!("set wid {host}")) {
+                    // SAFETY: `host` was just created on this thread by `create_child_host_parent`
+                    // and has not been stored in `slot`, so destroying it prevents leaking the HWND.
                     unsafe {
                         windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(host as _);
                     }
@@ -550,6 +574,8 @@ impl Player {
         #[cfg(windows)]
         if let Ok(mut slot) = self.embed_wid.lock() {
             if let Some(wid) = slot.take().filter(|wid| *wid > 1) {
+                // SAFETY: `Backend::Idle` above already terminated libmpv so it no longer
+                // renders into `wid`; `DestroyWindow` safely releases our child host HWND.
                 unsafe {
                     windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(wid as _);
                 }
@@ -569,6 +595,8 @@ impl Player {
                 Foundation::{GetLastError, SetLastError},
                 UI::WindowsAndMessaging::{IsWindow, SetParent, ShowWindow, HWND_MESSAGE, SW_HIDE},
             };
+            // SAFETY: `IsWindow` verifies `wid` is still a valid window before hiding it
+            // and reparenting it to the system `HWND_MESSAGE` Parking parent.
             unsafe {
                 if IsWindow(wid as _) != 0 {
                     ShowWindow(wid as _, SW_HIDE);
@@ -591,6 +619,8 @@ impl Player {
         }
         #[cfg(windows)]
         if let Some(wid) = *self.embed_wid.lock().map_err(|_| "player embed lock")? {
+            // SAFETY: `ShowWindow` accepts any `HWND` handle value (returning 0 if invalid
+            // or already hidden, such as sentinel `1` under `HLS_V7_PLAYER_NULL`).
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(wid as _, 0);
             }
@@ -635,6 +665,8 @@ impl Player {
         match inner {
             Backend::Mpv(session) => {
                 let c_command = CString::new(command).map_err(|error| error.to_string())?;
+                // SAFETY: `session.handle` is a live initialized `mpv_handle` serialized by
+                // `self.inner`, and `c_command` is a valid NUL-terminated C string.
                 let code = unsafe { (session.command_string)(session.handle, c_command.as_ptr()) };
                 if code < 0 {
                     Err(format!("mpv_command_string failed: {code}"))
@@ -807,6 +839,8 @@ impl PlayerChild {
 pub fn run_player_process() -> i32 {
     std::env::set_var("HLS_V7_PLAYER_CHILD", "1");
     #[cfg(windows)]
+    // SAFETY: `SetProcessDpiAwarenessContext` takes predefined constant DPI context handles
+    // and returns `FALSE` without side effects if process DPI awareness is already locked.
     unsafe {
         // mpv 的窗口线程由其内部创建，仅设置当前线程不会改变它的 DPI 默认值。
         // 若系统兼容性设置或清单已锁定进程 DPI 模式，SetProcessDpiAwarenessContext
@@ -847,6 +881,9 @@ pub fn run_player_process() -> i32 {
     let mut stdout = std::io::BufWriter::new(std::io::stdout());
     loop {
         #[cfg(windows)]
+        // SAFETY: `MSG` is a `#[repr(C)]` POD struct valid when zero-initialized, and
+        // `PeekMessageW` / `TranslateMessage` / `DispatchMessageW` pump only the current
+        // thread's Win32 message queue.
         unsafe {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
@@ -980,6 +1017,11 @@ fn only_software_graphics_adapters() -> bool {
         flags: u32,
     }
 
+    // SAFETY: Loads `dxgi.dll` strictly from `System32` (`LOAD_LIBRARY_SEARCH_SYSTEM32`),
+    // resolves `CreateDXGIFactory1` with its documented `stdcall` signature, verifies
+    // non-null COM interface pointers before reading `IDXGIFactory1` (slot 12 = `EnumAdapters1`,
+    // slot 2 = `Release`) and `IDXGIAdapter1` (slot 10 = `GetDesc1`, slot 2 = `Release`)
+    // vtable entries, releases every COM interface, and calls `FreeLibrary(module)` before return.
     unsafe {
         let name: Vec<u16> = "dxgi.dll\0".encode_utf16().collect();
         let module = LoadLibraryExW(
@@ -996,7 +1038,7 @@ fn only_software_graphics_adapters() -> bool {
                 std::mem::transmute(create);
             let iid = GUID::from_u128(0x770aae78_f26f_4dba_a829_253c83d1b387);
             let mut factory = std::ptr::null_mut();
-            if create(&iid, &mut factory) < 0 {
+            if create(&iid, &mut factory) < 0 || factory.is_null() {
                 return None;
             }
             let table = *(factory as *const *const *const c_void);
@@ -1013,7 +1055,7 @@ fn only_software_graphics_adapters() -> bool {
                     if code == 0x887a0002u32 as i32 {
                         return found_software;
                     }
-                    if code < 0 {
+                    if code < 0 || adapter.is_null() {
                         return false;
                     }
                     let table = *(adapter as *const *const *const c_void);
@@ -1044,6 +1086,15 @@ fn only_software_graphics_adapters() -> bool {
         // 检测不完整或存在任意硬件适配器时保留正常画质，不能把软解码等同于软件渲染。
         result.unwrap_or(false)
     }
+}
+
+fn mpv_option_cstrings(name: &str, value: &str) -> Result<(CString, CString), String> {
+    let clean_name = name.replace('\0', "");
+    let option =
+        CString::new(name).map_err(|_| format!("播放器选项名包含无效空字符: {clean_name}"))?;
+    let c_value =
+        CString::new(value).map_err(|_| format!("播放器选项 {clean_name} 包含无效空字符"))?;
+    Ok((option, c_value))
 }
 
 #[allow(clippy::manual_c_str_literals)]
@@ -1082,7 +1133,10 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
             }
         }
         for path in candidates {
-            if !path.is_absolute() || !path.is_file() {
+            if !path.is_absolute()
+                || !path.is_file()
+                || path.as_os_str().encode_wide().any(|unit| unit == 0)
+            {
                 continue;
             }
             let wide: Vec<u16> = path
@@ -1090,6 +1144,8 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 .encode_wide()
                 .chain(std::iter::once(0))
                 .collect();
+            // SAFETY: `path` is an existing absolute file without interior NUL code units,
+            // and search flags restrict DLL resolution to the DLL directory and `System32`.
             let module = unsafe {
                 LoadLibraryExW(
                     wide.as_ptr(),
@@ -1101,6 +1157,10 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                 last = format!("{} 无法加载", path.display());
                 continue;
             }
+            // SAFETY: `module` is a live `HMODULE`; all symbol names are NUL-terminated ASCII
+            // literals, function pointers are transmuted to their exact libmpv C ABI signatures
+            // (`extern "C"`), and every failure branch destroys `handle` (if non-null) before
+            // calling `FreeLibrary(module)`.
             unsafe {
                 let create = GetProcAddress(module, b"mpv_create\0".as_ptr());
                 let initialize = GetProcAddress(module, b"mpv_initialize\0".as_ptr());
@@ -1207,8 +1267,14 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
                         ]);
                     }
                     for (name, value) in options {
-                        let option = CString::new(name).unwrap();
-                        let value = CString::new(value).unwrap();
+                        let (option, value) = match mpv_option_cstrings(name, &value) {
+                            Ok(pair) => pair,
+                            Err(error) => {
+                                terminate(handle);
+                                FreeLibrary(module);
+                                return Err(error);
+                            }
+                        };
                         let code = set_option(handle, option.as_ptr(), value.as_ptr());
                         if code < 0 {
                             terminate(handle);
@@ -1245,17 +1311,22 @@ fn load_libmpv_session(wid: Option<i64>) -> Result<MpvSession, String> {
 
 fn property_string(session: &MpvSession, name: &str) -> Option<String> {
     let getter = session.get_property_string?;
+    let free = session.free?;
     let property = CString::new(name).ok()?;
+    // SAFETY: `session.handle` is a live `mpv_handle` serialized by `Player::inner`, and
+    // `property` is a valid NUL-terminated C string.
     let pointer = unsafe { getter(session.handle, property.as_ptr()) };
     if pointer.is_null() {
         return None;
     }
+    // SAFETY: A non-null pointer from `mpv_get_property_string` is a NUL-terminated C string
+    // allocated by libmpv that stays valid until `mpv_free` is called below.
     let value = unsafe { CStr::from_ptr(pointer) }
         .to_string_lossy()
         .into_owned();
-    if let Some(free) = session.free {
-        unsafe { free(pointer.cast()) };
-    }
+    // SAFETY: `pointer` was returned by `mpv_get_property_string` on the same libmpv DLL
+    // instance that exported `free` (`mpv_free`).
+    unsafe { free(pointer.cast()) };
     Some(value)
 }
 
@@ -1275,7 +1346,11 @@ fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Resu
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    // SAFETY: `GetModuleHandleW(null)` returns the current executable's `HMODULE` without
+    // incrementing its reference count.
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    // SAFETY: `class` is NUL-terminated `"STATIC\0"` UTF-16, `parent` was validated as a live
+    // `HWND` by `attach_embed_hwnd`, and optional window-name/menu/param pointers are null.
     let child: HWND = unsafe {
         CreateWindowExW(
             0,
@@ -1295,6 +1370,8 @@ fn create_child_host_parent(parent: i64, x: i32, y: i32, w: i32, h: i32) -> Resu
     if child.is_null() {
         return Err("failed to create mpv host window".into());
     }
+    // SAFETY: `child` is a valid newly created `HWND`; if `SetWindowPos` fails, `DestroyWindow`
+    // immediately cleans up `child` before returning the OS error.
     unsafe {
         if SetWindowPos(
             child,
@@ -1389,5 +1466,38 @@ mod tests {
             Some(value) => std::env::set_var("HLS_V7_PLAYER_NULL", value),
             None => std::env::remove_var("HLS_V7_PLAYER_NULL"),
         }
+    }
+
+    #[test]
+    fn mpv_options_and_property_queries_reject_interior_nul_and_require_free() {
+        let (opt, val) = mpv_option_cstrings("title", PLAYER_WINDOW_TITLE).unwrap();
+        assert_eq!(opt.to_str().unwrap(), "title");
+        assert_eq!(val.to_str().unwrap(), PLAYER_WINDOW_TITLE);
+
+        assert!(mpv_option_cstrings("bad\0name", "yes").is_err());
+        assert!(mpv_option_cstrings("title", "bad\0value").is_err());
+        assert!(quote_mpv("C:\\video\0injected.mp4").is_err());
+
+        unsafe extern "C" fn panic_getter(_: *mut c_void, _: *const c_char) -> *mut c_char {
+            panic!("mpv_get_property_string must not be invoked when mpv_free is absent");
+        }
+        unsafe extern "C" fn noop_cmd(_: *mut c_void, _: *const c_char) -> i32 {
+            0
+        }
+        unsafe extern "C" fn noop_term(_: *mut c_void) {}
+        unsafe extern "C" fn noop_wait(_: *mut c_void, _: f64) -> *const MpvEvent {
+            std::ptr::null()
+        }
+        let session = MpvSession {
+            #[cfg(windows)]
+            module: std::ptr::null_mut(),
+            handle: std::ptr::null_mut(),
+            command_string: noop_cmd,
+            terminate: noop_term,
+            get_property_string: Some(panic_getter),
+            free: None,
+            wait_event: noop_wait,
+        };
+        assert_eq!(property_string(&session, "time-pos"), None);
     }
 }

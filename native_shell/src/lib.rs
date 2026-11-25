@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
+
 #[cfg(feature = "full-core")]
 mod atomic_replace;
 #[cfg(feature = "full-core")]

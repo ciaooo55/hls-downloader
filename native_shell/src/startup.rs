@@ -26,11 +26,15 @@ fn enable_startup() -> Result<(), String> {
     };
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     let value = quoted_executable(&exe);
+    let subkey = wide(SUBKEY);
+    let name = wide(NAME);
     let mut handle = null_mut();
+    // SAFETY: `subkey` is a NUL-terminated UTF-16 buffer for a constant registry path,
+    // optional security/class/disposition pointers are null, and `handle` is writable.
     let create = unsafe {
         RegCreateKeyExW(
             HKEY_CURRENT_USER,
-            wide(SUBKEY).as_ptr(),
+            subkey.as_ptr(),
             0,
             null(),
             REG_OPTION_NON_VOLATILE,
@@ -43,16 +47,20 @@ fn enable_startup() -> Result<(), String> {
     if create != 0 {
         return Err(registry_error("打开开机启动注册表失败", create));
     }
+    // SAFETY: `handle` is an open `HKEY` with `KEY_SET_VALUE` access, `name` and `value`
+    // are NUL-terminated UTF-16 slices, and `size_of_val` passes the exact byte length
+    // including the trailing UTF-16 NUL required by `REG_SZ`.
     let set = unsafe {
         RegSetValueExW(
             handle,
-            wide(NAME).as_ptr(),
+            name.as_ptr(),
             0,
             REG_SZ,
             value.as_ptr().cast(),
             std::mem::size_of_val(value.as_slice()) as u32,
         )
     };
+    // SAFETY: `handle` was opened by `RegCreateKeyExW` above and is closed exactly once.
     unsafe { RegCloseKey(handle) };
     if set == 0 {
         Ok(())
@@ -72,6 +80,8 @@ fn disable_startup() -> Result<(), String> {
     let subkey = wide(SUBKEY);
     let name = wide(NAME);
     let mut handle = null_mut();
+    // SAFETY: `subkey` is a NUL-terminated UTF-16 buffer and `handle` is a writable `HKEY`
+    // output slot.
     let open = unsafe {
         RegOpenKeyExW(
             HKEY_CURRENT_USER,
@@ -88,7 +98,10 @@ fn disable_startup() -> Result<(), String> {
         return Err(registry_error("打开开机启动注册表失败", open));
     }
 
+    // SAFETY: `handle` is an open `HKEY` with `KEY_SET_VALUE` access and `name` is a
+    // NUL-terminated UTF-16 value name.
     let delete = unsafe { RegDeleteValueW(handle, name.as_ptr()) };
+    // SAFETY: `handle` was opened by `RegOpenKeyExW` above and is closed on all exit paths.
     unsafe {
         RegCloseKey(handle);
     }
