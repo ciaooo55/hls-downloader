@@ -43,11 +43,12 @@ fn core_failure(error: String, fallback: &str) -> Failure {
     let is_transport = lower.starts_with("core pipe ")
         || lower.starts_with("core ipc ")
         || lower.starts_with("core stream ")
+        || lower.starts_with("core connect")
         || lower.starts_with("v7 core connect")
         || lower.starts_with("createfilew")
         || lower.starts_with("waitnamedpipew");
     if is_transport {
-        Failure(3, format!("无法连接 Core：{error}"))
+        Failure(3, format!("无法连接下载服务：{error}"))
     } else if error.trim().is_empty() {
         rejected(fallback)
     } else {
@@ -119,22 +120,22 @@ fn connect() -> Result<CoreIpcClient> {
         return Ok(client);
     }
     let root = install_root().ok_or_else(|| Failure(3, "无法定位安装目录".into()))?;
-    spawn_core(&root).map_err(|error| Failure(3, format!("无法启动 Core：{error}")))?;
+    spawn_core(&root).map_err(|error| Failure(3, format!("无法启动下载服务：{error}")))?;
     CoreIpcClient::connect_existing(Duration::from_secs(15))
-        .map_err(|_| Failure(3, "无法连接 Core".into()))
+        .map_err(|_| Failure(3, "无法连接下载服务".into()))
 }
 
 fn command(client: &mut CoreIpcClient, cmd: CoreCommand) -> Result<Vec<EventEnvelope>> {
     let events = client
         .command(cmd)
-        .map_err(|error| core_failure(error, "Core 拒绝请求；请检查任务、设置及使用条款状态"))?;
+        .map_err(|error| core_failure(error, "桌面端拒绝请求；请检查任务与设置状态"))?;
     for envelope in &events {
         match &envelope.event {
             CoreEvent::Error { code, message } => {
                 let detail = if message.trim().is_empty() {
-                    format!("Core 错误: {code}")
+                    format!("请求失败: {code}")
                 } else {
-                    format!("Core 错误 ({code}): {message}")
+                    format!("请求失败 ({code}): {message}")
                 };
                 return Err(rejected(detail));
             }
@@ -358,11 +359,11 @@ fn run(args: &[String]) -> Result<Value> {
     if let Some(capability) = capability {
         match client
             .request(&CorePipeRequest::Capabilities { request_id: 1 })
-            .map_err(|_| rejected("无法查询 Core 能力"))?
+            .map_err(|_| rejected("无法查询桌面端能力"))?
         {
             CorePipeResponse::Capabilities { commands, .. }
                 if commands.iter().any(|v| v == capability) => {}
-            _ => return Err(rejected("当前 Core 版本不支持此功能，请升级并重启 Core")),
+            _ => return Err(rejected("当前桌面端版本不支持此功能，请升级并重启程序")),
         }
     }
     match op {
@@ -450,7 +451,7 @@ fn run(args: &[String]) -> Result<Value> {
                     } => Some((data, task_count)),
                     _ => None,
                 })
-                .ok_or_else(|| rejected("Core 没有返回导出结果"))?;
+                .ok_or_else(|| rejected("桌面端没有返回导出结果"))?;
             if let Some(path) = output {
                 // Do not overwrite a script's existing export accidentally.
                 let mut file = std::fs::OpenOptions::new()
@@ -470,7 +471,7 @@ fn run(args: &[String]) -> Result<Value> {
                 .map_err(|_| rejected("无法读取队列"))?
             {
                 CorePipeResponse::Settings { queue_profiles, .. } => queue_profiles,
-                _ => return Err(rejected("Core 返回了无效队列设置")),
+                _ => return Err(rejected("桌面端返回了无效队列设置")),
             };
             let profile = profiles
                 .iter_mut()

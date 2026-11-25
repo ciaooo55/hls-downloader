@@ -24,19 +24,25 @@ fn workbench_candidates(engine: &Path) -> Vec<PathBuf> {
 
 fn open_workbench() -> Result<(), String> {
     // 由工作台的单实例入口唤醒现有窗口，让原生工作台同步可见状态。
-    // 直接 ShowWindow 只恢复 HWND，Java 仍可能认为窗口已隐藏而停止绘制和交互。
     let engine =
         std::env::current_exe().map_err(|error| format!("resolve engine path: {error}"))?;
-    let launcher = workbench_candidates(&engine)
+    if let Some(launcher) = workbench_candidates(&engine)
         .into_iter()
         .find(|candidate| candidate.is_file())
-        .ok_or_else(|| "HLSDownloader.exe was not found next to the installed Core".to_string())?;
-    eprintln!("tray action: opening {}", launcher.display());
-    Command::new(&launcher)
-        .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("open workbench: {error}"))
+    {
+        eprintln!("tray action: opening {}", launcher.display());
+        return Command::new(&launcher)
+            .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("open workbench: {error}"));
+    }
+    if let Some(root) = engine.parent() {
+        if hls_native_shell::spawn_desktop_ui(root, None) {
+            return Ok(());
+        }
+    }
+    Err("HLSDownloader.exe was not found next to the installed Core".to_string())
 }
 
 fn format_tray_tooltip(active_count: usize, total_speed_bps: u64) -> String {
@@ -58,9 +64,9 @@ fn format_tray_tooltip(active_count: usize, total_speed_bps: u64) -> String {
     format!("HLS Downloader · {active_count} 下载中 · {speed}")
 }
 
-fn current_tray_snapshot(
+fn current_tray_snapshot_with_active(
     server: &hls_native_shell::CoreServer,
-) -> Option<(String, hls_native_shell::TrayMenuState)> {
+) -> Option<(usize, String, hls_native_shell::TrayMenuState)> {
     let settings = server.coordinator().settings().ok()?;
     let (active_count, total_speed_bps) = server.coordinator().transfer_summary().ok()?;
     let tooltip = format_tray_tooltip(active_count, total_speed_bps);
@@ -69,7 +75,14 @@ fn current_tray_snapshot(
         takeover_enabled: settings.takeover_enabled,
         clipboard_watch: settings.clipboard_watch,
     };
-    Some((tooltip, state))
+    Some((active_count, tooltip, state))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn current_tray_snapshot(
+    server: &hls_native_shell::CoreServer,
+) -> Option<(String, hls_native_shell::TrayMenuState)> {
+    current_tray_snapshot_with_active(server).map(|(_, tooltip, state)| (tooltip, state))
 }
 
 fn toggle_speed_limit_updates(
@@ -97,15 +110,16 @@ fn sync_tray_state_if_changed(
     server: &hls_native_shell::CoreServer,
     last_tooltip: &mut String,
     last_state: &mut Option<hls_native_shell::TrayMenuState>,
-) {
-    let Some((tooltip, state)) = current_tray_snapshot(server) else {
-        return;
+) -> usize {
+    let Some((active_count, tooltip, state)) = current_tray_snapshot_with_active(server) else {
+        return 0;
     };
     if tooltip != *last_tooltip || *last_state != Some(state) {
         hls_native_shell::update_tray_state(&tooltip, state);
         *last_tooltip = tooltip;
         *last_state = Some(state);
     }
+    active_count
 }
 
 fn wake_or_open_workbench(server: &hls_native_shell::CoreServer, surface: &str) {
@@ -114,6 +128,8 @@ fn wake_or_open_workbench(server: &hls_native_shell::CoreServer, surface: &str) 
             Ok(()) => return,
             Err(error) => eprintln!("tray ui show ({surface}) failed: {error}"),
         }
+    } else if surface != "main" {
+        server.queue_ui_show(surface);
     }
     if let Err(error) = open_workbench() {
         eprintln!("tray action failed: {error}");
@@ -227,12 +243,15 @@ fn start_resident_tray(server: &hls_native_shell::CoreServer) {
             let mut last_tooltip = String::new();
             let mut last_state = None;
             while !stop.load(std::sync::atomic::Ordering::Acquire) {
-                sync_tray_state_if_changed(&status_server, &mut last_tooltip, &mut last_state);
-                for _ in 0..5 {
-                    if stop.load(std::sync::atomic::Ordering::Acquire) {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(200));
+                let active_count =
+                    sync_tray_state_if_changed(&status_server, &mut last_tooltip, &mut last_state);
+                let poll_interval = if active_count > 0 {
+                    std::time::Duration::from_millis(250)
+                } else {
+                    std::time::Duration::from_millis(1000)
+                };
+                if status_server.wait_until_stopped(poll_interval) {
+                    break;
                 }
             }
         })

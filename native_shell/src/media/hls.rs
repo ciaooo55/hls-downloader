@@ -590,7 +590,7 @@ pub struct HlsDownloadOptions {
     pub live_max_minutes: u64,
     pub progress: Option<PathBuf>,
     /// 纯 TS 点播（可直接拼接）时，拼接后用 FFmpeg 无损重封装为真正的 MP4。
-    /// 默认关闭，保持旧行为（拼接后的 TS 字节流直接作为成品）。
+    /// 默认开启；若未安装 FFmpeg 或重封装失败则自动回退保留已拼接 TS。
     pub remux_ts_to_mp4: bool,
 }
 
@@ -607,7 +607,7 @@ impl Default for HlsDownloadOptions {
             download_subtitles: true,
             live_max_minutes: 0,
             progress: None,
-            remux_ts_to_mp4: false,
+            remux_ts_to_mp4: true,
         }
     }
 }
@@ -5254,5 +5254,10 @@ mod tests {
             "{merged}"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_download_options_default_enables_ts_to_mp4_remux() {
+        assert!(HlsDownloadOptions::default().remux_ts_to_mp4);
     }
 }
