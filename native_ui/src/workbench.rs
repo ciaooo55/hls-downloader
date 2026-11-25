@@ -34,7 +34,7 @@ pub struct Workbench {
     rows: Rc<VecModel<TaskRow>>,
     navigation: Rc<VecModel<NavigationRow>>,
     positions: RefCell<HashMap<String, usize>>,
-    commands: mpsc::SyncSender<WorkbenchJob>,
+    commands: RefCell<mpsc::SyncSender<WorkbenchJob>>,
     editor_commands: mpsc::SyncSender<WorkbenchJob>,
     resource_commands: mpsc::SyncSender<WorkbenchJob>,
     system_commands: mpsc::SyncSender<WorkbenchJob>,
@@ -47,11 +47,10 @@ pub struct Workbench {
     details_full_log: Cell<bool>,
     settings: RefCell<Option<SettingsEditor>>,
     settings_response: RefCell<Option<CorePipeResponse>>,
-    show_settings: Cell<bool>,
+    settings_open_id: Cell<Option<u64>>,
     settings_save_id: Cell<Option<u64>>,
-    settings_instant_save_ids: RefCell<HashSet<u64>>,
     queues: RefCell<Option<QueueEditor>>,
-    pending_queues: Cell<bool>,
+    queues_open_id: Cell<Option<u64>>,
     queue_save: RefCell<Option<QueueSave>>,
     tools: RefCell<Option<Rc<ResourceTools>>>,
     media: RefCell<Option<Rc<crate::media_controller::MediaController>>>,
@@ -336,7 +335,7 @@ impl Workbench {
             rows,
             navigation,
             positions: RefCell::new(HashMap::new()),
-            commands,
+            commands: RefCell::new(commands),
             editor_commands,
             resource_commands,
             system_commands,
@@ -349,12 +348,11 @@ impl Workbench {
             details_full_log: Cell::new(false),
             settings: RefCell::new(None),
             settings_response: RefCell::new(None),
-            show_settings: Cell::new(false),
+            settings_open_id: Cell::new(None),
             settings_save_id: Cell::new(None),
-            settings_instant_save_ids: RefCell::new(HashSet::new()),
             exports: RefCell::new(HashMap::new()),
             queues: RefCell::new(None),
-            pending_queues: Cell::new(false),
+            queues_open_id: Cell::new(None),
             queue_save: RefCell::new(None),
             tools: RefCell::new(None),
             media: RefCell::new(None),
@@ -1443,7 +1441,7 @@ impl Workbench {
     }
 
     fn job(&self, job: WorkbenchJob) -> bool {
-        self.enqueue(&self.commands, job)
+        self.enqueue(&self.commands.borrow(), job)
     }
 
     fn enqueue(&self, commands: &mpsc::SyncSender<WorkbenchJob>, job: WorkbenchJob) -> bool {
@@ -1809,10 +1807,12 @@ impl Workbench {
                 self.open_details();
             }
             "settings" => {
-                self.show_settings.set(true);
-                self.request(CorePipeRequest::LoadSettings {
-                    request_id: self.id(),
-                });
+                let request_id = self.id();
+                if self.request(CorePipeRequest::LoadSettings { request_id }) {
+                    self.settings_open_id.set(Some(request_id));
+                } else {
+                    self.settings_open_id.set(None);
+                }
             }
             "refresh" => {
                 self.job(WorkbenchJob::Snapshot(self.id()));
@@ -2038,28 +2038,13 @@ impl Workbench {
                     }
                 }
                 let settings_saved = self.settings_save_id.get() == Some(request_id);
-                let instant_saved = self
-                    .settings_instant_save_ids
-                    .borrow_mut()
-                    .remove(&request_id);
                 if settings_saved {
-                    self.settings_instant_save_ids.borrow_mut().clear();
                     self.settings_save_id.set(None);
                     if let Some(editor) = self.settings.borrow_mut().as_mut() {
                         editor.receive_settings(&response, true);
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("success".into());
                         editor.window.set_status("设置已保存".into());
-                    }
-                } else if instant_saved {
-                    if let Some(editor) = self.settings.borrow_mut().as_mut() {
-                        if !editor.complete_instant_save(request_id, &response) {
-                            editor.receive_settings(&response, false);
-                        }
-                        if !editor.window.get_busy() {
-                            editor.window.set_status_tone("success".into());
-                            editor.window.set_status("开关已即时生效".into());
-                        }
                     }
                 } else if let Some(editor) = self.settings.borrow_mut().as_mut() {
                     editor.receive_settings(&response, false);
@@ -2079,10 +2064,12 @@ impl Workbench {
                     tools.set_queues(&self.queue_profiles());
                 }
                 self.render_status();
-                if self.show_settings.replace(false) {
+                if self.settings_open_id.get() == Some(request_id) {
+                    self.settings_open_id.set(None);
                     self.open_settings(&response);
                 }
-                if self.pending_queues.replace(false) {
+                if self.queues_open_id.get() == Some(request_id) {
+                    self.queues_open_id.set(None);
                     self.open_queues();
                 }
             }
@@ -2115,18 +2102,16 @@ impl Workbench {
                         }
                     }
                 }
+                if request_id.is_some() && request_id == self.settings_open_id.get() {
+                    self.settings_open_id.set(None);
+                }
+                if request_id.is_some() && request_id == self.queues_open_id.get() {
+                    self.queues_open_id.set(None);
+                }
                 if request_id.is_some() && request_id == self.settings_save_id.get() {
                     self.settings_save_id.set(None);
                     if let Some(settings) = self.settings.borrow().as_ref() {
                         settings.window.set_busy(false);
-                        settings.window.set_status_tone("error".into());
-                        settings.window.set_status(message.into());
-                    }
-                } else if let Some(failed_id) =
-                    request_id.filter(|id| self.settings_instant_save_ids.borrow_mut().remove(id))
-                {
-                    if let Some(settings) = self.settings.borrow_mut().as_mut() {
-                        settings.fail_instant_save(failed_id);
                         settings.window.set_status_tone("error".into());
                         settings.window.set_status(message.into());
                     }
@@ -2660,13 +2645,16 @@ impl Workbench {
         let profiles = match self.settings_response.borrow().as_ref() {
             Some(CorePipeResponse::Settings { queue_profiles, .. }) => queue_profiles.clone(),
             _ => {
-                self.pending_queues.set(true);
-                self.request(CorePipeRequest::LoadSettings {
-                    request_id: self.id(),
-                });
+                let request_id = self.id();
+                if self.request(CorePipeRequest::LoadSettings { request_id }) {
+                    self.queues_open_id.set(Some(request_id));
+                } else {
+                    self.queues_open_id.set(None);
+                }
                 return;
             }
         };
+        self.queues_open_id.set(None);
         if let Some(previous) = self.queues.borrow().as_ref() {
             let _ = previous.window.hide();
         }
@@ -2762,6 +2750,7 @@ impl Workbench {
     }
 
     fn open_settings(self: &Rc<Self>, response: &CorePipeResponse) {
+        self.settings_open_id.set(None);
         if let Some(previous) = self.settings.borrow().as_ref() {
             let _ = previous.window.hide();
         }
@@ -2783,37 +2772,8 @@ impl Workbench {
                     if let Err(error) = editor.edit(&key, &value) {
                         editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
-                    } else if !editor.window.get_busy() {
-                        if let Some((submitted, values)) = editor.prepare_instant_bool_change(&key)
-                        {
-                            if key.as_str() == "reduce_motion" {
-                                let reduce = value.as_str() == "true";
-                                editor
-                                    .window
-                                    .global::<crate::Tokens>()
-                                    .set_reduce_motion(reduce);
-                                this.window
-                                    .global::<crate::Tokens>()
-                                    .set_reduce_motion(reduce);
-                            }
-                            let id = this.id();
-                            if this.request(CorePipeRequest::StoreSettings {
-                                request_id: id,
-                                values,
-                            }) {
-                                editor.record_instant_save_sent(id, key.to_string(), submitted);
-                                this.settings_instant_save_ids.borrow_mut().insert(id);
-                            } else {
-                                editor.window.set_status_tone("error".into());
-                                editor
-                                    .window
-                                    .set_status("命令队列已满，可点击“保存设置”重试".into());
-                            }
-                        } else {
-                            editor.window.set_status("".into());
-                        }
                     } else {
-                        editor.window.set_status("".into());
+                        sync_settings_edit_status(editor);
                     }
                 }
             }
@@ -2823,6 +2783,7 @@ impl Workbench {
             if let Some(this) = weak.upgrade() {
                 if let Some(editor) = this.settings.borrow_mut().as_mut() {
                     editor.edit_rule(index, &key, &value);
+                    sync_settings_edit_status(editor);
                 }
             }
         });
@@ -2846,7 +2807,10 @@ impl Workbench {
                     return;
                 };
                 match picked {
-                    Ok(Some(path)) => editor.edit_rule(index, "directory", &path),
+                    Ok(Some(path)) => {
+                        editor.edit_rule(index, "directory", &path);
+                        sync_settings_edit_status(editor);
+                    }
                     Err(error) => {
                         editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
@@ -2859,6 +2823,7 @@ impl Workbench {
             let Some(editor) = settings.as_mut() else {
                 return;
             };
+            let is_credentials = action.as_str() == "credentials";
             let result = match action.as_str() {
                 "credentials" => editor
                     .credential_host(index)
@@ -2868,6 +2833,8 @@ impl Workbench {
             if let Err(error) = result {
                 editor.window.set_status_tone("warning".into());
                 editor.window.set_status(error.into());
+            } else if !is_credentials {
+                sync_settings_edit_status(editor);
             }
         });
         let weak = Rc::downgrade(self);
@@ -2945,7 +2912,12 @@ impl Workbench {
                     };
                     match picked {
                         Ok(Some(path)) => {
-                            let _ = editor.edit(key, &path);
+                            if let Err(error) = editor.edit(key, &path) {
+                                editor.window.set_status_tone("warning".into());
+                                editor.window.set_status(error.into());
+                            } else {
+                                sync_settings_edit_status(editor);
+                            }
                             editor.render(&editor.window.get_selected_group());
                         }
                         Err(error) => {
@@ -3008,6 +2980,20 @@ impl Workbench {
             }
             Err(error) => self.show_notice("error", error.to_string()),
         }
+    }
+}
+
+fn sync_settings_edit_status(editor: &SettingsEditor) {
+    if editor.window.get_busy() || editor.has_validation_errors() {
+        return;
+    }
+    if editor.has_unsaved_changes() {
+        editor.window.set_status_tone("info".into());
+        editor
+            .window
+            .set_status("有未保存的更改，点击「保存设置」生效".into());
+    } else {
+        editor.window.set_status("".into());
     }
 }
 
@@ -4663,5 +4649,157 @@ mod file_selection_tests {
             extract_curl_probe_url("curl -H 'Referer: https://only-header.test'"),
             None
         );
+    }
+
+    #[test]
+    fn failed_load_settings_disarms_settings_and_queues_without_ghost_opening_later() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+
+        // 1. Core error on LoadSettings for both settings and queues disarms open IDs.
+        workbench.action("settings");
+        let failed_settings_id = workbench
+            .settings_open_id
+            .get()
+            .expect("settings_open_id armed after LoadSettings request");
+        workbench.action("queues");
+        let failed_queues_id = workbench
+            .queues_open_id
+            .get()
+            .expect("queues_open_id armed when settings_response is None");
+
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(failed_settings_id),
+            code: "ui_connection".into(),
+            message: "读取设置失败".into(),
+        });
+        assert!(workbench.settings_open_id.get().is_none());
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+        assert_eq!(workbench.window.get_notice().as_str(), "读取设置失败");
+
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(failed_queues_id),
+            code: "ui_connection".into(),
+            message: "读取队列失败".into(),
+        });
+        assert!(workbench.queues_open_id.get().is_none());
+
+        // Later unrelated Settings response (e.g., background SettingsChanged reload) must NOT
+        // ghost-open SettingsWindow or QueueWindow.
+        let unrelated_settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 999,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 0,
+            "download_dir": "D:/Downloads"
+        }))
+        .unwrap();
+        workbench.response(unrelated_settings);
+        assert!(
+            workbench.settings.borrow().is_none(),
+            "SettingsWindow must not ghost-open on unrelated Settings response"
+        );
+        assert!(
+            workbench.queues.borrow().is_none(),
+            "QueueWindow must not ghost-open on unrelated Settings response"
+        );
+
+        // 2. Enqueue failure (full/closed command channel) shows error notice and never arms open IDs.
+        *workbench.settings_response.borrow_mut() = None;
+        let (closed_tx, closed_rx) = mpsc::sync_channel(1);
+        drop(closed_rx);
+        *workbench.commands.borrow_mut() = closed_tx;
+
+        workbench.clear_notice();
+        workbench.action("settings");
+        assert!(workbench.settings_open_id.get().is_none());
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+        assert!(!workbench.window.get_notice().is_empty());
+
+        workbench.clear_notice();
+        workbench.action("queues");
+        assert!(workbench.queues_open_id.get().is_none());
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+        assert!(!workbench.window.get_notice().is_empty());
+
+        let later_settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1000,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 0,
+            "download_dir": "D:/Downloads"
+        }))
+        .unwrap();
+        workbench.response(later_settings);
+        assert!(workbench.settings.borrow().is_none());
+        assert!(workbench.queues.borrow().is_none());
+
+        // 3. Matching Settings response opens SettingsWindow cleanly and tracks transactional status.
+        let (live_tx, live_rx) = mpsc::sync_channel(8);
+        *workbench.commands.borrow_mut() = live_tx;
+        workbench.action("settings");
+        let open_id = workbench.settings_open_id.get().unwrap();
+        assert!(matches!(
+            live_rx.try_recv().unwrap(),
+            WorkbenchJob::Request(req) if req.request_id() == Some(open_id)
+        ));
+        let open_response: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": open_id,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 0,
+            "download_dir": "D:/Downloads"
+        }))
+        .unwrap();
+        workbench.response(open_response);
+        let settings_window = workbench
+            .settings
+            .borrow()
+            .as_ref()
+            .expect("matching Settings response opens SettingsWindow")
+            .window
+            .clone_strong();
+        assert_eq!(settings_window.get_status().as_str(), "");
+
+        // Toggling a checkbox stages unsaved status without enqueuing instant StoreSettings.
+        settings_window.invoke_edited("speed_limit_enabled".into(), "true".into());
+        assert!(
+            live_rx.try_recv().is_err(),
+            "checkbox edit must not immediately dispatch StoreSettings"
+        );
+        assert_eq!(settings_window.get_status_tone().as_str(), "info");
+        assert_eq!(
+            settings_window.get_status().as_str(),
+            "有未保存的更改，点击「保存设置」生效"
+        );
+
+        // Reverting back to original value clears unsaved status.
+        settings_window.invoke_edited("speed_limit_enabled".into(), "false".into());
+        assert_eq!(settings_window.get_status().as_str(), "");
+
+        // Site rule add + edit also surfaces the transactional unsaved status.
+        settings_window.invoke_site_rule_action(0, "add".into());
+        assert_eq!(settings_window.get_status_tone().as_str(), "info");
+        assert_eq!(
+            settings_window.get_status().as_str(),
+            "有未保存的更改，点击「保存设置」生效"
+        );
+        settings_window.invoke_site_rule_edited(0, "host".into(), "example.com".into());
+        assert_eq!(
+            settings_window.get_status().as_str(),
+            "有未保存的更改，点击「保存设置」生效"
+        );
+
+        let _ = settings_window.hide();
+        workbench.window.hide().unwrap();
     }
 }
