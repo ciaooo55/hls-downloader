@@ -29,6 +29,7 @@ pub use profile_paths::{
 pub use request_validation::canonical_resource_key;
 pub use runtime_log::{init_runtime_log, record_runtime_log};
 pub use tray::{
-    completion_sound, show_notification, spawn_tray, update_tray_state, TrayAction, TrayMenuState,
+    completion_sound, notify_minimized_to_tray, show_notification, spawn_tray, update_tray_state,
+    TrayAction, TrayMenuState,
 };
 pub use window_util::*;

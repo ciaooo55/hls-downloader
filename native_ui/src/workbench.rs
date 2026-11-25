@@ -206,20 +206,14 @@ impl Workbench {
                 let client = client.as_mut().unwrap();
                 match job {
                     WorkbenchJob::Request(request) => client.request(&request),
-                    WorkbenchJob::Snapshot(request_id) => {
-                        let browser_connected = client
-                            .task_page(None, 1)
-                            .map(|page| page.browser_connected)
-                            .unwrap_or(false);
-                        client.snapshot_state().map(|(tasks, latest_sequence)| {
-                            CorePipeResponse::Snapshot {
-                                request_id,
-                                tasks,
-                                latest_sequence,
-                                browser_connected,
-                            }
-                        })
-                    }
+                    WorkbenchJob::Snapshot(request_id) => client.snapshot_state_with_browser().map(
+                        |(tasks, latest_sequence, browser_connected)| CorePipeResponse::Snapshot {
+                            request_id,
+                            tasks,
+                            latest_sequence,
+                            browser_connected,
+                        },
+                    ),
                     WorkbenchJob::Batch(request_id, commands) => {
                         let mut events = Vec::new();
                         for (index, command) in commands.into_iter().enumerate() {
@@ -743,14 +737,33 @@ impl Workbench {
     }
 
     fn close(&self) {
+        let was_visible = self.window.window().is_visible();
         native_window::save_geometry(self.window.window());
         if let Some(media) = self.media.borrow().as_ref() {
             media.main_closed();
         }
         let _ = self.window.hide();
         self.closing.set(true);
+        if was_visible {
+            notify_tray_close_once();
+        }
     }
+}
 
+fn notify_tray_close_once() {
+    let marker = native_window::ui_directory().join("tray-close-hint.marker");
+    if marker.is_file() {
+        return;
+    }
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::write(&marker, b"1\n").is_ok() {
+        hls_client::notify_minimized_to_tray();
+    }
+}
+
+impl Workbench {
     pub fn ready_to_release(&self) -> bool {
         self.closing.get()
             && !self.window.window().is_visible()

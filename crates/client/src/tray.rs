@@ -185,6 +185,9 @@ unsafe fn load_product_icon() -> TrayIcon {
     }
 }
 
+#[cfg(windows)]
+const WM_TRAY_MINIMIZED_HINT: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 33;
+
 pub fn show_notification(title: &str, body: &str) {
     #[cfg(windows)]
     unsafe {
@@ -199,6 +202,18 @@ pub fn show_notification(title: &str, body: &str) {
     #[cfg(not(windows))]
     {
         let _ = (title, body);
+    }
+}
+
+pub fn notify_minimized_to_tray() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
+        let class_name: Vec<u16> = "HLSDownloader.v7.Tray\0".encode_utf16().collect();
+        let hwnd = FindWindowW(class_name.as_ptr(), std::ptr::null());
+        if !hwnd.is_null() {
+            let _ = PostMessageW(hwnd, WM_TRAY_MINIMIZED_HINT, 0, 0);
+        }
     }
 }
 
@@ -393,6 +408,13 @@ unsafe extern "system" fn tray_wnd_proc(
         let tip = current_tooltip();
         copy_utf16(&mut data.szTip, &tip);
         Shell_NotifyIconW(NIM_ADD, &data);
+        return 0;
+    }
+    if msg == WM_TRAY_MINIMIZED_HINT {
+        show_notification(
+            "HLS Downloader 仍在后台运行",
+            "主窗口已收起到系统托盘，正在进行的下载与浏览器接管不会中断。",
+        );
         return 0;
     }
     if msg == WM_TRAY {

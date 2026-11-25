@@ -97,6 +97,10 @@ h1 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: -.015em; }
 .scan-button .hlsd-icon { width: 13px; height: 13px; }
 
 /* 资源筛选与批量下载工具条 */
+.cookie-auth-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 4px 8px 12px; padding: 7px 9px 7px 11px; border: 1px solid color-mix(in srgb, var(--amber) 38%, var(--border)); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--amber) 8%, var(--surface)); box-shadow: var(--shadow-sm); }
+.cookie-auth-banner span { min-width: 0; flex: 1; color: var(--amber-ink); font-size: 11px; font-weight: 550; line-height: 1.4; }
+.cookie-auth-banner .hlsd-button { flex: none; height: 25px; padding: 0 9px; font-size: 11px; border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: var(--surface); color: var(--amber-ink); }
+.cookie-auth-banner .hlsd-button:hover:not(:disabled) { border-color: transparent; background: var(--amber); color: #ffffff; }
 .resource-toolbar { display: grid; gap: 6px; padding: 0 4px 8px 12px; }
 .resource-filter-row { display: flex; align-items: center; gap: 5px; }
 .resource-search { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--control-border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: 11.5px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; transition: border-color .14s ease, box-shadow .14s ease; }

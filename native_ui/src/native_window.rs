@@ -164,6 +164,29 @@ pub fn activate(window: &Window) {
     }
 }
 
+pub fn is_cursor_inside(window: &Window) -> bool {
+    #[cfg(windows)]
+    if let Some(handle) = hwnd(window) {
+        use windows_sys::Win32::{
+            Foundation::{HWND, POINT, RECT},
+            UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect},
+        };
+        unsafe {
+            let mut cursor = POINT { x: 0, y: 0 };
+            let mut rect: RECT = std::mem::zeroed();
+            if GetCursorPos(&mut cursor) != 0 && GetWindowRect(handle as HWND, &mut rect) != 0 {
+                return cursor.x >= rect.left
+                    && cursor.x < rect.right
+                    && cursor.y >= rect.top
+                    && cursor.y < rect.bottom;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+    false
+}
+
 /// Returns `true` when `SHQueryUserNotificationState` reports a busy,
 /// exclusive D3D fullscreen, or presentation session (`QUNS_BUSY = 2`,
 /// `QUNS_RUNNING_D3D_FULL_SCREEN = 3`, `QUNS_PRESENTATION_MODE = 4`).

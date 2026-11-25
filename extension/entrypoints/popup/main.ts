@@ -418,11 +418,21 @@ async function main() {
   filterChips.setAttribute('role', 'group')
   filterChips.setAttribute('aria-label', '按类型筛选资源')
   resourceToolbar.append(filterRow, filterChips)
+  const cookieAuthBanner = el('div', 'cookie-auth-banner')
+  cookieAuthBanner.hidden = true
+  const cookieAuthText = el('span', '', '检测到本站登录态 · 高画质或受限媒体可能需授权 Cookie')
+  const cookieAuthQuickBtn = el('button', 'hlsd-button', '授权本站') as HTMLButtonElement
+  cookieAuthQuickBtn.type = 'button'
+  cookieAuthQuickBtn.addEventListener('click', () => cookieBtn.click())
+  cookieAuthBanner.append(cookieAuthText, cookieAuthQuickBtn)
+  const COOKIE_DOWNGRADED_HOSTS_KEY = 'cookieDowngradedHosts'
+  let siteHasCookies = false
+  let cookieDowngradedHosts: string[] = []
   const list = el('div', 'list')
   const browserTransfers = el('div', 'browser-transfers')
   browserTransfers.hidden = true
   browserTransfers.setAttribute('aria-live', 'polite')
-  section.append(sectionHeader, resourceToolbar, browserTransfers, list)
+  section.append(sectionHeader, resourceToolbar, cookieAuthBanner, browserTransfers, list)
   const footer = el('footer')
   const restorePromptsBtn = el('button', 'restore-site-prompts', '\u6062\u590d\u672c\u7ad9\u81ea\u52a8\u63d0\u793a') as HTMLButtonElement
   restorePromptsBtn.type = 'button'
@@ -1097,6 +1107,26 @@ async function main() {
         void sendBatch(batchTargets.slice(0, 20))
       }
     }
+    const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
+    const cookieDowngraded = Boolean(host && cookieDowngradedHosts.includes(host))
+    const hasAuthSensitiveMedia = visible.some(
+      item => !item.drmProtected && (item.kind === 'hls' || item.kind === 'dash' || item.kind === 'media' || Boolean(item.audioUrl)),
+    )
+    const showCookieBanner = Boolean(
+      host
+      && !cookieAuthorized
+      && (cookieDowngraded || (siteHasCookies && hasAuthSensitiveMedia)),
+    )
+    if (showCookieBanner) {
+      setTextIfChanged(
+        cookieAuthText,
+        cookieDowngraded
+          ? '刚才的下载需携带本站登录态 · 授权后启用多线程加速'
+          : '检测到本站登录态 · 高画质或受限媒体可能需授权 Cookie',
+      )
+    }
+    cookieAuthBanner.hidden = !showCookieBanner
+    cookieAuthQuickBtn.disabled = Boolean(settingsBusy)
     if (!visible.length) {
       const heading = resourceState === 'loading'
         ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d\u9875\u9762'
@@ -1585,7 +1615,12 @@ async function main() {
     try {
       await browser.storage.local.set({ authorizedCookieHosts: next, useBrowserCookies: false })
       authorizedCookieHosts = next
+      if (next.includes(host) && cookieDowngradedHosts.includes(host)) {
+        cookieDowngradedHosts = cookieDowngradedHosts.filter(entry => entry !== host)
+        void browser.storage?.session?.set?.({ [COOKIE_DOWNGRADED_HOSTS_KEY]: cookieDowngradedHosts }).catch(() => undefined)
+      }
       refreshButtons()
+      renderList()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Cookie 设置保存失败')
     } finally {
@@ -1642,15 +1677,37 @@ async function main() {
   if (pageTabId === undefined) subtitlePanel.replaceChildren(el('p', 'panel-hint', '请在包含播放器的网页中使用字幕翻译。'))
   host = normalizeHost(pageUrl)
   suppressionHost = hostForPage(pageUrl)
+  if (host && /^https?:\/\//i.test(pageUrl) && browser.cookies?.getAll) {
+    void browser.cookies.getAll({ url: pageUrl }).then(cookies => {
+      const nextHas = Array.isArray(cookies) && cookies.length > 0
+      if (siteHasCookies !== nextHas) {
+        siteHasCookies = nextHas
+        renderList()
+      }
+    }).catch(() => undefined)
+  }
   settingsSite.textContent = host ? `当前站点 · ${host}` : '当前页面不是普通网页，站点设置不可用。'
   title.textContent = host || '当前页面不支持媒体识别'
   title.title = pageUrl
   const downloadErrorKey = `download-error:${tab?.id}`
-  void browser.storage.session.get(downloadErrorKey).then(stored => {
+  void browser.storage.session.get([downloadErrorKey, COOKIE_DOWNGRADED_HOSTS_KEY]).then(stored => {
     if (stored[downloadErrorKey]) setError(String(stored[downloadErrorKey]))
+    if (Array.isArray(stored[COOKIE_DOWNGRADED_HOSTS_KEY])) {
+      cookieDowngradedHosts = stored[COOKIE_DOWNGRADED_HOSTS_KEY].map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
+      renderList()
+    }
   }).catch(() => undefined)
   browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'session' && changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
+    if (area === 'session') {
+      if (changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
+      if (changes[COOKIE_DOWNGRADED_HOSTS_KEY]) {
+        const raw = changes[COOKIE_DOWNGRADED_HOSTS_KEY].newValue
+        cookieDowngradedHosts = Array.isArray(raw)
+          ? raw.map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
+          : []
+        renderList()
+      }
+    }
     if (area === 'local' && !settingsBusy) {
       let dirty = false
       if (changes.enabled) {

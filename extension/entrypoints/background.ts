@@ -160,6 +160,21 @@ interface PreserveBrowserDownloadResult {
   resolvedChain?: RequestChain
 }
 
+const COOKIE_DOWNGRADED_HOSTS_KEY = 'cookieDowngradedHosts'
+
+async function recordCookieDowngradedHost(targetUrl: string, pageUrl: string): Promise<void> {
+  const candidates = [normalizeHost(pageUrl), normalizeHost(targetUrl)].filter(Boolean)
+  if (!candidates.length || !browser.storage?.session?.get || !browser.storage?.session?.set) return
+  try {
+    const stored = await browser.storage.session.get(COOKIE_DOWNGRADED_HOSTS_KEY)
+    const existing = Array.isArray(stored?.[COOKIE_DOWNGRADED_HOSTS_KEY])
+      ? stored[COOKIE_DOWNGRADED_HOSTS_KEY].map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
+      : []
+    const next = [...new Set([...candidates, ...existing])].slice(0, 32)
+    await browser.storage.session.set({ [COOKIE_DOWNGRADED_HOSTS_KEY]: next })
+  } catch {}
+}
+
 async function checkAcceleratedDownloadCookies(
   chain: RequestChain,
   resource: Pick<MediaResource, 'url' | 'pageUrl' | 'tabId' | 'frameId'>,
@@ -178,6 +193,7 @@ async function checkAcceleratedDownloadCookies(
     return { ok: true, resourceCookies: [] }
   }
   if (!cookiePermissionAllows(targetUrl, pageUrl, authorizedCookieHosts)) {
+    void recordCookieDowngradedHost(targetUrl, pageUrl)
     return { ok: false }
   }
   try {
@@ -2884,6 +2900,7 @@ export default defineBackground(() => {
         // `topPageUrl` cookies when `href` points to a cookie-free CDN host).
         if (!cookiePermissionAllows(href, topPageUrl, config.authorizedCookieHosts)
           && await tabHasCookiesForUrl(href, '', tabId, sender.frameId ?? 0)) {
+          void recordCookieDowngradedHost(href, topPageUrl)
           if (!ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') {
             return { ok: false, browserFallback: true }
           }

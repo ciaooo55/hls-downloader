@@ -343,6 +343,8 @@ export component WorkbenchWindow inherits Window {
     out property <length> content-inset: viewport-width < 900px ? 12px : 16px;
     out property <length> row-height: 64px;
     private property <length> task-scroll-y: 0px;
+    private property <int> drag-source-index: -1;
+    private property <int> drag-target-index: -1;
     in-out property <bool> queues-expanded: true;
     in-out property <bool> categories-expanded: true;
     in-out property <string> query;
@@ -980,7 +982,7 @@ export component WorkbenchWindow inherits Window {
 
                                             // 虚拟化任务行列表（64px 行高）
                                             if root.tasks.length > 0: task-list := ListView {
-                                                changed viewport-y => { root.task-scroll-y = self.viewport-y; }
+                                                viewport-y <=> root.task-scroll-y;
                                                 for row[index] in root.tasks: Rectangle {
                                                     height: root.row-height;
                                                     if index < root.tasks.length - 1: Rectangle {
@@ -1139,6 +1141,16 @@ export component WorkbenchWindow inherits Window {
                                                                     drag := TouchArea {
                                                                         mouse-cursor: grab; accessible-role: button; accessible-label: "调整任务队列顺序";
                                                                         pointer-event(event) => {
+                                                                            if event.kind == PointerEventKind.move && self.pressed && root.sort-column == "queue" {
+                                                                                root.drag-source-index = index;
+                                                                                root.drag-target-index = abs(self.mouse-y - self.pressed-y) >= root.row-height * 0.4
+                                                                                    ? max(0, min(root.tasks.length - 1, index + round((self.mouse-y - self.pressed-y) / root.row-height)))
+                                                                                    : -1;
+                                                                            }
+                                                                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                                                                root.drag-source-index = -1;
+                                                                                root.drag-target-index = -1;
+                                                                            }
                                                                             if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
                                                                                 if abs(self.mouse-y - self.pressed-y) >= root.row-height * 0.4 {
                                                                                     root.place-row(row.id, root.tasks[max(0, min(root.tasks.length - 1, index + round((self.mouse-y - self.pressed-y) / root.row-height)))].id);
@@ -1150,6 +1162,18 @@ export component WorkbenchWindow inherits Window {
                                                             }
                                                         }
                                                         Rectangle { horizontal-stretch: 1; }
+                                                    }
+                                                    if root.drag-target-index == index && root.drag-target-index != root.drag-source-index && root.drag-source-index >= 0: Rectangle {
+                                                        x: 12px;
+                                                        y: root.drag-target-index > root.drag-source-index ? parent.height - 2px : 0px;
+                                                        width: parent.width - 26px;
+                                                        height: 2px;
+                                                        border-radius: 1px;
+                                                        background: Tokens.accent;
+                                                        Rectangle {
+                                                            x: -3px; y: -2px; width: 6px; height: 6px; border-radius: 3px;
+                                                            background: Tokens.accent;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1217,7 +1241,7 @@ export component WorkbenchWindow inherits Window {
 
                                     ScrollCue {
                                         x: parent.width - self.width; y: 34px; height: parent.height - 34px;
-                                        viewport-y: root.task-scroll-y; viewport-height: root.tasks.length * root.row-height; visible-height: parent.height - 34px;
+                                        viewport-y <=> root.task-scroll-y; viewport-height: root.tasks.length * root.row-height; visible-height: parent.height - 34px;
                                     }
                                 }
                             }

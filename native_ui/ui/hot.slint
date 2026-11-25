@@ -166,6 +166,7 @@ export component ConfirmWindow inherits Window {
     preferred-height: root.details_expanded ? 560px : 468px;
     background: Tokens.dialog;
     in property <string> window_title;
+    in-out property <bool> is_local_payload: false;
     in-out property <string> filename;
     in-out property <string> download_dir;
     in-out property <string> save_preview;
@@ -249,7 +250,7 @@ export component ConfirmWindow inherits Window {
                                 border-radius: 6px; background: Tokens.accent-soft; border-width: 1px; border-color: Tokens.accent-border;
                                 Image { source: @image-url("../../assets/app-icon.png"); width: 16px; height: 16px; image-fit: contain; }
                             }
-                            Text { text: "确认下载"; color: Tokens.ink; font-size: 15.5px; font-weight: 700; vertical-alignment: center; }
+                            Text { text: root.is_local_payload ? "保存已接收文件" : "确认下载"; color: Tokens.ink; font-size: 15.5px; font-weight: 700; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
                             if root.remaining != "": Rectangle {
                                 width: remaining-text.preferred-width + 16px; height: 21px; y: (parent.height - self.height) / 2; border-radius: 10.5px; background: Tokens.info-bg; border-width: 1px; border-color: Tokens.accent-border;
@@ -521,8 +522,8 @@ export component ConfirmWindow inherits Window {
                     if root.compact: ConfirmIconButton { icon: "settings"; label: "更多设置"; enabled: !root.busy; clicked => { root.command("more"); } }
                     Rectangle { horizontal-stretch: 1; }
                     HotButton { label: "取消"; busy-label: "正在取消"; min-width: root.compact ? 56px : 64px; busy: root.busy && root.rejecting; enabled: !root.busy; clicked => { root.command("reject"); } }
-                    HotButton { label: "稍后下载"; busy-label: "正在加入"; min-width: root.compact ? 72px : 78px; busy: root.busy && !root.rejecting && root.busy_action == "accept_paused"; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept_paused"); } }
-                    HotButton { label: "开始下载"; busy-label: "正在开始"; busy: root.busy && !root.rejecting && root.busy_action != "accept_paused"; min-width: root.compact ? 84px : 96px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
+                    HotButton { label: root.is_local_payload ? "暂存列表" : "稍后下载"; busy-label: "正在加入"; min-width: root.compact ? 72px : 78px; busy: root.busy && !root.rejecting && root.busy_action == "accept_paused"; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept_paused"); } }
+                    HotButton { label: root.is_local_payload ? "保存文件" : "开始下载"; busy-label: root.is_local_payload ? "正在保存" : "正在开始"; busy: root.busy && !root.rejecting && root.busy_action != "accept_paused"; min-width: root.compact ? 84px : 96px; primary: true; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept"); } }
                 }
             }
         }

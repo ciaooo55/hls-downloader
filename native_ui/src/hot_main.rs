@@ -780,11 +780,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let activation = activation::ActivationServer::start()?;
 
     let mut initial_client = connect_or_start_core()?;
-    let (initial_tasks, initial_sequence) = initial_client.snapshot_state()?;
-    let initial_browser_connected = initial_client
-        .task_page(None, 1)
-        .map(|page| page.browser_connected)
-        .unwrap_or(false);
+    let (initial_tasks, initial_sequence, initial_browser_connected) =
+        initial_client.snapshot_state_with_browser()?;
     let (initial_pending, initial_task_variants) = load_handoff_state(&mut initial_client);
     let settings = initial_client.load_settings().ok();
     let presenter_settings = Arc::new(Mutex::new(PresenterSettings::from_response(
@@ -966,11 +963,37 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let active_hud = Arc::new(Mutex::new(ActiveTaskHud::default()));
     let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
+    let complete_shown_at = Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let processing_timer = Timer::default();
     processing_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
         let active_hud = Arc::clone(&active_hud);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let progress = progress.as_weak();
+        let complete = complete.as_weak();
         move || {
+            if let Some(complete_item) = complete.upgrade() {
+                if complete_item.window().is_visible() {
+                    let now = std::time::Instant::now();
+                    if should_hold_complete_toast(
+                        complete_item.get_action_busy(),
+                        complete_item.get_power_seconds(),
+                        complete_item.get_power_hint().as_str(),
+                        native_window::is_cursor_inside(complete_item.window()),
+                    ) {
+                        complete_shown_at.set(Some(now));
+                    } else if let Some(shown_at) = complete_shown_at.get() {
+                        if now.saturating_duration_since(shown_at) >= COMPLETE_AUTO_DISMISS_DURATION
+                        {
+                            complete_shown_at.set(None);
+                            let _ = complete_item.hide();
+                        }
+                    } else {
+                        complete_shown_at.set(Some(now));
+                    }
+                } else if complete_shown_at.get().is_some() {
+                    complete_shown_at.set(None);
+                }
+            }
             let Some(item) = progress.upgrade() else {
                 return;
             };
@@ -1898,10 +1921,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     complete.on_command({
         let completed_task = Rc::clone(&completed_task);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let window = complete.as_weak();
         move |command| {
             let Some(item) = window.upgrade() else { return };
             if command == "hide_complete" {
+                complete_shown_at.set(None);
                 let _ = item.hide();
                 return;
             }
@@ -1985,6 +2010,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let clipboard_filter = Rc::clone(&clipboard_filter);
         let settings_reload = settings_reload.clone();
         let runtime_settings = Rc::clone(&runtime_settings);
@@ -2092,9 +2118,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .lock()
                                 .map(|settings| settings.download_dir.clone())
                                 .unwrap_or_default();
+                            let workbench_visible = current_workbench
+                                .as_ref()
+                                .is_some_and(|window| window.window.window().is_visible());
                             update_task_windows(
                                 snapshot,
-                                *runtime_settings.borrow(),
+                                PresenterRuntimeSettings {
+                                    workbench_visible,
+                                    ..*runtime_settings.borrow()
+                                },
                                 open_folder_on_complete.get(),
                                 &fallback_dir,
                                 &progress,
@@ -2103,6 +2135,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 &rendered_hud_task,
                                 &completed_task,
                                 &completed_notified,
+                                Some(&complete_shown_at),
                                 Some(&progress_user_moved),
                             );
                         }
@@ -2110,6 +2143,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             completed_notified.borrow_mut().remove(&task_id);
                             if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
                                 *completed_task.borrow_mut() = None;
+                                complete_shown_at.set(None);
                                 if let Some(item) = complete.upgrade() {
                                     item.set_task_id("".into());
                                     let _ = item.hide();
@@ -2142,7 +2176,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     );
                                     render_progress_hud(
                                         &progress,
-                                        *runtime_settings.borrow(),
+                                        PresenterRuntimeSettings {
+                                            workbench_visible: current_workbench
+                                                .as_ref()
+                                                .is_some_and(|w| w.window.window().is_visible()),
+                                            ..*runtime_settings.borrow()
+                                        },
                                         &primary,
                                         position,
                                         &fallback_dir,
@@ -2185,6 +2224,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 item.set_power_seconds(
                                     i32::try_from(delay_seconds).unwrap_or(i32::MAX),
                                 );
+                                complete_shown_at.set(Some(std::time::Instant::now()));
                                 present_complete_toast(&item);
                             }
                         }
@@ -3191,6 +3231,12 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     state
         .confirm_dir_overridden
         .store(false, std::sync::atomic::Ordering::Relaxed);
+    item.set_is_local_payload(
+        offer
+            .local_source_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()),
+    );
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
     sync_confirm_save_preview(&item);
@@ -3617,6 +3663,7 @@ struct PresenterRuntimeSettings {
     dark: bool,
     theme_mode: theme::ThemeMode,
     reduce_motion: bool,
+    workbench_visible: bool,
 }
 
 impl PresenterRuntimeSettings {
@@ -3635,6 +3682,7 @@ impl PresenterRuntimeSettings {
                 dark: theme::ThemeMode::from_response(response).is_dark(),
                 theme_mode: theme::ThemeMode::from_response(response),
                 reduce_motion: *reduce_motion || os_reduce_motion(),
+                workbench_visible: false,
             },
             _ => Self {
                 dark: theme::ThemeMode::System.is_dark(),
@@ -4338,6 +4386,17 @@ impl ActiveTaskHud {
     }
 }
 
+const COMPLETE_AUTO_DISMISS_DURATION: Duration = Duration::from_secs(10);
+
+pub(crate) fn should_hold_complete_toast(
+    action_busy: bool,
+    power_seconds: i32,
+    power_hint: &str,
+    cursor_inside: bool,
+) -> bool {
+    action_busy || power_seconds > 0 || !power_hint.is_empty() || cursor_inside
+}
+
 fn present_complete_toast(item: &CompleteWindow) {
     if item.get_power_seconds() <= 0 && native_window::is_foreground_fullscreen_or_busy() {
         trace("suppressing complete toast while foreground fullscreen/busy");
@@ -4381,6 +4440,7 @@ fn update_task_windows(
     rendered_hud_task: &Mutex<Option<String>>,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
+    complete_shown_at: Option<&std::cell::Cell<Option<std::time::Instant>>>,
     progress_user_moved: Option<&Arc<std::sync::atomic::AtomicBool>>,
 ) {
     if task_is_active(&snapshot.status) {
@@ -4456,6 +4516,9 @@ fn update_task_windows(
         if settings.show_complete {
             if let Some(item) = complete.upgrade() {
                 apply_completed_snapshot_to_toast(&item, &snapshot);
+                if let Some(shown_at) = complete_shown_at {
+                    shown_at.set(Some(std::time::Instant::now()));
+                }
                 present_complete_toast(&item);
             }
         }
@@ -4603,6 +4666,10 @@ fn render_progress_hud(
     item.set_can_open_folder(snapshot_folder(snapshot, fallback_dir).is_some());
     let first_show = !item.window().is_visible();
     if first_show {
+        if settings.workbench_visible {
+            trace("suppressing floating progress HUD while main workbench is visible");
+            return;
+        }
         if native_window::is_foreground_fullscreen_or_busy() {
             trace("suppressing background progress HUD while foreground fullscreen/busy");
             return;
@@ -6306,5 +6373,17 @@ mod tests {
         apply_completed_snapshot_to_toast(&plain, &finished);
         assert_eq!(plain.get_power_seconds(), 0);
         assert_eq!(plain.get_power_hint().as_str(), "");
+
+        // CompleteWindow auto-dismiss holds while busy, hovered, or showing power countdown.
+        assert!(!super::should_hold_complete_toast(false, 0, "", false));
+        assert!(super::should_hold_complete_toast(true, 0, "", false));
+        assert!(super::should_hold_complete_toast(false, 180, "", false));
+        assert!(super::should_hold_complete_toast(
+            false,
+            0,
+            "关机 将在 180 秒后执行",
+            false
+        ));
+        assert!(super::should_hold_complete_toast(false, 0, "", true));
     }
 }
