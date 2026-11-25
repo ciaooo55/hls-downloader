@@ -272,6 +272,10 @@ pub fn write_files(paths: &[std::path::PathBuf]) -> Result<(), String> {
 
 #[cfg(windows)]
 fn windows_clipboard() -> Option<String> {
+    // SAFETY: `OpenClipboard(0)` associates clipboard access with the current task; every
+    // exit path below calls `CloseClipboard()`, and any `GlobalLock` on the `CF_UNICODETEXT`
+    // (13) `HGLOBAL` is bounded by `GlobalSize(handle) / 2`, checked for `u16` alignment
+    // and NUL termination before decoding, and paired with `GlobalUnlock(handle)`.
     unsafe {
         if OpenClipboard(0) == 0 {
             return None;
@@ -288,7 +292,10 @@ fn windows_clipboard() -> Option<String> {
             return None;
         }
         let ptr = GlobalLock(handle) as *const u16;
-        if ptr.is_null() {
+        if ptr.is_null() || !ptr.is_aligned() {
+            if !ptr.is_null() {
+                GlobalUnlock(handle);
+            }
             CloseClipboard();
             return None;
         }
@@ -318,7 +325,13 @@ fn windows_write(text: &str) -> Result<(), String> {
     };
     let mut wide: Vec<u16> = text.encode_utf16().collect();
     wide.push(0);
-    let bytes = wide.len() * 2;
+    let bytes = wide.len() * std::mem::size_of::<u16>();
+    // SAFETY: Allocates a movable `HGLOBAL` of `bytes` (`wide.len() * 2`), copies the
+    // NUL-terminated UTF-16 buffer into the locked block, unlocks it, opens the clipboard
+    // with a temporary `HWND_MESSAGE` owner window so `EmptyClipboard` can claim ownership,
+    // and transfers `handle` to the system on `SetClipboardData(CF_UNICODETEXT, handle)`
+    // success — calling `GlobalFree(handle)` only when `SetClipboardData` was not reached
+    // or failed, while always closing the clipboard and destroying `owner`.
     unsafe {
         let handle = GlobalAlloc(0x0002, bytes);
         if handle == 0 {
@@ -372,6 +385,8 @@ fn windows_write(text: &str) -> Result<(), String> {
 
 #[cfg(windows)]
 #[link(name = "user32")]
+// SAFETY: Exact `user32` `stdcall` ABI declarations for Win32 clipboard functions
+// (`HWND`/`HANDLE` are pointer-sized `isize`, `BOOL` is `i32`, `UINT` is `u32`).
 unsafe extern "system" {
     fn OpenClipboard(owner: isize) -> i32;
     fn CloseClipboard() -> i32;
@@ -382,6 +397,7 @@ unsafe extern "system" {
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
+// SAFETY: Exact `kernel32` `stdcall` ABI declarations for Win32 `HGLOBAL` memory management.
 unsafe extern "system" {
     fn GlobalLock(handle: isize) -> *mut core::ffi::c_void;
     fn GlobalUnlock(handle: isize) -> i32;

@@ -149,6 +149,7 @@ fn system_executable(name: &str) -> Result<std::path::PathBuf, String> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     let mut buffer = vec![0u16; 260];
+    // SAFETY: `buffer` is a valid writable `u16` slice of `buffer.len()` `WCHAR`s.
     let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
     if len == 0 {
         return Err(format!(
@@ -158,6 +159,8 @@ fn system_executable(name: &str) -> Result<std::path::PathBuf, String> {
     }
     let dir = if len >= buffer.len() {
         let mut larger = vec![0u16; len + 1];
+        // SAFETY: `larger` is sized to `len + 1` `WCHAR`s to hold the full system directory
+        // path plus its terminating NUL.
         let actual =
             unsafe { GetSystemDirectoryW(larger.as_mut_ptr(), larger.len() as u32) } as usize;
         if actual == 0 || actual >= larger.len() {
@@ -183,14 +186,16 @@ fn suspend() -> Result<(), String> {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token = std::ptr::null_mut();
-    if unsafe {
+    // SAFETY: `GetCurrentProcess()` returns the current process pseudo-handle and `token`
+    // is a valid writable `HANDLE` output slot.
+    let opened = unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
             &mut token,
         )
-    } == 0
-    {
+    };
+    if opened == 0 {
         return Err(format!(
             "OpenProcessToken failed: {}",
             std::io::Error::last_os_error()
@@ -201,9 +206,12 @@ fn suspend() -> Result<(), String> {
         LowPart: 0,
         HighPart: 0,
     };
+    // SAFETY: Null system name targets the local system, `name` is NUL-terminated UTF-16,
+    // and `luid` is a valid writable `LUID`.
     let ok = unsafe { LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) } != 0;
     if !ok {
         let err = std::io::Error::last_os_error();
+        // SAFETY: `token` was opened by `OpenProcessToken` above and is closed before returning.
         unsafe { CloseHandle(token) };
         return Err(format!("LookupPrivilegeValueW failed: {err}"));
     }
@@ -216,6 +224,8 @@ fn suspend() -> Result<(), String> {
     };
     let mut previous = privileges;
     let mut size = 0;
+    // SAFETY: `token` has `TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY` access, `privileges` and
+    // `previous` are valid single-entry `TOKEN_PRIVILEGES` structs, and `size` is writable.
     let adjusted = unsafe {
         AdjustTokenPrivileges(
             token,
@@ -226,13 +236,18 @@ fn suspend() -> Result<(), String> {
             &mut size,
         )
     } != 0;
+    // SAFETY: Reads the calling thread's Win32 error code immediately after `AdjustTokenPrivileges`.
     let last_error = unsafe { GetLastError() };
     if !adjusted || last_error == ERROR_NOT_ALL_ASSIGNED {
+        // SAFETY: `token` is owned by this call frame and closed on failure.
         unsafe { CloseHandle(token) };
         return Err(format!("AdjustTokenPrivileges failed: {last_error}"));
     }
+    // SAFETY: `SetSuspendState(0, 0, 0)` requests a normal non-forced S3/S0ix sleep state
+    // after enabling `SeShutdownPrivilege` on the process token.
     let ok = unsafe { windows_sys::Win32::System::Power::SetSuspendState(0, 0, 0) };
     let suspend_error = std::io::Error::last_os_error();
+    // SAFETY: Restores the prior privilege state captured in `previous` on the open `token`.
     let restored = unsafe {
         AdjustTokenPrivileges(
             token,
@@ -243,7 +258,9 @@ fn suspend() -> Result<(), String> {
             std::ptr::null_mut(),
         )
     };
+    // SAFETY: Reads the calling thread's Win32 error code immediately after `AdjustTokenPrivileges`.
     let restore_error = unsafe { GetLastError() };
+    // SAFETY: `token` is closed exactly once at the end of `suspend()`.
     unsafe { CloseHandle(token) };
     if restored == 0 || restore_error == ERROR_NOT_ALL_ASSIGNED {
         return Err(format!("restore shutdown privilege: {restore_error}"));

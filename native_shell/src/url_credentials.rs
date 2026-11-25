@@ -253,10 +253,9 @@ impl CoreStore {
                         })?;
                     }
                     if value != before {
-                        let sanitized = if is_json {
-                            value.to_string()
-                        } else {
-                            value.as_str().unwrap().to_owned()
+                        let sanitized = match (is_json, value.as_str()) {
+                            (false, Some(plain)) => plain.to_owned(),
+                            _ => value.to_string(),
                         };
                         changed = true;
                         self.connection

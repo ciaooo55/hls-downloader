@@ -66,9 +66,11 @@ mod imp {
 
     pub(super) struct JobHandle(*mut c_void);
 
-    // Win32 job object kernel handles are process-global and thread-safe for
-    // `AssignProcessToJobObject`.
+    // SAFETY: Win32 job object kernel handles are process-wide kernel objects without
+    // thread affinity, so moving `JobHandle` across threads is sound.
     unsafe impl Send for JobHandle {}
+    // SAFETY: `AssignProcessToJobObject` is synchronized by the Windows kernel on a live
+    // job handle, and the singleton `JobHandle` is never mutated or closed concurrently.
     unsafe impl Sync for JobHandle {}
 
     impl JobHandle {

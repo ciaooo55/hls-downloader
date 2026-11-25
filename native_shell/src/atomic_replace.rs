@@ -24,14 +24,17 @@ pub(crate) fn replace_file(
             .chain(Some(0))
             .collect();
         replace_with_retry(|| {
-            if unsafe {
+            // SAFETY: `extended_path` rejects embedded NUL code units, and both `source`
+            // and `destination` are NUL-terminated UTF-16 buffers that outlive each
+            // synchronous `MoveFileExW` call inside this retry closure.
+            let moved = unsafe {
                 MoveFileExW(
                     source.as_ptr(),
                     destination.as_ptr(),
                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
                 )
-            } == 0
-            {
+            };
+            if moved == 0 {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())

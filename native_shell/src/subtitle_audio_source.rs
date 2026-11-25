@@ -84,7 +84,10 @@ pub(crate) fn decode(
         "-rw_timeout",
         "10000000",
     ]);
-    let url = source["url"].as_str().unwrap();
+    let url = source["url"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or("音轨地址必须是 HTTP/HTTPS")?;
     let path = url
         .split(['?', '#'])
         .next()
@@ -126,7 +129,7 @@ pub(crate) fn decode(
             "-ss",
             &(position - 4.0).max(0.0).to_string(),
             "-i",
-            source["url"].as_str().unwrap(),
+            url,
             "-af",
             &audio_filter,
             "-t",
@@ -246,8 +249,11 @@ mod tests {
             json!({"url":"https://user:password@cdn.example/media"}),
             json!({"url":"https://cdn.example/media", "request_method":"POST"}),
             json!({"url":"file:///private/media.mp4"}),
+            json!({}),
+            json!({"url": 42}),
         ] {
             assert!(validate(&private).is_err());
+            assert!(decode(&private, 0.0, 1.0, || false).is_err());
         }
     }
 }

@@ -1199,14 +1199,13 @@ fn fetch_bytes_with_transport(
         crate::net_policy::consume(count, || check_job_control(&job))?;
         body.extend_from_slice(&buffer[..count]);
     }
-    if matches!(status, 200 | 206)
-        && expected_length.is_some_and(|expected| expected != body.len() as u64)
-    {
-        return Err(EngineError::Failed(format!(
-            "incomplete response body: received {} bytes, expected {}",
-            body.len(),
-            expected_length.unwrap()
-        )));
+    if matches!(status, 200 | 206) {
+        if let Some(expected) = expected_length.filter(|&expected| expected != body.len() as u64) {
+            return Err(EngineError::Failed(format!(
+                "incomplete response body: received {} bytes, expected {expected}",
+                body.len()
+            )));
+        }
     }
     check_job_control(&job)?;
     Ok((status, body, fetched.final_url))
@@ -1298,10 +1297,9 @@ pub(crate) fn copy_hls_body(
         writer.write_all(&buffer[..count])?;
         received += count as u64;
     }
-    if expected.is_some_and(|length| received != length) {
+    if let Some(length) = expected.filter(|&length| received != length) {
         return Err(EngineError::Failed(format!(
-            "incomplete response body: received {received} bytes, expected {}",
-            expected.unwrap()
+            "incomplete response body: received {received} bytes, expected {length}"
         ))
         .into());
     }
@@ -1540,8 +1538,11 @@ fn mark_file_sparse(_file: &File) {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::IO::DeviceIoControl;
         const FSCTL_SET_SPARSE: u32 = 0x000900C4;
+        let mut returned = 0u32;
+        // SAFETY: `_file` owns a valid open Win32 file handle for the duration of this
+        // synchronous `DeviceIoControl` call (`lpOverlapped` is null), `FSCTL_SET_SPARSE`
+        // takes no input/output buffers, and `returned` is a writable `u32` stack variable.
         unsafe {
-            let mut returned = 0u32;
             let _ = DeviceIoControl(
                 _file.as_raw_handle(),
                 FSCTL_SET_SPARSE,
@@ -3068,12 +3069,10 @@ impl CurlBody {
     fn next_buffer(&mut self) -> std::io::Result<bool> {
         loop {
             self.check_control()?;
-            match self
-                .receiver
-                .as_ref()
-                .unwrap()
-                .recv_timeout(Duration::from_millis(50))
-            {
+            let Some(receiver) = self.receiver.as_ref() else {
+                return Ok(false);
+            };
+            match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(result) => {
                     self.buffer = result?;
                     self.at = 0;
@@ -3132,10 +3131,9 @@ impl Read for CurlBody {
         }
         let count = output.len().min(self.buffer.len() - self.at);
         let received = self.received + count as u64;
-        if self.limit.is_some_and(|limit| received > limit) {
+        if let Some(limit) = self.limit.filter(|&limit| received > limit) {
             return Err(std::io::Error::other(format!(
-                "byte range response body exceeds {} bytes",
-                self.limit.unwrap()
+                "byte range response body exceeds {limit} bytes"
             )));
         }
         if self.expected.is_some_and(|length| received > length) {
@@ -4120,6 +4118,8 @@ fn fetch_via_curl_impersonate(
             use std::os::windows::ffi::OsStringExt;
             use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
             let mut dir = vec![0u16; 32768];
+            // SAFETY: `dir` is a valid writable `u16` buffer of `dir.len()` `WCHAR`s, and
+            // `dir[..len]` is sliced only when `0 < len < dir.len()`.
             let len = unsafe { GetSystemDirectoryW(dir.as_mut_ptr(), dir.len() as u32) } as usize;
             if len == 0 || len >= dir.len() {
                 return None;
@@ -4351,17 +4351,28 @@ fn fetch_via_curl_impersonate(
                         .try_wait()
                         .map_err(|error| EngineError::Failed(error.to_string()))?
                     {
-                        let error = fs::read_to_string(dir.join("stderr")).unwrap_or_default();
-                        return Err(EngineError::Failed(format!(
-                            "curl response headers incomplete ({status}): {}",
-                            error.trim()
-                        )));
+                        // Re-read once after observing child exit so headers flushed right
+                        // between the earlier 0-byte read and process termination are not lost.
+                        if header_reader
+                            .read(&mut byte)
+                            .map_err(|error| EngineError::Failed(error.to_string()))?
+                            == 0
+                        {
+                            let error = fs::read_to_string(dir.join("stderr")).unwrap_or_default();
+                            return Err(EngineError::Failed(format!(
+                                "curl response headers incomplete ({status}): {}",
+                                error.trim()
+                            )));
+                        }
+                    } else {
+                        if body.idle_since.elapsed() >= Duration::from_secs(60) {
+                            return Err(EngineError::Failed(
+                                "curl response headers stalled".into(),
+                            ));
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
                     }
-                    if body.idle_since.elapsed() >= Duration::from_secs(60) {
-                        return Err(EngineError::Failed("curl response headers stalled".into()));
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                    continue;
                 }
                 head.push(byte[0]);
                 header_bytes += 1;
@@ -4957,7 +4968,10 @@ fn resolve_location(current: &ParsedUrl, location: &str) -> String {
     };
     // RFC 3986: only the path participates in dot-segment removal. Preserve
     // authority, query bytes and percent escapes for signed request identities.
-    let authority_start = target.find("://").unwrap() + 3;
+    let Some(scheme_sep) = target.find("://") else {
+        return String::new();
+    };
+    let authority_start = scheme_sep + 3;
     let path_start = target[authority_start..]
         .find(['/', '?', '#'])
         .map(|index| authority_start + index)
@@ -5183,6 +5197,10 @@ mod winhttp {
         pulse: Condvar,
     }
 
+    /// # Safety
+    /// Invoked by WinHTTP on async request notifications. When `context != 0`, `context`
+    /// must be a pointer produced by `Arc::into_raw` for `RequestSignal` that remains
+    /// valid until the terminal `WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING` callback consumes it.
     unsafe extern "system" fn status_callback(
         _handle: *mut core::ffi::c_void,
         context: usize,
@@ -5206,8 +5224,12 @@ mod winhttp {
                 }
                 WINHTTP_CALLBACK_STATUS_READ_COMPLETE => status.completed = Some(Ok(length)),
                 WINHTTP_CALLBACK_STATUS_REQUEST_ERROR => {
-                    status.completed =
-                        Some(Err((*(information as *const WINHTTP_ASYNC_RESULT)).dwError));
+                    let code = if information.is_null() {
+                        0
+                    } else {
+                        (*(information as *const WINHTTP_ASYNC_RESULT)).dwError
+                    };
+                    status.completed = Some(Err(code));
                 }
                 WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING => status.closed = true,
                 _ => return,
@@ -5230,19 +5252,27 @@ mod winhttp {
         pub(super) range_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
+    // SAFETY: WinHTTP `HINTERNET` handles have no thread affinity, `&mut self` serializes
+    // `Read::read` and `Drop::drop` on the owning thread, and callback synchronization uses
+    // `Arc<RequestSignal>` (`Mutex` + `Condvar`).
     unsafe impl Send for WinHttpBody {}
 
     impl Drop for WinHttpBody {
         fn drop(&mut self) {
+            // Enforce strict child-before-parent WinHTTP handle teardown:
+            // 1) close `request` and wait for `WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING`,
+            // 2) recycle or close `connect`, while process-global `session` outlives both.
             self.close_request();
-            unsafe {
-                if !self.connect.is_null() {
-                    if self.recycle_connect && put_connect(&self.connect_key, self.connect) {
-                        self.connect = null_mut();
-                    } else {
+            if !self.connect.is_null() {
+                if self.recycle_connect && put_connect(&self.connect_key, self.connect) {
+                    self.connect = null_mut();
+                } else {
+                    // SAFETY: `self.request` has already finished closing above, and
+                    // `self.connect` is an owned WinHTTP connection handle closed once.
+                    unsafe {
                         WinHttpCloseHandle(self.connect);
-                        self.connect = null_mut();
                     }
+                    self.connect = null_mut();
                 }
             }
         }
@@ -5253,6 +5283,8 @@ mod winhttp {
             if self.request.is_null() {
                 return;
             }
+            // SAFETY: `self.request` is an owned WinHTTP request handle; `std::mem::replace`
+            // nulls it before `WinHttpCloseHandle` so it can never be closed twice.
             unsafe {
                 WinHttpCloseHandle(std::mem::replace(&mut self.request, null_mut()));
             }
@@ -5272,7 +5304,9 @@ mod winhttp {
         }
 
         fn wait(&self, operation: &str) -> Result<u32, EngineError> {
-            let signal = self.signal.as_ref().expect("registered WinHTTP callback");
+            let signal = self.signal.as_ref().ok_or_else(|| {
+                EngineError::Failed(format!("{operation}: missing WinHTTP callback signal"))
+            })?;
             let mut status = signal
                 .status
                 .lock()
@@ -5302,9 +5336,13 @@ mod winhttp {
 
     impl Read for WinHttpBody {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if buf.is_empty() {
+            if buf.is_empty() || self.request.is_null() {
                 return Ok(0);
             }
+            // SAFETY: `self.request` is a live async WinHTTP request handle, and `buf`
+            // remains exclusively borrowed and pinned on this stack frame until either
+            // `READ_COMPLETE` arrives in `self.wait` or `AbortReadGuard` closes the handle
+            // and waits for `WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING`.
             let ok = unsafe {
                 WinHttpReadData(
                     self.request,
@@ -5314,16 +5352,25 @@ mod winhttp {
                 )
             };
             if ok == 0 {
-                return Err(std::io::Error::other(format!(
-                    "WinHttpReadData {}",
-                    unsafe { GetLastError() }
-                )));
+                // SAFETY: Reads the calling thread's Win32 error immediately after `WinHttpReadData`.
+                let code = unsafe { GetLastError() };
+                return Err(std::io::Error::other(format!("WinHttpReadData {code}")));
             }
-            match self.wait("WinHttpReadData") {
-                Ok(got) => Ok(got as usize),
+            struct AbortReadGuard<'a>(&'a mut WinHttpBody);
+            impl Drop for AbortReadGuard<'_> {
+                fn drop(&mut self) {
+                    self.0.recycle_connect = false;
+                    self.0.close_request();
+                }
+            }
+            let guard = AbortReadGuard(self);
+            match guard.0.wait("WinHttpReadData") {
+                Ok(got) => {
+                    std::mem::forget(guard);
+                    Ok((got as usize).min(buf.len()))
+                }
                 Err(error) => {
-                    self.recycle_connect = false;
-                    self.close_request();
+                    drop(guard);
                     Err(std::io::Error::other(error.to_string()))
                 }
             }
@@ -5337,6 +5384,9 @@ mod winhttp {
     fn cached_session(proxy: &str) -> Result<*mut core::ffi::c_void, EngineError> {
         use std::collections::HashMap;
         use std::sync::{Mutex, OnceLock};
+        if proxy.contains('\0') {
+            return Err(EngineError::Failed("invalid WinHTTP proxy".into()));
+        }
         static CACHE: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let mut map = cache
@@ -5345,29 +5395,38 @@ mod winhttp {
         if let Some(handle) = map.get(proxy) {
             return Ok(*handle as *mut core::ffi::c_void);
         }
+        let ua = wide(super::CHROME_UA);
+        let empty = [0u16];
+        // SAFETY: `ua`, `proxy_wide`, and `empty` are valid NUL-terminated UTF-16 buffers
+        // without interior NULs; the resulting session `HINTERNET` is configured before
+        // publication and retained in `CACHE` for the lifetime of the process so it always
+        // outlives child `connect` and `request` handles.
         unsafe {
             let session = match super::proxy_route(proxy) {
                 super::ProxyRoute::Direct => WinHttpOpen(
-                    wide(super::CHROME_UA).as_ptr(),
+                    ua.as_ptr(),
                     WINHTTP_ACCESS_TYPE_NO_PROXY,
                     null_mut(),
                     null_mut(),
                     WINHTTP_FLAG_ASYNC,
                 ),
                 super::ProxyRoute::System => WinHttpOpen(
-                    wide(super::CHROME_UA).as_ptr(),
+                    ua.as_ptr(),
                     SYSTEM_PROXY_ACCESS_TYPE,
                     null_mut(),
                     null_mut(),
                     WINHTTP_FLAG_ASYNC,
                 ),
-                super::ProxyRoute::Manual(proxy_url) => WinHttpOpen(
-                    wide(super::CHROME_UA).as_ptr(),
-                    WINHTTP_ACCESS_TYPE_NAMED_PROXY,
-                    wide(proxy_url).as_ptr(),
-                    wide("").as_ptr(),
-                    WINHTTP_FLAG_ASYNC,
-                ),
+                super::ProxyRoute::Manual(proxy_url) => {
+                    let proxy_wide = wide(proxy_url);
+                    WinHttpOpen(
+                        ua.as_ptr(),
+                        WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+                        proxy_wide.as_ptr(),
+                        empty.as_ptr(),
+                        WINHTTP_FLAG_ASYNC,
+                    )
+                }
             };
             if session.is_null() {
                 return Err(EngineError::Failed(format!(
@@ -5443,6 +5502,12 @@ mod winhttp {
         let mut request_body = super::post_body(job)?;
         let request_body_len = u32::try_from(request_body.len())
             .map_err(|_| EngineError::Failed("HTTP request body exceeds WinHTTP limit".into()))?;
+        // SAFETY: `session` is a live process-cached `HINTERNET`; `WinHttpBody` takes
+        // immediate RAII ownership of `connect` and `request` so any early error closes
+        // `request` (synchronizing with `WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING` once
+        // `WINHTTP_OPTION_CONTEXT_VALUE` is set) before closing `connect` and before
+        // `request_body` drops. All wide strings and option stack variables outlive their
+        // respective WinHTTP calls.
         unsafe {
             let proxy = job.proxy.trim();
             let session = cached_session(proxy)?;
@@ -5659,6 +5724,9 @@ mod winhttp {
     }
 
     fn query_header_string(request: *mut core::ffi::c_void, query: u32) -> Option<String> {
+        // SAFETY: `request` is a live WinHTTP request handle after `HEADERS_AVAILABLE`.
+        // The first `WinHttpQueryHeaders` queries the required byte size (`lpBuffer` null),
+        // and the second writes at most `actual` bytes into `buf` (`Vec<u16>`).
         unsafe {
             let mut size: u32 = 0;
             WinHttpQueryHeaders(
@@ -5669,10 +5737,10 @@ mod winhttp {
                 &mut size,
                 null_mut(),
             );
-            if size == 0 {
+            if size == 0 || size > 1024 * 1024 {
                 return None;
             }
-            let mut buf = vec![0u16; (size as usize / 2).saturating_add(1)];
+            let mut buf = vec![0u16; (size as usize).div_ceil(2).saturating_add(1)];
             let mut actual = (buf.len() * 2) as u32;
             if WinHttpQueryHeaders(
                 request,
@@ -5685,7 +5753,11 @@ mod winhttp {
             {
                 return None;
             }
-            let end = buf.iter().position(|&ch| ch == 0).unwrap_or(buf.len());
+            let max_units = ((actual as usize) / 2).min(buf.len());
+            let end = buf[..max_units]
+                .iter()
+                .position(|&ch| ch == 0)
+                .unwrap_or(max_units);
             let text = String::from_utf16_lossy(&buf[..end]);
             if text.is_empty() {
                 None
