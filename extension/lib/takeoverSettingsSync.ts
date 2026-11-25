@@ -223,6 +223,9 @@ export class TakeoverSettingsSync {
     if (speedLimitEnabled !== undefined) values.speedLimitEnabled = speedLimitEnabled
     const speedLimitKib = normalizedBytes(response?.speed_limit_kib ?? response?.download_speed_limit_kib)
     if (speedLimitKib !== undefined) values.speedLimitKib = speedLimitKib
+    const tvboxConfigured = readDesktopBool(response, 'tvbox_configured', 'tvboxConfigured')
+      ?? (typeof response?.tvbox_endpoint === 'string' ? response.tvbox_endpoint.trim().length > 0 : undefined)
+    if (tvboxConfigured !== undefined) values.tvboxConfigured = tvboxConfigured
     if (Object.keys(values).length) await this.storage.set(values)
   }
 

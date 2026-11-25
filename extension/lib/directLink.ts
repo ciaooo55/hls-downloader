@@ -1,5 +1,5 @@
-// 只提前接管明确的附件链接；PDF、图片和媒体的普通预览仍由响应头阶段判断。
-const ATTACHMENT_PATH = /\.(?:zip|7z|rar|tar|tgz|gz|bz2|xz|iso|img|exe|msi|msix|appx|apk|dmg|pkg|deb|rpm|epub|docx?|xlsx?|pptx?|vsix|nupkg|cab|bin|jar|torrent|metalink|meta4)$/i
+// 只提前接管明确的附件与常见大文件下载链接；网页普通导航仍由响应头阶段判断。
+const ATTACHMENT_PATH = /\.(?:zip|7z|rar|tar|tgz|gz|bz2|xz|zst|iso|img|exe|msi|msix|appx|apk|appimage|dmg|pkg|deb|rpm|pdf|epub|docx?|xlsx?|pptx?|vsix|nupkg|whl|safetensors|gguf|onnx|cab|bin|jar|mp4|mkv|webm|mov|avi|mp3|flac|wav|m4a|torrent|metalink|meta4)$/i
 
 export function isDirectDownloadLink(href: string, pageUrl: string, downloadAttribute: boolean): boolean {
   try {

@@ -1,5 +1,5 @@
 import { Tokens, HotButton, ChoiceButton, WorkbenchIcon, HotScrollView, FadePanel } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 
 export component SystemWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
@@ -7,9 +7,9 @@ export component SystemWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 780px; preferred-height: 620px;
+    preferred-width: 780px; preferred-height: 560px;
     // 最小高度保证“浏览器插件”页的说明、按钮与提示完整显示，不需要在卡片里滚动。
-    min-width: 620px; min-height: 520px;
+    min-width: 620px; min-height: 450px;
     in-out property <string> page: "browser";
     in property <string> browser-status;
     in property <string> content;
@@ -22,13 +22,8 @@ export component SystemWindow inherits Window {
     callback action(string);
     VerticalLayout {
         spacing: 0px;
-        DialogHeader {
-            heading: root.page == "browser" ? "浏览器插件" : root.page == "notices" ? "通知中心" : root.page == "updates" ? "软件更新" : "关于 HLS Downloader";
-            description: root.page == "browser" ? "识别网页资源，将下载交给桌面" : root.page == "updates" ? "检查版本，下载并校验更新包" : root.page == "notices" ? "查看最近的任务与系统消息" : "版本、组件与诊断信息";
-            icon: root.page == "browser" ? "extension" : root.page == "updates" ? "refresh" : root.page == "notices" ? "notices" : "info";
-        }
         VerticalLayout {
-        padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 16px;
+        padding: 18px; padding-left: 24px; padding-right: 24px; spacing: 14px;
         // 页签按内容宽度靠左排列，不再被拉伸成宽窄不一的四段。
         HorizontalLayout {
             spacing: 8px; alignment: start;
@@ -110,8 +105,8 @@ export component DecisionWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 520px; preferred-height: 320px;
-    min-width: 360px; min-height: 280px;
+    preferred-width: 480px; preferred-height: 220px;
+    min-width: 360px; min-height: 190px;
     in property <string> heading;
     in property <string> message;
     in property <string> confirm-label;
@@ -120,19 +115,45 @@ export component DecisionWindow inherits Window {
     callback decided(bool);
     public function enter() { content.enter(); }
     content := FadePanel {
-    VerticalLayout {
-        spacing: 0px;
-        DialogHeader { heading: root.heading; description: "请确认后继续"; icon: root.danger ? "delete" : "info"; }
-        HotScrollView {
-            vertical-stretch: 1;
-            horizontal-scrollbar-policy: always-off;
-            viewport-width: self.width;
-            VerticalLayout { padding: 24px; Text { text: root.message; color: Tokens.muted; wrap: word-wrap; } }
+        VerticalLayout {
+            spacing: 0px;
+            HotScrollView {
+                vertical-stretch: 1;
+                horizontal-scrollbar-policy: always-off;
+                viewport-width: self.width;
+                VerticalLayout {
+                    padding: 24px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 14px;
+                        alignment: start;
+                        Rectangle {
+                            width: 38px; height: 38px;
+                            border-radius: 10px;
+                            background: root.danger ? Tokens.fail-surface : Tokens.info-bg;
+                            border-width: 1px;
+                            border-color: root.danger ? Tokens.fail.with-alpha(Tokens.dark ? 0.38 : 0.28) : Tokens.accent-border;
+                            WorkbenchIcon {
+                                name: root.danger ? "delete" : "info";
+                                ink: root.danger ? Tokens.fail : Tokens.accent;
+                                width: 18px; height: 18px; x: 10px; y: 10px;
+                            }
+                        }
+                        Text {
+                            text: root.message;
+                            color: Tokens.ink;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            DialogFooter {
+                HotButton { label: "取消"; enabled: !root.busy; clicked => { root.decided(false); } }
+                HotButton { label: root.confirm-label; enabled: !root.busy; primary: !root.danger; danger: root.danger; clicked => { root.decided(true); } }
+            }
         }
-        DialogFooter {
-            HotButton { label: "取消"; enabled: !root.busy; clicked => { root.decided(false); } }
-            HotButton { label: root.confirm-label; enabled: !root.busy; primary: !root.danger; danger: root.danger; clicked => { root.decided(true); } }
-        }
-    }
     }
 }

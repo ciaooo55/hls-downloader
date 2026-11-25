@@ -33,7 +33,7 @@ import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
 import { canHarvestPageLinks, CONTEXT_MENU_IDS, contextMenuCapabilities } from '../lib/contextMenuActions'
 import { installSubtitleBackground } from '../lib/subtitleBackground'
-import { errorText } from '../lib/productCopy'
+import { classifyEngineConnectionState, errorText, type EngineConnectionState } from '../lib/productCopy'
 import { sameSiteVideoIdentity, sitePageVideoId } from '../lib/siteManifest'
 
 const HOST = 'com.ciaooo55.hls_downloader'
@@ -148,6 +148,7 @@ async function findLocalBrowserDownload(record: LocalDownloadHandoff): Promise<B
 
 interface AcceleratedTakeoverDecision {
   accelerate: boolean
+  leaveInBrowser?: boolean
   desktopReady?: boolean
   resourceCookies?: ReplayCookie[]
 }
@@ -156,6 +157,22 @@ interface PreserveBrowserDownloadResult {
   preserved: boolean
   desktopReady?: boolean
   resourceCookies?: ReplayCookie[]
+  resolvedChain?: RequestChain
+}
+
+const COOKIE_DOWNGRADED_HOSTS_KEY = 'cookieDowngradedHosts'
+
+async function recordCookieDowngradedHost(targetUrl: string, pageUrl: string): Promise<void> {
+  const candidates = [normalizeHost(pageUrl), normalizeHost(targetUrl)].filter(Boolean)
+  if (!candidates.length || !browser.storage?.session?.get || !browser.storage?.session?.set) return
+  try {
+    const stored = await browser.storage.session.get(COOKIE_DOWNGRADED_HOSTS_KEY)
+    const existing = Array.isArray(stored?.[COOKIE_DOWNGRADED_HOSTS_KEY])
+      ? stored[COOKIE_DOWNGRADED_HOSTS_KEY].map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
+      : []
+    const next = [...new Set([...candidates, ...existing])].slice(0, 32)
+    await browser.storage.session.set({ [COOKIE_DOWNGRADED_HOSTS_KEY]: next })
+  } catch {}
 }
 
 async function checkAcceleratedDownloadCookies(
@@ -172,17 +189,16 @@ async function checkAcceleratedDownloadCookies(
     ? chain.frameId
     : (validDownloadIdentity(resource.frameId) ? resource.frameId : 0)
   const requestCookie = requestHeader(chain, 'cookie').trim()
+  if (!requestCookie) {
+    return { ok: true, resourceCookies: [] }
+  }
+  if (!cookiePermissionAllows(targetUrl, pageUrl, authorizedCookieHosts)) {
+    void recordCookieDowngradedHost(targetUrl, pageUrl)
+    return { ok: false }
+  }
   try {
-    if (requestCookie) {
-      const cookies = await cookieRecordsFor(targetUrl, pageUrl, tabId, frameId, true)
-      if (cookieHeaderForUrl(cookies, targetUrl).trim() !== requestCookie) return { ok: false }
-      return { ok: true, resourceCookies: cookies }
-    }
-    if (!cookiePermissionAllows(targetUrl, pageUrl, authorizedCookieHosts)) {
-      if (await tabHasCookiesForUrl(targetUrl, pageUrl, tabId, frameId)) return { ok: false }
-      return { ok: true, resourceCookies: [] }
-    }
     const cookies = await cookieRecordsFor(targetUrl, pageUrl, tabId, frameId, true)
+    if (cookieHeaderForUrl(cookies, targetUrl).trim() !== requestCookie) return { ok: false }
     return { ok: true, resourceCookies: cookies }
   } catch {
     return { ok: false }
@@ -194,7 +210,21 @@ async function evaluateAcceleratedBrowserDownload(
   chain: RequestChain | undefined,
   config: { minimumBytes: number, authorizedCookieHosts: string[] },
   item?: Pick<Browser.downloads.DownloadItem, 'state' | 'totalBytes' | 'fileSize' | 'canResume'>,
+  ctrlForce = false,
 ): Promise<AcceleratedTakeoverDecision> {
+  const configuredMin = Number(config.minimumBytes)
+  const minThreshold = !ctrlForce && Number.isFinite(configuredMin) && configuredMin > 0 ? configuredMin : 0
+  const itemBytes = Math.max(
+    0,
+    Number(item?.fileSize || 0) > 0
+      ? Number(item?.fileSize)
+      : Number(item?.totalBytes || 0) > 0
+        ? Number(item?.totalBytes)
+        : trackedSize(chain),
+  )
+  if (minThreshold > 0 && itemBytes > 0 && itemBytes < minThreshold) {
+    return { accelerate: false, leaveInBrowser: true }
+  }
   if (!chain) return { accelerate: false }
   if (!canAccelerateBrowserDownload({
     kind: resource.kind,
@@ -206,13 +236,20 @@ async function evaluateAcceleratedBrowserDownload(
     itemTotalBytes: item?.totalBytes,
     itemFileSize: item?.fileSize,
     canResume: item?.canResume,
-    minimumBytes: config.minimumBytes,
+    minimumBytes: minThreshold,
   })) {
     return { accelerate: false }
   }
   const cookies = await checkAcceleratedDownloadCookies(chain, resource, config.authorizedCookieHosts)
-  if (!cookies.ok) return { accelerate: false }
-  if (!await desktopReadyForNewHandoff()) return { accelerate: false }
+  if (!cookies.ok) {
+    return { accelerate: false, leaveInBrowser: minThreshold > 0 }
+  }
+  if (ctrlForce) {
+    return { accelerate: true, desktopReady: true, resourceCookies: cookies.resourceCookies }
+  }
+  if (!await desktopReadyForNewHandoff()) {
+    return { accelerate: false, leaveInBrowser: true }
+  }
   return { accelerate: true, desktopReady: true, resourceCookies: cookies.resourceCookies }
 }
 
@@ -231,15 +268,44 @@ async function preserveBrowserDownload(
     throw new Error('浏览器下载已取消，不再创建桌面任务')
   }
   const effectiveConfig = config ?? await settings()
-  const accelerated = await evaluateAcceleratedBrowserDownload(resource, chain, effectiveConfig, current)
+  if (!intent?.ctrlForce && effectiveConfig.minimumBytes > 0) {
+    const knownBytes = Math.max(
+      0,
+      current.fileSize > 0
+        ? current.fileSize
+        : current.totalBytes > 0
+          ? current.totalBytes
+          : (resource.size && resource.size > 0 ? resource.size : trackedSize(chain)),
+    )
+    if (knownBytes > 0 && knownBytes < effectiveConfig.minimumBytes) {
+      return { preserved: true }
+    }
+  }
+  const resolvedChain = chain ?? (current.state === 'in_progress'
+    ? (await resourceRequest(resource, undefined, { browserDownload: item })).chain
+    : undefined)
+  const accelerated = await evaluateAcceleratedBrowserDownload(
+    resource,
+    resolvedChain,
+    effectiveConfig,
+    current,
+    Boolean(intent?.ctrlForce),
+  )
   if (accelerated.accelerate) {
     return {
       preserved: false,
       desktopReady: accelerated.desktopReady,
       resourceCookies: accelerated.resourceCookies,
+      resolvedChain,
     }
   }
-  // 无法确认可安全重放且值得多线程加速时，让浏览器保全响应，完成后复制成功文件。
+  if (accelerated.leaveInBrowser) {
+    return { preserved: true }
+  }
+  if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') {
+    return { preserved: true }
+  }
+  // 仅对不可重放响应（POST/multipart、no-store 一次性流、已完成本地项或未授权 Cookie 的 GET）让浏览器完成后导入。
   await queueLocalBrowserDownload({
     downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
     sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
@@ -275,7 +341,7 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
               await persistLocalDownloads()
               continue
             }
-          } else if (record.handoffId) throw new Error('原文件交接回执暂不可用')
+          } else if (record.handoffId) throw new Error('无法读取浏览器已完成的文件，请重试')
           // 没有浏览器项可证明当前路径仍归其所有，保留源文件，仅结束已确认的跟踪。
           localDownloadHandoffs.delete(record.requestId)
           await persistLocalDownloads()
@@ -322,7 +388,8 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           // Core may already own the import. Retain the original request ID
           // and source file, and retry at the recovery cadence rather than
           // repeatedly submitting the same import every second.
-          if (response?.transport_error || response?.ok === true && !response.handoff?.id) {
+          const isUserShutdown = classifyEngineConnectionState(response) === 'user_shutdown'
+          if (!isUserShutdown && (response?.transport_error || response?.ok === true && !response.handoff?.id)) {
             record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
             await persistLocalDownloads()
             continue
@@ -1661,14 +1728,21 @@ function uncertainOffer(requestId: string) {
   }
 }
 
-let desktopReadinessCheck: Promise<boolean> | undefined
+let desktopReadinessCheck: Promise<EngineConnectionState> | undefined
 
-async function desktopReadyForNewHandoff(): Promise<boolean> {
+async function desktopHandoffReadiness(): Promise<EngineConnectionState> {
   // 只供尚未发送的新交接使用，且必须在暂停原响应前检查；未知旧交接继续按原 ID 恢复。
   desktopReadinessCheck ??= native({ op: 'ping', interactive: true }, 1_500)
-    .then(response => response?.ok === true, () => false)
+    .then(
+      response => classifyEngineConnectionState(response),
+      error => classifyEngineConnectionState({ error: errorText(error) }),
+    )
     .finally(() => { desktopReadinessCheck = undefined })
   return desktopReadinessCheck
+}
+
+async function desktopReadyForNewHandoff(): Promise<boolean> {
+  return (await desktopHandoffReadiness()) === 'online'
 }
 
 async function offer(resource: MediaResource, chain?: RequestChain, options: ResourceRequestOptions = {}, clientRequestId?: string, recovering = false) {
@@ -2486,14 +2560,18 @@ export default defineBackground(() => {
     if (creatingExtension && creatingExtension !== browser.runtime.id) return
     if (item.url.startsWith('blob:') || item.url.startsWith('data:')) {
       const config = await settings()
-      if (!config.enabled) return
       const sourceKey = await localDownloadIntentUrl(item.url)
       const intent = await waitForClickIntent(sourceKey, undefined, item.referrer || '', undefined, 12)
       if (intent?.altBypass) return
+      if (!config.enabled && !intent?.ctrlForce) return
+      if (!intent?.ctrlForce && config.minimumBytes > 0 && item.totalBytes > 0 && item.totalBytes < config.minimumBytes) {
+        return
+      }
       const blobOrigin = item.url.startsWith('blob:') ? new URL(item.url).origin : ''
       const pageUrl = await topLevelPageUrl(intent?.tabId ?? blobSource?.tabId ?? downloadIdentity(item).tabId ?? -1,
         intent?.pageUrl || blobSource?.pageUrl || item.referrer || (blobOrigin !== 'null' ? blobOrigin : ''))
-      if (!pageUrl && config.excludedHosts.length) return
+      if (!pageUrl && config.excludedHosts.length && !intent?.ctrlForce) return
+      if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') return
       await queueLocalBrowserDownload({ downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`, sourceKey, pageUrl, intent })
       return
     }
@@ -2565,6 +2643,7 @@ export default defineBackground(() => {
           const response = earlyResource
             ? await requestDownload(earlyResource, provisionalChain, {
               ...acceleratedOptions,
+              ...(earlyResult?.intent?.ctrlForce ? { explicitUserAction: true } : {}),
               browserRequestId: earlyTakeover?.requestId, browserDownload: originalRequest,
             }) : undefined
           if (response?.ownership_uncertain) {
@@ -2668,9 +2747,10 @@ export default defineBackground(() => {
       if (preservation.preserved) return
       // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
       // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
-      chain = (await resourceRequest(resource, chain, { browserDownload: classified.actual })).chain
+      chain = preservation.resolvedChain ?? (await resourceRequest(resource, chain, { browserDownload: classified.actual })).chain
       if (!chain) return
       if (chain.method.toUpperCase() === 'POST') {
+        if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') return
         // 复用本地导入，复制成功前保留浏览器源文件。
         await queueLocalBrowserDownload({
           downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
@@ -2679,13 +2759,14 @@ export default defineBackground(() => {
         })
         return
       }
-      if (!preservation.desktopReady && !await desktopReadyForNewHandoff()) return
+      if (!intent?.ctrlForce && !preservation.desktopReady && !await desktopReadyForNewHandoff()) return
       const pauseResult = await pauseBrowserDownload(actualBrowser)
       if (pauseResult === null) return
       paused = pauseResult
       console.debug('HLS Downloader offering a verified browser download')
       const response = await requestDownload(resource, chain, {
         desktopReady: true,
+        ...(intent?.ctrlForce ? { explicitUserAction: true } : {}),
         ...(preservation.resourceCookies !== undefined ? { resourceCookies: preservation.resourceCookies } : {}),
         browserRequestId: chain.requestId,
         browserDownload: classified.actual,
@@ -2815,11 +2896,14 @@ export default defineBackground(() => {
           || (!ctrlForce && isHandoffSuppressed(config.suppressions, topPageUrl, 'file'))) {
           return { ok: false, browserFallback: true }
         }
-        // Match Firefox's cookie safety guard: if site cookies are not authorized
-        // for export yet the tab cookie store holds cookies for this URL, let
-        // Chrome complete the authenticated download and hand off locally.
+        // Only check cookies that would actually be sent to `href` (not unrelated
+        // `topPageUrl` cookies when `href` points to a cookie-free CDN host).
         if (!cookiePermissionAllows(href, topPageUrl, config.authorizedCookieHosts)
-          && await tabHasCookiesForUrl(href, topPageUrl, tabId, sender.frameId ?? 0)) {
+          && await tabHasCookiesForUrl(href, '', tabId, sender.frameId ?? 0)) {
+          void recordCookieDowngradedHost(href, topPageUrl)
+          if (!ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') {
+            return { ok: false, browserFallback: true }
+          }
           return { ok: false, browserFallback: true, preserveLocal: true }
         }
         await clickIntentStore.consume({ url: href, referrer: pageUrl, tabId })
@@ -2830,7 +2914,10 @@ export default defineBackground(() => {
           replayContext: { method: 'GET', page_url: topPageUrl },
         }
         try {
-          const response = await requestDownload(resource, undefined, { allowUnverified: true })
+          const response = await requestDownload(resource, undefined, {
+            allowUnverified: true,
+            ...(ctrlForce ? { explicitUserAction: true } : {}),
+          })
           if (response?.ownership_uncertain) await reportDownloadError(tabId, response.error)
           return { ...response, browserFallback: !desktopAcceptedHandoff(response) && !response?.ownership_uncertain }
         } catch (error) {

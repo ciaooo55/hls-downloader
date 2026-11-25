@@ -1,6 +1,6 @@
 import { LineEdit } from "std-widgets.slint";
 import { Tokens, HotButton, FieldLabel, FocusRing, HotCheckBox, HotScrollView, HotComboBox, Panel } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 import { NavigationItem, WorkbenchButton } from "workbench_components.slint";
 
 component WeekdayPill inherits Rectangle {
@@ -57,9 +57,9 @@ export component QueueWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
     title: "下载队列"; background: Tokens.canvas;
     default-font-family: Tokens.type-face; default-font-size: 13px;
-    preferred-width: 780px; preferred-height: 640px; min-width: 640px;
+    preferred-width: 780px; preferred-height: 580px; min-width: 640px;
     // 最小高度保证左侧队列列表至少显示约三项，列表不会被按钮挤成一行。
-    min-height: 440px;
+    min-height: 400px;
     in property <[string]> profiles;
     in-out property <int> selected;
     in-out property <string> queue-name;
@@ -84,7 +84,6 @@ export component QueueWindow inherits Window {
     callback action(string);
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: "下载队列"; description: "独立管理优先级、连接、限速与执行时间"; icon: "queue"; }
         HorizontalLayout {
             spacing: 0px;
             Rectangle {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectManifestKind, isCommonMediaStreamUrl, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from './manifestSniff'
+import { detectManifestKind, isCommonMediaStreamUrl, isMseMediaSliceUrl, manifestMimeType, shouldInspectManifestResponse, shouldReportMediaResponse } from './manifestSniff'
 
 describe('extensionless manifest sniffing', () => {
   it('only opts into the bounded clone for manifest-like responses', () => {
@@ -54,5 +54,20 @@ describe('extensionless manifest sniffing', () => {
     expect(isCommonMediaStreamUrl('https://api.bilibili.test/x/player/playurl?cid=1&mime=video%2Fmp4')).toBe(false)
     expect(isCommonMediaStreamUrl('https://site.test/api/playurl?mime=video%2Fmp4')).toBe(false)
     expect(isCommonMediaStreamUrl('https://cdn.test/upgcxcode/1/2/3-1-30080.m4s')).toBe(false)
+  })
+
+  it('rejects raw YouTube SABR / byte-range / adaptive MSE slice URLs and fMP4 init segments while keeping .m3u8/.mpd manifests', () => {
+    expect(isMseMediaSliceUrl('https://rr2---sn-abc.googlevideo.com/videoplayback?expire=1&itag=248&mime=video%2Fwebm&gir=yes&range=0-65535&rn=1&rbuf=0')).toBe(true)
+    expect(isMseMediaSliceUrl('https://rr2---sn-abc.googlevideo.com/videoplayback?expire=1&sabr=1&ump=1')).toBe(true)
+    expect(isMseMediaSliceUrl('https://rr2---sn-abc.googlevideo.com/videoplayback?expire=1&itag=251&mime=audio%2Fwebm')).toBe(true)
+    expect(isMseMediaSliceUrl('https://cdn.test/video/track.mp4?bytestart=0&byteend=99999')).toBe(true)
+    expect(isMseMediaSliceUrl('https://cdn.test/hls/init-v1.mp4')).toBe(true)
+    expect(shouldReportMediaResponse('https://rr2---sn-abc.googlevideo.com/videoplayback?expire=1&sabr=1&ump=1', 'application/vnd.yt-ump')).toBe(false)
+    expect(isCommonMediaStreamUrl('https://rr2---sn-abc.googlevideo.com/videoplayback?expire=1&itag=137&mime=video%2Fmp4&range=0-1000')).toBe(false)
+
+    // Genuine manifests (including YouTube Live HLS/DASH) and muxed progressive itag=18 remain eligible.
+    expect(isMseMediaSliceUrl('https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1/file/index.m3u8')).toBe(false)
+    expect(shouldReportMediaResponse('https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1/file/index.m3u8', 'application/vnd.apple.mpegurl')).toBe(true)
+    expect(isMseMediaSliceUrl('https://rr1.googlevideo.test/videoplayback?expire=1&mime=video%2Fmp4&itag=18')).toBe(false)
   })
 })

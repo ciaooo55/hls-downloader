@@ -164,4 +164,34 @@ describe('HLS browser inspection', () => {
       { status: 200 },
     ))).resolves.toBeNull()
   })
+
+  it('flags SAMPLE-AES, FairPlay streamingkeydelivery, and Widevine HLS keys as drmProtected while keeping standard AES-128 downloadable', async () => {
+    const fairplayMedia = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:5',
+      '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://fps.test/asset-1",KEYFORMAT="com.apple.streamingkeydelivery"',
+      '#EXTINF:4.0,',
+      'seg-1.m4s',
+      '#EXT-X-ENDLIST',
+    ].join('\n')
+    const widevineMaster = [
+      '#EXTM3U',
+      '#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES-CTR,URI="data:text/plain;base64,AAAA",KEYFORMAT="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080',
+      'v1080.m3u8',
+    ].join('\n')
+    const plainMedia = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.test/key.bin"\n#EXTINF:4.0,\nseg-1.ts\n#EXT-X-ENDLIST\n'
+
+    const fpResult = await inspectHlsResource({ url: 'https://cdn.test/fp.m3u8' }, async () => new Response(fairplayMedia, { status: 200 }))
+    expect(fpResult?.drmProtected).toBe(true)
+
+    const wvResult = await inspectHlsResource(
+      { url: 'https://cdn.test/wv-master.m3u8' },
+      async url => new Response(url.endsWith('v1080.m3u8') ? plainMedia : widevineMaster, { status: 200 }),
+    )
+    expect(wvResult?.drmProtected).toBe(true)
+
+    const aes128Result = await inspectHlsResource({ url: 'https://cdn.test/aes128.m3u8' }, async () => new Response(plainMedia, { status: 200 }))
+    expect(aes128Result?.drmProtected).toBeUndefined()
+  })
 })

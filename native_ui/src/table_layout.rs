@@ -27,14 +27,14 @@ pub fn columns(viewport: f32) -> Vec<Column> {
             width: if compact { 84.0 } else { 116.0 },
         },
     ];
-    if viewport >= 850.0 {
+    if viewport >= 650.0 {
         columns.push(Column {
             id: "speed",
             label: "速度",
             width: if compact { 84.0 } else { 100.0 },
         });
     }
-    if viewport >= 700.0 {
+    if viewport >= 830.0 {
         columns.push(Column {
             id: "size",
             label: "大小",

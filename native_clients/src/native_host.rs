@@ -537,16 +537,26 @@ impl NativeHostSession {
                 .filter_map(|encoded| serde_json::from_str::<Handoff>(&encoded).ok())
                 .next_back()
             {
-                return Ok(json!({"ok": true, "handoff": public_handoff(&existing, None)}));
+                if existing.status == "pending" && matches!(&self.core, HostCore::Remote(_)) {
+                    let root =
+                        crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
+                    crate::core_spawn::ensure_presenter(&root)?;
+                }
+                let task = existing.task_id.as_deref().and_then(|task_id| {
+                    self.core
+                        .snapshot_tasks()
+                        .ok()?
+                        .into_iter()
+                        .find(|item| item.task_id == task_id)
+                });
+                return Ok(
+                    json!({"ok": true, "handoff": public_handoff(&existing, task.as_ref())}),
+                );
             }
         } else if matches!(&self.core, HostCore::Remote(_)) {
-            // Confirm the Core pipe is still live before launching Presenter,
+            // Confirm the Core pipe is still live before admitting or launching UI,
             // so a stale session after tray Shutdown cannot spawn an orphan UI.
             self.core.handle(CoreCommand::Ping)?;
-        }
-        if matches!(&self.core, HostCore::Remote(_)) {
-            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
-            crate::core_spawn::ensure_presenter(&root)?;
         }
 
         let owned_credential_ref = self.persist_browser_context(payload)?;
@@ -580,7 +590,7 @@ impl NativeHostSession {
                 Ok(admitted) => admitted,
                 Err(_) => {
                     return Ok(
-                        json!({"ok": false, "transport_error": true, "error": "Core 交接接收回执无法解析"}),
+                        json!({"ok": false, "transport_error": true, "error": "桌面端未返回确认结果"}),
                     )
                 }
             },
@@ -595,7 +605,7 @@ impl NativeHostSession {
             Err(error) => return Ok(json!({"ok": false, "transport_error": true, "error": error})),
             _ => {
                 return Ok(
-                    json!({"ok": false, "transport_error": true, "error": "Core 返回了无效的交接接收回执"}),
+                    json!({"ok": false, "transport_error": true, "error": "桌面端未返回确认结果"}),
                 )
             }
         };
@@ -609,7 +619,18 @@ impl NativeHostSession {
                 }
             }
         }
-        let response = public_handoff(&admitted, None);
+        if admitted.status == "pending" && matches!(&self.core, HostCore::Remote(_)) {
+            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
+            crate::core_spawn::ensure_presenter(&root)?;
+        }
+        let task = admitted.task_id.as_deref().and_then(|task_id| {
+            self.core
+                .snapshot_tasks()
+                .ok()?
+                .into_iter()
+                .find(|item| item.task_id == task_id)
+        });
+        let response = public_handoff(&admitted, task.as_ref());
         Ok(json!({"ok": true, "handoff": response}))
     }
 
@@ -701,7 +722,7 @@ impl NativeHostSession {
                 if let Some(snapshot) = reused {
                     return Ok((snapshot, false));
                 }
-                Err(duplicate_error.unwrap_or_else(|| "Rust Core 未返回新建任务快照".to_string()))
+                Err(duplicate_error.unwrap_or_else(|| "桌面端未返回新建任务快照".to_string()))
             });
         match result {
             Ok((snapshot, created)) => {
@@ -1094,14 +1115,14 @@ fn connect_or_start_core(explicit_autostart: bool) -> Result<CoreIpcClient, Stri
         || connect_existing_core(Duration::from_millis(10)),
         hls_client::is_user_shutdown_active,
         |first_error| {
-            let root = crate::install_root()
-                .ok_or_else(|| format!("v7 Core unavailable: {first_error}"))?;
+            let root =
+                crate::install_root().ok_or_else(|| format!("Core unavailable: {first_error}"))?;
             if explicit_autostart {
                 hls_client::clear_user_shutdown();
             }
-            crate::spawn_core(&root).map(|_| ()).map_err(|error| {
-                format!("v7 Core unavailable: {first_error}; start failed: {error}")
-            })
+            crate::spawn_core(&root)
+                .map(|_| ())
+                .map_err(|error| format!("Core unavailable: {first_error}; start failed: {error}"))
         },
         CoreIpcClient::connect,
     )
@@ -1125,9 +1146,7 @@ fn connect_or_start_core_with<C>(
             }
             // 非显式冷启动操作在进入启动锁临界区后必须重查托盘退出标记，防止并发托盘退出被竞态拉活。
             if !explicit_autostart && is_user_shutdown() {
-                return Err(format!(
-                    "v7 Core unavailable (user_shutdown): {first_error}"
-                ));
+                return Err(format!("Core unavailable (user_shutdown): {first_error}"));
             }
             start_core(&first_error)?;
 
@@ -1144,7 +1163,7 @@ fn connect_or_start_core_with<C>(
             }
 
             Err(format!(
-                "v7 Core did not become ready: {}",
+                "Core did not become ready: {}",
                 last_error.unwrap_or_else(|| "no connection attempt was made".to_string())
             ))
         }
@@ -1152,6 +1171,7 @@ fn connect_or_start_core_with<C>(
 }
 
 fn public_handoff(handoff: &Handoff, task: Option<&TaskSnapshot>) -> Value {
+    let already_accepted = handoff.status == "accepted" || handoff.presentation == "quick_accepted";
     let mut value = json!({
         "id": handoff.id,
         "url": handoff.offer.url,
@@ -1168,11 +1188,11 @@ fn public_handoff(handoff: &Handoff, task: Option<&TaskSnapshot>) -> Value {
         "status": handoff.status,
         "task_id": handoff.task_id,
         "created_at_ms": handoff.created_at_ms,
-        "presented": handoff.presentation == "presented",
+        "presented": handoff.presentation == "presented" || already_accepted,
         "presentation": handoff.presentation,
         "presentation_mode": if handoff.presentation == "fallback" { "ui-fallback" } else { "native-rust" },
         "presentation_ok": handoff.presentation != "failed" && handoff.status != "failed",
-        "presentation_queued": matches!(handoff.presentation.as_str(), "queued" | "presenting" | "fallback"),
+        "presentation_queued": !already_accepted && matches!(handoff.presentation.as_str(), "queued" | "presenting" | "fallback"),
         "presentable": true,
     });
     if !handoff.offer.audio_url.is_empty() {
@@ -1393,7 +1413,7 @@ fn dispatch_session_message_inner<S>(
             match open(policy) {
                 Ok(connected) => *session = Some(connected),
                 Err(error) => {
-                    eprintln!("v7 Core still unavailable: {error}");
+                    eprintln!("Core still unavailable: {error}");
                     let shutdown_flag = report_user_shutdown(&mut is_user_shutdown)
                         || error.contains("(user_shutdown)");
                     return core_unreachable_response_with(shutdown_flag);
@@ -1463,7 +1483,7 @@ fn ensure_task_started(events: &[EventEnvelope], task_id: &str) -> Result<(), St
             _ => {}
         }
     }
-    Err("Rust Core 未确认下载已启动".into())
+    Err("桌面端未确认下载已启动".into())
 }
 
 fn resource_payload(message: &Value) -> Result<&Map<String, Value>, String> {
@@ -3499,5 +3519,75 @@ mod tests {
         assert_eq!(crashed_resp["code"], "core_unreachable");
         assert!(crashed_resp.get("error_code").is_none());
         assert!(crashed_resp.get("user_shutdown").is_none());
+    }
+
+    #[test]
+    fn quick_download_enabled_auto_accepts_in_core_unless_duplicate_requires_disambiguation() {
+        let mut session = NativeHostSession::in_memory().unwrap();
+        let set_resp = session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "quick_download_enabled": true
+            }))
+            .unwrap();
+        assert_eq!(set_resp["ok"], true);
+        assert_eq!(set_resp["quick_download_enabled"], true);
+
+        let first = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": {
+                    "url": "https://cdn.test/silent-quick.mp4",
+                    "filename": "silent-quick.mp4",
+                    "size": 4096,
+                    "client_request_id": "quick-req-1"
+                }
+            }))
+            .unwrap();
+        assert_eq!(first["ok"], true, "first={first}");
+        assert_eq!(first["handoff"]["status"], "accepted");
+        assert_eq!(first["handoff"]["presentation"], "quick_accepted");
+        assert_eq!(first["handoff"]["presented"], true);
+        assert_eq!(first["handoff"]["presentation_ok"], true);
+        assert_eq!(first["handoff"]["presentation_queued"], false);
+        let task_id = first["handoff"]["task_id"]
+            .as_str()
+            .expect("auto-accepted handoff must assign task_id")
+            .to_string();
+        assert!(!task_id.is_empty());
+
+        // Retrying the same client_request_id returns the same accepted handoff idempotently:
+        let retried = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": {
+                    "url": "https://cdn.test/silent-quick.mp4",
+                    "filename": "silent-quick.mp4",
+                    "size": 4096,
+                    "client_request_id": "quick-req-1"
+                }
+            }))
+            .unwrap();
+        assert_eq!(retried["handoff"]["status"], "accepted");
+        assert_eq!(retried["handoff"]["task_id"], task_id);
+
+        // A distinct offer hitting an active duplicate conflict must NOT silently auto-accept;
+        // it must stay "pending" / "queued" so Presenter can disambiguate!
+        let dup = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": {
+                    "url": "https://cdn.test/silent-quick.mp4",
+                    "filename": "silent-quick.mp4",
+                    "size": 4096,
+                    "client_request_id": "quick-req-2"
+                }
+            }))
+            .unwrap();
+        assert_eq!(dup["ok"], true, "dup={dup}");
+        assert_eq!(dup["handoff"]["status"], "pending");
+        assert_eq!(dup["handoff"]["presentation"], "queued");
+        assert_eq!(dup["handoff"]["presentation_queued"], true);
+        assert!(dup["handoff"]["task_id"].is_null());
     }
 }

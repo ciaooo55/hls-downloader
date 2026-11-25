@@ -136,7 +136,7 @@ fn read_message<T: for<'de> Deserialize<'de>>(reader: &mut impl Read) -> Result<
     }
     let length = u32::from_le_bytes(header) as usize;
     if length > V7_PIPE_MAX_FRAME {
-        return Err("v7 Core pipe frame too large".into());
+        return Err("Core pipe frame too large".into());
     }
     let mut payload = vec![0u8; length];
     reader
@@ -619,7 +619,7 @@ impl OverlappedPipe {
         }
         let length = u32::from_le_bytes(header) as usize;
         if length > V7_PIPE_MAX_FRAME {
-            return Err("v7 Core pipe frame too large".into());
+            return Err("Core pipe frame too large".into());
         }
         let mut payload = vec![0u8; length];
         let mut offset = 0;
@@ -752,7 +752,7 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
     }
     let length = u32::from_le_bytes(header) as usize;
     if length > V7_PIPE_MAX_FRAME {
-        return Err("v7 Core pipe frame too large".into());
+        return Err("Core pipe frame too large".into());
     }
     // A complete header starts one absolute body budget; progress cannot renew it.
     let body_deadline = Instant::now() + frame_timeout;
@@ -813,7 +813,7 @@ fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
     }
     let length = u32::from_le_bytes(header) as usize;
     if length > V7_PIPE_MAX_FRAME {
-        return Err("v7 Core pipe frame too large".into());
+        return Err("Core pipe frame too large".into());
     }
 
     let deadline = std::time::Instant::now() + V7_FRAME_READ_TIMEOUT;
@@ -1518,7 +1518,7 @@ pub fn serve_tcp_listener(
         .map_err(|error| format!("Core listener address: {error}"))?;
     if !local_addr.ip().is_loopback() {
         return Err(format!(
-            "v7 Core TCP listener requires loopback, got {local_addr}"
+            "Core TCP listener requires loopback, got {local_addr}"
         ));
     }
     listener
@@ -1743,7 +1743,7 @@ impl CoreIpcClient {
         timeout: Duration,
     ) -> Result<Self, String> {
         if !addr.ip().is_loopback() {
-            return Err(format!("v7 Core TCP client requires loopback, got {addr}"));
+            return Err(format!("Core TCP client requires loopback, got {addr}"));
         }
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -1766,13 +1766,13 @@ impl CoreIpcClient {
                             return Ok(client);
                         }
                         other => {
-                            return Err(format!("v7 Core hello rejected: {other:?}"));
+                            return Err(format!("Core hello rejected: {other:?}"));
                         }
                     }
                 }
                 Err(error) => {
                     if std::time::Instant::now() >= deadline {
-                        return Err(format!("v7 Core connect {addr}: {error}"));
+                        return Err(format!("Core connect {addr}: {error}"));
                     }
                     thread::sleep(Duration::from_millis(40));
                 }
@@ -1841,7 +1841,7 @@ impl CoreIpcClient {
             CorePipeResponse::Hello {
                 protocol, version, ..
             } if protocol == V7_PROTOCOL_NAME && version == V7_PROTOCOL_VERSION => Ok(client),
-            other => Err(format!("v7 Core pipe hello rejected: {other:?}")),
+            other => Err(format!("Core pipe hello rejected: {other:?}")),
         }
     }
 
@@ -1865,19 +1865,27 @@ impl CoreIpcClient {
     }
 
     pub fn snapshot_state(&mut self) -> Result<(Vec<crate::TaskSnapshot>, u64), String> {
+        self.snapshot_state_with_browser()
+            .map(|(tasks, latest_sequence, _)| (tasks, latest_sequence))
+    }
+
+    pub fn snapshot_state_with_browser(
+        &mut self,
+    ) -> Result<(Vec<crate::TaskSnapshot>, u64, bool), String> {
         if matches!(self.request(&CorePipeRequest::Capabilities { request_id: 1 })?,
             CorePipeResponse::Capabilities { commands, .. }
                 if commands.iter().any(|name| name == "list_tasks_paged")
                     && commands.iter().any(|name| name == "event_batch_resync"))
         {
-            return self.paged_snapshot_state();
+            return self.paged_snapshot_state_with_browser();
         }
         match self.request(&CorePipeRequest::Snapshot { request_id: 1 })? {
             CorePipeResponse::Snapshot {
                 tasks,
                 latest_sequence,
+                browser_connected,
                 ..
-            } => Ok((tasks, latest_sequence)),
+            } => Ok((tasks, latest_sequence, browser_connected)),
             CorePipeResponse::Error { message, .. } => Err(message),
             other => Err(format!("unexpected Core snapshot: {other:?}")),
         }
@@ -1885,15 +1893,24 @@ impl CoreIpcClient {
 
     /// Read bounded pages and reconcile changes made while the pages were read.
     /// A row's page sequence prevents older replay events from overwriting it.
+    #[cfg(test)]
     fn paged_snapshot_state(&mut self) -> Result<(Vec<crate::TaskSnapshot>, u64), String> {
+        self.paged_snapshot_state_with_browser()
+            .map(|(tasks, sequence, _)| (tasks, sequence))
+    }
+
+    fn paged_snapshot_state_with_browser(
+        &mut self,
+    ) -> Result<(Vec<crate::TaskSnapshot>, u64, bool), String> {
         use std::collections::BTreeMap;
         'retry: for _ in 0..3 {
             let mut tasks = BTreeMap::<String, (crate::TaskSnapshot, u64)>::new();
             let mut cursor: Option<String> = None;
             let mut baseline = None;
-            let target = loop {
+            let (target, mut browser_connected) = loop {
                 let page = self.task_page(cursor.as_deref(), 128)?;
                 baseline.get_or_insert(page.sequence);
+                let page_browser_connected = page.browser_connected;
                 for task in page.tasks {
                     tasks.insert(task.task_id.clone(), (task, page.sequence));
                 }
@@ -1902,7 +1919,7 @@ impl CoreIpcClient {
                         cursor = Some(next)
                     }
                     Some(_) => return Err("Core task cursor did not advance".into()),
-                    None => break page.sequence,
+                    None => break (page.sequence, page_browser_connected),
                 }
             };
             let mut after = baseline.unwrap_or(target);
@@ -1937,13 +1954,16 @@ impl CoreIpcClient {
                         {
                             tasks.remove(&task_id);
                         }
+                        crate::CoreEvent::BrowserStatus { connected, .. } => {
+                            browser_connected = connected;
+                        }
                         _ => {}
                     }
                 }
             }
             let mut tasks: Vec<_> = tasks.into_values().map(|(snapshot, _)| snapshot).collect();
             tasks.sort_by(|a, b| (a.queue_index, &a.task_id).cmp(&(b.queue_index, &b.task_id)));
-            return Ok((tasks, after));
+            return Ok((tasks, after, browser_connected));
         }
         Err("任务变化过快，需重新同步".into())
     }
@@ -3313,6 +3333,75 @@ mod tests {
         drop(client);
         stop.store(true, Ordering::SeqCst);
         stop_handle.signal();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn snapshot_state_with_browser_reports_connection_flag_across_paged_and_legacy_paths() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let paged_mode = Arc::new(AtomicBool::new(true));
+        let server_paged = Arc::clone(&paged_mode);
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(move |request| match request {
+                CorePipeRequest::Hello { .. } => CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: std::process::id(),
+                },
+                CorePipeRequest::Capabilities { request_id } => CorePipeResponse::Capabilities {
+                    request_id,
+                    product_version: "10.1.0".into(),
+                    protocol_version: V7_PROTOCOL_VERSION,
+                    commands: if server_paged.load(Ordering::SeqCst) {
+                        vec!["list_tasks_paged".into(), "event_batch_resync".into()]
+                    } else {
+                        Vec::new()
+                    },
+                    settings: Vec::new(),
+                    max_frame_bytes: V7_PIPE_MAX_FRAME as u64,
+                },
+                CorePipeRequest::ListTasks { request_id, .. } => CorePipeResponse::TaskPage {
+                    request_id,
+                    page: hls_protocol::TaskPage {
+                        tasks: Vec::new(),
+                        next: None,
+                        sequence: 5,
+                        browser_connected: true,
+                    },
+                },
+                CorePipeRequest::Snapshot { request_id } => CorePipeResponse::Snapshot {
+                    request_id,
+                    tasks: Vec::new(),
+                    latest_sequence: 9,
+                    browser_connected: false,
+                },
+                _ => CorePipeResponse::Error {
+                    request_id: None,
+                    code: "unexpected".into(),
+                    message: "unexpected request".into(),
+                },
+            });
+        let server_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || serve_tcp_listener(listener, server_stop, handler));
+
+        let mut client = CoreIpcClient::connect_addr(addr).unwrap();
+        let (tasks, seq, browser_connected) = client.snapshot_state_with_browser().unwrap();
+        assert!(tasks.is_empty());
+        assert_eq!(seq, 5);
+        assert!(browser_connected);
+
+        paged_mode.store(false, Ordering::SeqCst);
+        let (tasks, seq, browser_connected) = client.snapshot_state_with_browser().unwrap();
+        assert!(tasks.is_empty());
+        assert_eq!(seq, 9);
+        assert!(!browser_connected);
+        assert_eq!(client.snapshot_state().unwrap().1, 9);
+
+        drop(client);
+        stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(50));
         worker.join().unwrap().unwrap();
     }
 }

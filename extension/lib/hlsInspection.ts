@@ -11,6 +11,7 @@ export interface HlsInspectionResult {
   isLive?: boolean
   lowLatencyLive?: boolean
   partOnlyLive?: boolean
+  drmProtected?: boolean
   duration?: number
   variants: HlsVariant[]
   renditionUrls: string[]
@@ -57,6 +58,7 @@ export async function inspectHlsResource(
   let live = info.isLive
   let lowLatencyLive = info.lowLatencyLive
   let partOnlyLive = info.partOnlyLive
+  let drmProtected = info.drmProtected === true
   let duration = live ? undefined : info.duration
   let playbackUrls = info.playbackUrls
   let playbackUrlHashes = info.playbackUrlHashes
@@ -70,6 +72,7 @@ export async function inspectHlsResource(
           live = mediaInfo.isLive
           lowLatencyLive = mediaInfo.lowLatencyLive
           partOnlyLive = mediaInfo.partOnlyLive
+          if (mediaInfo.drmProtected) drmProtected = true
           playbackUrls = mediaInfo.playbackUrls
           playbackUrlHashes = mediaInfo.playbackUrlHashes
           if (live === false) duration = mediaInfo.duration
@@ -88,6 +91,7 @@ export async function inspectHlsResource(
     isLive: live,
     lowLatencyLive,
     partOnlyLive,
+    ...(drmProtected ? { drmProtected: true } : {}),
     duration,
     variants,
     renditionUrls: info.renditionUrls,

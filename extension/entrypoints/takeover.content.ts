@@ -235,8 +235,8 @@ export default defineContentScript({
           return fallback(response?.preserveLocal === true)
         }
       }).catch(() => {
-        // 发送后连接中断不能证明桌面没收到；自动导航可能造成第二份下载。
-        console.warn('HLS Downloader 无法确认链接交接，请检查主程序后重试')
+        // MV3 Service Worker 唤醒失败或扩展重载时回退到浏览器原生点击，避免吞掉用户点击。
+        void fallback()
       })
     })
   },

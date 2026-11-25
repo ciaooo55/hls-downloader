@@ -1,7 +1,7 @@
 import { LineEdit } from "std-widgets.slint";
 import { MediaSeek } from "media.slint";
 import { Tokens, HotButton, ChoiceButton, HotScrollView, HotComboBox, FadePanel } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 
 export component CastWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
@@ -9,8 +9,8 @@ export component CastWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 720px; preferred-height: 680px;
-    min-width: 480px; min-height: 380px;
+    preferred-width: 720px; preferred-height: 610px;
+    min-width: 480px; min-height: 360px;
     in-out property <string> page: "source";
     in-out property <string> mode: "cast";
     in-out property <string> source-kind: "url";
@@ -42,11 +42,10 @@ export component CastWindow inherits Window {
     callback seek(float);
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: "投屏与媒体推送"; description: root.browser-request ? "选择接收设备，继续这次浏览器推送" : "将媒体发送到设备，或发布局域网播放地址"; icon: "cast"; }
-        // 与页眉图标、页脚按钮同一条 24px 边线；滚动条落在滚动区自身的右侧内边距里，
+        // 与页脚按钮同一条 24px 边线；滚动条落在滚动区自身的右侧内边距里，
         // 不再额外预留一条只在滚动时才需要的空白。
         VerticalLayout {
-        padding-top: 20px; spacing: 16px;
+        padding-top: 18px; spacing: 16px;
         HorizontalLayout {
             padding-left: 24px; padding-right: 24px;
             spacing: 8px; alignment: start;
@@ -111,7 +110,7 @@ export component CastWindow inherits Window {
                         HotButton { label: "发布局域网播放地址"; icon: "network"; enabled: !root.busy && !root.discovering; clicked => { root.action("publish"); } }
                     }
                     if root.browser-request: HorizontalLayout { alignment: start; HotButton { label: "取消这次浏览器推送"; enabled: !root.busy; clicked => { root.action("cancel_push"); } } }
-                    Text { text: "设备只接收 Core 提供的媒体地址。浏览器凭据由 Core 使用。TVBox 的暂停、进度等控制以接收端实际能力为准。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
+                    Text { text: "接收设备仅获取媒体播放地址，网页登录凭据保存在本机不会外泄。TVBox 的暂停、进度等控制以接收端实际能力为准。"; color: Tokens.faint; font-size: 12px; wrap: word-wrap; }
                 }
                 if root.page == "session": VerticalLayout {
                     spacing: 12px; alignment: start;

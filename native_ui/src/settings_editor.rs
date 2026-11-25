@@ -95,7 +95,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
         "quick_download_enabled",
         "浏览器接管静默直下（不弹确认框）",
     ),
-    ("外观", "theme_mode", "主题 / Theme"),
+    ("外观", "theme_mode", "主题"),
     ("外观", "reduce_motion", "减少动态效果"),
     ("外观", "task_sort", "任务排序"),
 ];
@@ -103,11 +103,7 @@ const FIELDS: &[(&str, &str, &str)] = &[
 // Choice settings keep Core values in storage and show product copy in the UI.
 pub(crate) fn choice_options(key: &str) -> &'static [(&'static str, &'static str)] {
     match key {
-        "theme_mode" => &[
-            ("system", "跟随系统 / System"),
-            ("light", "浅色 / Light"),
-            ("dark", "深色 / Dark"),
-        ],
+        "theme_mode" => &[("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")],
         "proxy_mode" => &[
             ("direct", "直连"),
             ("system", "系统代理"),
@@ -392,7 +388,7 @@ impl SettingsEditor {
         self.values = values;
         let mode = crate::theme::ThemeMode::from_response(Some(response));
         self.values.insert("theme_mode".into(), mode.code().into());
-        crate::native_window::apply_theme(&self.window, mode.is_dark());
+        crate::native_window::apply_dialog_theme(&self.window, mode.is_dark());
         if saved {
             self.dirty.clear();
             self.invalid.clear();

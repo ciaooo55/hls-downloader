@@ -36,6 +36,8 @@ const BILIBILI_PLAYURL_PATHS = new Set([
   '/x/player/playurl',
   '/pgc/player/web/playurl',
   '/pgc/player/web/v2/playurl',
+  '/ogv/player/playview',
+  '/pugv/player/web/playurl',
 ])
 
 const BILIBILI_AUDIO_TRACK_ID = /-(?:30216|30232|30280|30250|30251|30255|30257|30259|30260)\.m4s(?:$|[?#])/i
@@ -60,7 +62,7 @@ export function bilibiliPageVideoId(pageUrl: string): string {
     if (page.protocol !== 'https:' || !bilibiliHost(page.hostname)) return ''
     const videoMatch = /^\/(?:[a-z]{2}\/)?video\/(BV[A-Za-z0-9]+|av\d+)(?:\/|$)/i.exec(page.pathname)
     if (videoMatch?.[1]) return videoMatch[1]
-    const bangumiMatch = /^\/(?:[a-z]{2}\/)?bangumi\/play\/((?:ep|ss)\d+)(?:\/|$)/i.exec(page.pathname)
+    const bangumiMatch = /^\/(?:[a-z]{2}\/)?(?:bangumi|cheese)\/play\/((?:ep|ss)\d+)(?:\/|$)/i.exec(page.pathname)
     if (bangumiMatch?.[1]) return bangumiMatch[1]
     if (/^\/(?:[a-z]{2}\/)?list\//i.test(page.pathname)) {
       const bvid = page.searchParams.get('bvid') || ''
@@ -217,9 +219,15 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
   }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return []
   const root = body as Record<string, unknown>
-  const resultObj = root.result && typeof root.result === 'object' ? root.result as Record<string, unknown> : null
-  const payload = (root.data && typeof root.data === 'object' ? root.data : null)
-    || (resultObj?.video_info && typeof resultObj.video_info === 'object' ? resultObj.video_info : null)
+  const dataObj = root.data && typeof root.data === 'object' && !Array.isArray(root.data)
+    ? root.data as Record<string, unknown>
+    : null
+  const resultObj = root.result && typeof root.result === 'object' && !Array.isArray(root.result)
+    ? root.result as Record<string, unknown>
+    : null
+  const payload = (dataObj?.video_info && typeof dataObj.video_info === 'object' && !Array.isArray(dataObj.video_info) ? dataObj.video_info : null)
+    || (resultObj?.video_info && typeof resultObj.video_info === 'object' && !Array.isArray(resultObj.video_info) ? resultObj.video_info : null)
+    || dataObj
     || resultObj
     || root
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return []

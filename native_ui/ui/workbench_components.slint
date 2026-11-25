@@ -4,7 +4,7 @@ export { WorkbenchIcon } from "theme.slint";
 export component WorkbenchButton inherits Rectangle {
     in property <string> label;
     in property <string> icon;
-    in property <string> hint: label;
+    in property <string> hint: "";
     in property <bool> icon-only: false;
     in property <bool> primary: false;
     in property <bool> tonal: false;
@@ -53,7 +53,7 @@ export component WorkbenchButton inherits Rectangle {
     accessible-role: button; accessible-label: root.label; accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
     forward-focus: focus;
-    Tooltip { text: @markdown("\{root.hint}"); }
+    if root.hint != "" || root.icon-only: Tooltip { text: @markdown("\{root.hint != "" ? root.hint : root.label}"); }
     if root.primary && !touch.pressed && root.enabled: Rectangle {
         x: 1px; y: 1px; width: parent.width - 2px; height: 1px;
         border-radius: max(0px, parent.border-radius - 1px);

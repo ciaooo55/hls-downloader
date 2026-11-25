@@ -351,7 +351,7 @@ pub enum CorePipeResponse {
         download_subtitles: bool,
         #[serde(default = "default_true")]
         skip_ad_segments: bool,
-        #[serde(default)]
+        #[serde(default = "default_true")]
         hls_remux_ts_to_mp4: bool,
         #[serde(default)]
         keep_temp_files: bool,
@@ -540,7 +540,7 @@ pub fn encode_message<T: Serialize>(message: &T) -> Result<Vec<u8>, String> {
     impl std::io::Write for Frame {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if bytes.len() > 4 + V7_PIPE_MAX_FRAME - self.0.len() {
-                return Err(std::io::Error::other("v7 Core pipe frame too large"));
+                return Err(std::io::Error::other("Core pipe frame too large"));
             }
             self.0.extend_from_slice(bytes);
             Ok(bytes.len())
@@ -564,11 +564,11 @@ pub fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, S
     }
     let length = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
     if length > V7_PIPE_MAX_FRAME || frame.len() - 4 != length {
-        return Err("v7 Core pipe frame invalid length".into());
+        return Err("Core pipe frame invalid length".into());
     }
     serde_json::from_slice(&frame[4..]).map_err(|error| {
         format!(
-            "v7 Core pipe JSON invalid at line {}, column {}",
+            "Core pipe JSON invalid at line {}, column {}",
             error.line(),
             error.column()
         )

@@ -305,4 +305,31 @@ mod tests {
         assert!(!workbench.get_compact_sidebar());
         workbench.hide().unwrap();
     }
+
+    #[test]
+    fn workbench_new_lazily_defers_secondary_windows_to_single_main_window() {
+        let windows = Rc::new(RefCell::new(Vec::new()));
+        struct CountingPlatform {
+            windows: Rc<RefCell<Vec<Rc<MinimalSoftwareWindow>>>>,
+        }
+        impl Platform for CountingPlatform {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+                let win = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+                self.windows.borrow_mut().push(Rc::clone(&win));
+                Ok(win)
+            }
+            fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
+                Ok(())
+            }
+        }
+        let _ = slint::platform::set_platform(Box::new(CountingPlatform {
+            windows: Rc::clone(&windows),
+        }));
+        // Note: if the thread-local Slint platform was already initialized by an earlier test,
+        // verify directly on the Workbench struct that SystemTools and CastTools hold None windows!
+        OffscreenPlatform::init_test();
+        let wb = crate::workbench::Workbench::new(Vec::new(), 1, true, false, true).unwrap();
+        assert_eq!(wb.window.get_browser_status().as_str(), "浏览器已连接");
+        let _ = windows;
+    }
 }

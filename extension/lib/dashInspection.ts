@@ -6,6 +6,7 @@ export interface DashInspectionResult {
   audioTracks: MediaAudioTrack[]
   inspected: true
   isLive: boolean
+  drmProtected?: boolean
   duration?: number
   width?: number
   height?: number
@@ -158,6 +159,37 @@ function resolvePattern(value: string, baseUrl: string, representationId = '', b
   return httpResolvedUrl(substituted, baseUrl)
 }
 
+function hasDashDrmProtection(xmlBody: string): boolean {
+  const protections = blocks(xmlBody, 'ContentProtection')
+  if (!protections.length) return false
+  for (const protection of protections) {
+    const scheme = (protection.attributes.schemeiduri || '').toLowerCase()
+    const value = (protection.attributes.value || '').toLowerCase()
+    const body = protection.body.toLowerCase()
+    const hasDefaultKid = Object.keys(protection.attributes).some(key => key === 'default_kid' || key.endsWith(':default_kid'))
+    if (
+      scheme.includes('edef8ba9-79d6-4ace-a3c8-27dcd51d21ed') // Widevine
+      || scheme.includes('9a04f079-9840-4286-ab92-e65be0885f95') // PlayReady
+      || scheme.includes('94ce86fb-07ff-4f43-adb8-93d2fa968ca2') // FairPlay
+      || scheme.includes('e2719d58-a985-b3c9-781a-b030af78d30e') // ClearKey
+      || scheme.includes('5e629af5-38da-4063-8977-97ffbd9902d4') // Marlin
+      || scheme.includes('3d5e6d35-9b9a-41e8-b843-dd3c6e72c42c') // WisePlay
+      || scheme.includes('widevine')
+      || scheme.includes('playready')
+      || scheme.includes('fairplay')
+      || scheme.includes('streamingkeydelivery')
+    ) {
+      return true
+    }
+    if (scheme.includes('mp4protection')) {
+      if (!value || (value !== 'none' && value !== 'false' && value !== '0') || hasDefaultKid) return true
+    }
+    if (hasDefaultKid || /^(?:cenc|cbcs|cens|cbc1)$/.test(value)) return true
+    if (/<\s*(?:[a-z_][\w.-]*:)?(?:pssh|pro)\b/i.test(body)) return true
+  }
+  return false
+}
+
 /** Parse the MPD metadata needed by the browser panel without a DOM dependency. */
 export function parseDashManifest(text: string, baseUrl: string): DashInspectionResult | null {
   const cleaned = text.replace(/<!--[\s\S]*?-->/g, '')
@@ -166,6 +198,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
   if (!root) return null
   const rootAttributes = attributes(root[1])
   const rootBody = root[2]
+  const drmProtected = hasDashDrmProtection(rootBody)
   const isLive = rootAttributes.type?.toLowerCase() === 'dynamic'
   const periodBlocks = blocks(rootBody, 'Period')
   const periods = periodBlocks.length ? periodBlocks : [{ attributes: {}, body: rootBody }]
@@ -279,6 +312,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     inspected: true,
     audioTracks,
     isLive,
+    ...(drmProtected ? { drmProtected: true } : {}),
     duration: duration || undefined,
     width: best?.width || undefined,
     height: best?.height || undefined,

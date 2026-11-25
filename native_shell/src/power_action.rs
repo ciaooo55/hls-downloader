@@ -3,10 +3,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct PendingAction {
     action: String,
+    title: String,
+    deadline: Instant,
     generation: u64,
 }
 
@@ -34,6 +36,19 @@ pub fn pending() -> Option<String> {
         .and_then(|guard| guard.as_ref().map(|pending| pending.action.clone()))
 }
 
+pub fn pending_details() -> Option<(String, String, u64)> {
+    PENDING.lock().ok().and_then(|guard| {
+        guard.as_ref().map(|pending| {
+            let remaining = pending
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .as_secs()
+                .max(1);
+            (pending.action.clone(), pending.title.clone(), remaining)
+        })
+    })
+}
+
 pub fn cancel() -> bool {
     PENDING
         .lock()
@@ -56,10 +71,19 @@ pub fn confirm() -> Result<bool, String> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn schedule(action: &str, delay_secs: u64) -> Result<(), String> {
+    schedule_with_title(action, "", delay_secs)
+}
+
+pub fn schedule_with_title(action: &str, title: &str, delay_secs: u64) -> Result<(), String> {
     let action = normalize(action)?.to_string();
-    let generation = replace_pending(action.clone())?;
     let wait = delay_secs.max(1);
+    let generation = replace_pending(
+        action.clone(),
+        title.to_string(),
+        Instant::now() + Duration::from_secs(wait),
+    )?;
     thread::spawn(move || {
         for _ in 0..wait {
             if !pending_generation_matches(generation) {
@@ -74,12 +98,17 @@ pub fn schedule(action: &str, delay_secs: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn replace_pending(action: String) -> Result<u64, String> {
+fn replace_pending(action: String, title: String, deadline: Instant) -> Result<u64, String> {
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::SeqCst);
     let mut guard = PENDING
         .lock()
         .map_err(|_| "电源动作状态不可用".to_string())?;
-    *guard = Some(PendingAction { action, generation });
+    *guard = Some(PendingAction {
+        action,
+        title,
+        deadline,
+        generation,
+    });
     Ok(generation)
 }
 
@@ -297,11 +326,17 @@ mod tests {
     #[test]
     fn rescheduling_same_action_invalidates_the_old_generation() {
         let _guard = TEST_LOCK.lock().unwrap();
-        let old_generation = replace_pending("shutdown".into()).unwrap();
-        let new_generation = replace_pending("shutdown".into()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let old_generation =
+            replace_pending("shutdown".into(), "first.mp4".into(), deadline).unwrap();
+        let new_generation =
+            replace_pending("shutdown".into(), "second.mp4".into(), deadline).unwrap();
         assert_ne!(old_generation, new_generation);
         assert_eq!(take_pending_generation(old_generation), None);
         assert_eq!(pending().as_deref(), Some("shutdown"));
+        let (_, title, remaining) = pending_details().unwrap();
+        assert_eq!(title, "second.mp4");
+        assert!(remaining >= 1);
         assert_eq!(
             take_pending_generation(new_generation).as_deref(),
             Some("shutdown")

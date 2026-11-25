@@ -1,13 +1,13 @@
 import { LineEdit } from "std-widgets.slint";
 import { Tokens, HotButton, HotCheckBox, FieldLabel, WorkbenchIcon, HotScrollView, HotComboBox } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 
 export component ServiceSettingsWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
     title: root.mode == "subtitle" ? "字幕翻译设置" : "站点凭据";
     default-font-family: Tokens.type-face; default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 650px; preferred-height: 700px; min-width: 440px; min-height: 360px;
+    preferred-width: 650px; preferred-height: 620px; min-width: 440px; min-height: 360px;
     in property <string> mode;
     in property <bool> busy;
     in property <bool> loaded;
@@ -42,7 +42,6 @@ export component ServiceSettingsWindow inherits Window {
     }
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: root.mode == "subtitle" ? "字幕翻译" : "站点登录信息"; description: root.mode == "subtitle" ? "配置翻译服务、语言与字幕显示" : "管理 Cookie 与身份请求头，已存凭据不会回显"; icon: root.mode == "subtitle" ? "subtitle" : "security"; }
         HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;

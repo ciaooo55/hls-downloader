@@ -5,6 +5,7 @@ import {
   clickIntentPollsForKind,
   earlyTakeoverRequiresClick,
   isOrdinaryFileKind,
+  looksSingleUseAuthorizedDownload,
   ordinaryFileResponseIdentified,
 } from './fileTakeover'
 
@@ -97,34 +98,52 @@ describe('accelerated multi-connection takeover eligibility', () => {
     })).toBe(true)
   })
 
-  it('preserves small, unknown-size, non-GET, non-HTTP, completed, and non-range transfers', () => {
+  it('accelerates normal HTTP(S) GET downloads including canResume=false, small/unknown-size, un-ranged 200, and S3 presigned URLs', () => {
     expect(canAccelerateBrowserDownload({
       ...resumableLargeGet(),
-      responseHeaders: { 'accept-ranges': 'bytes', 'content-length': String(1024 * 1024 - 1), etag: '"small"' },
-    })).toBe(false)
+      canResume: false,
+      responseHeaders: {
+        'accept-ranges': 'bytes',
+        'content-length': String(50 * 1024 * 1024),
+      },
+    })).toBe(true)
     expect(canAccelerateBrowserDownload({
       ...resumableLargeGet(),
-      responseHeaders: { 'accept-ranges': 'bytes', etag: '"unknown-size"' },
+      canResume: false,
+      responseHeaders: { 'content-length': String(64 * 1024) },
+    })).toBe(true)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      canResume: false,
+      responseHeaders: {},
       itemTotalBytes: -1,
       itemFileSize: -1,
-    })).toBe(false)
+    })).toBe(true)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      statusCode: undefined,
+      responseHeaders: undefined,
+    })).toBe(true)
+    const s3Presigned = 'https://release-assets.githubusercontent.com/12345/archive.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA%2F20261125%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261125T080000Z&X-Amz-Expires=300&X-Amz-Signature=deadbeef'
+    expect(looksSingleUseAuthorizedDownload(s3Presigned)).toBe(false)
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      url: s3Presigned,
+      canResume: false,
+      responseHeaders: { 'content-length': String(25 * 1024 * 1024) },
+    })).toBe(true)
+  })
+
+  it('preserves non-GET, non-HTTP(S), completed, and non-media/file transfers', () => {
     expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), method: 'POST' })).toBe(false)
     expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), url: 'blob:https://site.test/abc' })).toBe(false)
     expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), url: 'data:application/octet-stream,abc' })).toBe(false)
     expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), itemState: 'complete' })).toBe(false)
     expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), kind: 'hls' })).toBe(false)
-    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), responseHeaders: undefined })).toBe(false)
-    expect(canAccelerateBrowserDownload({
-      ...resumableLargeGet(),
-      responseHeaders: { 'content-length': String(50 * 1024 * 1024), etag: '"no-range"' },
-    })).toBe(false)
-    expect(canAccelerateBrowserDownload({
-      ...resumableLargeGet(),
-      responseHeaders: { 'accept-ranges': 'none', 'content-length': String(50 * 1024 * 1024), etag: '"none-range"' },
-    })).toBe(false)
+    expect(canAccelerateBrowserDownload({ ...resumableLargeGet(), statusCode: 403 })).toBe(false)
   })
 
-  it('rejects likely one-use transfers, cookie mismatches, and sizes below configured minimumBytes', () => {
+  it('rejects genuine one-use no-store/OAuth/SAML transfers, cookie mismatches, and sizes below configured minimumBytes', () => {
     expect(canAccelerateBrowserDownload({
       ...resumableLargeGet(),
       responseHeaders: {
@@ -133,13 +152,11 @@ describe('accelerated multi-connection takeover eligibility', () => {
         'cache-control': 'private, no-store',
       },
     })).toBe(false)
+    expect(looksSingleUseAuthorizedDownload('https://idp.example.com/sso/saml2?SAMLResponse=abc')).toBe(true)
+    expect(looksSingleUseAuthorizedDownload('https://site.test/oauth/callback?code=auth123&state=xyz')).toBe(true)
     expect(canAccelerateBrowserDownload({
       ...resumableLargeGet(),
-      canResume: false,
-      responseHeaders: {
-        'accept-ranges': 'bytes',
-        'content-length': String(50 * 1024 * 1024),
-      },
+      url: 'https://site.test/oauth/callback?code=auth123&state=xyz',
     })).toBe(false)
     expect(canAccelerateBrowserDownload({
       ...resumableLargeGet(),
@@ -149,5 +166,13 @@ describe('accelerated multi-connection takeover eligibility', () => {
       ...resumableLargeGet(),
       minimumBytes: 100 * 1024 * 1024,
     })).toBe(false)
+    // Unknown Content-Length remains eligible even when minimumBytes > 0.
+    expect(canAccelerateBrowserDownload({
+      ...resumableLargeGet(),
+      responseHeaders: {},
+      itemTotalBytes: 0,
+      itemFileSize: 0,
+      minimumBytes: 1 * 1024 * 1024,
+    })).toBe(true)
   })
 })

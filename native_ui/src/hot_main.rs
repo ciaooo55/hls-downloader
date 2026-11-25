@@ -780,7 +780,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let activation = activation::ActivationServer::start()?;
 
     let mut initial_client = connect_or_start_core()?;
-    let (initial_tasks, initial_sequence) = initial_client.snapshot_state()?;
+    let (initial_tasks, initial_sequence, initial_browser_connected) =
+        initial_client.snapshot_state_with_browser()?;
     let (initial_pending, initial_task_variants) = load_handoff_state(&mut initial_client);
     let settings = initial_client.load_settings().ok();
     let presenter_settings = Arc::new(Mutex::new(PresenterSettings::from_response(
@@ -802,10 +803,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    let progress_user_moved = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let progress = ProgressWindow::new()?;
     progress.on_move_window({
         let weak = progress.as_weak();
+        let moved = Arc::clone(&progress_user_moved);
         move |dx, dy| {
+            moved.store(true, std::sync::atomic::Ordering::Relaxed);
             if let Some(item) = weak.upgrade() {
                 move_window(item.window(), dx, dy);
             }
@@ -885,6 +889,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ui_sequence = Rc::new(std::cell::Cell::new(initial_sequence));
     let native_workbench = Rc::new(std::cell::Cell::new(true));
     let core_online = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let browser_connected = Arc::new(std::sync::atomic::AtomicBool::new(
+        initial_browser_connected,
+    ));
     confirm.on_open_workbench({
         let workbench = Rc::clone(&workbench);
         let known_tasks = Arc::clone(&known_tasks);
@@ -892,6 +899,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let ui_sequence = Rc::clone(&ui_sequence);
         let native_workbench = Rc::clone(&native_workbench);
         let core_online = Arc::clone(&core_online);
+        let browser_connected = Arc::clone(&browser_connected);
         move |explicit_native, launch_id: slint::SharedString| {
             let launch_id = (!launch_id.is_empty()).then(|| launch_id.to_string());
             if explicit_native {
@@ -906,6 +914,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 match workbench::Workbench::new(
                     tasks,
                     ui_sequence.get(),
+                    browser_connected.load(std::sync::atomic::Ordering::Relaxed),
                     settings.dark,
                     settings.reduce_motion,
                 ) {
@@ -954,11 +963,37 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let active_hud = Arc::new(Mutex::new(ActiveTaskHud::default()));
     let rendered_hud_task = Arc::new(Mutex::new(None::<String>));
+    let complete_shown_at = Rc::new(std::cell::Cell::new(None::<std::time::Instant>));
     let processing_timer = Timer::default();
     processing_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
         let active_hud = Arc::clone(&active_hud);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let progress = progress.as_weak();
+        let complete = complete.as_weak();
         move || {
+            if let Some(complete_item) = complete.upgrade() {
+                if complete_item.window().is_visible() {
+                    let now = std::time::Instant::now();
+                    if should_hold_complete_toast(
+                        complete_item.get_action_busy(),
+                        complete_item.get_power_seconds(),
+                        complete_item.get_power_hint().as_str(),
+                        native_window::is_cursor_inside(complete_item.window()),
+                    ) {
+                        complete_shown_at.set(Some(now));
+                    } else if let Some(shown_at) = complete_shown_at.get() {
+                        if now.saturating_duration_since(shown_at) >= COMPLETE_AUTO_DISMISS_DURATION
+                        {
+                            complete_shown_at.set(None);
+                            let _ = complete_item.hide();
+                        }
+                    } else {
+                        complete_shown_at.set(Some(now));
+                    }
+                } else if complete_shown_at.get().is_some() {
+                    complete_shown_at.set(None);
+                }
+            }
             let Some(item) = progress.upgrade() else {
                 return;
             };
@@ -1002,6 +1037,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let runtime_settings = Rc::clone(&runtime_settings);
         let core_online = Arc::clone(&core_online);
+        let browser_connected = Arc::clone(&browser_connected);
+        let progress_user_moved = Arc::clone(&progress_user_moved);
         let progress = progress.as_weak();
         move |sequence| {
             core_online.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1014,6 +1051,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_default();
             if let Some(window) = workbench.borrow().as_ref() {
                 window.set_engine_online(true);
+                window.set_browser_connected(
+                    browser_connected.load(std::sync::atomic::Ordering::Relaxed),
+                );
                 window.replace(tasks.clone(), sequence);
             }
             let (primary, position, processing_elapsed) = active_hud
@@ -1045,6 +1085,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         position,
                         &fallback_dir,
                         processing_elapsed,
+                        Some(&progress_user_moved),
                     );
                 }
                 None => {
@@ -1088,6 +1129,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         quick_failed: Arc::clone(&quick_failed),
         confirm_dir_overridden: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         core_online: Arc::clone(&core_online),
+        browser_connected: Arc::clone(&browser_connected),
     };
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
@@ -1100,6 +1142,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
+        let progress_user_moved = Arc::clone(&progress_user_moved);
         let confirm = confirm.as_weak();
         let window = progress.as_weak();
         move |command| {
@@ -1160,6 +1203,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             position,
                             &fallback_dir,
                             processing_elapsed,
+                            Some(&progress_user_moved),
                         );
                     }
                 }
@@ -1555,6 +1599,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 {
                                     if let Some(renamed) = renamed_filename {
                                         item.set_filename(renamed.into());
+                                        sync_confirm_save_preview(&item);
                                         item.set_duplicate_text("".into());
                                         item.set_duplicate_task_id("".into());
                                     }
@@ -1633,6 +1678,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .confirm_dir_overridden
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
                             item.set_download_dir(path.clone().into());
+                            sync_confirm_save_preview(&item);
                             if let Ok(mut settings) = presenter_settings.lock() {
                                 settings.record_recent_dir(&path);
                                 sync_confirm_selectors(&item, &settings, &path, None);
@@ -1651,6 +1697,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         offer_state
                             .confirm_dir_overridden
                             .store(true, std::sync::atomic::Ordering::Relaxed);
+                        sync_confirm_save_preview(&item);
                         clear_confirm_issue(&item);
                         refresh_confirm_duplicate(&item, &offer_state);
                         refresh_confirm_disk_space(&item, current_pending_size(&pending));
@@ -1662,9 +1709,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         offer_state
                             .confirm_dir_overridden
                             .store(true, std::sync::atomic::Ordering::Relaxed);
+                        sync_confirm_save_preview(&item);
                         clear_confirm_issue(&item);
                         refresh_confirm_duplicate(&item, &offer_state);
                         refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                    }
+                    return;
+                }
+                "toggle_details" => {
+                    if let Some(item) = window.upgrade() {
+                        item.set_details_expanded(!item.get_details_expanded());
+                        fit_confirm_window(&item);
                     }
                     return;
                 }
@@ -1686,6 +1741,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     .load(std::sync::atomic::Ordering::Relaxed),
                             );
                         }
+                        sync_confirm_save_preview(&item);
                         if let Some(offer) = current_offer.as_ref() {
                             item.set_resource_meta(
                                 format_resource_meta(offer, &item.get_filename()).into(),
@@ -1754,6 +1810,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                     }
+                    sync_confirm_save_preview(&item);
                     clear_confirm_issue(&item);
                     refresh_confirm_duplicate(&item, &offer_state);
                     refresh_confirm_disk_space(&item, current_pending_size(&pending));
@@ -1839,6 +1896,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         item.set_category(category.into());
                         let dir = settings.directory_for(category);
                         item.set_download_dir(dir.clone().into());
+                        sync_confirm_save_preview(&item);
                         sync_confirm_selectors(&item, &settings, &dir, None);
                         refresh_confirm_duplicate(&item, &offer_state);
                         refresh_confirm_disk_space(&item, current_pending_size(&pending));
@@ -1863,10 +1921,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     complete.on_command({
         let completed_task = Rc::clone(&completed_task);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let window = complete.as_weak();
         move |command| {
             let Some(item) = window.upgrade() else { return };
             if command == "hide_complete" {
+                complete_shown_at.set(None);
                 let _ = item.hide();
                 return;
             }
@@ -1950,11 +2010,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
+        let complete_shown_at = Rc::clone(&complete_shown_at);
         let clipboard_filter = Rc::clone(&clipboard_filter);
         let settings_reload = settings_reload.clone();
         let runtime_settings = Rc::clone(&runtime_settings);
         let presenter_settings = Arc::clone(&presenter_settings);
         let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
+        let progress_user_moved = Arc::clone(&progress_user_moved);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
@@ -2056,9 +2118,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 .lock()
                                 .map(|settings| settings.download_dir.clone())
                                 .unwrap_or_default();
+                            let workbench_visible = current_workbench
+                                .as_ref()
+                                .is_some_and(|window| window.window.window().is_visible());
                             update_task_windows(
                                 snapshot,
-                                *runtime_settings.borrow(),
+                                PresenterRuntimeSettings {
+                                    workbench_visible,
+                                    ..*runtime_settings.borrow()
+                                },
                                 open_folder_on_complete.get(),
                                 &fallback_dir,
                                 &progress,
@@ -2067,12 +2135,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 &rendered_hud_task,
                                 &completed_task,
                                 &completed_notified,
+                                Some(&complete_shown_at),
+                                Some(&progress_user_moved),
                             );
                         }
                         CoreEvent::TaskDeleted { task_id } => {
                             completed_notified.borrow_mut().remove(&task_id);
                             if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
                                 *completed_task.borrow_mut() = None;
+                                complete_shown_at.set(None);
                                 if let Some(item) = complete.upgrade() {
                                     item.set_task_id("".into());
                                     let _ = item.hide();
@@ -2105,11 +2176,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     );
                                     render_progress_hud(
                                         &progress,
-                                        *runtime_settings.borrow(),
+                                        PresenterRuntimeSettings {
+                                            workbench_visible: current_workbench
+                                                .as_ref()
+                                                .is_some_and(|w| w.window.window().is_visible()),
+                                            ..*runtime_settings.borrow()
+                                        },
                                         &primary,
                                         position,
                                         &fallback_dir,
                                         processing_elapsed,
+                                        Some(&progress_user_moved),
                                     )
                                 }
                                 None => {
@@ -2147,6 +2224,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 item.set_power_seconds(
                                     i32::try_from(delay_seconds).unwrap_or(i32::MAX),
                                 );
+                                complete_shown_at.set(Some(std::time::Instant::now()));
                                 present_complete_toast(&item);
                             }
                         }
@@ -2157,36 +2235,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Creating a hidden Slint window does not initialize its renderer. Present one
-    // frame off-screen so the first browser handoff only pays IPC and
-    // visibility latency, not font/layout/graphics initialization.
-    let prewarm_timer = Timer::default();
-    // A zero-duration Slint timer is treated as stopped by some backends.
-    // Schedule the prewarm on the first real event-loop tick instead.
-    prewarm_timer.start(TimerMode::SingleShot, Duration::from_millis(1), {
-        let confirm = confirm.as_weak();
-        let pending = Arc::clone(&pending);
-        move || {
-            if !pending.lock().map(|items| items.is_empty()).unwrap_or(true) {
-                return;
-            }
-            let Some(item) = confirm.upgrade() else {
-                return;
-            };
-            item.window()
-                .set_position(slint::PhysicalPosition::new(-32_000, -32_000));
-            if native_window::show_non_activating(&item, false, false).is_ok() {
-                // `show()` initializes the native window and renderer. Some
-                // Windows/driver combinations deliberately skip rendering
-                // notifications for a fully off-screen window, which used to
-                // leave the presenter permanently "not ready" even though the
-                // first real popup worked. The latency smoke still measures
-                // the first real visible frame, so marking the completed
-                // off-screen show here is both deterministic and honest.
-                write_ready_marker();
-                let _ = item.hide();
-            }
-        }
+    // Keep popup windows strictly hidden at startup so MainWindowTitle on
+    // `--workbench` launch is always the Workbench window and zero ghost
+    // topmost windows exist. Signal readiness on the first event-loop tick.
+    let ready_timer = Timer::default();
+    ready_timer.start(TimerMode::SingleShot, Duration::from_millis(1), || {
+        write_ready_marker();
     });
 
     show_next_offer(&confirm.as_weak(), &offer_state);
@@ -2198,7 +2252,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     slint::run_event_loop_until_quit()?;
     processing_timer.stop();
-    prewarm_timer.stop();
+    ready_timer.stop();
     Ok(())
 }
 
@@ -2223,7 +2277,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
     match kind {
         "cast" => {
             let window = CastWindow::new()?;
-            crate::native_window::apply_theme(&window, dark);
+            crate::native_window::apply_dialog_theme(&window, dark);
             window.global::<Tokens>().set_reduce_motion(true);
             window.show()?;
             write_ready_marker();
@@ -2231,7 +2285,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
         }
         "settings" => {
             let window = SettingsWindow::new()?;
-            crate::native_window::apply_theme(&window, dark);
+            crate::native_window::apply_dialog_theme(&window, dark);
             window
                 .global::<Tokens>()
                 .set_reduce_motion(env::var_os("HLS_V7_RENDER_MOTION").is_none());
@@ -2263,16 +2317,25 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                     }
                     .into(),
                     queue_index: index,
-                    downloaded_bytes: 32 * 1024 * 1024,
+                    downloaded_bytes: if index % 3 == 0 {
+                        128 * 1024 * 1024
+                    } else {
+                        32 * 1024 * 1024
+                    },
                     total_bytes: Some(128 * 1024 * 1024),
-                    speed_bytes_per_sec: 1024 * 1024,
-                    available_actions: vec!["pause".into(), "cancel".into()],
+                    speed_bytes_per_sec: if index % 3 == 0 { 0 } else { 1024 * 1024 },
+                    available_actions: if index % 3 == 0 {
+                        vec!["open".into(), "open_folder".into(), "delete".into()]
+                    } else {
+                        vec!["pause".into(), "cancel".into()]
+                    },
                     ..Default::default()
                 })
                 .collect();
             let workbench = workbench::Workbench::new(
                 tasks,
                 1,
+                true,
                 dark,
                 env::var_os("HLS_V7_RENDER_MOTION").is_none(),
             )?;
@@ -2317,9 +2380,10 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
             ])));
             window.set_recent_dir_index(0);
             window.set_duplicate_text("已有同一地址的任务：示例视频.mp4（已暂停）".into());
-            window.set_remaining("  ·  后面还有 2 个".into());
+            window.set_remaining("后面还有 2 个".into());
             window.set_free_space_hint("磁盘可用 186.4 GB".into());
             window.set_free_space_low(false);
+            sync_confirm_save_preview(&window);
             if kind == "confirm-error" {
                 let (text, actions) = target_check::TargetIssue::NoPermission.presentation();
                 set_confirm_issue(&window, &text, actions);
@@ -2329,6 +2393,7 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                 let filename = "分布式一致性协议实战：从 Paxos 到 Raft 的工程化落地与故障演练全程录像（高清 1080p · 含中英双语字幕、课后答疑、助教板书整理、往年期末真题讲解与实验环境搭建步骤的完整合集，第一部分至第三部分，另附全部课堂讨论记录与小组项目展示录像）.mp4";
                 window.set_download_dir(directory.into());
                 window.set_filename(filename.into());
+                sync_confirm_save_preview(&window);
                 window.set_duplicate_text("".into());
                 let units = target_check::path_units(directory, filename);
                 debug_assert!(units > 259);
@@ -2344,12 +2409,30 @@ fn run_visual_fixture(kind: &str, dark: bool) -> Result<(), Box<dyn std::error::
                 window.set_details_expanded(true);
                 window.set_duplicate_text("".into());
             }
-            window.on_command(|command| {
-                if command != "drag" {
-                    let _ = slint::quit_event_loop();
+            window.on_command({
+                let weak = window.as_weak();
+                move |command| {
+                    if command == "toggle_details" {
+                        if let Some(item) = weak.upgrade() {
+                            item.set_details_expanded(!item.get_details_expanded());
+                            fit_confirm_window(&item);
+                        }
+                        return;
+                    }
+                    if command != "drag" {
+                        let _ = slint::quit_event_loop();
+                    }
                 }
             });
             correct_native_click_position(window.window());
+            window.window().set_size(slint::LogicalSize::new(
+                520.0,
+                if window.get_details_expanded() {
+                    560.0
+                } else {
+                    468.0
+                },
+            ));
             window.show()?;
             round_native_window(window.window());
             fit_confirm_window(&window);
@@ -2520,6 +2603,7 @@ struct EventLoopState {
     quick_failed: Arc<Mutex<HashSet<String>>>,
     confirm_dir_overridden: Arc<std::sync::atomic::AtomicBool>,
     core_online: Arc<std::sync::atomic::AtomicBool>,
+    browser_connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn event_loop(
@@ -2554,6 +2638,11 @@ fn event_loop(
         state
             .core_online
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(page) = client.task_page(None, 1) {
+            state
+                .browser_connected
+                .store(page.browser_connected, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Ok(mut known_tasks) = state.known_tasks.lock() {
             *known_tasks = tasks.clone();
         }
@@ -2682,6 +2771,11 @@ fn event_loop(
                         if matches!(event, CoreEvent::Shutdown) {
                             shutting_down = true;
                         }
+                        if let CoreEvent::BrowserStatus { connected, .. } = &event {
+                            state
+                                .browser_connected
+                                .store(*connected, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if let CoreEvent::TaskDeleted { ref task_id } = event {
                             if let Ok(mut variants) = state.known_task_variants.lock() {
                                 variants.remove(task_id);
@@ -2793,14 +2887,42 @@ fn load_handoff_state(
 }
 
 // 输入为 rcWork 的物理尺寸；紧凑窗口不能超出可用工作区。
+#[cfg(test)]
 fn confirm_window_logical_size(work_area: (u32, u32), scale_factor: f32) -> Option<(f32, f32)> {
+    confirm_window_logical_size_for(work_area, scale_factor, false)
+}
+
+fn confirm_window_logical_size_for(
+    work_area: (u32, u32),
+    scale_factor: f32,
+    details_expanded: bool,
+) -> Option<(f32, f32)> {
     if work_area.0 == 0 || work_area.1 == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
         return None;
     }
+    let target_height = if details_expanded { 560.0 } else { 468.0 };
     Some((
         (work_area.0 as f32 / scale_factor).min(520.0),
-        (work_area.1 as f32 / scale_factor).min(400.0),
+        (work_area.1 as f32 / scale_factor).min(target_height),
     ))
+}
+
+fn format_save_preview(download_dir: &str, filename: &str) -> String {
+    let dir = download_dir.trim();
+    if dir.is_empty() {
+        return filename.to_owned();
+    }
+    let trimmed = dir.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        format!("\\{filename}")
+    } else {
+        format!("{trimmed}\\{filename}")
+    }
+}
+
+fn sync_confirm_save_preview(item: &ConfirmWindow) {
+    let preview = format_save_preview(&item.get_download_dir(), &item.get_filename());
+    item.set_save_preview(preview.into());
 }
 
 // 仅在真实确认或 fixture 的 show() 成功后调用；离屏预热不参与尺寸适配。
@@ -2827,6 +2949,9 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
                     return;
                 }
             };
+            if !confirm.window().is_visible() {
+                return;
+            }
             let Ok(handle) = native.window_handle() else {
                 return;
             };
@@ -2845,9 +2970,11 @@ fn fit_confirm_window(confirm: &ConfirmWindow) {
             let work_width = (work_right - work_left) as u32;
             let work_height = (work_bottom - work_top) as u32;
             let scale = native.scale_factor() as f32;
-            let Some((width, height)) =
-                confirm_window_logical_size((work_width, work_height), scale)
-            else {
+            let Some((width, height)) = confirm_window_logical_size_for(
+                (work_width, work_height),
+                scale,
+                confirm.get_details_expanded(),
+            ) else {
                 return;
             };
             let width = (width * scale).round() as u32;
@@ -3104,8 +3231,15 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     state
         .confirm_dir_overridden
         .store(false, std::sync::atomic::Ordering::Relaxed);
+    item.set_is_local_payload(
+        offer
+            .local_source_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()),
+    );
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
+    sync_confirm_save_preview(&item);
     item.set_category(category.into());
     sync_confirm_selectors(
         &item,
@@ -3143,7 +3277,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
         .map(|items| items.len().saturating_sub(1))
         .unwrap_or_default();
     item.set_remaining(if remaining > 0 {
-        format!("  ·  还有 {remaining} 个待确认").into()
+        format!("后面还有 {remaining} 个").into()
     } else {
         "".into()
     });
@@ -3174,6 +3308,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     let shown = if quiet_fullscreen {
         native_window::show_non_activating(&item, false, true).is_ok()
     } else {
+        native_window::set_cloaked(item.window(), true);
         native_window::set_no_activate(item.window(), false);
         item.show().is_ok()
     };
@@ -3184,12 +3319,14 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
         if quiet_fullscreen {
             fit_confirm_window(&item);
         } else {
-            native_window::prepare_dialog(&item, false, false, None);
             fit_confirm_window(&item);
             native_window::prepare_dialog(&item, false, true, None);
         }
-    } else if let Ok(mut active) = state.active_handoff.lock() {
-        *active = None;
+    } else {
+        native_window::set_cloaked(item.window(), false);
+        if let Ok(mut active) = state.active_handoff.lock() {
+            *active = None;
+        }
     }
     let reported = CoreIpcClient::connect()
         .and_then(|mut client| {
@@ -3526,6 +3663,7 @@ struct PresenterRuntimeSettings {
     dark: bool,
     theme_mode: theme::ThemeMode,
     reduce_motion: bool,
+    workbench_visible: bool,
 }
 
 impl PresenterRuntimeSettings {
@@ -3544,6 +3682,7 @@ impl PresenterRuntimeSettings {
                 dark: theme::ThemeMode::from_response(response).is_dark(),
                 theme_mode: theme::ThemeMode::from_response(response),
                 reduce_motion: *reduce_motion || os_reduce_motion(),
+                workbench_visible: false,
             },
             _ => Self {
                 dark: theme::ThemeMode::System.is_dark(),
@@ -3677,9 +3816,9 @@ fn toggle_hud_speed_limit(
     let effective_kib = if next_enabled && current_kib == 0 {
         values.insert(
             "download_speed_limit_kib".into(),
-            serde_json::Value::from(2048u64),
+            serde_json::Value::from(1024u64),
         );
-        2048
+        1024
     } else {
         current_kib
     };
@@ -4247,6 +4386,17 @@ impl ActiveTaskHud {
     }
 }
 
+const COMPLETE_AUTO_DISMISS_DURATION: Duration = Duration::from_secs(10);
+
+pub(crate) fn should_hold_complete_toast(
+    action_busy: bool,
+    power_seconds: i32,
+    power_hint: &str,
+    cursor_inside: bool,
+) -> bool {
+    action_busy || power_seconds > 0 || !power_hint.is_empty() || cursor_inside
+}
+
 fn present_complete_toast(item: &CompleteWindow) {
     if item.get_power_seconds() <= 0 && native_window::is_foreground_fullscreen_or_busy() {
         trace("suppressing complete toast while foreground fullscreen/busy");
@@ -4255,14 +4405,26 @@ fn present_complete_toast(item: &CompleteWindow) {
     let reopening = !item.window().is_visible();
     if reopening {
         item.set_entered(false);
+        native_window::set_cloaked(item.window(), true);
     }
-    native_window::prepare_bottom_right_toast(item, 16.0);
     if item.show().is_ok() {
         if reopening {
             play_complete_entrance(item);
         }
         round_native_window(item.window());
         native_window::prepare_bottom_right_toast(item, 16.0);
+    } else {
+        native_window::set_cloaked(item.window(), false);
+    }
+}
+
+fn apply_completed_snapshot_to_toast(item: &CompleteWindow, snapshot: &TaskSnapshot) {
+    item.set_details(format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into());
+    item.set_filename(snapshot.filename.clone().into());
+    if item.get_power_seconds() <= 0 && item.get_power_hint().is_empty() {
+        item.set_power_hint("".into());
+        item.set_power_action_label("".into());
+        item.set_power_seconds(0);
     }
 }
 
@@ -4278,6 +4440,8 @@ fn update_task_windows(
     rendered_hud_task: &Mutex<Option<String>>,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
+    complete_shown_at: Option<&std::cell::Cell<Option<std::time::Instant>>>,
+    progress_user_moved: Option<&Arc<std::sync::atomic::AtomicBool>>,
 ) {
     if task_is_active(&snapshot.status) {
         completed_notified.borrow_mut().remove(&snapshot.task_id);
@@ -4304,6 +4468,7 @@ fn update_task_windows(
                 position,
                 fallback_dir,
                 processing_elapsed,
+                progress_user_moved,
             )
         }
         None => {
@@ -4350,13 +4515,10 @@ fn update_task_windows(
         }
         if settings.show_complete {
             if let Some(item) = complete.upgrade() {
-                item.set_details(
-                    format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into(),
-                );
-                item.set_filename(snapshot.filename.into());
-                item.set_power_hint("".into());
-                item.set_power_action_label("".into());
-                item.set_power_seconds(0);
+                apply_completed_snapshot_to_toast(&item, &snapshot);
+                if let Some(shown_at) = complete_shown_at {
+                    shown_at.set(Some(std::time::Instant::now()));
+                }
                 present_complete_toast(&item);
             }
         }
@@ -4390,6 +4552,7 @@ fn render_progress_hud(
     position: (usize, usize),
     fallback_dir: &str,
     processing_elapsed: Option<u64>,
+    user_moved: Option<&Arc<std::sync::atomic::AtomicBool>>,
 ) {
     if !settings.show_progress {
         return;
@@ -4503,14 +4666,43 @@ fn render_progress_hud(
     item.set_can_open_folder(snapshot_folder(snapshot, fallback_dir).is_some());
     let first_show = !item.window().is_visible();
     if first_show {
+        if settings.workbench_visible {
+            trace("suppressing floating progress HUD while main workbench is visible");
+            return;
+        }
         if native_window::is_foreground_fullscreen_or_busy() {
             trace("suppressing background progress HUD while foreground fullscreen/busy");
             return;
         }
         item.invoke_enter();
     }
-    if first_show && native_window::show_non_activating(&item, true, false).is_ok() {
+    if first_show && native_window::show_non_activating(&item, false, false).is_ok() {
         round_native_window(item.window());
+        let moved = user_moved.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
+        if !moved {
+            native_window::position_bottom_right_hud(item.window(), 16.0, 36.0);
+            #[cfg(windows)]
+            {
+                let weak = item.as_weak();
+                let moved_flag = user_moved.cloned();
+                let _ = slint::spawn_local(async move {
+                    let Some(item) = weak.upgrade() else {
+                        return;
+                    };
+                    use slint::winit_030::WinitWindowAccessor;
+                    if item.window().winit_window().await.is_ok()
+                        && item.window().is_visible()
+                        && !moved_flag
+                            .as_ref()
+                            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        native_window::position_bottom_right_hud(item.window(), 16.0, 36.0);
+                    }
+                });
+            }
+        } else {
+            native_window::fit_to_work_area(item.window());
+        }
     }
     // show/resize 由 round_native_window 清缓存；普通进度更新保留局部重绘。
     item.window().request_redraw();
@@ -5043,7 +5235,8 @@ mod tests {
                 (320.0, 320.0),
                 (360.0, 360.0),
                 (400.0, 400.0),
-                (816.0, 400.0),
+                (468.0, 468.0),
+                (816.0, 468.0),
             ] {
                 let physical = ((960.0 * scale) as u32, (logical_height * scale) as u32);
                 assert_eq!(
@@ -5058,13 +5251,13 @@ mod tests {
     #[test]
     fn confirm_window_size_keeps_preferred_size_when_it_fits() {
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
-            for (width, height) in [(520.0, 400.0), (960.0, 816.0), (1920.0, 1080.0)] {
+            for (width, height) in [(520.0, 468.0), (960.0, 816.0), (1920.0, 1080.0)] {
                 assert_eq!(
                     confirm_window_logical_size(
                         ((width * scale) as u32, (height * scale) as u32),
                         scale,
                     ),
-                    Some((520.0, 400.0))
+                    Some((520.0, 468.0))
                 );
             }
         }
@@ -5096,7 +5289,7 @@ mod tests {
                     ((480.0 * scale) as u32, (816.0 * scale) as u32),
                     scale
                 ),
-                Some((480.0, 400.0)),
+                Some((480.0, 468.0)),
                 "仅宽度受限，缩放={scale}"
             );
         }
@@ -5108,9 +5301,9 @@ mod tests {
         for (physical, scale, expected) in [
             ((750, 480), 1.5_f32, (500.0, 320.0)),
             ((960, 640), 2.0, (480.0, 320.0)),
-            ((1600, 852), 1.5, (520.0, 400.0)),
+            ((1600, 852), 1.5, (520.0, 468.0)),
             ((650, 450), 1.25, (520.0, 360.0)),
-            ((1920, 1020), 1.25, (520.0, 400.0)),
+            ((1920, 1020), 1.25, (520.0, 468.0)),
         ] {
             assert_eq!(
                 confirm_window_logical_size(physical, scale),
@@ -5801,11 +5994,11 @@ mod tests {
         assert_eq!(format_hud_speed_limit_feedback(true, 2048), "已限速 2 MB/s");
         assert_eq!(format_hud_speed_limit_feedback(false, 0), "已取消限速");
 
-        // Toggle from 0 defaults to 2048 KiB/s; toggling off preserves configured KiB.
+        // Toggle from 0 defaults to 1024 KiB/s; toggling off preserves configured KiB.
         let (enabled, kib, values) = toggle_hud_speed_limit(false, 0);
         assert!(enabled);
-        assert_eq!(kib, 2048);
-        assert_eq!(values["download_speed_limit_kib"], serde_json::json!(2048));
+        assert_eq!(kib, 1024);
+        assert_eq!(values["download_speed_limit_kib"], serde_json::json!(1024));
         let (enabled_off, kib_kept, values_off) = toggle_hud_speed_limit(true, 512);
         assert!(!enabled_off);
         assert_eq!(kib_kept, 512);
@@ -6039,6 +6232,7 @@ mod tests {
             (1, 1),
             "",
             Some(12),
+            None,
         );
         assert!(progress.get_processing());
         assert!(!progress.get_progress_known());
@@ -6137,5 +6331,59 @@ mod tests {
                 .get_free_space_hint()
                 .starts_with("磁盘剩余空间不足"));
         }
+    }
+
+    #[test]
+    fn complete_toast_preserves_active_power_countdown_and_confirm_preview_strips_duplicate_slash()
+    {
+        use super::{apply_completed_snapshot_to_toast, format_save_preview, CompleteWindow};
+
+        assert_eq!(format_save_preview(r"D:\", "movie.mp4"), r"D:\movie.mp4");
+        assert_eq!(
+            format_save_preview(r"D:\下载\媒体", "movie.mp4"),
+            r"D:\下载\媒体\movie.mp4"
+        );
+        assert_eq!(
+            format_save_preview(r"D:\下载\媒体\", "movie.mp4"),
+            r"D:\下载\媒体\movie.mp4"
+        );
+        assert_eq!(format_save_preview("", "movie.mp4"), "movie.mp4");
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let complete = CompleteWindow::new().unwrap();
+        complete.set_power_hint("关机 将在 180 秒后执行".into());
+        complete.set_power_action_label("关机".into());
+        complete.set_power_seconds(180);
+
+        let finished = TaskSnapshot {
+            task_id: "late-finish".into(),
+            filename: "bonus.mp4".into(),
+            status: "completed".into(),
+            downloaded_bytes: 64 * 1024 * 1024,
+            ..Default::default()
+        };
+        apply_completed_snapshot_to_toast(&complete, &finished);
+        assert_eq!(complete.get_filename().as_str(), "bonus.mp4");
+        assert_eq!(complete.get_power_seconds(), 180);
+        assert_eq!(complete.get_power_action_label().as_str(), "关机");
+        assert_eq!(complete.get_power_hint().as_str(), "关机 将在 180 秒后执行");
+
+        // When no power countdown is active, power properties stay clear.
+        let plain = CompleteWindow::new().unwrap();
+        apply_completed_snapshot_to_toast(&plain, &finished);
+        assert_eq!(plain.get_power_seconds(), 0);
+        assert_eq!(plain.get_power_hint().as_str(), "");
+
+        // CompleteWindow auto-dismiss holds while busy, hovered, or showing power countdown.
+        assert!(!super::should_hold_complete_toast(false, 0, "", false));
+        assert!(super::should_hold_complete_toast(true, 0, "", false));
+        assert!(super::should_hold_complete_toast(false, 180, "", false));
+        assert!(super::should_hold_complete_toast(
+            false,
+            0,
+            "关机 将在 180 秒后执行",
+            false
+        ));
+        assert!(super::should_hold_complete_toast(false, 0, "", true));
     }
 }

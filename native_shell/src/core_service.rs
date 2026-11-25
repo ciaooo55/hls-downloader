@@ -5,10 +5,136 @@ use crate::{
     AvScanStatus, CoreCommand, CoreRuntime, CoreStore, EventEnvelope, MirrorStatus, TaskFailure,
     TaskSnapshot, TaskSpec,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresenterWakeMode {
+    BackgroundToast,
+    Workbench,
+}
+
+#[derive(Default)]
+struct PendingPresenterQueue {
+    ui_shows: VecDeque<(String, Instant)>,
+    clipboard_offers: VecDeque<(Vec<String>, Instant)>,
+    undelivered_power_action: bool,
+}
+
+pub struct PresenterBridge {
+    subscribers: AtomicUsize,
+    pending: Mutex<PendingPresenterQueue>,
+    waker: Mutex<Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>>,
+}
+
+impl PresenterBridge {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            subscribers: AtomicUsize::new(0),
+            pending: Mutex::new(PendingPresenterQueue::default()),
+            waker: Mutex::new(None),
+        })
+    }
+
+    pub(crate) fn enter_subscriber(self: &Arc<Self>) -> PresenterSubscriberGuard {
+        self.subscribers.fetch_add(1, Ordering::AcqRel);
+        PresenterSubscriberGuard(Arc::clone(self))
+    }
+
+    pub(crate) fn has_subscribers(&self) -> bool {
+        self.subscribers.load(Ordering::Acquire) > 0
+    }
+
+    pub(crate) fn set_waker(&self, waker: Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>) {
+        if let Ok(mut guard) = self.waker.lock() {
+            *guard = waker;
+        }
+    }
+
+    pub(crate) fn wake(&self, mode: PresenterWakeMode) {
+        let waker = self.waker.lock().ok().and_then(|guard| guard.clone());
+        if let Some(waker) = waker {
+            waker(mode);
+        }
+    }
+
+    pub(crate) fn queue_ui_show(&self, surface: &str, ttl: Duration) {
+        let now = Instant::now();
+        if let Ok(mut guard) = self.pending.lock() {
+            guard.ui_shows.retain(|(_, expires)| *expires > now);
+            if guard
+                .ui_shows
+                .back()
+                .is_none_or(|(queued, _)| queued != surface)
+            {
+                guard.ui_shows.push_back((surface.to_string(), now + ttl));
+            }
+        }
+    }
+
+    pub(crate) fn queue_clipboard_offer(&self, urls: Vec<String>, ttl: Duration) {
+        if urls.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        if let Ok(mut guard) = self.pending.lock() {
+            guard.clipboard_offers.retain(|(_, expires)| *expires > now);
+            if guard
+                .clipboard_offers
+                .back()
+                .is_none_or(|(queued, _)| *queued != urls)
+            {
+                guard.clipboard_offers.push_back((urls, now + ttl));
+            }
+        }
+    }
+
+    pub(crate) fn mark_power_action_pending(&self) {
+        if let Ok(mut guard) = self.pending.lock() {
+            guard.undelivered_power_action = true;
+        }
+    }
+
+    pub(crate) fn take_ready_events(&self) -> Vec<crate::CoreEvent> {
+        let now = Instant::now();
+        let Ok(mut guard) = self.pending.lock() else {
+            return Vec::new();
+        };
+        let mut ready = Vec::new();
+        if guard.undelivered_power_action {
+            guard.undelivered_power_action = false;
+            if let Some((action, title, delay_seconds)) = crate::power_action::pending_details() {
+                ready.push(crate::CoreEvent::PowerActionPending {
+                    action,
+                    title,
+                    delay_seconds,
+                });
+            }
+        }
+        while let Some((urls, expires)) = guard.clipboard_offers.pop_front() {
+            if expires > now {
+                ready.push(crate::CoreEvent::ClipboardOffer { urls });
+            }
+        }
+        while let Some((surface, expires)) = guard.ui_shows.pop_front() {
+            if expires > now {
+                ready.push(crate::CoreEvent::UiShow { surface });
+            }
+        }
+        ready
+    }
+}
+
+pub(crate) struct PresenterSubscriberGuard(Arc<PresenterBridge>);
+
+impl Drop for PresenterSubscriberGuard {
+    fn drop(&mut self) {
+        self.0.subscribers.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// Active-progress snapshots of one task reach SQLite at most this often; a
 /// status or stage change is always written at once.
@@ -42,6 +168,7 @@ pub struct PersistentCore {
     /// batch (reset when the queue starts a fresh run from idle). Historical
     /// failed/canceled tasks loaded from disk are never placed here.
     batch_disrupted: BTreeMap<String, BTreeSet<String>>,
+    presenter_bridge: Arc<PresenterBridge>,
 }
 
 impl PersistentCore {
@@ -53,7 +180,317 @@ impl PersistentCore {
         Self::from_store(CoreStore::in_memory()?)
     }
 
+    pub(crate) fn presenter_bridge(&self) -> Arc<PresenterBridge> {
+        Arc::clone(&self.presenter_bridge)
+    }
+
+    pub(crate) fn offer_eligible_for_quick_accept(offer: &crate::ResourceOffer) -> bool {
+        if offer.resource_kind == crate::ResourceKind::Torrent {
+            return false;
+        }
+        let url = offer.url.trim();
+        if url.is_empty() {
+            return false;
+        }
+        if let Some(local) = offer.local_source_path.as_deref() {
+            offer.resource_kind == crate::ResourceKind::File
+                && !local.trim().is_empty()
+                && hls_client::request_validation::validate_local_source_path(
+                    url,
+                    local,
+                    (offer.size > 0).then_some(offer.size),
+                )
+                .is_ok()
+        } else {
+            crate::http_engine::remote_resource_url_allowed(url)
+                && (offer.audio_url.trim().is_empty()
+                    || (crate::http_engine::remote_resource_url_allowed(offer.audio_url.trim())
+                        && crate::http_engine::http_fetch_url_allowed(offer.audio_url.trim())))
+        }
+    }
+
+    fn default_quick_spec_from_store(
+        &self,
+        offer: &crate::ResourceOffer,
+    ) -> Result<Option<TaskSpec>, String> {
+        if !self
+            .store
+            .setting_bool("browser_quick_download_enabled", false)?
+        {
+            return Ok(None);
+        }
+        let legal_ok = self.store.setting_bool("legal_terms_accepted", true)?;
+        let legal_version = self
+            .store
+            .setting_string("legal_terms_version", crate::LEGAL_TERMS_VERSION)?;
+        if !legal_ok
+            || (!legal_version.is_empty() && legal_version != crate::LEGAL_TERMS_VERSION)
+            || !Self::offer_eligible_for_quick_accept(offer)
+        {
+            return Ok(None);
+        }
+        let allowed_hosts = self.store.setting_string("allowed_hosts", "")?;
+        if offer.local_source_path.is_none()
+            && (!crate::net_policy::url_allowed(offer.url.trim(), &allowed_hosts)
+                || (!offer.audio_url.trim().is_empty()
+                    && !crate::net_policy::url_allowed(offer.audio_url.trim(), &allowed_hosts)))
+        {
+            return Ok(None);
+        }
+        let filename = if !offer.filename.trim().is_empty() {
+            offer.filename.trim().to_string()
+        } else {
+            offer
+                .url
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(&offer.url)
+                .rsplit('/')
+                .find(|part| !part.is_empty())
+                .unwrap_or("download")
+                .to_string()
+        };
+        let filename = if offer.resource_kind == crate::ResourceKind::File
+            && !offer.audio_url.trim().is_empty()
+        {
+            crate::download_worker::normalize_dual_track_mp4_filename(&filename)
+        } else {
+            filename
+        };
+        if crate::download_worker::validate_filename(&filename).is_err() {
+            return Ok(None);
+        }
+        let configured_dir = self.store.setting_string("download_dir", "")?;
+        let base_dir = if !configured_dir.trim().is_empty() {
+            configured_dir
+        } else {
+            std::env::var("HLS_V7_DOWNLOAD_DIR")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| {
+                    crate::default_v7_download_dir()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+        };
+        let auto_cat = self.store.setting_bool("auto_category_dirs", false)?;
+        let cat_dirs = crate::category::parse_category_dirs(
+            &self.store.setting_string("browser_category_dirs", "")?,
+        );
+        let download_dir = if offer.local_source_path.is_some() {
+            base_dir
+        } else {
+            crate::category::resolve_category_dir(
+                &base_dir,
+                &filename,
+                &offer.url,
+                offer.resource_kind,
+                auto_cat,
+                &cat_dirs,
+            )
+        };
+        let temp_dir = self.store.setting_string("temp_dir", "")?;
+        let work_dir = if temp_dir.trim().is_empty() {
+            download_dir.clone()
+        } else {
+            temp_dir
+        };
+        let concurrency = self
+            .store
+            .setting_u64("default_concurrency", 12)?
+            .clamp(1, 64) as u32;
+        let allow_duplicate = self.store.setting_bool("allow_duplicate", false)?;
+        let local_source_path = match offer.local_source_path.as_deref() {
+            Some(local) => Some(
+                hls_client::request_validation::validate_local_source_path(
+                    offer.url.trim(),
+                    local,
+                    (offer.size > 0).then_some(offer.size),
+                )?
+                .to_string_lossy()
+                .into_owned(),
+            ),
+            None => None,
+        };
+        Ok(Some(TaskSpec {
+            url: offer.url.trim().to_string(),
+            resource_kind: offer.resource_kind,
+            local_source_path,
+            title: if offer.title.trim().is_empty() {
+                filename.clone()
+            } else {
+                offer.title.clone()
+            },
+            filename,
+            download_dir,
+            work_dir,
+            queue_id: crate::DEFAULT_QUEUE_ID.into(),
+            allow_duplicate,
+            request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
+            mime_type: offer.mime_type.clone(),
+            concurrency,
+            credential_ref: offer.credential_ref.clone(),
+            replay_context_ref: offer.replay_context_ref.clone(),
+            expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                .then_some(offer.size),
+            preferred_bandwidth: offer.preferred_bandwidth,
+            preferred_height: offer.preferred_height,
+            preferred_variant_id: offer.preferred_variant_id.clone(),
+            source_page_url: offer.source_page_url.clone(),
+            audio_url: offer.audio_url.trim().to_string(),
+            resource_key: if offer.local_source_path.is_some() {
+                String::new()
+            } else if offer.resource_key.trim().is_empty() {
+                crate::http_engine::canonical_url_key(&offer.url)
+            } else {
+                offer.resource_key.clone()
+            },
+            ..Default::default()
+        }))
+    }
+
+    pub(crate) fn has_quick_handoff_duplicate_conflict(
+        &self,
+        offer: &crate::ResourceOffer,
+        spec: &TaskSpec,
+    ) -> bool {
+        if spec.allow_duplicate {
+            return false;
+        }
+        let without_password = |url: &str| {
+            crate::duplicate::canonicalize_url(&hls_client::url_credentials::redact_ftp_passwords(
+                url,
+            ))
+        };
+        let want_url = without_password(&offer.url);
+        let is_adaptive = matches!(
+            offer.resource_kind,
+            crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
+        );
+        let offer_variant = (
+            offer.preferred_variant_id.trim(),
+            offer.preferred_bandwidth,
+            offer.preferred_height,
+        );
+        let offer_name_lower = crate::download_worker::provisional_task_name(spec)
+            .trim()
+            .to_lowercase();
+        let offer_key = if offer.local_source_path.is_some() {
+            String::new()
+        } else if !offer.resource_key.trim().is_empty() {
+            offer.resource_key.trim().to_string()
+        } else {
+            crate::http_engine::canonical_url_key(&offer.url)
+        };
+        let offer_page = crate::duplicate::canonicalize_url(&offer.source_page_url);
+        let want_target = (!spec.download_dir.trim().is_empty() && !offer_name_lower.is_empty())
+            .then(|| {
+                Path::new(spec.download_dir.trim())
+                    .join(&offer_name_lower)
+                    .to_string_lossy()
+                    .to_lowercase()
+            });
+
+        for task in self.tasks() {
+            if matches!(task.status.as_str(), "canceled" | "cancelled") {
+                continue;
+            }
+            let stored_spec = self.task_spec(&task.task_id);
+            if !want_url.is_empty() && without_password(&task.url) == want_url {
+                if is_adaptive {
+                    let same_variant = match stored_spec {
+                        Some(stored) => {
+                            (
+                                stored.preferred_variant_id.trim(),
+                                stored.preferred_bandwidth,
+                                stored.preferred_height,
+                            ) == offer_variant
+                        }
+                        None => offer_variant == ("", 0, 0),
+                    };
+                    if same_variant {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+            if is_adaptive
+                || matches!(
+                    task.resource_kind,
+                    crate::ResourceKind::Hls
+                        | crate::ResourceKind::Dash
+                        | crate::ResourceKind::Live
+                )
+            {
+                continue;
+            }
+            let task_name_lower = if !task.filename.trim().is_empty() {
+                task.filename.trim().to_lowercase()
+            } else if let Some(stored) = stored_spec {
+                crate::download_worker::provisional_task_name(stored)
+                    .trim()
+                    .to_lowercase()
+            } else {
+                task.title.trim().to_lowercase()
+            };
+            let task_key = stored_spec
+                .map(|stored| {
+                    if stored.resource_key.trim().is_empty() {
+                        crate::http_engine::canonical_url_key(&stored.url)
+                    } else {
+                        stored.resource_key.trim().to_string()
+                    }
+                })
+                .unwrap_or_else(|| crate::http_engine::canonical_url_key(&task.url));
+            if !offer_key.is_empty()
+                && !offer_name_lower.is_empty()
+                && task_key == offer_key
+                && task_name_lower == offer_name_lower
+            {
+                return true;
+            }
+            if !offer_page.is_empty()
+                && !offer_name_lower.is_empty()
+                && crate::duplicate::canonicalize_url(&task.source_page_url) == offer_page
+                && task_name_lower == offer_name_lower
+            {
+                return true;
+            }
+            if let Some(ref want_path) = want_target {
+                let task_target = if !task.output_path.trim().is_empty() {
+                    Some(task.output_path.trim().to_lowercase())
+                } else {
+                    stored_spec
+                        .filter(|s| {
+                            !s.download_dir.trim().is_empty() && !task_name_lower.is_empty()
+                        })
+                        .map(|s| {
+                            Path::new(s.download_dir.trim())
+                                .join(&task_name_lower)
+                                .to_string_lossy()
+                                .to_lowercase()
+                        })
+                };
+                if task_target.as_deref() == Some(want_path.as_str()) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn admit_handoff(&mut self, encoded: &str) -> Result<String, String> {
+        self.admit_handoff_with_quick_spec(encoded, None)
+            .map(|(admitted, _)| admitted)
+    }
+
+    pub(crate) fn admit_handoff_with_quick_spec(
+        &mut self,
+        encoded: &str,
+        quick_spec: Option<TaskSpec>,
+    ) -> Result<(String, Option<String>), String> {
         let original: crate::contract::BrowserHandoff = serde_json::from_str(encoded)
             .map_err(|error| format!("decode browser handoff: {error}"))?;
         let handoff = redact_urls(original.clone())?;
@@ -73,7 +510,7 @@ impl PersistentCore {
                 .query_handoffs(None, Some(&handoff.request_id), false)?
                 .pop()
             {
-                return Ok(existing);
+                return Ok((existing, None));
             }
         }
         if !self
@@ -82,6 +519,53 @@ impl PersistentCore {
             .is_empty()
         {
             return Err("交接编号已属于另一请求".into());
+        }
+        let resolved_quick_spec = match quick_spec {
+            Some(spec) => Some(spec),
+            None => self.default_quick_spec_from_store(&original.offer)?,
+        };
+        if let Some(spec) = resolved_quick_spec {
+            if crate::download_worker::validate_filename(&spec.filename).is_ok()
+                && !self.has_quick_handoff_duplicate_conflict(&original.offer, &spec)
+            {
+                let redacted_spec = redact_urls(spec.clone())?;
+                let before = self.runtime.clone();
+                let mut events = self.runtime.handle(CoreCommand::CreateTask {
+                    spec: redacted_spec,
+                });
+                let created_task_id = events.iter().find_map(|envelope| match &envelope.event {
+                    crate::CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                    _ => None,
+                });
+                if let Some(task_id) = created_task_id {
+                    let mut accepted_original = original;
+                    accepted_original.status = "accepted".into();
+                    accepted_original.presentation = "quick_accepted".into();
+                    accepted_original.task_id = Some(task_id.clone());
+                    let mut accepted_handoff = handoff;
+                    accepted_handoff.status = "accepted".into();
+                    accepted_handoff.presentation = "quick_accepted".into();
+                    accepted_handoff.task_id = Some(task_id.clone());
+                    events.extend(self.runtime.emit(crate::CoreEvent::HandoffResolved {
+                        handoff_id: accepted_handoff.id.clone(),
+                        task_id: Some(task_id.clone()),
+                    }));
+                    let encoded_accepted = serde_json::to_string(&accepted_handoff)
+                        .map_err(|error| format!("encode browser handoff: {error}"))?;
+                    if let Err(error) = self.store.apply_events_spec_and_handoff(
+                        &events,
+                        Some(&spec),
+                        Some(&accepted_original),
+                    ) {
+                        self.runtime = before;
+                        return Err(error);
+                    }
+                    self.update_batch_disrupted_against(&before, &events);
+                    self.committed(&events);
+                    return Ok((encoded_accepted, Some(task_id)));
+                }
+                self.runtime = before;
+            }
         }
         let encoded = serde_json::to_string(&handoff)
             .map_err(|error| format!("encode browser handoff: {error}"))?;
@@ -94,7 +578,7 @@ impl PersistentCore {
             return Err(error);
         }
         self.committed(&events);
-        Ok(encoded)
+        Ok((encoded, None))
     }
 
     pub fn handle(&mut self, command: CoreCommand) -> Result<Vec<EventEnvelope>, String> {
@@ -908,6 +1392,7 @@ impl PersistentCore {
             persisted_progress: HashMap::new(),
             volatile_tasks: BTreeSet::new(),
             batch_disrupted: BTreeMap::new(),
+            presenter_bridge: PresenterBridge::new(),
         })
     }
     pub fn flush_for_shutdown(&mut self) -> Result<(), String> {
