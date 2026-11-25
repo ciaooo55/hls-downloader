@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   applyTheme,
   normalizeThemePreference,
+  readCachedResolvedTheme,
+  RESOLVED_THEME_STORAGE_KEY,
   resolveTheme,
   THEME_BASE_CSS,
   THEME_TOKENS_CSS,
+  writeCachedResolvedTheme,
 } from './theme'
 
 describe('theme resolution', () => {
@@ -66,6 +69,28 @@ describe('applyTheme', () => {
     media.flip()
     expect(root.getAttribute('data-hlsd-theme')).toBe('dark')
     expect(media.listenerCount()).toBe(0)
+  })
+
+  it('persists and restores synchronous resolved theme cache for zero-flash popup boot', () => {
+    const store = new Map<string, string>()
+    const fakeStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    }
+    expect(readCachedResolvedTheme(fakeStorage)).toBeNull()
+    const root = fakeRoot()
+    const media = fakeMedia(true)
+    const cleanup = applyTheme(
+      root,
+      'auto',
+      () => media as unknown as MediaQueryList,
+      resolved => writeCachedResolvedTheme(resolved, fakeStorage),
+    )
+    expect(store.get(RESOLVED_THEME_STORAGE_KEY)).toBe('dark')
+    expect(readCachedResolvedTheme(fakeStorage)).toBe('dark')
+    media.flip()
+    expect(readCachedResolvedTheme(fakeStorage)).toBe('light')
+    cleanup()
   })
 })
 

@@ -91,7 +91,7 @@ export function pageDownloadUrls(
   anchors: PageLinkCandidate[],
   mediaSrcs: string[],
   baseUrl: string,
-  limit = 40,
+  limit = 200,
 ): string[] {
   const maxItems = Math.max(1, Math.min(200, Math.floor(limit)))
   const basePage = pageIdentity(baseUrl)

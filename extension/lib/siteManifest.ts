@@ -7,6 +7,7 @@ export interface SiteManifestCandidate {
   url: string
   mimeType: string
   videoId: string
+  audioUrl?: string
   inspection?: Partial<MediaResource>
 }
 
@@ -37,7 +38,7 @@ const BILIBILI_PLAYURL_PATHS = new Set([
   '/pgc/player/web/v2/playurl',
 ])
 
-const BILIBILI_AUDIO_TRACK_ID = /-(?:30216|30232|30280|30250|30251)\.m4s(?:$|[?#])/i
+const BILIBILI_AUDIO_TRACK_ID = /-(?:30216|30232|30280|30250|30251|30255|30257|30259|30260)\.m4s(?:$|[?#])/i
 
 /** A logical page identity, never a substitute for exact request/byte ownership. */
 export function youtubePageVideoId(pageUrl: string): string {
@@ -73,6 +74,39 @@ export function sitePageVideoId(pageUrl: string): string {
   return youtubePageVideoId(pageUrl) || bilibiliPageVideoId(pageUrl)
 }
 
+/**
+ * True when two URLs represent the same non-empty video playback target across
+ * SPA `replaceState`/`pushState` normalizations (such as Bilibili `/video/BV...` ->
+ * `/en/video/BV...` or tracking query stripping) while distinguishing multi-part
+ * episodes (`?p=2`) and playlist switches (`?list=...`).
+ */
+export function sameSiteVideoIdentity(previousUrl: string, nextUrl: string): boolean {
+  if (!previousUrl || !nextUrl) return false
+  const prevId = sitePageVideoId(previousUrl)
+  const nextId = sitePageVideoId(nextUrl)
+  if (!prevId || prevId !== nextId) return false
+  try {
+    const prev = new URL(previousUrl)
+    const next = new URL(nextUrl)
+    if (prev.origin !== next.origin) return false
+    if (bilibiliHost(prev.hostname)) {
+      const prevPart = prev.searchParams.get('p') || '1'
+      const nextPart = next.searchParams.get('p') || '1'
+      return prevPart === nextPart
+    }
+    if (youtubeHost(prev.hostname) || prev.hostname === 'www.youtube-nocookie.com') {
+      const prevList = prev.searchParams.get('list') || ''
+      const nextList = next.searchParams.get('list') || ''
+      const prevIndex = prev.searchParams.get('index') || ''
+      const nextIndex = next.searchParams.get('index') || ''
+      return prevList === nextList && prevIndex === nextIndex
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** True for Bilibili CDN full-track byte-ranged video `.m4s` streams appended to MSE. */
 export function isBilibiliFullTrackMseUrl(url: string): boolean {
   try {
@@ -81,6 +115,18 @@ export function isBilibiliFullTrackMseUrl(url: string): boolean {
     if (!bilibiliMediaHost(parsed.hostname)) return false
     if (!/\.m4s$/i.test(parsed.pathname)) return false
     return !BILIBILI_AUDIO_TRACK_ID.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+/** True for Bilibili CDN full-track byte-ranged audio `.m4s` streams appended to MSE. */
+export function isBilibiliAudioTrackMseUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) return false
+    if (!bilibiliMediaHost(parsed.hostname)) return false
+    return BILIBILI_AUDIO_TRACK_ID.test(parsed.pathname)
   } catch {
     return false
   }
@@ -136,8 +182,33 @@ function codecPreference(codecs: string): number {
   return 0
 }
 
+function parseFrameRate(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  const text = String(raw || '').trim()
+  if (!text) return 0
+  if (text.includes('/')) {
+    const [num, den] = text.split('/', 2).map(Number)
+    if (Number.isFinite(num) && Number.isFinite(den) && den > 0) return num / den
+  }
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function extractTrackObjects(raw: unknown): Array<Record<string, unknown>> {
+  if (!raw) return []
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+  }
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>
+    if (obj.audio) return extractTrackObjects(obj.audio)
+    return [obj]
+  }
+  return []
+}
+
 /** Extract Bilibili DASH/durl streams from `window.__playinfo__` or `playurl` JSON. */
-export function bilibiliPlayinfoCandidates(pageUrl: string, body: unknown): SiteManifestCandidate[] {
+export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteManifestCandidate[] {
   const videoId = bilibiliPageVideoId(pageUrl)
   if (!videoId) return []
   if (typeof body === 'string') {
@@ -171,6 +242,7 @@ export function bilibiliPlayinfoCandidates(pageUrl: string, body: unknown): Site
       width: number
       height: number
       bandwidth: number
+      fps: number
       quality: string
       codecs: string
       variantId: string
@@ -185,67 +257,116 @@ export function bilibiliPlayinfoCandidates(pageUrl: string, body: unknown): Site
       const width = Math.max(0, Math.floor(Number(track.width || 0)))
       const height = Math.max(0, Math.floor(Number(track.height || 0)))
       const bandwidth = Math.max(0, Math.floor(Number(track.bandwidth || 0)))
+      const fps = parseFrameRate(track.frameRate ?? track.frame_rate)
+      const highFps = fps >= 50 ? Math.round(fps) : 0
       const codecs = String(track.codecs || '')
       const id = String(track.id || '')
-      const quality = height > 0 ? `${height}p` : (id ? `Q${id}` : '')
+      const quality = height > 0
+        ? `${height}p${highFps ? highFps : ''}`
+        : (id ? `Q${id}` : '')
       parsedVideos.push({
         url: urls[0],
         width,
         height,
         bandwidth,
+        fps,
         quality,
         codecs,
         variantId: `${id || height || 0}:${codecs || bandwidth || 0}`,
       })
     }
-    const audioTracks: MediaAudioTrack[] = []
-    if (Array.isArray(dash.audio)) {
-      for (const raw of dash.audio) {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
-        const track = raw as Record<string, unknown>
+
+    type ParsedAudio = {
+      url: string
+      bandwidth: number
+      codecs: string
+      standardAac: boolean
+      label: string
+    }
+    const parsedAudios: ParsedAudio[] = []
+    const collectAudioGroup = (rawGroup: unknown, groupKind: 'standard' | 'dolby' | 'flac') => {
+      for (const track of extractTrackObjects(rawGroup)) {
         const urls = bilibiliTrackUrls(track)
         if (!urls.length) continue
         urls.forEach(u => playbackUrls.add(u))
-        audioTracks.push({
-          label: String(track.codecs || track.id || '音频'),
-          language: '',
+        const bandwidth = Math.max(0, Math.floor(Number(track.bandwidth || 0)))
+        const codecs = String(track.codecs || track.mimeType || '')
+        const lowerCodecs = codecs.toLowerCase()
+        const isSpecialCodec = groupKind !== 'standard'
+          || lowerCodecs.includes('flac')
+          || lowerCodecs.includes('ec-3')
+          || lowerCodecs.includes('ac-3')
+          || lowerCodecs.includes('eac3')
+        parsedAudios.push({
           url: urls[0],
-          default: audioTracks.length === 0,
+          bandwidth,
+          codecs,
+          standardAac: !isSpecialCodec,
+          label: String(codecs || track.id || (groupKind === 'flac' ? 'Hi-Res FLAC' : groupKind === 'dolby' ? 'Dolby' : '音频')),
         })
       }
     }
+    collectAudioGroup(dash.audio, 'standard')
+    collectAudioGroup(dash.dolby, 'dolby')
+    collectAudioGroup(dash.flac, 'flac')
+
+    // Prefer standard AAC .m4s (highest bandwidth) for universal MP4 muxing;
+    // fall back to flac/dolby highest-bandwidth track only when standard AAC is absent.
+    const standardAudios = parsedAudios
+      .filter(track => track.standardAac)
+      .sort((a, b) => b.bandwidth - a.bandwidth)
+    const fallbackAudios = parsedAudios
+      .filter(track => !track.standardAac)
+      .sort((a, b) => b.bandwidth - a.bandwidth)
+    const orderedAudios = [...standardAudios, ...fallbackAudios]
+    const bestAudio = orderedAudios[0]
+    const bestAudioUrl = bestAudio?.url || ''
+
+    const audioTracks: MediaAudioTrack[] = orderedAudios.map((track, index) => ({
+      label: track.label,
+      language: '',
+      url: track.url,
+      default: index === 0,
+    }))
+
     if (!parsedVideos.length) return []
     parsedVideos.sort((left, right) => right.height - left.height
+      || Math.round(right.fps) - Math.round(left.fps)
       || codecPreference(right.codecs) - codecPreference(left.codecs)
       || right.bandwidth - left.bandwidth)
-    // Keep one preferred codec per resolution so the hover card shows clean quality choices.
+    // Keep one preferred codec per resolution/framerate tier so cards show clean quality choices.
     const byQuality = new Map<string, ParsedVideo>()
     for (const entry of parsedVideos) {
-      const key = entry.height > 0 ? `${entry.height}p` : entry.variantId
+      const key = entry.quality || entry.variantId
       if (!byQuality.has(key)) byQuality.set(key, entry)
     }
     const chosen = [...byQuality.values()].slice(0, 8)
     const primary = chosen[0]
+    const audioBandwidth = bestAudio?.bandwidth || 0
     const variants: MediaVariant[] = chosen.length > 1
       ? chosen.map(entry => ({
           url: entry.url,
           variantId: entry.variantId,
           ...(entry.width > 0 ? { width: entry.width } : {}),
           ...(entry.height > 0 ? { height: entry.height } : {}),
-          ...(entry.bandwidth > 0 ? { bandwidth: entry.bandwidth } : {}),
+          ...(entry.bandwidth > 0 ? { bandwidth: entry.bandwidth + audioBandwidth } : {}),
           ...(entry.quality ? { quality: entry.quality } : {}),
+          ...(bestAudioUrl ? { audioUrl: bestAudioUrl } : {}),
         }))
       : []
-    const estimatedSize = durationSeconds && primary.bandwidth > 0
-      ? Math.round(durationSeconds * primary.bandwidth / 8)
+    const totalPrimaryBandwidth = primary.bandwidth > 0 ? primary.bandwidth + audioBandwidth : 0
+    const estimatedSize = durationSeconds && totalPrimaryBandwidth > 0
+      ? Math.round(durationSeconds * totalPrimaryBandwidth / 8)
       : undefined
     return [{
       url: primary.url,
       mimeType: 'video/mp4',
       videoId,
+      ...(bestAudioUrl ? { audioUrl: bestAudioUrl } : {}),
       inspection: {
         inspected: true,
         isLive: false,
+        ...(bestAudioUrl ? { audioUrl: bestAudioUrl, filename: `${videoId}.mp4` } : {}),
         ...(durationSeconds ? { duration: durationSeconds } : {}),
         ...(primary.width > 0 ? { width: primary.width } : {}),
         ...(primary.height > 0 ? { height: primary.height } : {}),
@@ -267,16 +388,27 @@ export function bilibiliPlayinfoCandidates(pageUrl: string, body: unknown): Site
     const size = Math.max(0, Math.floor(Number((first as Record<string, unknown>).size || 0)))
     const itemLengthMs = Number((first as Record<string, unknown>).length || 0)
     const duration = durationSeconds || (Number.isFinite(itemLengthMs) && itemLengthMs > 0 ? Math.round(itemLengthMs / 1000) : undefined)
+    const durlAudioCandidates = extractTrackObjects(data.durl_audio ?? (first as Record<string, unknown>).audio)
+      .flatMap(track => {
+        const trackUrls = bilibiliTrackUrls(track)
+        return trackUrls.length
+          ? [{ url: trackUrls[0], bandwidth: Math.max(0, Math.floor(Number(track.bandwidth || 0))) }]
+          : []
+      })
+      .sort((a, b) => b.bandwidth - a.bandwidth)
+    const durlAudioUrl = durlAudioCandidates[0]?.url || ''
     return [{
       url: urls[0],
       mimeType: 'video/mp4',
       videoId,
+      ...(durlAudioUrl ? { audioUrl: durlAudioUrl } : {}),
       inspection: {
         inspected: true,
         isLive: false,
+        ...(durlAudioUrl ? { audioUrl: durlAudioUrl, filename: `${videoId}.mp4` } : {}),
         ...(duration ? { duration } : {}),
         ...(size > 0 ? { estimatedSize: size } : {}),
-        playbackUrls: urls.slice(0, 48),
+        playbackUrls: [...urls, ...(durlAudioUrl ? [durlAudioUrl] : [])].slice(0, 48),
       },
     }]
   }
@@ -284,10 +416,12 @@ export function bilibiliPlayinfoCandidates(pageUrl: string, body: unknown): Site
   return []
 }
 
+export const bilibiliPlayinfoCandidates = extractBilibiliPlayinfo
+
 export function siteManifestCandidates(url: string, pageUrl: string, body: unknown): SiteManifestCandidate[] {
   if (!shouldInspectSiteResponse(url, pageUrl)) return []
   if (bilibiliPageVideoId(pageUrl)) {
-    return bilibiliPlayinfoCandidates(pageUrl, body)
+    return extractBilibiliPlayinfo(pageUrl, body)
   }
   if (typeof body === 'string') {
     if (body.length > SITE_RESPONSE_LIMIT) return []

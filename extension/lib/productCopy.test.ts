@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { engineConnectionLabel, errorText, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from './productCopy'
+import { classifyEngineConnectionState, engineConnectionLabel, engineStatusCopy, errorText, EXTENSION_PRODUCT_LABEL, extensionVersionLabel } from './productCopy'
 
 describe('extension product language', () => {
   it('uses user-facing product names and an explicit version', () => {
@@ -11,6 +11,20 @@ describe('extension product language', () => {
     expect(engineConnectionLabel(true, false)).toBe('下载引擎已连接')
     expect(engineConnectionLabel(false, true)).toBe('下载引擎正在重连')
     expect(engineConnectionLabel(false, false)).toBe('下载引擎未连接')
+  })
+
+  it('distinguishes online, user_shutdown, host_missing, and core_unreachable states cleanly', () => {
+    expect(classifyEngineConnectionState({ ok: true })).toBe('online')
+    expect(classifyEngineConnectionState({ ok: false, error_code: 'user_shutdown' })).toBe('user_shutdown')
+    expect(classifyEngineConnectionState({ ok: false, error: '桌面端已退出 (user_shutdown)' })).toBe('user_shutdown')
+    expect(classifyEngineConnectionState({ ok: false, code: 'host_missing' })).toBe('host_missing')
+    expect(classifyEngineConnectionState({ ok: false, error: 'Specified native messaging host not found.' })).toBe('host_missing')
+    expect(classifyEngineConnectionState({ ok: false, error: 'Core pipe closed' })).toBe('core_unreachable')
+
+    expect(engineStatusCopy('online').label).toBe('引擎已就绪')
+    expect(engineStatusCopy('user_shutdown').label).toBe('桌面端已退出 · 点击下载自动唤醒')
+    expect(engineStatusCopy('host_missing').label).toBe('未检测到桌面端 · 请先安装或运行桌面程序')
+    expect(engineStatusCopy('core_unreachable').label).toBe('连接中断 · 点击重试或打开桌面端')
   })
 })
 

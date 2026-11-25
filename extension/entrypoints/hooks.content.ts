@@ -4,7 +4,7 @@ import { hlsWorkerChunkKey, hlsWorkerOutputBuffers } from '../lib/hlsWorkerOwner
 import { inspectHlsResource } from '../lib/hlsInspection'
 import { inspectDashResource } from '../lib/dashInspection'
 import type { MediaResource } from '../lib/resources'
-import { SITE_RESPONSE_LIMIT, bilibiliPlayinfoCandidates, shouldInspectSiteResponse, siteManifestCandidates } from '../lib/siteManifest'
+import { SITE_RESPONSE_LIMIT, bilibiliPlayinfoCandidates, sameSiteVideoIdentity, shouldInspectSiteResponse, siteManifestCandidates } from '../lib/siteManifest'
 import { responseIdentity } from '../lib/requestChain'
 
 export default defineContentScript({
@@ -35,33 +35,58 @@ export default defineContentScript({
       return observation
     }
     const sourcePageUrl = () => location.href.split('#', 1)[0]
+    let lastObservedPageUrl = sourcePageUrl()
     const pendingInspections = new Map<() => void, string>()
-    const cancelObsoleteInspections = () => {
+    const cancelObsoleteInspections = (preserveSameVideoFrom?: string) => {
       const pageUrl = sourcePageUrl()
       for (const [cancel, owner] of pendingInspections) {
-        if (owner !== pageUrl) cancel()
+        if (owner === pageUrl) continue
+        if (preserveSameVideoFrom && owner === preserveSameVideoFrom && sameSiteVideoIdentity(owner, pageUrl)) {
+          pendingInspections.set(cancel, pageUrl)
+          continue
+        }
+        cancel()
       }
     }
-    const pendingResources: Array<{ url: string; mimeType: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl: string; responseIdentity?: Record<string, string> }> = []
+    const pendingResources: Array<{ url: string; mimeType: string; audioUrl?: string; inspection?: Partial<MediaResource>; siteVideoId?: string; sourcePageUrl: string; responseIdentity?: Record<string, string> }> = []
     type MediaOwnershipPurpose = 'mse' | 'download'
     const pendingMse: Array<{ blobUrl: string; mediaUrl: string; purpose: MediaOwnershipPurpose; sourcePageUrl: string }> = []
     const mseReportTimes = new Map<string, { mediaUrl: string; purpose: MediaOwnershipPurpose; at: number }>()
     const MSE_REPORT_INTERVAL_MS = 300
-    const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>, siteVideoId?: string, pageUrl = sourcePageUrl(), identity?: Record<string, string>) => {
-      if (pageUrl !== sourcePageUrl()) return
+    const migrateSameVideoBuffers = (previousPage: string, nextPage: string) => {
+      if (!previousPage || !nextPage || previousPage === nextPage) return false
+      if (!sameSiteVideoIdentity(previousPage, nextPage)) return false
+      for (const item of pendingResources) {
+        if (item.sourcePageUrl === previousPage) item.sourcePageUrl = nextPage
+      }
+      for (const item of pendingMse) {
+        if (item.sourcePageUrl === previousPage) item.sourcePageUrl = nextPage
+      }
+      cancelObsoleteInspections(previousPage)
+      return true
+    }
+    const matchesActivePage = (pageUrl: string, allowSameSiteVideo = false) => {
+      const active = sourcePageUrl()
+      return pageUrl === active || (allowSameSiteVideo && sameSiteVideoIdentity(pageUrl, active))
+    }
+    const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>, siteVideoId?: string, pageUrl = sourcePageUrl(), identity?: Record<string, string>, audioUrl?: string) => {
+      if (!matchesActivePage(pageUrl, Boolean(siteVideoId))) return
+      const effectivePageUrl = sourcePageUrl()
       if (typeof url !== 'string') return
       if (!siteVideoId && !shouldReportMediaResponse(url, mimeType)) return
+      const resolvedAudioUrl = audioUrl || inspection?.audioUrl
       const detail = {
         url,
         mimeType,
+        ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
         ...(inspection !== undefined ? { inspection } : {}),
         ...(siteVideoId !== undefined ? { siteVideoId } : {}),
-        sourcePageUrl: pageUrl,
+        sourcePageUrl: effectivePageUrl,
         ...(identity ? { responseIdentity: identity } : {}),
       }
       const previous = pendingResources.findIndex(item => item.url === url)
       if (previous >= 0) {
-        if (pendingResources[previous].sourcePageUrl === pageUrl && pendingResources[previous].inspection) {
+        if (matchesActivePage(pendingResources[previous].sourcePageUrl, Boolean(siteVideoId)) && pendingResources[previous].inspection) {
           detail.inspection ||= pendingResources[previous].inspection
         }
         pendingResources.splice(previous, 1)
@@ -93,9 +118,10 @@ export default defineContentScript({
       }))
     }
     const reportSiteManifests = (url: string, body: unknown, pageUrl: string) => {
-      if (pageUrl !== sourcePageUrl()) return
-      for (const candidate of siteManifestCandidates(url, pageUrl, body)) {
-        report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, pageUrl)
+      if (!matchesActivePage(pageUrl)) return
+      const activePageUrl = sourcePageUrl()
+      for (const candidate of siteManifestCandidates(url, activePageUrl, body)) {
+        report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, activePageUrl, undefined, candidate.audioUrl)
       }
     }
     const scanPageSiteMetadata = () => {
@@ -104,7 +130,7 @@ export default defineContentScript({
         const playinfo = (window as unknown as { __playinfo__?: unknown }).__playinfo__
         if (!playinfo) return
         for (const candidate of bilibiliPlayinfoCandidates(pageUrl, playinfo)) {
-          report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, pageUrl)
+          report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, pageUrl, undefined, candidate.audioUrl)
         }
       } catch {}
     }
@@ -279,11 +305,18 @@ export default defineContentScript({
       // Frozen URL.createObjectURL only disables blob: download correlation.
     }
     window.addEventListener('__hls_downloader_replay__', () => {
+      const activePage = sourcePageUrl()
       scanPageSiteMetadata()
-      pendingResources.filter(event => event.sourcePageUrl === sourcePageUrl())
-        .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
-      pendingMse.filter(event => event.sourcePageUrl === sourcePageUrl())
-        .forEach(event => window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
+      pendingResources.filter(event => event.sourcePageUrl === activePage || sameSiteVideoIdentity(event.sourcePageUrl, activePage))
+        .forEach(event => {
+          const normalized = event.sourcePageUrl === activePage ? event : { ...event, sourcePageUrl: activePage }
+          window.dispatchEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(normalized) }))
+        })
+      pendingMse.filter(event => event.sourcePageUrl === activePage || sameSiteVideoIdentity(event.sourcePageUrl, activePage))
+        .forEach(event => {
+          const normalized = event.sourcePageUrl === activePage ? event : { ...event, sourcePageUrl: activePage }
+          window.dispatchEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(normalized) }))
+        })
     })
     if (typeof document !== 'undefined') {
       document.addEventListener('DOMContentLoaded', scanPageSiteMetadata)
@@ -291,7 +324,10 @@ export default defineContentScript({
     }
     for (const event of ['__hls_downloader_navigation__', 'popstate', 'hashchange']) {
       window.addEventListener(event, () => {
-        cancelObsoleteInspections()
+        const nextPage = sourcePageUrl()
+        const preserved = migrateSameVideoBuffers(lastObservedPageUrl, nextPage)
+        lastObservedPageUrl = nextPage
+        if (!preserved) cancelObsoleteInspections()
         scanPageSiteMetadata()
       })
     }
@@ -299,14 +335,21 @@ export default defineContentScript({
       for (const cancel of pendingInspections.keys()) cancel()
     })
     try {
-      const notifyNavigation = () => queueMicrotask(() => {
+      const notifyNavigation = (previousPage: string) => queueMicrotask(() => {
+        const nextPage = sourcePageUrl()
+        migrateSameVideoBuffers(previousPage, nextPage)
+        lastObservedPageUrl = nextPage
         window.dispatchEvent(new Event('__hls_downloader_navigation__'))
       })
       for (const method of ['pushState', 'replaceState'] as const) {
         const original = history[method]
         history[method] = function (this: History, ...args: Parameters<History['pushState']>) {
+          const beforePage = sourcePageUrl()
           const result = original.apply(this, args)
-          notifyNavigation()
+          const afterPage = sourcePageUrl()
+          migrateSameVideoBuffers(beforePage, afterPage)
+          lastObservedPageUrl = afterPage
+          notifyNavigation(beforePage)
           return result
         } as History[typeof method]
       }
