@@ -178,61 +178,41 @@ struct ResumeState {
 }
 
 pub fn parse_ftp_url(url: &str) -> Result<FtpTarget, String> {
+    if !ftp_wire_ok(url) {
+        return Err("FTP 地址不能包含控制字符".into());
+    }
     let lower = url.to_ascii_lowercase();
     let tls = lower.starts_with("ftps://");
     if !tls && !lower.starts_with("ftp://") {
         return Err("not an FTP URL".into());
     }
     let (_, rest) = url.split_once("://").ok_or("not an FTP URL")?;
-    let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let (userinfo, hostport) = auth.rsplit_once('@').unwrap_or(("anonymous:", auth));
+    let auth = crate::net_policy::parse_url_authority(url).ok_or("FTP host or port invalid")?;
+    if auth.raw_hostport.contains(['?', '#', '@'])
+        || auth.host.contains(['?', '#', '@'])
+        || auth.host.is_empty()
+        || !ftp_wire_ok(&auth.host)
+    {
+        return Err("FTP host invalid".into());
+    }
+    let userinfo = auth.userinfo.unwrap_or("anonymous:");
     let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
     let user = percent_decode(user)?;
     let password = percent_decode(password)?;
     let default_port = if tls { 990 } else { 21 };
-    let parse_port = |port: &str| -> Result<u16, String> {
-        let port = port
-            .parse::<u16>()
-            .map_err(|_| "FTP port invalid".to_string())?;
-        if port == 0 {
-            return Err("FTP port invalid".into());
-        }
-        Ok(port)
-    };
-    let (host, port) = if let Some(bracketed) = hostport.strip_prefix('[') {
-        let (host, suffix) = bracketed
-            .split_once(']')
-            .ok_or("FTP IPv6 address invalid")?;
-        host.parse::<std::net::Ipv6Addr>()
-            .map_err(|_| "FTP IPv6 address invalid".to_string())?;
-        let port = if suffix.is_empty() {
-            default_port
-        } else {
-            parse_port(suffix.strip_prefix(':').ok_or("FTP port invalid")?)?
-        };
-        (host, port)
-    } else if let Some((host, port)) = hostport.rsplit_once(':') {
-        if host.contains(':') {
-            return Err("FTP IPv6 address must be bracketed".into());
-        }
-        (host, parse_port(port)?)
-    } else {
-        (hostport, default_port)
-    };
-    if host.is_empty() || !ftp_wire_ok(host) {
-        return Err("FTP host missing".into());
-    }
+    let port = auth.port.unwrap_or(default_port);
     let user = if user.is_empty() {
         "anonymous".to_string()
     } else {
         user
     };
-    let path = format!("/{}", percent_decode(path.trim_start_matches('/'))?);
+    let raw_path = rest.split_once('/').map_or("", |(_, p)| p);
+    let path = format!("/{}", percent_decode(raw_path.trim_start_matches('/'))?);
     if !ftp_wire_ok(&user) || !ftp_wire_ok(&password) || !ftp_wire_ok(&path) {
         return Err("FTP 地址不能包含控制字符".into());
     }
     Ok(FtpTarget {
-        host: host.to_string(),
+        host: auth.host,
         port,
         user,
         password,
@@ -358,14 +338,101 @@ pub(crate) fn download_ftp_routed(
     result
 }
 
+fn connect_tcp_interruptible<A>(
+    addr: A,
+    timeout: Duration,
+    control: &FtpControl<'_>,
+) -> Result<TcpStream, String>
+where
+    A: tokio::net::ToSocketAddrs + Send + 'static,
+{
+    control.check()?;
+    let rt = crate::proxy_tunnel::runtime()?;
+    let stream = if tokio::runtime::Handle::try_current().is_err() {
+        rt.block_on(async {
+            let mut poll = tokio::time::interval(Duration::from_millis(100));
+            let deadline = tokio::time::sleep(timeout);
+            let connect = tokio::net::TcpStream::connect(addr);
+            tokio::pin!(deadline, connect);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut deadline => return Err("FTP connection timed out".to_string()),
+                    _ = poll.tick() => control.check()?,
+                    res = &mut connect => return res.map_err(|error| error.to_string()),
+                }
+            }
+        })?
+    } else {
+        let abort = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abort_task = std::sync::Arc::clone(&abort);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        rt.spawn(async move {
+            let mut poll = tokio::time::interval(Duration::from_millis(50));
+            let deadline = tokio::time::sleep(timeout);
+            let connect = tokio::net::TcpStream::connect(addr);
+            tokio::pin!(deadline, connect);
+            let out = loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut deadline => break Err("FTP connection timed out".to_string()),
+                    _ = poll.tick() => {
+                        if abort_task.load(std::sync::atomic::Ordering::Acquire) {
+                            return;
+                        }
+                    }
+                    res = &mut connect => break res.map_err(|error| error.to_string()),
+                }
+            };
+            let _ = tx.send(out);
+        });
+        let started = Instant::now();
+        loop {
+            if let Err(err) = control.check() {
+                abort.store(true, std::sync::atomic::Ordering::Release);
+                return Err(err);
+            }
+            if started.elapsed() >= timeout {
+                abort.store(true, std::sync::atomic::Ordering::Release);
+                return Err("FTP connection timed out".into());
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(res) => break res?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("FTP connection aborted".into());
+                }
+            }
+        }
+    };
+    let std_stream = stream.into_std().map_err(|error| error.to_string())?;
+    std_stream
+        .set_nonblocking(false)
+        .map_err(|error| error.to_string())?;
+    Ok(std_stream)
+}
+
 /// Connects, upgrades to TLS when requested, logs in and selects binary mode.
 fn open_session<'a>(target: &FtpTarget, control: &'a FtpControl<'a>) -> Result<Conn<'a>, String> {
     let implicit = target.tls && target.port == 990;
     control.check()?;
     let raw = match control.proxy {
         Some(proxy) => proxy.connect_blocking(&target.host, target.port, || control.check())?,
-        None => TcpStream::connect((target.host.as_str(), target.port))
-            .map_err(|error| error.to_string())?,
+        None => {
+            if let Ok(ip) = target.host.parse::<std::net::IpAddr>() {
+                connect_tcp_interruptible(
+                    std::net::SocketAddr::new(ip, target.port),
+                    DATA_CONNECT_TIMEOUT,
+                    control,
+                )?
+            } else {
+                connect_tcp_interruptible(
+                    (target.host.clone(), target.port),
+                    DATA_CONNECT_TIMEOUT,
+                    control,
+                )?
+            }
+        }
     };
     let raw = FtpSocket::new(raw, control)?;
     let mut ctrl = if implicit {
@@ -484,10 +551,14 @@ fn open_data<'a>(
         match open_passive_data(ctrl, host, control) {
             Ok(socket) => return Ok(DataChannel::Passive(socket)),
             Err(PassiveError::Fatal(error)) => return Err(error),
+            Err(PassiveError::Refused(reason)) if reason == "paused" || reason == "canceled" => {
+                return Err(reason);
+            }
             Err(PassiveError::Refused(reason)) if control.proxy.is_some() => {
                 return Err(format!("FTP 代理传输需要被动模式：{reason}"));
             }
             Err(PassiveError::Refused(reason)) => {
+                control.check()?;
                 active.store(true, Ordering::SeqCst);
                 return open_active_data(ctrl, control)
                     .map_err(|error| format!("{reason}; active mode failed: {error}"));
@@ -505,7 +576,18 @@ fn open_passive_data<'a>(
     control: &'a FtpControl<'a>,
 ) -> Result<FtpSocket<'a>, PassiveError> {
     let peer = ctrl.peer_addr()?;
-    let epsv = command(ctrl, "EPSV")?;
+    let epsv = match command(ctrl, "EPSV") {
+        Ok(reply) => reply,
+        Err(err) => {
+            if let Err(stop) = control.stopped() {
+                return Err(PassiveError::Fatal(stop));
+            }
+            return Err(PassiveError::Fatal(err));
+        }
+    };
+    if let Err(stop) = control.check() {
+        return Err(PassiveError::Fatal(stop));
+    }
     // Only an unsupported command on IPv4 authorizes PASV. A malformed
     // success or a transient/permission error must not start another path.
     let pasv_allowed = if control.proxy.is_some() {
@@ -514,7 +596,18 @@ fn open_passive_data<'a>(
         peer.is_ipv4()
     };
     let data_port = if pasv_allowed && matches!(reply_code(&epsv), Some(500 | 501 | 502 | 504)) {
-        let pasv = command(ctrl, "PASV")?;
+        let pasv = match command(ctrl, "PASV") {
+            Ok(reply) => reply,
+            Err(err) => {
+                if let Err(stop) = control.stopped() {
+                    return Err(PassiveError::Fatal(stop));
+                }
+                return Err(PassiveError::Fatal(err));
+            }
+        };
+        if let Err(stop) = control.check() {
+            return Err(PassiveError::Fatal(stop));
+        }
         if passive_refused(&pasv) {
             return Err(PassiveError::Refused(format!(
                 "PASV refused: {}",
@@ -535,13 +628,33 @@ fn open_passive_data<'a>(
     };
     // Both passive modes use the control peer, never a server-advertised host.
     let data_addr = std::net::SocketAddr::new(peer.ip(), data_port);
-    control.check()?;
+    control.check().map_err(PassiveError::Fatal)?;
     let data_raw = match control.proxy {
-        Some(proxy) => proxy.connect_blocking(host, data_port, || control.check())?,
-        None => TcpStream::connect_timeout(&data_addr, DATA_CONNECT_TIMEOUT)
-            .map_err(|error| PassiveError::Refused(format!("passive connect failed: {error}")))?,
+        Some(proxy) => match proxy.connect_blocking(host, data_port, || control.check()) {
+            Ok(stream) => stream,
+            Err(err) => {
+                if let Err(stop) = control.stopped() {
+                    return Err(PassiveError::Fatal(stop));
+                }
+                return Err(PassiveError::Fatal(err));
+            }
+        },
+        None => match connect_tcp_interruptible(data_addr, DATA_CONNECT_TIMEOUT, control) {
+            Ok(stream) => stream,
+            Err(err) if err == "paused" || err == "canceled" => {
+                return Err(PassiveError::Fatal(err));
+            }
+            Err(err) => {
+                if let Err(stop) = control.check() {
+                    return Err(PassiveError::Fatal(stop));
+                }
+                return Err(PassiveError::Refused(format!(
+                    "passive connect failed: {err}"
+                )));
+            }
+        },
     };
-    control.check()?;
+    control.check().map_err(PassiveError::Fatal)?;
     Ok(FtpSocket::new(data_raw, control)?)
 }
 
@@ -1548,6 +1661,23 @@ mod tests {
         }
         let invalid_utf8 = parse_ftp_url("ftp://files.example/a%FF.bin").unwrap_err();
         assert!(invalid_utf8.contains("valid UTF-8"), "{invalid_utf8}");
+
+        // Unencoded '?' or '#' inside user:pass must stay in credentials, while '?'/'#'/'@' in host are rejected.
+        let unencoded_creds =
+            parse_ftp_url("ftp://alice:p?ss#word@Files.Example:2121/pub/a.bin").unwrap();
+        assert_eq!(unencoded_creds.user, "alice");
+        assert_eq!(unencoded_creds.password, "p?ss#word");
+        assert_eq!(unencoded_creds.host, "files.example");
+        assert_eq!(unencoded_creds.port, 2121);
+        assert_eq!(unencoded_creds.path, "/pub/a.bin");
+        for bad_host in [
+            "ftp://files.example?bad/a.bin",
+            "ftp://files.example#bad/a.bin",
+            "ftp://files.example?bad",
+            "ftp://files.example#bad",
+        ] {
+            assert!(parse_ftp_url(bad_host).is_err(), "{bad_host}");
+        }
     }
 
     #[test]
@@ -1760,6 +1890,111 @@ mod tests {
         assert!(!reply_is_complete(b"220-Welcome\r\nfeature line\r\n").unwrap());
         assert!(reply_is_complete(b"220-Welcome\r\nfeature line\r\n220 Ready\r\n").unwrap());
         assert!(reply_is_complete(b"broken\r\n").is_err());
+    }
+
+    #[test]
+    fn pause_and_cancel_short_circuit_passive_negotiation_and_interrupt_connect() {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        for word in ["pause", "cancel"] {
+            let expected = if word == "pause" {
+                "paused"
+            } else {
+                "canceled"
+            };
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let root = std::env::temp_dir().join(format!(
+                "hls-ftp-stop-epsv-{}-{word}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = root.join("payload.downloading");
+            let control = root.join("control");
+            std::fs::write(&control, "run").unwrap();
+            let ctrl_for_srv = control.clone();
+            let server = std::thread::spawn(move || {
+                let (mut ctrl, _) = listener.accept().unwrap();
+                ctrl.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                ctrl.write_all(b"220 Ready\r\n").unwrap();
+                let mut reader = BufReader::new(ctrl.try_clone().unwrap());
+                let mut commands = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let cmd = line.trim_end().to_string();
+                    commands.push(cmd.clone());
+                    match cmd.as_str() {
+                        "USER anonymous" => ctrl.write_all(b"230 Logged in\r\n").unwrap(),
+                        "TYPE I" => ctrl.write_all(b"200 Binary\r\n").unwrap(),
+                        "SIZE /file.bin" => ctrl.write_all(b"213 8\r\n").unwrap(),
+                        "MDTM /file.bin" => ctrl.write_all(b"213 20261115000000\r\n").unwrap(),
+                        "EPSV" => {
+                            std::fs::write(&ctrl_for_srv, word).unwrap();
+                            std::thread::sleep(Duration::from_millis(120));
+                            let _ = ctrl.write_all(b"502 Not implemented\r\n");
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                commands
+            });
+            let err = download_ftp(
+                &format!("ftp://{address}/file.bin"),
+                &output,
+                &control,
+                false,
+            )
+            .unwrap_err();
+            let commands = server.join().unwrap();
+            let _ = std::fs::remove_dir_all(root);
+            assert_eq!(err, expected);
+            assert!(
+                !commands
+                    .iter()
+                    .any(|c| c == "PASV" || c.starts_with("EPRT") || c.starts_with("PORT")),
+                "pause/cancel must not fall back to PASV or active mode: {commands:?}"
+            );
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-ftp-conn-stop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let control_path = root.join("control");
+        std::fs::write(&control_path, "pause").unwrap();
+        let ftp_ctrl = FtpControl {
+            proxy: None,
+            path: &control_path,
+            reason: Cell::new(crate::http_engine::Control::Run),
+            checked: Cell::new(Instant::now() - Duration::from_secs(1)),
+        };
+        let started = Instant::now();
+        let res = connect_tcp_interruptible(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 9)),
+            Duration::from_secs(20),
+            &ftp_ctrl,
+        );
+        let elapsed = started.elapsed();
+        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(res.unwrap_err(), "paused");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "interruptible connect took too long: {elapsed:?}"
+        );
     }
 
     #[test]

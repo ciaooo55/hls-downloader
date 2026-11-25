@@ -35,11 +35,11 @@ impl std::fmt::Debug for Proxy {
     }
 }
 
-fn runtime() -> Result<&'static Runtime, String> {
+pub(crate) fn runtime() -> Result<&'static Runtime, String> {
     static RT: OnceLock<io::Result<Runtime>> = OnceLock::new();
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
+            .worker_threads(2)
             .enable_all()
             .build()
     })
@@ -144,7 +144,10 @@ impl Proxy {
         target_url: &str,
         check: impl Fn() -> Result<(), String>,
     ) -> Result<Option<Self>, String> {
-        match proxy_route(route) {
+        if route.trim() == crate::net_policy::INVALID_MANUAL_PROXY {
+            return Err("手动代理模式未配置代理服务器地址".into());
+        }
+        match proxy_route(route).map_err(|e| e.to_string())? {
             ProxyRoute::Direct => Ok(None),
             ProxyRoute::Manual(url) => Self::parse(url).map(Some),
             ProxyRoute::System => lookup_system_proxy(target_url, false, check)?
@@ -436,3 +439,19 @@ fn io_error(e: io::Error) -> String {
 mod system;
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod fail_closed_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_rejects_invalid_manual_proxy_sentinel_fail_closed() {
+        let err = Proxy::resolve(
+            crate::net_policy::INVALID_MANUAL_PROXY,
+            "sftp://example.com/file.bin",
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(err, "手动代理模式未配置代理服务器地址");
+    }
+}

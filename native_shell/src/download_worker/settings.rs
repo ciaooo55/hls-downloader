@@ -289,6 +289,27 @@ impl CoreCoordinator {
             }
         }
         let mut core = self.lock()?;
+        if values.contains_key("proxy_mode") || values.contains_key("proxy_url") {
+            let stored_mode;
+            let effective_mode = match values.get("proxy_mode").and_then(Value::as_str) {
+                Some(mode) => mode.trim(),
+                None => {
+                    stored_mode = core.store().setting_string("proxy_mode", "system")?;
+                    stored_mode.trim()
+                }
+            };
+            let stored_url;
+            let effective_url = match values.get("proxy_url").and_then(Value::as_str) {
+                Some(url) => url.trim(),
+                None => {
+                    stored_url = core.store().setting_string("proxy_url", "")?;
+                    stored_url.trim()
+                }
+            };
+            if effective_mode.eq_ignore_ascii_case("manual") && effective_url.is_empty() {
+                return Err("手动代理模式未配置代理服务器地址".into());
+            }
+        }
         let normalize_power = |raw: &str| -> String {
             let trimmed = raw.trim();
             if trimmed.is_empty() {
@@ -1100,5 +1121,49 @@ mod tests {
         coordinator
             .set_setting("download_speed_limit_kib", json!(0))
             .unwrap();
+    }
+
+    #[test]
+    fn manual_proxy_mode_requires_non_empty_proxy_url_across_single_and_batch_updates() {
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+
+        // Enabling manual mode when stored proxy_url is empty must fail closed.
+        assert!(coordinator
+            .set_setting("proxy_mode", json!("manual"))
+            .is_err());
+        assert!(coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), json!("manual")),
+                ("proxy_url".into(), json!("   ")),
+            ]))
+            .is_err());
+        assert_eq!(coordinator.settings().unwrap().proxy_mode, "system");
+
+        // Enabling manual mode together with a valid proxy_url succeeds.
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), json!("manual")),
+                ("proxy_url".into(), json!("http://127.0.0.1:8080")),
+            ]))
+            .unwrap();
+        assert_eq!(coordinator.settings().unwrap().proxy_mode, "manual");
+
+        // Clearing proxy_url while effective proxy_mode remains manual must fail closed.
+        assert!(coordinator.set_setting("proxy_url", json!("")).is_err());
+        assert!(coordinator.set_setting("proxy_url", json!("  ")).is_err());
+        assert_eq!(
+            coordinator.settings().unwrap().proxy_url,
+            "http://127.0.0.1:8080"
+        );
+
+        // Switching away from manual mode while clearing proxy_url in one batch succeeds.
+        coordinator
+            .set_settings(BTreeMap::from([
+                ("proxy_mode".into(), json!("system")),
+                ("proxy_url".into(), json!("")),
+            ]))
+            .unwrap();
+        assert_eq!(coordinator.settings().unwrap().proxy_mode, "system");
+        assert!(coordinator.settings().unwrap().proxy_url.is_empty());
     }
 }

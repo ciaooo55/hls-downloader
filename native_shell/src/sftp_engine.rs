@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 
 const STATE_VERSION: u32 = 1;
 const BLOCK_SIZE: usize = 64 * 1024;
+const CHECKPOINT_BYTES: u64 = 4 * 1024 * 1024;
+const CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Clone, PartialEq)]
 pub struct SftpTarget {
@@ -423,6 +425,9 @@ fn load_state(path: &Path) -> ResumeState {
 }
 
 fn save_state(path: &Path, state: &ResumeState) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
     let value = serde_json::json!({
         "version": state.version,
         "resource_key": state.resource_key,
@@ -430,7 +435,14 @@ fn save_state(path: &Path, state: &ResumeState) -> Result<(), String> {
         "mtime": state.mtime,
         "offset": state.offset,
     });
-    fs::write(path, value.to_string()).map_err(|error| error.to_string())
+    let tmp = path.with_extension("json.tmp");
+    let mut file = File::create(&tmp).map_err(|error| error.to_string())?;
+    file.write_all(value.to_string().as_bytes())
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| error.to_string())?;
+    drop(file);
+    crate::atomic_replace::replace_file(&tmp, path).map_err(|error| error.to_string())
 }
 
 fn resume_offset(
@@ -441,7 +453,7 @@ fn resume_offset(
 ) -> u64 {
     if stat.size > 0
         && current_size > 0
-        && current_size < stat.size
+        && current_size <= stat.size
         && state.offset == current_size
         && !stat.mtime.is_empty()
         && stat.mtime != "0"
@@ -461,6 +473,7 @@ fn read_control(path: &Path) -> String {
     crate::task_control::read_word(path)
 }
 
+#[cfg(test)]
 fn transfer_from_session(
     session: &dyn SftpSession,
     target: &SftpTarget,
@@ -468,6 +481,18 @@ fn transfer_from_session(
     control: &Path,
     offset: u64,
     total: u64,
+) -> Result<u64, String> {
+    transfer_from_session_checkpointed(session, target, output, control, offset, total, None)
+}
+
+fn transfer_from_session_checkpointed(
+    session: &dyn SftpSession,
+    target: &SftpTarget,
+    output: &Path,
+    control: &Path,
+    offset: u64,
+    total: u64,
+    checkpoint: Option<(&Path, &str)>,
 ) -> Result<u64, String> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -490,6 +515,29 @@ fn transfer_from_session(
     };
     let mut buf = vec![0u8; BLOCK_SIZE];
     let mut written = offset;
+    let mut checkpointed = offset;
+    let mut last_checkpoint = std::time::Instant::now();
+    let resource_key = target.resource_key();
+    let persist_checkpoint = |local: &mut File, at: u64, truncate: bool| -> Result<(), String> {
+        let Some((state_file, mtime)) = checkpoint else {
+            return Ok(());
+        };
+        local.flush().map_err(|error| error.to_string())?;
+        if truncate {
+            local.set_len(at).map_err(|error| error.to_string())?;
+        }
+        local.sync_data().map_err(|error| error.to_string())?;
+        save_state(
+            state_file,
+            &ResumeState {
+                version: STATE_VERSION,
+                resource_key: resource_key.clone(),
+                total,
+                mtime: mtime.to_string(),
+                offset: at,
+            },
+        )
+    };
     let progress = progress_path(output);
     let mut rate = crate::http_engine::TransferRate::new(written);
     let mut last_progress = std::time::Instant::now();
@@ -497,25 +545,68 @@ fn transfer_from_session(
     loop {
         match read_control(control).as_str() {
             "cancel" => return Err("canceled".into()),
-            "pause" => return Err("paused".into()),
+            "pause" => {
+                if written > offset {
+                    persist_checkpoint(&mut local, written, false)?;
+                }
+                return Err("paused".into());
+            }
             _ => {}
         }
-        let count = remote.read(&mut buf)?;
+        let count = match remote.read(&mut buf) {
+            Ok(count) => count,
+            Err(error) => {
+                let ctrl = read_control(control);
+                if ctrl == "cancel" {
+                    return Err("canceled".into());
+                }
+                if written > offset {
+                    if ctrl == "pause" {
+                        persist_checkpoint(&mut local, written, false)?;
+                        return Err("paused".into());
+                    }
+                    let _ = persist_checkpoint(&mut local, written, false);
+                } else if ctrl == "pause" {
+                    return Err("paused".into());
+                }
+                return Err(error);
+            }
+        };
         if count == 0 {
             break;
         }
         if count > buf.len() || count as u64 > total.saturating_sub(written) {
+            if written > offset && read_control(control) != "cancel" {
+                let _ = persist_checkpoint(&mut local, written, false);
+            }
             return Err("SFTP 数据超过远程 STAT 声明的长度".into());
         }
-        crate::net_policy::consume(count, || match read_control(control).as_str() {
-            "cancel" => Err("canceled".to_string()),
-            "pause" => Err("paused".to_string()),
-            _ => Ok(()),
-        })?;
-        local
-            .write_all(&buf[..count])
-            .map_err(|error| error.to_string())?;
+        if let Err(ctrl_err) =
+            crate::net_policy::consume(count, || match read_control(control).as_str() {
+                "cancel" => Err("canceled".to_string()),
+                "pause" => Err("paused".to_string()),
+                _ => Ok(()),
+            })
+        {
+            if ctrl_err != "canceled" && written > offset {
+                persist_checkpoint(&mut local, written, false)?;
+            }
+            return Err(ctrl_err);
+        }
+        if let Err(error) = local.write_all(&buf[..count]) {
+            if written > offset && read_control(control) != "cancel" {
+                let _ = persist_checkpoint(&mut local, written, true);
+            }
+            return Err(error.to_string());
+        }
         written += count as u64;
+        if written.saturating_sub(checkpointed) >= CHECKPOINT_BYTES
+            || (written > checkpointed && last_checkpoint.elapsed() >= CHECKPOINT_INTERVAL)
+        {
+            persist_checkpoint(&mut local, written, false)?;
+            checkpointed = written;
+            last_checkpoint = std::time::Instant::now();
+        }
         if last_progress.elapsed() >= std::time::Duration::from_millis(200) {
             let speed = rate.sample(written) as f64;
             crate::http_engine::write_progress(&progress, written, total, speed, "downloading");
@@ -523,6 +614,9 @@ fn transfer_from_session(
         }
     }
     local.flush().map_err(|error| error.to_string())?;
+    if written != total && written > offset && read_control(control) != "cancel" {
+        let _ = persist_checkpoint(&mut local, written, false);
+    }
     let final_speed = rate.sample(written) as f64;
     crate::http_engine::write_progress(&progress, written, total, final_speed, "downloading");
     Ok(written)
@@ -599,6 +693,12 @@ fn download_with_session(
     };
     let state = load_state(&state_file);
     let offset = resume_offset(current, &stat, &target.resource_key(), &state);
+    if offset == stat.size && stat.size > 0 {
+        let progress = progress_path(output);
+        crate::http_engine::write_progress(&progress, stat.size, stat.size, 0.0, "downloading");
+        let _ = fs::remove_file(&state_file);
+        return Ok(stat.size);
+    }
     if offset == 0 {
         match fs::remove_file(&state_file) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
@@ -609,26 +709,15 @@ fn download_with_session(
             _ => {}
         }
     }
-    let written = match transfer_from_session(session, target, output, control, offset, stat.size) {
-        Ok(bytes) => bytes,
-        Err(error) if error == "paused" => {
-            let size = fs::metadata(output)
-                .map(|meta| meta.len())
-                .unwrap_or(offset);
-            save_state(
-                &state_file,
-                &ResumeState {
-                    version: STATE_VERSION,
-                    resource_key: target.resource_key(),
-                    total: stat.size,
-                    mtime: stat.mtime,
-                    offset: size,
-                },
-            )?;
-            return Err(error);
-        }
-        Err(error) => return Err(error),
-    };
+    let written = transfer_from_session_checkpointed(
+        session,
+        target,
+        output,
+        control,
+        offset,
+        stat.size,
+        Some((&state_file, &stat.mtime)),
+    )?;
     if written != stat.size {
         return Err(format!(
             "文件长度不匹配，期望 {}，实际 {written}",
@@ -1389,5 +1478,181 @@ mod tests {
         assert!(script.contains("ls -l \"/pub/a.bin\""));
         assert!(script.contains("\nget \"/pub/a.bin\" \"/tmp/a.bin\"\n"));
         assert!(!script.contains("get -a"));
+    }
+
+    #[test]
+    fn exact_size_resume_returns_immediately_without_reopening_or_truncating() {
+        struct PanicOnOpenSession {
+            stat: SftpStat,
+        }
+        impl SftpSession for PanicOnOpenSession {
+            fn stat(&self, _path: &str) -> Result<SftpStat, String> {
+                Ok(self.stat.clone())
+            }
+            fn open(&self, _path: &str) -> Result<Box<dyn SftpFile>, String> {
+                panic!("exact-size resume must not reopen or re-download remote file");
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-sftp-exact-resume-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = parse_sftp_url("sftp://lee@nas.local/pub/exact.bin").unwrap();
+        let output = root.join("payload.downloading");
+        let payload = b"already-complete-payload";
+        fs::write(&output, payload).unwrap();
+        let stat = SftpStat {
+            size: payload.len() as u64,
+            mtime: "1700000000".into(),
+        };
+        assert_eq!(
+            resume_offset(
+                payload.len() as u64,
+                &stat,
+                &target.resource_key(),
+                &ResumeState {
+                    version: STATE_VERSION,
+                    resource_key: target.resource_key(),
+                    total: stat.size,
+                    mtime: stat.mtime.clone(),
+                    offset: stat.size,
+                },
+            ),
+            stat.size
+        );
+        save_state(
+            &state_path(&output),
+            &ResumeState {
+                version: STATE_VERSION,
+                resource_key: target.resource_key(),
+                total: stat.size,
+                mtime: stat.mtime.clone(),
+                offset: stat.size,
+            },
+        )
+        .unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let session = PanicOnOpenSession { stat };
+        let got = download_with_session(&target, &output, &control, &session).unwrap();
+        assert_eq!(got, payload.len() as u64);
+        assert_eq!(fs::read(&output).unwrap(), payload);
+        assert!(!state_path(&output).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn periodic_and_read_error_checkpoints_persist_resume_state() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        struct InterruptingFile {
+            data: Arc<Vec<u8>>,
+            pos: usize,
+            fail_at: Option<usize>,
+            saw_periodic_checkpoint: Arc<AtomicBool>,
+            state_file: PathBuf,
+        }
+        impl SftpFile for InterruptingFile {
+            fn seek(&mut self, offset: u64) -> Result<(), String> {
+                self.pos = offset as usize;
+                Ok(())
+            }
+            fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
+                if self.pos >= CHECKPOINT_BYTES as usize && self.state_file.exists() {
+                    self.saw_periodic_checkpoint.store(true, Ordering::SeqCst);
+                }
+                if let Some(limit) = self.fail_at {
+                    if self.pos >= limit {
+                        return Err("simulated SFTP transport disconnect".into());
+                    }
+                    let remain = (limit - self.pos).min(buf.len());
+                    buf[..remain].copy_from_slice(&self.data[self.pos..self.pos + remain]);
+                    self.pos += remain;
+                    return Ok(remain);
+                }
+                let remain = (self.data.len() - self.pos).min(buf.len());
+                buf[..remain].copy_from_slice(&self.data[self.pos..self.pos + remain]);
+                self.pos += remain;
+                Ok(remain)
+            }
+        }
+        struct InterruptingSession {
+            data: Arc<Vec<u8>>,
+            fail_at: Option<usize>,
+            saw_periodic_checkpoint: Arc<AtomicBool>,
+            state_file: PathBuf,
+        }
+        impl SftpSession for InterruptingSession {
+            fn stat(&self, _path: &str) -> Result<SftpStat, String> {
+                Ok(SftpStat {
+                    size: self.data.len() as u64,
+                    mtime: "1700000123".into(),
+                })
+            }
+            fn open(&self, _path: &str) -> Result<Box<dyn SftpFile>, String> {
+                Ok(Box::new(InterruptingFile {
+                    data: Arc::clone(&self.data),
+                    pos: 0,
+                    fail_at: self.fail_at,
+                    saw_periodic_checkpoint: Arc::clone(&self.saw_periodic_checkpoint),
+                    state_file: self.state_file.clone(),
+                }))
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-sftp-err-ckpt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let total_len = (CHECKPOINT_BYTES as usize) + 256 * 1024;
+        let fail_offset = (CHECKPOINT_BYTES as usize) + 128 * 1024;
+        let payload = Arc::new((0..total_len).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+        let output = root.join("payload.downloading");
+        let state_file = state_path(&output);
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let target = parse_sftp_url("sftp://lee@nas.local/pub/large.bin").unwrap();
+        let saw_periodic = Arc::new(AtomicBool::new(false));
+
+        let failing = InterruptingSession {
+            data: Arc::clone(&payload),
+            fail_at: Some(fail_offset),
+            saw_periodic_checkpoint: Arc::clone(&saw_periodic),
+            state_file: state_file.clone(),
+        };
+        let err = download_with_session(&target, &output, &control, &failing).unwrap_err();
+        assert!(err.contains("disconnect"), "{err}");
+        assert!(
+            saw_periodic.load(Ordering::SeqCst),
+            "expected periodic checkpoint at >= 4 MiB during transfer"
+        );
+        let saved = load_state(&state_file);
+        assert_eq!(saved.offset, fail_offset as u64);
+        assert_eq!(fs::metadata(&output).unwrap().len(), fail_offset as u64);
+
+        // Second attempt resumes cleanly from `fail_offset` and finishes without corrupting bytes.
+        let succeeding = InterruptingSession {
+            data: Arc::clone(&payload),
+            fail_at: None,
+            saw_periodic_checkpoint: saw_periodic,
+            state_file: state_file.clone(),
+        };
+        let done = download_with_session(&target, &output, &control, &succeeding).unwrap();
+        assert_eq!(done, total_len as u64);
+        assert_eq!(fs::read(&output).unwrap(), *payload);
+        assert!(!state_file.exists());
+        let _ = fs::remove_dir_all(root);
     }
 }
