@@ -80,7 +80,6 @@ const FIELDS: &[(&str, &str, &str)] = &[
     ("媒体", "hls_remux_ts_to_mp4", "将 TS 点播无损封装为 MP4"),
     ("BT", "torrent_watch", "种子监视目录"),
     ("BT", "torrent_watch_enabled", "监视新种子"),
-    ("BT", "bt_upload_limit_kib", "BT 上传上限 KiB/s"),
     ("BT", "bt_max_connections", "最大 Peer 连接数"),
     ("BT", "bt_enable_dht", "启用 DHT 节点发现"),
     ("投屏与推送", "tvbox_endpoint", "TVBox 接收端地址"),
@@ -146,7 +145,6 @@ pub struct SettingsEditor {
     pub window: SettingsWindow,
     pub values: BTreeMap<String, Value>,
     pub dirty: BTreeMap<String, Value>,
-    in_flight_instant: BTreeMap<u64, (String, Value)>,
     invalid: BTreeMap<String, (String, String)>,
     rules: Vec<crate::site_rules::SiteRuleDraft>,
     rules_error: Option<String>,
@@ -196,7 +194,6 @@ impl SettingsEditor {
             window,
             values,
             dirty: BTreeMap::new(),
-            in_flight_instant: BTreeMap::new(),
             invalid: BTreeMap::new(),
             rules,
             rules_error,
@@ -205,6 +202,14 @@ impl SettingsEditor {
         editor.render_rules();
         editor.render("通用");
         Ok(editor)
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.dirty.is_empty() || self.rules_changed
+    }
+
+    pub fn has_validation_errors(&self) -> bool {
+        !self.invalid.is_empty() || self.rules_error.is_some()
     }
 
     pub fn discard_unsaved_secrets(&mut self) {
@@ -247,11 +252,7 @@ impl SettingsEditor {
             _ => Value::String(text.to_owned()),
         };
         self.invalid.remove(key);
-        let has_in_flight = self
-            .in_flight_instant
-            .values()
-            .any(|(pending_key, _)| pending_key == key);
-        if &value == original && !has_in_flight {
+        if &value == original {
             self.dirty.remove(key);
         } else {
             self.dirty.insert(key.to_owned(), value);
@@ -397,7 +398,6 @@ impl SettingsEditor {
         crate::native_window::apply_dialog_theme(&self.window, mode.is_dark());
         if saved {
             self.dirty.clear();
-            self.in_flight_instant.clear();
             self.invalid.clear();
             self.rules_changed = false;
         }
@@ -446,85 +446,6 @@ impl SettingsEditor {
         }
         Ok(changes)
     }
-
-    /// Prepares a single non-destructive boolean toggle payload for immediate
-    /// submission without prematurely clearing `dirty` or mutating baseline
-    /// `values` before Core confirms persistence.
-    pub fn prepare_instant_bool_change(
-        &self,
-        key: &str,
-    ) -> Option<(Value, BTreeMap<String, Value>)> {
-        if !is_instant_bool_setting(key) {
-            return None;
-        }
-        let value = self.dirty.get(key)?.clone();
-        let single = BTreeMap::from([(key.to_owned(), value.clone())]);
-        let mapped = storage_changes(&self.values, &single);
-        Some((value, mapped))
-    }
-
-    pub fn record_instant_save_sent(&mut self, request_id: u64, key: String, value: Value) {
-        self.in_flight_instant.insert(request_id, (key, value));
-    }
-
-    pub fn complete_instant_save(&mut self, request_id: u64, response: &CorePipeResponse) -> bool {
-        let Some((key, submitted)) = self.in_flight_instant.remove(&request_id) else {
-            return false;
-        };
-        self.receive_settings(response, false);
-        let still_in_flight = self
-            .in_flight_instant
-            .values()
-            .any(|(pending_key, _)| pending_key == &key);
-        if !still_in_flight
-            && (self.dirty.get(&key) == Some(&submitted)
-                || self.dirty.get(&key) == self.values.get(&key))
-        {
-            self.dirty.remove(&key);
-        }
-        true
-    }
-
-    pub fn fail_instant_save(&mut self, request_id: u64) -> bool {
-        let Some((key, _)) = self.in_flight_instant.remove(&request_id) else {
-            return false;
-        };
-        let still_in_flight = self
-            .in_flight_instant
-            .values()
-            .any(|(pending_key, _)| pending_key == &key);
-        if !still_in_flight && self.dirty.get(&key) == self.values.get(&key) {
-            self.dirty.remove(&key);
-        }
-        true
-    }
-}
-
-/// Non-destructive boolean preferences that apply immediately on toggle.
-/// Security-sensitive toggles (`av_scan_*`) and schedule toggles coupled with
-/// `HH:mm` clock inputs keep explicit confirmation via "保存设置".
-pub fn is_instant_bool_setting(key: &str) -> bool {
-    matches!(
-        key,
-        "auto_category"
-            | "clipboard_watch"
-            | "resume_interrupted"
-            | "start_on_login"
-            | "completion_sound_enabled"
-            | "progress_window_enabled"
-            | "complete_popup_enabled"
-            | "speed_limit_enabled"
-            | "allow_duplicate"
-            | "keep_temp_files"
-            | "download_subtitles"
-            | "skip_ad_segments"
-            | "hls_remux_ts_to_mp4"
-            | "torrent_watch_enabled"
-            | "bt_enable_dht"
-            | "takeover_enabled"
-            | "quick_download_enabled"
-            | "reduce_motion"
-    )
 }
 
 fn validate_setting_text(key: &str, text: &str) -> Result<(), String> {
@@ -701,7 +622,14 @@ mod tests {
     }
 
     #[test]
-    fn instant_bool_toggles_apply_single_key_and_preserve_unsaved_text_or_sensitive_drafts() {
+    fn transactional_edits_stage_booleans_and_numbers_together_and_omit_bt_upload_limit() {
+        assert!(!FIELDS
+            .iter()
+            .any(|(_, key, _)| *key == "bt_upload_limit_kib"));
+        assert!(FIELDS
+            .iter()
+            .any(|(group, key, _)| *group == "BT" && *key == "bt_max_connections"));
+
         crate::offscreen::OffscreenPlatform::init_test();
         let parent = crate::WorkbenchWindow::new().unwrap();
         let response: CorePipeResponse = serde_json::from_value(serde_json::json!({
@@ -714,104 +642,60 @@ mod tests {
             "hls_remux_ts_to_mp4": true,
             "av_scan_enabled": false,
             "schedule_enabled": false,
+            "schedule_start": "00:00",
             "default_concurrency": 8,
             "legal_accepted": true,
+            "speed_limit_enabled": false,
             "speed_limit_kib": 0,
             "download_dir": "D:\\Downloads"
         }))
         .unwrap();
         let mut editor = SettingsEditor::new(&response, &parent).unwrap();
+        assert!(!editor.has_unsaved_changes());
+        assert!(!editor.has_validation_errors());
 
-        // Draft an unsaved numeric setting and a security-sensitive boolean setting.
-        editor.edit("default_concurrency", "12").unwrap();
-        editor.edit("av_scan_enabled", "true").unwrap();
-        editor.edit("schedule_enabled", "true").unwrap();
-        assert_eq!(
-            editor.prepare_instant_bool_change("default_concurrency"),
-            None
-        );
-        assert_eq!(editor.prepare_instant_bool_change("av_scan_enabled"), None);
-        assert_eq!(editor.prepare_instant_bool_change("schedule_enabled"), None);
+        // Boolean and numeric edits stage together and track unsaved state cleanly.
+        editor.edit("speed_limit_enabled", "true").unwrap();
+        assert!(editor.has_unsaved_changes());
+        editor.edit("speed_limit_kib", "2048").unwrap();
+        assert!(editor.has_unsaved_changes());
+        assert!(!editor.has_validation_errors());
 
-        // Queue-full send failure: prepared instant change stays dirty so "保存设置" retries it.
-        editor.edit("quick_download_enabled", "true").unwrap();
-        let (submitted, first) = editor
-            .prepare_instant_bool_change("quick_download_enabled")
-            .expect("quick_download_enabled should prepare immediate save");
-        assert_eq!(
-            first,
-            BTreeMap::from([("browser_quick_download_enabled".into(), Value::from(true))])
-        );
-        assert_eq!(
-            editor.dirty.get("quick_download_enabled"),
-            Some(&Value::from(true)),
-            "must remain dirty before Core confirms save"
-        );
-        assert_eq!(
-            editor.storage_changes().unwrap()["browser_quick_download_enabled"],
-            Value::from(true),
-            "manual save must retry unconfirmed instant toggle when send queue was full"
-        );
+        let staged = editor.storage_changes().unwrap();
+        assert_eq!(staged["download_speed_limit_enabled"], Value::from(true));
+        assert_eq!(staged["download_speed_limit_kib"], Value::from(2048));
 
-        // Core Error response: in-flight instant save fails -> remains dirty for manual retry.
-        editor.record_instant_save_sent(101, "quick_download_enabled".into(), submitted.clone());
-        assert!(editor.fail_instant_save(101));
-        assert_eq!(
-            editor.storage_changes().unwrap()["browser_quick_download_enabled"],
-            Value::from(true),
-            "manual save must still include toggle after Core returns Error"
-        );
+        // Reverting both back to baseline clears dirty and has_unsaved_changes().
+        editor.edit("speed_limit_enabled", "false").unwrap();
+        assert!(editor.has_unsaved_changes());
+        editor.edit("speed_limit_kib", "0").unwrap();
+        assert!(!editor.has_unsaved_changes());
+        assert!(editor.storage_changes().unwrap().is_empty());
 
-        // Multiple rapid instant toggles track independent request_ids without overwriting.
-        editor.record_instant_save_sent(102, "quick_download_enabled".into(), submitted);
-        editor.edit("clipboard_watch", "false").unwrap();
-        let (clip_val, clip_map) = editor
-            .prepare_instant_bool_change("clipboard_watch")
-            .expect("clipboard_watch should prepare immediate save");
-        assert_eq!(
-            clip_map,
-            BTreeMap::from([("clipboard_watch".into(), Value::from(false))])
-        );
-        editor.record_instant_save_sent(103, "clipboard_watch".into(), clip_val);
+        // Validation errors are tracked until corrected.
+        assert!(editor.edit("schedule_start", "25:99").is_err());
+        assert!(editor.has_validation_errors());
+        editor.edit("schedule_start", "08:30").unwrap();
+        assert!(!editor.has_validation_errors());
+        assert!(editor.has_unsaved_changes());
 
-        // Request 102 succeeds while request 103 fails: 102 clears dirty, 103 stays dirty!
-        let ack_102: CorePipeResponse = serde_json::from_value(serde_json::json!({
+        // Site rule edits also mark unsaved changes until save confirmation.
+        editor.edit("schedule_start", "00:00").unwrap();
+        assert!(!editor.has_unsaved_changes());
+        editor.rule_action(0, "add").unwrap();
+        assert!(editor.has_unsaved_changes());
+        editor.edit_rule(0, "host", "example.com");
+
+        editor.edit("speed_limit_enabled", "true").unwrap();
+        editor.edit("speed_limit_kib", "2048").unwrap();
+        let committed = editor.storage_changes().unwrap();
+        assert_eq!(committed["download_speed_limit_enabled"], Value::from(true));
+        assert_eq!(committed["download_speed_limit_kib"], Value::from(2048));
+        assert!(committed.contains_key("site_rules"));
+
+        let saved_ack: CorePipeResponse = serde_json::from_value(serde_json::json!({
             "type": "settings",
-            "request_id": 102,
-            "takeover_enabled": true,
-            "takeover_minimum_bytes": 0,
-            "quick_download_enabled": true,
-            "clipboard_watch": true,
-            "hls_remux_ts_to_mp4": true,
-            "av_scan_enabled": false,
-            "schedule_enabled": false,
-            "default_concurrency": 8,
-            "legal_accepted": true,
-            "speed_limit_kib": 0,
-            "download_dir": "D:\\Downloads"
-        }))
-        .unwrap();
-        assert!(editor.complete_instant_save(102, &ack_102));
-        assert!(!editor.dirty.contains_key("quick_download_enabled"));
-        assert!(editor.fail_instant_save(103));
-        assert_eq!(
-            editor.dirty.get("clipboard_watch"),
-            Some(&Value::from(false))
-        );
-
-        // Toggling quick_download_enabled right back to false and confirming it clears dirty.
-        editor.edit("quick_download_enabled", "false").unwrap();
-        let (back_val, second) = editor
-            .prepare_instant_bool_change("quick_download_enabled")
-            .expect("toggling back should also apply immediately");
-        assert_eq!(
-            second,
-            BTreeMap::from([("browser_quick_download_enabled".into(), Value::from(false))])
-        );
-        editor.record_instant_save_sent(104, "quick_download_enabled".into(), back_val);
-        let ack_104: CorePipeResponse = serde_json::from_value(serde_json::json!({
-            "type": "settings",
-            "request_id": 104,
+            "request_id": 2,
             "takeover_enabled": true,
             "takeover_minimum_bytes": 0,
             "quick_download_enabled": false,
@@ -819,23 +703,16 @@ mod tests {
             "hls_remux_ts_to_mp4": true,
             "av_scan_enabled": false,
             "schedule_enabled": false,
+            "schedule_start": "00:00",
             "default_concurrency": 8,
             "legal_accepted": true,
-            "speed_limit_kib": 0,
+            "speed_limit_enabled": true,
+            "speed_limit_kib": 2048,
             "download_dir": "D:\\Downloads"
         }))
         .unwrap();
-        assert!(editor.complete_instant_save(104, &ack_104));
-
-        // Unsaved numeric/security/schedule drafts AND failed clipboard_watch remain for "保存设置".
-        let explicit = editor.storage_changes().unwrap();
-        assert_eq!(explicit["default_concurrency"], Value::from(12));
-        assert_eq!(explicit["av_scan_enabled"], Value::from(true));
-        assert_eq!(
-            explicit["download_speed_schedule_enabled"],
-            Value::from(true)
-        );
-        assert_eq!(explicit["clipboard_watch"], Value::from(false));
-        assert!(!explicit.contains_key("browser_quick_download_enabled"));
+        editor.receive_settings(&saved_ack, true);
+        assert!(!editor.has_unsaved_changes());
+        assert!(!editor.has_validation_errors());
     }
 }

@@ -709,6 +709,8 @@ fn transfer_ftp(
     // 数据留在调用线程，直接沿用任务/队列/全局限速上下文。
     let mut buf = [0u8; 64 * 1024];
     let mut downloaded = resume_from;
+    let mut rate = crate::http_engine::TransferRate::new(downloaded);
+    let mut last_progress = Instant::now();
     crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
     loop {
         control.check()?;
@@ -738,13 +740,19 @@ fn transfer_ftp(
         file.write_all(&buf[..count])
             .map_err(|error| error.to_string())?;
         downloaded = received;
-        crate::http_engine::write_progress(&progress, downloaded, size, 0.0, "downloading");
+        if last_progress.elapsed() >= PROGRESS_INTERVAL {
+            let speed = rate.sample(downloaded) as f64;
+            crate::http_engine::write_progress(&progress, downloaded, size, speed, "downloading");
+            last_progress = Instant::now();
+        }
     }
     if remote_size.is_some_and(|size| downloaded != size) {
         return Err(format!(
             "FTP transfer size mismatch: expected {size}, received {downloaded}"
         ));
     }
+    let final_speed = rate.sample(downloaded) as f64;
+    crate::http_engine::write_progress(&progress, downloaded, size, final_speed, "downloading");
     drop(data);
     file.sync_all().map_err(|error| error.to_string())?;
     control.check()?;

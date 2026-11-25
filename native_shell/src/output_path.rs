@@ -254,14 +254,14 @@ pub fn typed_output_path(
         "flac"
     } else if head.starts_with(b"OggS") {
         "ogg"
+    } else if looks_like_mpeg_ts(head) {
+        "ts"
     } else if head.starts_with(b"ID3")
         || (head.len() >= 2 && head[0] == 0xff && head[1] & 0xe6 == 0xe2)
     {
         "mp3"
     } else if head.len() >= 2 && head[0] == 0xff && head[1] & 0xf6 == 0xf0 {
         "aac"
-    } else if head.len() > 376 && head[0] == 0x47 && head[188] == 0x47 && head[376] == 0x47 {
-        "ts"
     } else if head.starts_with(b"\x1f\x8b") {
         "gz"
     } else if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
@@ -298,35 +298,25 @@ pub fn typed_output_path(
                 | "appx"
                 | "appxbundle"
                 | "cbz"
+                | "kmz"
+                | "3mf"
+                | "crx"
+                | "ipa"
+                | "aab"
+                | "xapk"
+                | "kra"
+                | "ora"
+                | "dwfx"
+                | "mcpack"
+                | "mcworld"
+                | "mrpack"
+                | "pk3"
+                | "pk4"
+                | "love"
         )
-    };
-    let is_generic_placeholder_ext = |ext: &str| {
-        matches!(
-            ext,
-            "" | "bin"
-                | "dat"
-                | "tmp"
-                | "part"
-                | "download"
-                | "php"
-                | "asp"
-                | "aspx"
-                | "jsp"
-                | "cgi"
-                | "html"
-                | "htm"
-        )
-    };
-    let is_safe_explicit_zip_container_ext = |ext: &str| {
-        !is_generic_placeholder_ext(ext)
-            && !is_dangerous_executable_extension(ext)
-            && ext.len() <= 24
-            && ext
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     };
     let extension = if zip {
-        if zip_subtype(&current) || is_safe_explicit_zip_container_ext(&current) {
+        if zip_subtype(&current) {
             current.as_str()
         } else if zip_subtype(mime_ext) {
             mime_ext
@@ -339,6 +329,7 @@ pub fn typed_output_path(
         if (detected == "mp4" && matches!(current.as_str(), "m4v" | "m4a" | "m4b"))
             || (detected == "jpg" && current == "jpeg")
             || (detected == "ogg" && matches!(current.as_str(), "oga" | "ogv" | "opus"))
+            || (detected == "ts" && matches!(current.as_str(), "m2ts" | "mts"))
         {
             current.as_str()
         } else {
@@ -363,6 +354,29 @@ pub fn typed_output_path(
     } else {
         requested.with_extension(extension)
     })
+}
+
+fn looks_like_mpeg_ts(head: &[u8]) -> bool {
+    let offset = if head.len() >= 10
+        && head.starts_with(b"ID3")
+        && head[3] < 0xff
+        && head[4] < 0xff
+        && head[6..10].iter().all(|byte| byte & 0x80 == 0)
+    {
+        let tag_len = ((head[6] as usize) << 21)
+            | ((head[7] as usize) << 14)
+            | ((head[8] as usize) << 7)
+            | (head[9] as usize);
+        let header_and_footer: usize = if head[5] & 0x10 != 0 { 20 } else { 10 };
+        header_and_footer.saturating_add(tag_len)
+    } else {
+        0
+    };
+    let Some(rest) = head.get(offset..) else {
+        return false;
+    };
+    (rest.len() > 376 && rest[0] == 0x47 && rest[188] == 0x47 && rest[376] == 0x47)
+        || (rest.len() > 388 && rest[4] == 0x47 && rest[196] == 0x47 && rest[388] == 0x47)
 }
 
 fn is_dangerous_executable_extension(ext: &str) -> bool {
@@ -403,6 +417,8 @@ fn is_dangerous_executable_extension(ext: &str) -> bool {
             | "sct"
             | "shb"
             | "shs"
+            | "pyz"
+            | "pyzw"
     )
 }
 
@@ -841,7 +857,16 @@ mod tests {
             "extension.crx",
             "app.ipa",
             "bundle.aab",
+            "bundle.xapk",
             "painting.kra",
+            "layered.ora",
+            "drawing.dwfx",
+            "addon.mcpack",
+            "world.mcworld",
+            "modpack.mrpack",
+            "pak0.pk3",
+            "pak1.pk4",
+            "game.love",
         ] {
             let requested = dir.join(safe_name);
             let resolved =
@@ -849,14 +874,37 @@ mod tests {
             assert_eq!(resolved, requested, "must preserve {safe_name}");
         }
 
-        for generic_name in ["archive", "download.bin", "export.php", "temp.tmp"] {
-            let requested = dir.join(generic_name);
+        for (disp_name, expected_ext) in [("map.kmz", "kmz"), ("model.3mf", "3mf")] {
+            let resolved = typed_output_path(
+                &payload,
+                &dir.join("download.bin"),
+                "application/octet-stream",
+                &format!("attachment; filename=\"{disp_name}\""),
+            )
+            .unwrap();
+            assert_eq!(
+                resolved.extension().and_then(|e| e.to_str()),
+                Some(expected_ext),
+                "Content-Disposition {disp_name} must preserve .{expected_ext}"
+            );
+        }
+
+        for repair_name in [
+            "archive",
+            "download.bin",
+            "export.php",
+            "temp.tmp",
+            "release-v1.2",
+            "export.do",
+            "wrong.mp4",
+        ] {
+            let requested = dir.join(repair_name);
             let resolved =
                 typed_output_path(&payload, &requested, "application/octet-stream", "").unwrap();
             assert_eq!(
                 resolved.extension().and_then(|e| e.to_str()),
                 Some("zip"),
-                "generic {generic_name} should resolve to .zip"
+                "{repair_name} should resolve to .zip"
             );
         }
 
@@ -872,7 +920,14 @@ mod tests {
             Some("docx")
         );
 
-        for dangerous_name in ["disguised.exe", "runner.bat", "script.ps1", "setup.msi"] {
+        for dangerous_name in [
+            "disguised.exe",
+            "evil.pyz",
+            "evil.pyzw",
+            "runner.bat",
+            "script.ps1",
+            "setup.msi",
+        ] {
             let requested = dir.join(dangerous_name);
             let resolved =
                 typed_output_path(&payload, &requested, "application/octet-stream", "").unwrap();
@@ -882,6 +937,90 @@ mod tests {
                 "dangerous {dangerous_name} must never pass through unchanged"
             );
         }
+
+        let unknown_payload = dir.join("unknown.downloading");
+        fs::write(&unknown_payload, b"\x00\x01\x02\x03opaque-bytes").unwrap();
+        let blocked_pyz_disp = typed_output_path(
+            &unknown_payload,
+            &dir.join("download.bin"),
+            "application/octet-stream",
+            "attachment; filename=\"evil.pyz\"",
+        )
+        .unwrap();
+        assert_eq!(
+            blocked_pyz_disp,
+            dir.join("download.bin"),
+            "dangerous .pyz Content-Disposition must be blocked"
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typed_output_path_detects_id3_prefixed_mpeg_ts_and_m2ts_without_breaking_mp3() {
+        let dir = test_dir("id3-ts");
+        fs::create_dir_all(&dir).unwrap();
+
+        // 1. ID3v2 header (10-byte header + 32-byte body) followed by 3 x 188-byte MPEG-TS packets.
+        let mut id3_ts = Vec::new();
+        id3_ts.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x20");
+        id3_ts.extend_from_slice(&[0u8; 32]);
+        for _ in 0..3 {
+            let mut pkt = [0u8; 188];
+            pkt[0] = 0x47;
+            id3_ts.extend_from_slice(&pkt);
+        }
+        let ts_payload = dir.join("seg.downloading");
+        fs::write(&ts_payload, &id3_ts).unwrap();
+        let resolved_ts = typed_output_path(
+            &ts_payload,
+            &dir.join("segment.bin"),
+            "application/octet-stream",
+            "",
+        )
+        .unwrap();
+        assert_eq!(resolved_ts.extension().and_then(|e| e.to_str()), Some("ts"));
+
+        // 2. ID3v2 with 0x10 footer flag (+20 header/footer) + 192-byte M2TS packets (sync at +4).
+        let mut id3_m2ts = Vec::new();
+        id3_m2ts.extend_from_slice(b"ID3\x04\x00\x10\x00\x00\x00\x10");
+        id3_m2ts.extend_from_slice(&[0u8; 26]); // 16-byte body + 10-byte footer
+        for _ in 0..3 {
+            let mut pkt = [0u8; 192];
+            pkt[4] = 0x47;
+            id3_m2ts.extend_from_slice(&pkt);
+        }
+        let m2ts_payload = dir.join("bdav.downloading");
+        fs::write(&m2ts_payload, &id3_m2ts).unwrap();
+        let resolved_m2ts = typed_output_path(
+            &m2ts_payload,
+            &dir.join("clip.bin"),
+            "application/octet-stream",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_m2ts.extension().and_then(|e| e.to_str()),
+            Some("ts")
+        );
+
+        // 3. Regular ID3v2 MP3 must still detect as mp3.
+        let mut mp3_bytes = Vec::from(&b"ID3\x03\x00\x00\x00\x00\x00\x10"[..]);
+        mp3_bytes.extend_from_slice(&[0u8; 16]);
+        mp3_bytes.extend_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+        let mp3_payload = dir.join("song.downloading");
+        fs::write(&mp3_payload, &mp3_bytes).unwrap();
+        let resolved_mp3 = typed_output_path(
+            &mp3_payload,
+            &dir.join("track.bin"),
+            "application/octet-stream",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_mp3.extension().and_then(|e| e.to_str()),
+            Some("mp3")
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

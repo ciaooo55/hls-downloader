@@ -502,13 +502,25 @@ pub fn variant_choices(playlist: &Playlist) -> Vec<crate::StreamVariant> {
 }
 
 pub fn audio_choices(playlist: &Playlist) -> Vec<crate::StreamVariant> {
+    let has_external_audio = playlist
+        .renditions
+        .iter()
+        .any(|item| item.kind.eq_ignore_ascii_case("AUDIO") && item.uri.is_some());
+    if !has_external_audio {
+        return Vec::new();
+    }
     let mut choices: Vec<_> = playlist
         .renditions
         .iter()
-        .filter(|item| item.kind.eq_ignore_ascii_case("AUDIO") && item.uri.is_some())
+        .filter(|item| {
+            item.kind.eq_ignore_ascii_case("AUDIO")
+                && (item.uri.is_some() || !item.name.is_empty() || !item.language.is_empty())
+        })
         .map(|item| crate::StreamVariant {
             label: if item.language.is_empty() {
                 item.name.clone()
+            } else if item.name.is_empty() {
+                item.language.clone()
             } else {
                 format!("{} · {}", item.name, item.language)
             },
@@ -553,6 +565,7 @@ pub fn select_audio_track<'a>(
                 && (variant.audio_group.is_empty() || item.group_id == variant.audio_group)
         })
         .collect();
+    tracks.sort_by_key(|item| (!item.default, item.language.clone(), item.name.clone()));
     let preferred = preferred.trim();
     if !preferred.is_empty() {
         if let Some(hit) = tracks
@@ -569,7 +582,6 @@ pub fn select_audio_track<'a>(
             return Some(hit);
         }
     }
-    tracks.sort_by_key(|item| (!item.default, item.language.clone(), item.name.clone()));
     tracks.into_iter().next()
 }
 
@@ -1178,6 +1190,24 @@ fn download_hls_scoped(
             && extension(entry.path.to_string_lossy().as_ref()).eq_ignore_ascii_case("ts")
     });
     let needs_final_mux = audio_merged.is_some() || !subtitles.is_empty();
+    if can_concat && needs_final_mux {
+        let staged = task_dir.join(REMUX_STAGING_TS);
+        concat_files(&files, &staged)?;
+        let muxed = task_dir.join("muxed.mp4");
+        let mux_result = mux_av(
+            &staged,
+            audio_merged.as_deref(),
+            &subtitles,
+            &muxed,
+            control,
+        );
+        let _ = fs::remove_file(&staged);
+        mux_result?;
+        if let Some(audio) = &audio_merged {
+            let _ = fs::remove_file(audio);
+        }
+        return Ok(muxed);
+    }
     if can_concat && options.remux_ts_to_mp4 && super::merge::locate_ffmpeg().is_some() {
         // 可选：先拼接到 merged.ts，再无损重封装为 MP4；FFmpeg 失败时回落为原拼接结果。
         let staged = task_dir.join(REMUX_STAGING_TS);
@@ -1186,11 +1216,16 @@ fn download_hls_scoped(
             Ok(()) => {
                 let _ = fs::remove_file(&staged);
             }
-            Err(error) if error == "paused" || error == "canceled" => return Err(error),
+            Err(error) if error == "paused" || error == "canceled" => {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
+            }
             Err(error) => {
                 eprintln!("HLS TS→MP4 remux failed, keeping concatenated TS: {error}");
-                crate::atomic_replace::replace_file(&staged, &output)
-                    .map_err(|error| error.to_string())?;
+                if let Err(replace_error) = crate::atomic_replace::replace_file(&staged, &output) {
+                    let _ = fs::remove_file(&staged);
+                    return Err(replace_error.to_string());
+                }
             }
         }
     } else if can_concat {
@@ -1200,14 +1235,15 @@ fn download_hls_scoped(
     }
     if needs_final_mux {
         let muxed = task_dir.join("muxed.mp4");
-        mux_av(
+        let mux_result = mux_av(
             &output,
             audio_merged.as_deref(),
             &subtitles,
             &muxed,
             control,
-        )?;
+        );
         let _ = fs::remove_file(&output);
+        mux_result?;
         if let Some(audio) = &audio_merged {
             let _ = fs::remove_file(audio);
         }
@@ -5298,5 +5334,37 @@ mod tests {
         let explicit_original = select_audio_track(&playlist, variant, "Original").unwrap();
         assert_eq!(explicit_original.name, "Original");
         assert!(explicit_original.uri.is_none());
+
+        let choices = audio_choices(&playlist);
+        assert_eq!(choices.len(), 2);
+        assert!(choices.iter().any(|c| c.name == "Original"));
+        assert!(choices.iter().any(|c| c.name == "Commentary"));
+
+        let reordered = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-VERSION:4\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Commentary\",LANGUAGE=\"en\",DEFAULT=NO,AUTOSELECT=NO,URI=\"commentary.m3u8\"\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Original\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,AUDIO=\"aud\"\n",
+            "video.m3u8\n",
+        );
+        let reordered_pl =
+            parse_playlist(reordered, "https://cdn.example.test/master.m3u8").unwrap();
+        let reordered_var = select_variant_for(&reordered_pl, 0, 0, "").unwrap();
+        let lang_match = select_audio_track(&reordered_pl, reordered_var, "en").unwrap();
+        assert_eq!(
+            lang_match.name, "Original",
+            "DEFAULT=YES must win language ties even when listed after DEFAULT=NO"
+        );
+
+        let embedded_only = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Main\",LANGUAGE=\"en\",DEFAULT=YES\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,AUDIO=\"aud\"\n",
+            "video.m3u8\n",
+        );
+        let embedded_only_pl =
+            parse_playlist(embedded_only, "https://cdn.example.test/master.m3u8").unwrap();
+        assert!(audio_choices(&embedded_only_pl).is_empty());
     }
 }

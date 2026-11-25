@@ -358,7 +358,7 @@ fn strong_etag(value: &str) -> String {
     }
 }
 
-fn is_ephemeral_signature_query_param(raw_key: &str) -> bool {
+fn legacy_is_ephemeral_signature_query_param(raw_key: &str) -> bool {
     let lower = raw_key.trim().to_ascii_lowercase();
     matches!(
         lower.as_str(),
@@ -405,9 +405,13 @@ fn is_ephemeral_signature_query_param(raw_key: &str) -> bool {
 }
 
 /// Normalizes an HTTP(S) resource URL into a stable checkpoint identity key by
-/// canonicalizing scheme/host/default-port and stripping ephemeral presigned
-/// query parameters while retaining resource-identifying path and query params.
+/// delegating directly to the shared `hls_client::canonical_resource_key`.
 pub(crate) fn canonical_url_key(url: &str) -> String {
+    hls_client::canonical_resource_key(url)
+}
+
+/// Read-only fallback preserving pre-unification `.ranges.json` checkpoint keys.
+fn legacy_canonical_url_key(url: &str) -> String {
     let without_fragment = url.trim().split('#').next().unwrap_or("").trim();
     let Some((raw_scheme, rest)) = without_fragment.split_once("://") else {
         return without_fragment.to_string();
@@ -464,7 +468,7 @@ pub(crate) fn canonical_url_key(url: &str) -> String {
             .filter(|segment| !segment.is_empty())
             .filter(|segment| {
                 let key = segment.split('=').next().unwrap_or(segment);
-                !is_ephemeral_signature_query_param(key)
+                !legacy_is_ephemeral_signature_query_param(key)
             })
             .collect();
         if !kept.is_empty() {
@@ -497,10 +501,11 @@ fn checkpoint_matches(job: &Job, value: &serde_json::Value) -> bool {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .trim();
-    if expected_key.is_empty()
-        || saved_key.is_empty()
-        || (saved_key != expected_key && canonical_url_key(saved_key) != expected_key)
-    {
+    let key_matches = saved_key == expected_key
+        || canonical_url_key(saved_key) == expected_key
+        || (!job.url.trim().is_empty()
+            && legacy_canonical_url_key(saved_key) == legacy_canonical_url_key(&job.url));
+    if expected_key.is_empty() || saved_key.is_empty() || !key_matches {
         return false;
     }
     let expected_etag = strong_etag(&job.etag);
@@ -1505,9 +1510,54 @@ pub(crate) fn download_bytes_range(job: &Job, start: u64, length: u64) -> Result
     Ok(())
 }
 
+thread_local! {
+    static RANGE_OUTER_STOP: std::cell::RefCell<Option<Arc<AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct RangeOuterStopScope(Option<Arc<AtomicBool>>);
+
+impl Drop for RangeOuterStopScope {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        RANGE_OUTER_STOP.with(|slot| {
+            *slot.borrow_mut() = previous;
+        });
+    }
+}
+
+fn set_range_outer_stop(outer_stop: Option<Arc<AtomicBool>>) -> RangeOuterStopScope {
+    let previous =
+        RANGE_OUTER_STOP.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), outer_stop));
+    RangeOuterStopScope(previous)
+}
+
+fn current_range_outer_stop() -> Option<Arc<AtomicBool>> {
+    RANGE_OUTER_STOP.with(|slot| slot.borrow().clone())
+}
+
+fn range_outer_stopped() -> bool {
+    RANGE_OUTER_STOP.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    })
+}
+
 fn check_transfer_control(path: &Path, stop: Option<&AtomicBool>) -> Result<(), EngineError> {
+    check_transfer_control_with_outer(path, stop, None)
+}
+
+fn check_transfer_control_with_outer(
+    path: &Path,
+    stop: Option<&AtomicBool>,
+    outer_stop: Option<&AtomicBool>,
+) -> Result<(), EngineError> {
     check_control(path)?;
-    if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
+    if stop.is_some_and(|stop| stop.load(Ordering::SeqCst))
+        || outer_stop.is_some_and(|stop| stop.load(Ordering::SeqCst))
+        || range_outer_stopped()
+    {
         return Err(EngineError::Cancel);
     }
     Ok(())
@@ -2307,26 +2357,13 @@ fn range_worker(
     fresh: bool,
 ) -> Option<FetchResult> {
     let outer_stop = job.range_stop.clone();
+    let _outer_stop_scope = set_range_outer_stop(outer_stop.clone());
     let mut transport_job = job.clone();
     transport_job.range_stop = Some(Arc::clone(&stop));
     let job = &transport_job;
     // 尚未领取范围的 worker 不打开文件或分配写缓冲；首次启用后复用同一个 writer。
     let mut writer: Option<BufWriter<File>> = None;
     loop {
-        if outer_stop
-            .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::SeqCst))
-        {
-            let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
-            if slot.is_none() {
-                *slot = Some(EngineErrorCode::Pause);
-            }
-            stop.store(true, Ordering::SeqCst);
-            return None;
-        }
-        if stop.load(Ordering::SeqCst) {
-            return None;
-        }
         match read_control(&job.control) {
             Control::Pause => {
                 let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
@@ -2345,6 +2382,20 @@ fn range_worker(
                 return None;
             }
             Control::Run => {}
+        }
+        if outer_stop
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
+            if slot.is_none() {
+                *slot = Some(EngineErrorCode::Cancel);
+            }
+            stop.store(true, Ordering::SeqCst);
+            return None;
+        }
+        if stop.load(Ordering::SeqCst) {
+            return None;
         }
         let Some(active) = scheduler.claim(worker_index) else {
             if scheduler.is_idle() {
@@ -2695,7 +2746,10 @@ fn fetch_range(
         let mut last_control = Instant::now() - Duration::from_millis(50);
         loop {
             // 网络 read 的实际块往往远小于 WRITE_BATCH，不能每次 read 都重新打开控制文件。
-            if stop.load(Ordering::SeqCst) || last_control.elapsed() >= Duration::from_millis(50) {
+            if stop.load(Ordering::SeqCst)
+                || range_outer_stopped()
+                || last_control.elapsed() >= Duration::from_millis(50)
+            {
                 last_control = Instant::now();
                 if let Err(error) = check_range_control(job, stop) {
                     persist_range_progress(job, file, completed, start, cursor)?;
@@ -2718,7 +2772,7 @@ fn fetch_range(
             }
             let read = reader.read(&mut buffer[..read_limit]);
             // read 可能阻塞，返回后不能将协调器已停止的响应继续写盘。
-            if stop.load(Ordering::SeqCst) {
+            if stop.load(Ordering::SeqCst) || range_outer_stopped() {
                 if let Err(error) = check_range_control(job, stop) {
                     persist_range_progress(job, file, completed, start, cursor)?;
                     return Err(error);
@@ -2835,6 +2889,7 @@ struct InterruptibleTcpStream {
     control: PathBuf,
     last_control: Instant,
     range_stop: Option<Arc<AtomicBool>>,
+    outer_stop: Option<Arc<AtomicBool>>,
 }
 
 impl Read for InterruptibleTcpStream {
@@ -2846,7 +2901,11 @@ impl Read for InterruptibleTcpStream {
         loop {
             if self.last_control.elapsed() >= Duration::from_millis(50) {
                 self.last_control = Instant::now();
-                match check_transfer_control(&self.control, self.range_stop.as_deref()) {
+                match check_transfer_control_with_outer(
+                    &self.control,
+                    self.range_stop.as_deref(),
+                    self.outer_stop.as_deref(),
+                ) {
                     Ok(()) => {}
                     Err(_) => {
                         // Interrupted 会被 read_exact 自动重试，不能用它表达任务停止。
@@ -5081,6 +5140,7 @@ fn http_get(
         control: job.control.clone(),
         last_control: Instant::now() - Duration::from_millis(50),
         range_stop: job.range_stop.clone(),
+        outer_stop: current_range_outer_stop(),
     };
     let mut buf = Vec::with_capacity(4096);
     let mut block = [0u8; 4096];
@@ -5267,6 +5327,7 @@ mod winhttp {
         signal: Option<Arc<RequestSignal>>,
         control: PathBuf,
         pub(super) range_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+        pub(super) outer_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
     // SAFETY: WinHTTP `HINTERNET` handles have no thread affinity, `&mut self` serializes
@@ -5335,7 +5396,11 @@ mod winhttp {
                 }
                 // 已完成的读直接返回；仅网络仍在等待时检查控制，且不持回调锁做文件 I/O。
                 drop(status);
-                super::check_transfer_control(&self.control, self.range_stop.as_deref())?;
+                super::check_transfer_control_with_outer(
+                    &self.control,
+                    self.range_stop.as_deref(),
+                    self.outer_stop.as_deref(),
+                )?;
                 status = signal
                     .status
                     .lock()
@@ -5571,6 +5636,7 @@ mod winhttp {
                 signal: None,
                 control: job.control.clone(),
                 range_stop: job.range_stop.clone(),
+                outer_stop: super::current_range_outer_stop(),
             };
             let previous = WinHttpSetStatusCallback(
                 request,
@@ -11066,10 +11132,20 @@ mod tests {
         let second = canonical_url_key(
             "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/30280.m4s?e=NEW_E&uipk=5&nbs=1&deadline=1999999999&gen=playurlv2&os=cosbv&oi=123&trid=efgh&mid=999&platform=pc&upsig=22222222222222222222222222222222&uparams=e,uipk,nbs,deadline,gen,os,oi,trid,mid,platform",
         );
+        assert_eq!(
+            first,
+            "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/30280.m4s"
+        );
         assert_eq!(first, second);
-        assert!(first.contains("uipk=5&nbs=1&oi=123"));
         assert!(!first.contains("upsig="));
         assert!(!first.contains("deadline="));
+
+        let generic_win = canonical_url_key("https://example.com/download?os=win&platform=x64");
+        let generic_mac = canonical_url_key("https://example.com/download?os=mac&platform=arm64");
+        assert_ne!(generic_win, generic_mac);
+        let generic_key_a = canonical_url_key("https://example.com/get?key=fileA");
+        let generic_key_b = canonical_url_key("https://example.com/get?key=fileB");
+        assert_ne!(generic_key_a, generic_key_b);
 
         let s3_a = canonical_url_key(
             "https://bucket.s3.amazonaws.com/archive.iso?versionId=7&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA&X-Amz-Date=20260101T000000Z&X-Amz-Expires=900&X-Amz-Signature=deadbeef",
@@ -11140,7 +11216,107 @@ mod tests {
         });
         assert!(!checkpoint_matches(&job, &saved_mod));
 
+        // Pre-unification legacy `.ranges.json` checkpoint (where `key` was stripped and query unsorted)
+        // continues matching seamlessly via `legacy_canonical_url_key` fallback.
+        let (mut legacy_job, legacy_dir) = temp_job(
+            "https://example.com/get?b=2&key=fileA&a=1&token=fresh",
+            false,
+            2048,
+            2,
+        );
+        legacy_job.resource_key = canonical_url_key(&legacy_job.url);
+        legacy_job.etag = "\"v1\"".into();
+        let saved_pre_upgrade = serde_json::json!({
+            "version": 2,
+            "resource_key": "https://example.com/get?b=2&a=1",
+            "etag": "\"v1\"",
+            "last_modified": "",
+            "total": 2048,
+            "ranges": [[0, 1023]]
+        });
+        assert!(checkpoint_matches(&legacy_job, &saved_pre_upgrade));
+        let _ = fs::remove_dir_all(legacy_dir);
+
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn range_worker_outer_stop_checks_control_first_and_interrupts_active_reads() {
+        for (control_word, expected_pause) in [("pause", true), ("cancel", false), ("run", false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let _ = stream.write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-65535/65536\r\nContent-Length: 65536\r\n\r\nabcd",
+                );
+                let _ = ready_tx.send(());
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            });
+
+            let (mut job, dir) = temp_job(&format!("http://{addr}/video.bin"), false, 65536, 1);
+            fs::write(&job.output, []).unwrap();
+            let outer_stop = Arc::new(AtomicBool::new(false));
+            job.range_stop = Some(Arc::clone(&outer_stop));
+
+            let scheduler = Arc::new(RangeScheduler::new(
+                vec![WorkRange {
+                    start: 0,
+                    end: 65535,
+                }],
+                1,
+            ));
+            let downloaded = Arc::new(AtomicU64::new(0));
+            let failed = Arc::new(Mutex::new(None));
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_job = job.clone();
+            let worker_failed = Arc::clone(&failed);
+            let worker_stop = Arc::clone(&stop);
+            let worker = thread::spawn(move || {
+                range_worker(
+                    0,
+                    &worker_job,
+                    scheduler,
+                    downloaded,
+                    Arc::new(RangeCheckpoints::new(Vec::new())),
+                    worker_failed,
+                    worker_stop,
+                    true,
+                )
+            });
+
+            ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            if control_word != "run" {
+                fs::write(&job.control, control_word).unwrap();
+            }
+            outer_stop.store(true, Ordering::SeqCst);
+            let _ = worker.join().unwrap();
+            let _ = release_tx.send(());
+            let _ = server.join();
+
+            let recorded = failed.lock().unwrap().take();
+            let _ = fs::remove_dir_all(dir);
+            if expected_pause {
+                assert!(
+                    matches!(recorded, Some(EngineErrorCode::Pause)),
+                    "expected Pause for control={control_word}, got {recorded:?}"
+                );
+            } else {
+                assert!(
+                    matches!(recorded, Some(EngineErrorCode::Cancel)),
+                    "expected Cancel for control={control_word}, got {recorded:?}"
+                );
+            }
+        }
     }
 
     #[test]

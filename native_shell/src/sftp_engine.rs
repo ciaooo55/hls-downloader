@@ -340,7 +340,8 @@ fn keyscan_output(host: &str, port: u16) -> Result<String, String> {
     let scanner = which("ssh-keyscan").ok_or_else(|| {
         "OpenSSH ssh-keyscan not found; cannot TOFU the SFTP host key".to_string()
     })?;
-    let scanned = Command::new(scanner)
+    let mut command = Command::new(scanner);
+    command
         .args([
             "-p",
             &port.to_string(),
@@ -350,7 +351,18 @@ fn keyscan_output(host: &str, port: u16) -> Result<String, String> {
             "rsa,ecdsa,ed25519",
             host,
         ])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let child = command.spawn().map_err(|error| error.to_string())?;
+    crate::job_object::assign_child(&child);
+    let scanned = child
+        .wait_with_output()
         .map_err(|error| error.to_string())?;
     let stdout = String::from_utf8_lossy(&scanned.stdout);
     let stderr = String::from_utf8_lossy(&scanned.stderr);
@@ -479,6 +491,9 @@ fn transfer_from_session(
     let mut buf = vec![0u8; BLOCK_SIZE];
     let mut written = offset;
     let progress = progress_path(output);
+    let mut rate = crate::http_engine::TransferRate::new(written);
+    let mut last_progress = std::time::Instant::now();
+    crate::http_engine::write_progress(&progress, written, total, 0.0, "downloading");
     loop {
         match read_control(control).as_str() {
             "cancel" => return Err("canceled".into()),
@@ -501,9 +516,15 @@ fn transfer_from_session(
             .write_all(&buf[..count])
             .map_err(|error| error.to_string())?;
         written += count as u64;
-        crate::http_engine::write_progress(&progress, written, total, 0.0, "downloading");
+        if last_progress.elapsed() >= std::time::Duration::from_millis(200) {
+            let speed = rate.sample(written) as f64;
+            crate::http_engine::write_progress(&progress, written, total, speed, "downloading");
+            last_progress = std::time::Instant::now();
+        }
     }
     local.flush().map_err(|error| error.to_string())?;
+    let final_speed = rate.sample(written) as f64;
+    crate::http_engine::write_progress(&progress, written, total, final_speed, "downloading");
     Ok(written)
 }
 
@@ -696,7 +717,8 @@ fn openssh_get(
             _ => {}
         }
     }
-    let mut child = Command::new(sftp)
+    let mut command = Command::new(sftp);
+    command
         .args([
             "-P",
             &target.port.to_string(),
@@ -730,9 +752,14 @@ fn openssh_get(
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    crate::job_object::assign_child(&child);
     // Output from an SSH server is untrusted. Keep diagnostics bounded while
     // draining both pipes so a full pipe cannot block the transfer.
     fn capture(mut pipe: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {

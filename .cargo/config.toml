@@ -1,6 +1,3 @@
 [build]
 # 直接调用 Cargo 与项目构建脚本使用同一个仓库内输出目录。
 target-dir = ".tool-cache/build-cache/cargo-target"
-
-[env]
-CARGO_INCREMENTAL = "1"

@@ -1044,55 +1044,18 @@ fn fetch_magnet_metadata(
             return Ok(meta);
         }
     }
-    let hash = hash.ok_or_else(|| {
+    let _hash = hash.ok_or_else(|| {
         if magnet.info_hash.is_empty() && !exact_sources.is_empty() {
             "无法从磁力链接的 xs 地址读取有效种子元数据".into()
         } else {
             format!("magnet info_hash 无效: {}", magnet.info_hash)
         }
     })?;
-    let swarm_error = match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht, control) {
-        Ok(meta) => return Ok(meta),
-        Err(error) if is_control_stop(&error) => return Err(error),
-        Err(error) => error,
-    };
-    let aux_headers = strip_sensitive_headers(headers);
-    let mut last = "未能取得种子元数据".to_string();
-    for url in [
-        format!("https://itorrents.org/torrent/{hash}.torrent"),
-        format!("https://itorrent.ws/torrent/{hash}.torrent"),
-        format!("https://btcache.me/torrent/{hash}"),
-        format!("https://thetorrent.org/torrent/{hash}.torrent"),
-    ] {
-        check_optional_control(control)?;
-        match fetch_torrent_http_bytes(
-            &url,
-            &aux_headers,
-            proxy,
-            MAX_UT_METADATA_BYTES as u64,
-            control,
-            true,
-        ) {
-            Ok((status, body)) if status == 200 || status == 206 => {
-                if let Ok(mut parsed) = parse_torrent_file(&body) {
-                    if canonical_info_hash(&parsed.info_hash).as_deref() != Some(hash.as_str()) {
-                        last = "缓存种子的 info_hash 与磁力链接不匹配".into();
-                        continue;
-                    }
-                    if parsed.pieces.is_empty() {
-                        last = "元数据没有 piece 列表".into();
-                        continue;
-                    }
-                    merge_magnet_hints(&mut parsed, magnet);
-                    return Ok(parsed);
-                }
-            }
-            Ok((status, _)) => last = format!("{url} HTTP {status}"),
-            Err(error) if is_control_stop(&error) => return Err(error),
-            Err(error) => last = error,
-        }
+    match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht, control) {
+        Ok(meta) => Ok(meta),
+        Err(error) if is_control_stop(&error) => Err(error),
+        Err(swarm_error) => Err(format!("未能取得种子元数据：{swarm_error}")),
     }
-    Err(format!("未能取得种子元数据：{swarm_error}；缓存：{last}"))
 }
 
 fn canonical_info_hash(value: &str) -> Option<String> {
@@ -1915,7 +1878,9 @@ fn download_from_peer_ex_with_telemetry(
     // A complete bitfield lets us avoid requests the peer must ignore. HAVE
     // messages only add availability and therefore do not establish absence.
     let mut peer_availability_known = false;
+    let mut selection_cache = PieceSelectionCache::new(meta, selection_path);
     loop {
+        selection_cache.maybe_refresh(meta);
         let pending: Vec<usize> = meta
             .pieces
             .iter()
@@ -1924,7 +1889,7 @@ fn download_from_peer_ex_with_telemetry(
                 let start = *index as u64 * meta.piece_length;
                 let len = ((meta.length - start).min(meta.piece_length)) as usize;
                 !piece_is_complete(&mut file, start, len, hash)
-                    && piece_is_selected(meta, *index, selection_path)
+                    && selection_cache.is_selected(meta, *index)
             })
             .map(|(index, _)| index)
             .collect();
@@ -1947,7 +1912,7 @@ fn download_from_peer_ex_with_telemetry(
             if !unchoked {
                 while !unchoked {
                     check_torrent_control(control)?;
-                    if !piece_is_selected(meta, index, selection_path) {
+                    if !selection_cache.is_selected(meta, index) {
                         continue 'pieces;
                     }
                     if Instant::now() >= progress_deadline {
@@ -1979,7 +1944,7 @@ fn download_from_peer_ex_with_telemetry(
             while filled < len {
                 while !unchoked {
                     check_torrent_control(control)?;
-                    if !piece_is_selected(meta, index, selection_path) {
+                    if !selection_cache.is_selected(meta, index) {
                         continue 'pieces;
                     }
                     if Instant::now() >= progress_deadline {
@@ -1998,7 +1963,7 @@ fn download_from_peer_ex_with_telemetry(
                         }
                     }
                 }
-                if !piece_is_selected(meta, index, selection_path) {
+                if !selection_cache.is_selected(meta, index) {
                     continue 'pieces;
                 }
                 let block = (len - filled).min(16 * 1024);
@@ -2012,7 +1977,7 @@ fn download_from_peer_ex_with_telemetry(
                         let _ = send_message(&mut stream, 8, &payload);
                         return Err(error);
                     }
-                    if !piece_is_selected(meta, index, selection_path) {
+                    if !selection_cache.is_selected(meta, index) {
                         let _ = send_message(&mut stream, 8, &payload);
                         continue 'pieces;
                     }
@@ -2080,28 +2045,96 @@ fn download_from_peer_ex_with_telemetry(
     Ok(meta.length)
 }
 
-fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Path) -> bool {
-    if selection_path.as_os_str().is_empty() || !selection_path.is_file() {
-        return true;
+struct PieceSelectionCache<'a> {
+    path: &'a Path,
+    selected: Vec<bool>,
+    raw_bytes: Option<Vec<u8>>,
+    last_checked: Instant,
+}
+
+impl<'a> PieceSelectionCache<'a> {
+    const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
+
+    fn new(meta: &TorrentMeta, path: &'a Path) -> Self {
+        let mut cache = Self {
+            path,
+            selected: vec![true; meta.pieces.len()],
+            raw_bytes: None,
+            last_checked: Instant::now(),
+        };
+        cache.reload(meta);
+        cache
     }
-    let Ok(encoded) = fs::read(selection_path) else {
-        return false;
-    };
-    let Ok(selections) = serde_json::from_slice::<Vec<TorrentFileSelection>>(&encoded) else {
-        return false;
+
+    fn maybe_refresh(&mut self, meta: &TorrentMeta) {
+        if !self.path.as_os_str().is_empty()
+            && self.last_checked.elapsed() >= Self::REFRESH_INTERVAL
+        {
+            self.reload(meta);
+        }
+    }
+
+    fn is_selected(&mut self, meta: &TorrentMeta, piece_index: usize) -> bool {
+        if self.path.as_os_str().is_empty() {
+            return true;
+        }
+        self.maybe_refresh(meta);
+        self.selected.get(piece_index).copied().unwrap_or(false)
+    }
+
+    fn reload(&mut self, meta: &TorrentMeta) {
+        self.last_checked = Instant::now();
+        if self.path.as_os_str().is_empty() || !self.path.is_file() {
+            if self.raw_bytes.take().is_some() || !self.selected.iter().all(|&item| item) {
+                self.selected.fill(true);
+            }
+            return;
+        }
+        let Ok(encoded) = fs::read(self.path) else {
+            self.raw_bytes = None;
+            self.selected.fill(false);
+            return;
+        };
+        if self.raw_bytes.as_deref() == Some(encoded.as_slice()) {
+            return;
+        }
+        self.selected = compute_selected_pieces_from_bytes(meta, &encoded);
+        self.raw_bytes = Some(encoded);
+    }
+}
+
+fn compute_selected_pieces_from_bytes(meta: &TorrentMeta, encoded: &[u8]) -> Vec<bool> {
+    let Ok(selections) = serde_json::from_slice::<Vec<TorrentFileSelection>>(encoded) else {
+        return vec![false; meta.pieces.len()];
     };
     if selections.is_empty() {
-        return true;
+        return vec![true; meta.pieces.len()];
     }
-    let piece_start = piece_index as u64 * meta.piece_length;
-    let piece_end = (piece_start + meta.piece_length).min(meta.length);
-    meta.files.iter().any(|file| {
-        selections
-            .iter()
-            .any(|selection| selection.index == file.index && selection.selected)
-            && piece_start < file.offset.saturating_add(file.size)
-            && file.offset < piece_end
-    })
+    let selected_ranges: Vec<(u64, u64)> = meta
+        .files
+        .iter()
+        .filter(|file| {
+            selections
+                .iter()
+                .any(|selection| selection.index == file.index && selection.selected)
+        })
+        .map(|file| (file.offset, file.offset.saturating_add(file.size)))
+        .collect();
+    (0..meta.pieces.len())
+        .map(|piece_index| {
+            let piece_start = piece_index as u64 * meta.piece_length;
+            let piece_end = (piece_start + meta.piece_length).min(meta.length);
+            selected_ranges
+                .iter()
+                .any(|&(file_start, file_end)| piece_start < file_end && file_start < piece_end)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Path) -> bool {
+    let mut cache = PieceSelectionCache::new(meta, selection_path);
+    cache.is_selected(meta, piece_index)
 }
 
 fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {

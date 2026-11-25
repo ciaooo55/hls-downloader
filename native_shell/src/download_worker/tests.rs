@@ -9345,3 +9345,141 @@ fn dual_track_single_stream_failure_preserves_completed_track_until_real_user_ca
     drop(coordinator);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn armed_refresh_handles_utf8_leading_dots_multitenant_hosts_and_stream_mp4_filenames() {
+    // 1. Malformed leading/consecutive dots + UTF-8 labels must never panic and extract clean domains.
+    assert_eq!(
+        super::refresh_url_host("https://..中.example.com./a").as_deref(),
+        Some("中.example.com")
+    );
+    assert_eq!(
+        super::refresh_registrable_domain("..中.example.com"),
+        "example.com"
+    );
+    assert_eq!(
+        super::refresh_registrable_domain("a..b.example.com"),
+        "example.com"
+    );
+    assert!(super::refresh_same_site_or_host(
+        "..中.example.com",
+        "cdn.example.com"
+    ));
+
+    // 2. Multi-tenant cloud/CDN suffixes must NOT treat unrelated tenants as the same site.
+    for (tenant_a, tenant_b) in [
+        ("d111.cloudfront.net", "d222.cloudfront.net"),
+        ("tenant-a.github.io", "tenant-b.github.io"),
+        ("pub-aaa.r2.dev", "pub-bbb.r2.dev"),
+        ("ep1.azureedge.net", "ep2.azureedge.net"),
+        ("app1.pages.dev", "app2.pages.dev"),
+        ("api.acct1.workers.dev", "api.acct2.workers.dev"),
+        ("site1.vercel.app", "site2.vercel.app"),
+        ("site1.netlify.app", "site2.netlify.app"),
+        (
+            "bucket-a.s3.us-east-1.amazonaws.com",
+            "bucket-b.s3.us-east-1.amazonaws.com",
+        ),
+        ("s3.us-east-1.amazonaws.com", "s3.eu-west-1.amazonaws.com"),
+    ] {
+        assert!(
+            !super::refresh_same_site_or_host(tenant_a, tenant_b),
+            "unrelated multi-tenant hosts {tenant_a} and {tenant_b} must not match as same site"
+        );
+    }
+
+    let cf_task = TaskSpec {
+        url: "https://d111.cloudfront.net/releases/setup.zip?Expires=1".into(),
+        filename: "setup.zip".into(),
+        ..Default::default()
+    };
+    let cf_other_tenant_offer = crate::ResourceOffer {
+        url: "https://d222.cloudfront.net/releases/setup.zip?Expires=2".into(),
+        filename: "setup.zip".into(),
+        ..Default::default()
+    };
+    assert!(
+        !CoreCoordinator::offer_matches_armed_refresh_task(&cf_task, &cf_other_tenant_offer),
+        "different cloudfront tenants without shared page must not match"
+    );
+
+    // 3. Stream / dual-track tasks with `current.filename = "episode.mp4"` and empty `offer.filename`
+    // must match `.m3u8` / `.mpd` / `.m4s` refresh offers on the same `source_page_url`.
+    let page = "https://video.example.test/watch/ep01";
+    for (kind, old_url, new_url, audio_old, audio_new) in [
+        (
+            crate::ResourceKind::Hls,
+            "https://d111.cloudfront.net/hls/old-hash/master.m3u8?sig=1",
+            "https://d222.cloudfront.net/hls/new-hash/index.m3u8?sig=2",
+            "",
+            "",
+        ),
+        (
+            crate::ResourceKind::Dash,
+            "https://d111.cloudfront.net/dash/old-hash/manifest.mpd?sig=1",
+            "https://d222.cloudfront.net/dash/new-hash/stream.mpd?sig=2",
+            "",
+            "",
+        ),
+        (
+            crate::ResourceKind::File,
+            "https://d111.cloudfront.net/vod/old-vid-30080.m4s?sig=1",
+            "https://d222.cloudfront.net/vod/new-vid-30080.m4s?sig=2",
+            "https://d111.cloudfront.net/vod/old-aud-30280.m4s?sig=1",
+            "https://d222.cloudfront.net/vod/new-aud-30280.m4s?sig=2",
+        ),
+    ] {
+        let current = TaskSpec {
+            url: old_url.into(),
+            audio_url: audio_old.into(),
+            resource_kind: kind,
+            filename: "episode.mp4".into(),
+            source_page_url: page.into(),
+            ..Default::default()
+        };
+        let offer = crate::ResourceOffer {
+            url: new_url.into(),
+            audio_url: audio_new.into(),
+            resource_kind: kind,
+            filename: String::new(),
+            source_page_url: page.into(),
+            ..Default::default()
+        };
+        assert!(
+            CoreCoordinator::offer_matches_armed_refresh_task(&current, &offer),
+            "expected stream/dual-track mp4 task to match empty-filename refresh offer for {new_url}"
+        );
+    }
+
+    // 4. Single-track renamed `ResourceKind::File` with empty `offer.filename` on exact same page.
+    let renamed_file_task = TaskSpec {
+        url: "https://cdn.example.test/files/9f8e7d6c.mp4?token=expired".into(),
+        filename: "My Renamed Lecture 01.mp4".into(),
+        source_page_url: page.into(),
+        resource_kind: crate::ResourceKind::File,
+        ..Default::default()
+    };
+    let rotated_hash_offer = crate::ResourceOffer {
+        url: "https://cdn.example.test/files/1a2b3c4d.mp4?token=fresh".into(),
+        filename: String::new(),
+        source_page_url: page.into(),
+        resource_kind: crate::ResourceKind::File,
+        ..Default::default()
+    };
+    assert!(CoreCoordinator::offer_matches_armed_refresh_task(
+        &renamed_file_task,
+        &rotated_hash_offer
+    ));
+
+    let conflicting_ext_offer = crate::ResourceOffer {
+        url: "https://cdn.example.test/files/1a2b3c4d.pdf?token=fresh".into(),
+        filename: String::new(),
+        source_page_url: page.into(),
+        resource_kind: crate::ResourceKind::File,
+        ..Default::default()
+    };
+    assert!(!CoreCoordinator::offer_matches_armed_refresh_task(
+        &renamed_file_task,
+        &conflicting_ext_offer
+    ));
+}

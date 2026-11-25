@@ -172,69 +172,12 @@ fn explicit_filename_from_url(url: &str) -> Option<&str> {
     path.rsplit('/').find(|part| !part.is_empty())
 }
 
-fn is_rotating_signing_param(key: &str) -> bool {
-    let lower = key.trim().to_ascii_lowercase();
-    if lower.starts_with("x-amz-")
-        || lower.starts_with("x-goog-")
-        || lower.starts_with("x-oss-")
-        || lower.starts_with("q-sign-")
-    {
-        return true;
-    }
-    matches!(
-        lower.as_str(),
-        "sig"
-            | "signature"
-            | "token"
-            | "jwt"
-            | "expires"
-            | "exp"
-            | "se"
-            | "sp"
-            | "sv"
-            | "st"
-            | "skt"
-            | "ske"
-            | "hdnts"
-            | "auth_key"
-            | "sign"
-            | "nonce"
-            | "timestamp"
-            | "awsaccesskeyid"
-            | "googleaccessid"
-            | "ossaccesskeyid"
-            | "key-pair-id"
-            | "policy"
-            | "q-key-time"
-            | "q-signature"
-            | "q-header-list"
-            | "q-url-param-list"
-            | "q-ak"
-    )
-}
-
 fn url_without_signing_params(value: &str) -> String {
     let without_fragment = value.split('#').next().unwrap_or(value).trim();
-    let (base, query) = match without_fragment.split_once('?') {
-        Some((base, query)) => (base.trim_end_matches('/'), Some(query)),
-        None => (without_fragment.trim_end_matches('/'), None),
-    };
-    let Some(query) = query else {
-        return base.to_owned();
-    };
-    let mut kept: Vec<&str> = query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .filter(|pair| {
-            let key = pair.split('=').next().unwrap_or("");
-            !is_rotating_signing_param(key)
-        })
-        .collect();
-    if kept.is_empty() {
-        return base.to_owned();
+    if without_fragment.is_empty() {
+        return String::new();
     }
-    kept.sort_unstable();
-    format!("{base}?{}", kept.join("&"))
+    hls_client::canonical_resource_key(without_fragment)
 }
 
 fn find_duplicate_match<'a>(
@@ -6102,6 +6045,22 @@ mod tests {
         assert_eq!(
             url_without_signing_params(&paused_github_task.url),
             url_without_signing_params(&second_click.url)
+        );
+        assert_eq!(url_without_signing_params(""), "");
+        assert_eq!(url_without_signing_params("   #fragment  "), "");
+        assert_eq!(
+            url_without_signing_params(" ftp://files.example.org/pub/archive.tar.gz#readme "),
+            "ftp://files.example.org/pub/archive.tar.gz"
+        );
+        assert_eq!(
+            url_without_signing_params("  magnet:?xt=urn:btih:abcdef123456#tracker  "),
+            "magnet:?xt=urn:btih:abcdef123456"
+        );
+        let bili_task_url = "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/567890-1-30080.m4s?e=ig8euxZM&uipk=5&nbs=1&deadline=1730000000&gen=playurlv2&os=cosbv&oi=11111&trid=aaaa1111&mid=12345&platform=pc&og=cos&upsig=deadbeef1111&uparams=e,uipk,nbs,deadline,gen,os,oi,trid,mid,platform,og&orderid=0,3&logo=80000000";
+        let bili_offer_url = "https://UPOS-SZ-MIRRORCOS.bilivideo.com:443/upgcxcode/12/34/567890-1-30080.m4s?e=different&uipk=5&nbs=1&deadline=1730099999&gen=playurlv2&os=bcache&oi=22222&trid=bbbb2222&mid=99999&platform=html5&og=hw&upsig=cafebabe2222&uparams=e,deadline,trid&orderid=1,3&logo=00000000#frag";
+        assert_eq!(
+            url_without_signing_params(bili_task_url),
+            url_without_signing_params(bili_offer_url)
         );
         let found = find_duplicate_match(
             std::slice::from_ref(&paused_github_task),

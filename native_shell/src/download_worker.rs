@@ -640,6 +640,12 @@ impl CoreCoordinator {
             refresh_url_basename(&offer.url)
         };
 
+        let is_stream_or_dual_track = current_dual_track
+            || matches!(
+                current.resource_kind,
+                crate::ResourceKind::Hls | crate::ResourceKind::Dash | crate::ResourceKind::Live
+            );
+
         let cur_ext = refresh_specific_extension(if !cur_name.is_empty() {
             cur_name
         } else {
@@ -647,7 +653,11 @@ impl CoreCoordinator {
         });
         let offer_ext = refresh_specific_extension(&offer_name);
         if let (Some(left_ext), Some(right_ext)) = (cur_ext.as_deref(), offer_ext.as_deref()) {
-            if !left_ext.eq_ignore_ascii_case(right_ext) {
+            let compatible = left_ext.eq_ignore_ascii_case(right_ext)
+                || (is_stream_or_dual_track
+                    && refresh_is_compatible_stream_ext(left_ext)
+                    && refresh_is_compatible_stream_ext(right_ext));
+            if !compatible {
                 return false;
             }
         }
@@ -663,20 +673,24 @@ impl CoreCoordinator {
             return true;
         }
 
-        let is_stream_or_dual_track = current_dual_track
-            || matches!(
-                current.resource_kind,
-                crate::ResourceKind::Hls | crate::ResourceKind::Dash
-            );
+        let cur_page_key = crate::http_engine::canonical_url_key(&current.source_page_url);
+        let offer_page_key = crate::http_engine::canonical_url_key(&offer.source_page_url);
+        let same_exact_page = crate::http_engine::http_fetch_url_allowed(&current.source_page_url)
+            && !cur_page_key.is_empty()
+            && cur_page_key == offer_page_key;
+
         if is_stream_or_dual_track {
-            let cur_page_key = crate::http_engine::canonical_url_key(&current.source_page_url);
-            let offer_page_key = crate::http_engine::canonical_url_key(&offer.source_page_url);
             let height_compatible = current.preferred_height == 0
                 || offer.preferred_height == 0
                 || current.preferred_height == offer.preferred_height;
-            if !cur_page_key.is_empty() && cur_page_key == offer_page_key && height_compatible {
+            if same_exact_page && height_compatible {
                 return true;
             }
+        } else if current.resource_kind == crate::ResourceKind::File
+            && offer.filename.trim().is_empty()
+            && same_exact_page
+        {
+            return true;
         }
 
         false
@@ -3736,34 +3750,61 @@ fn refresh_url_host(url: &str) -> Option<String> {
     } else {
         host_port.split(':').next().unwrap_or("")
     }
-    .trim_end_matches('.')
+    .trim_matches('.')
     .to_ascii_lowercase();
     (!host.is_empty()).then_some(host)
 }
 
-fn refresh_registrable_domain(host: &str) -> &str {
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return host;
+fn refresh_registrable_domain(host: &str) -> String {
+    let trimmed = host.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        return String::new();
     }
-    let parts: Vec<&str> = host.split('.').filter(|part| !part.is_empty()).collect();
+    if trimmed.parse::<std::net::IpAddr>().is_ok() {
+        return trimmed.to_ascii_lowercase();
+    }
+    let parts: Vec<String> = trimmed
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect();
     if parts.len() <= 2 {
-        return host;
+        return parts.join(".");
     }
-    let second_level = parts[parts.len() - 2];
-    let top_level = parts[parts.len() - 1];
+    let second_level = parts[parts.len() - 2].as_str();
+    let top_level = parts[parts.len() - 1].as_str();
+    if second_level == "amazonaws"
+        && top_level == "com"
+        && parts[..parts.len() - 2]
+            .iter()
+            .any(|label| label == "s3" || label.starts_with("s3-"))
+    {
+        return parts.join(".");
+    }
+    let multi_tenant_suffix = matches!(
+        (second_level, top_level),
+        ("cloudfront", "net")
+            | ("amazonaws", "com")
+            | ("github", "io")
+            | ("r2", "dev")
+            | ("azureedge", "net")
+            | ("pages", "dev")
+            | ("workers", "dev")
+            | ("vercel", "app")
+            | ("netlify", "app")
+    );
     let multipart_tld = top_level.len() == 2
         && matches!(
             second_level,
             "co" | "com" | "net" | "org" | "edu" | "gov" | "ac"
         );
-    let keep = if multipart_tld && parts.len() >= 3 {
+    let keep = if (multi_tenant_suffix || multipart_tld) && parts.len() >= 3 {
         3
     } else {
         2
     };
     let start_label = parts.len() - keep;
-    let byte_offset: usize = parts[..start_label].iter().map(|part| part.len() + 1).sum();
-    &host[byte_offset..]
+    parts[start_label..].join(".")
 }
 
 fn refresh_same_site_or_host(left: &str, right: &str) -> bool {
@@ -3773,6 +3814,24 @@ fn refresh_same_site_or_host(left: &str, right: &str) -> bool {
     let left_domain = refresh_registrable_domain(left);
     let right_domain = refresh_registrable_domain(right);
     left_domain.contains('.') && left_domain == right_domain
+}
+
+fn refresh_is_compatible_stream_ext(ext: &str) -> bool {
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "mp4"
+            | "mkv"
+            | "ts"
+            | "m4s"
+            | "m3u8"
+            | "mpd"
+            | "webm"
+            | "mov"
+            | "m4a"
+            | "aac"
+            | "mp3"
+            | "flac"
+    )
 }
 
 fn refresh_url_basename(url: &str) -> String {
@@ -4155,13 +4214,34 @@ fn run_dual_track_http_file(
         return Err(error);
     }
 
-    cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
-
     let mut publish_spec = spec;
     publish_spec.expected_size = None;
     let publish_res = complete_payload(&core, task_id, &paths, &merged_mp4, &publish_spec);
-    if publish_res.is_ok() && paths.final_output != merged_mp4 {
-        let _ = fs::remove_file(&merged_mp4);
+    match &publish_res {
+        Ok(()) => {
+            let keep_temp = core
+                .lock()
+                .ok()
+                .and_then(|guard| guard.store().setting_bool("keep_temp_files", false).ok())
+                .unwrap_or(false);
+            if !keep_temp {
+                cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+                if paths.final_output != merged_mp4 {
+                    let _ = fs::remove_file(&merged_mp4);
+                }
+            }
+        }
+        Err(error)
+            if error == "canceled"
+                || matches!(
+                    crate::http_engine::read_control(&paths.control),
+                    crate::http_engine::Control::Cancel
+                ) =>
+        {
+            cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
+            let _ = fs::remove_file(&merged_mp4);
+        }
+        Err(_) => {}
     }
     publish_res
 }
