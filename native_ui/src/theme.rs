@@ -163,4 +163,141 @@ mod tests {
         assert!(relative_luminance(ink) < relative_luminance(muted));
         assert!(relative_luminance(muted) < relative_luminance(faint));
     }
+
+    #[test]
+    fn both_themes_text_and_interactive_tokens_meet_wcag_aa_contrast() {
+        use slint::ComponentHandle;
+
+        fn relative_luminance(color: slint::Color) -> f64 {
+            let linear = |channel: u8| {
+                let s = f64::from(channel) / 255.0;
+                if s <= 0.03928 {
+                    s / 12.92
+                } else {
+                    ((s + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color.red())
+                + 0.7152 * linear(color.green())
+                + 0.0722 * linear(color.blue())
+        }
+
+        fn contrast_ratio(fg: slint::Color, bg: slint::Color) -> f64 {
+            let l1 = relative_luminance(fg);
+            let l2 = relative_luminance(bg);
+            let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+            (hi + 0.05) / (lo + 0.05)
+        }
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let window = crate::ConfirmWindow::new().unwrap();
+        let tokens = window.global::<crate::Tokens>();
+
+        for dark in [false, true] {
+            let mode = if dark { "dark" } else { "light" };
+            tokens.invoke_apply_theme(dark);
+
+            let surfaces = [
+                ("surface", tokens.get_surface()),
+                ("surface-2", tokens.get_surface_2()),
+                ("surface-3", tokens.get_surface_3()),
+                ("canvas", tokens.get_canvas()),
+                ("rail", tokens.get_rail()),
+                ("dialog", tokens.get_dialog()),
+            ];
+
+            for (surface_name, bg) in surfaces {
+                for (token_name, fg) in [
+                    ("ink", tokens.get_ink()),
+                    ("muted", tokens.get_muted()),
+                    ("faint", tokens.get_faint()),
+                ] {
+                    let ratio = contrast_ratio(fg, bg);
+                    assert!(
+                        ratio >= 4.5,
+                        "{mode} {token_name} on {surface_name} contrast too low: {ratio:.2}"
+                    );
+                }
+
+                for (border_name, border) in [
+                    ("control-border", tokens.get_control_border()),
+                    ("border-strong", tokens.get_border_strong()),
+                    ("focus-ring", tokens.get_focus_ring()),
+                    ("accent", tokens.get_accent()),
+                    ("done", tokens.get_done()),
+                    ("warn", tokens.get_warn()),
+                    ("fail", tokens.get_fail()),
+                    ("info", tokens.get_info()),
+                ] {
+                    let ratio = contrast_ratio(border, bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{mode} {border_name} on {surface_name} interactive contrast too low: {ratio:.2}"
+                    );
+                }
+            }
+
+            for (label, fg, bg) in [
+                (
+                    "on-accent/accent",
+                    tokens.get_on_accent(),
+                    tokens.get_accent(),
+                ),
+                ("accent/surface", tokens.get_accent(), tokens.get_surface()),
+                (
+                    "accent/selected",
+                    tokens.get_accent(),
+                    tokens.get_selected(),
+                ),
+                (
+                    "done/success-surface",
+                    tokens.get_done(),
+                    tokens.get_success_surface(),
+                ),
+                ("done/surface", tokens.get_done(), tokens.get_surface()),
+                (
+                    "warn/warn-surface",
+                    tokens.get_warn(),
+                    tokens.get_warn_surface(),
+                ),
+                ("warn/surface", tokens.get_warn(), tokens.get_surface()),
+                (
+                    "fail/fail-surface",
+                    tokens.get_fail(),
+                    tokens.get_fail_surface(),
+                ),
+                ("fail/surface", tokens.get_fail(), tokens.get_surface()),
+                ("info/info-bg", tokens.get_info(), tokens.get_info_bg()),
+                ("info/surface", tokens.get_info(), tokens.get_surface()),
+                (
+                    "media-ink/media-bg",
+                    tokens.get_media_ink(),
+                    tokens.get_media_bg(),
+                ),
+                (
+                    "archive-ink/archive-bg",
+                    tokens.get_archive_ink(),
+                    tokens.get_archive_bg(),
+                ),
+                (
+                    "program-ink/program-bg",
+                    tokens.get_program_ink(),
+                    tokens.get_program_bg(),
+                ),
+                (
+                    "document-ink/document-bg",
+                    tokens.get_document_ink(),
+                    tokens.get_document_bg(),
+                ),
+                (
+                    "torrent-ink/torrent-bg",
+                    tokens.get_torrent_ink(),
+                    tokens.get_torrent_bg(),
+                ),
+            ] {
+                let ratio = contrast_ratio(fg, bg);
+                assert!(ratio >= 4.5, "{mode} {label} contrast too low: {ratio:.2}");
+            }
+        }
+    }
 }

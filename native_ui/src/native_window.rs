@@ -137,6 +137,220 @@ pub fn activate(window: &Window) {
     }
 }
 
+/// Returns `true` when `SHQueryUserNotificationState` reports a busy,
+/// exclusive D3D fullscreen, or presentation session (`QUNS_BUSY = 2`,
+/// `QUNS_RUNNING_D3D_FULL_SCREEN = 3`, `QUNS_PRESENTATION_MODE = 4`).
+pub fn quns_is_fullscreen_or_busy(state: i32) -> bool {
+    matches!(state, 2..=4)
+}
+
+/// Returns `true` when a foreground window's outer rect covers its monitor's
+/// full bounds (borderless fullscreen video, game, or presentation).
+pub fn rect_covers_monitor(
+    window_rect: (i32, i32, i32, i32),
+    monitor_rect: (i32, i32, i32, i32),
+) -> bool {
+    monitor_rect.2 > monitor_rect.0
+        && monitor_rect.3 > monitor_rect.1
+        && window_rect.0 <= monitor_rect.0
+        && window_rect.1 <= monitor_rect.1
+        && window_rect.2 >= monitor_rect.2
+        && window_rect.3 >= monitor_rect.3
+}
+
+/// Returns `true` when an HWND is parked off-screen (e.g. `(-32000, -32000)`
+/// prewarm/minimized) or unpositioned at `(0, 0)` / degenerate, meaning monitor
+/// queries should follow the active cursor monitor rather than `(0, 0)`.
+pub fn is_parked_window_rect(rect: (i32, i32, i32, i32)) -> bool {
+    rect.2 <= rect.0
+        || rect.3 <= rect.1
+        || rect.0 <= -16_000
+        || rect.1 <= -16_000
+        || (rect.0 == 0 && rect.1 == 0)
+}
+
+/// Clamps both outer window size and `(x, y)` origin so the window stays fully
+/// inside `work_area = (left, top, right, bottom)`. Intentionally parked
+/// off-screen windows (`x <= -16000 || y <= -16000`) keep their off-screen origin.
+pub fn clamp_window_to_work_area(
+    work_area: (i32, i32, i32, i32),
+    origin: (i32, i32),
+    outer_size: (u32, u32),
+) -> ((i32, i32), (u32, u32)) {
+    let (left, top, right, bottom) = work_area;
+    let area_width = (right - left).max(1) as u32;
+    let area_height = (bottom - top).max(1) as u32;
+    let width = outer_size.0.clamp(1, area_width);
+    let height = outer_size.1.clamp(1, area_height);
+    if origin.0 <= -16_000 || origin.1 <= -16_000 {
+        return (origin, (width, height));
+    }
+    let max_x = (right - width as i32).max(left);
+    let max_y = (bottom - height as i32).max(top);
+    let x = origin.0.clamp(left, max_x);
+    let y = origin.1.clamp(top, max_y);
+    ((x, y), (width, height))
+}
+
+/// Detects whether the user is currently in a fullscreen game, video player, or
+/// presentation so background download notifications avoid interrupting or
+/// stealing focus.
+pub fn is_foreground_fullscreen_or_busy() -> bool {
+    #[cfg(windows)]
+    {
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHQueryUserNotificationState(pquns: *mut i32) -> i32;
+        }
+        use windows_sys::Win32::{
+            Foundation::RECT,
+            Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+            },
+            UI::WindowsAndMessaging::{
+                GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow,
+                GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+            },
+        };
+
+        unsafe {
+            let mut state = 0_i32;
+            if SHQueryUserNotificationState(&mut state) >= 0 && quns_is_fullscreen_or_busy(state) {
+                return true;
+            }
+            let fg = GetForegroundWindow();
+            if fg.is_null()
+                || fg == GetDesktopWindow()
+                || fg == GetShellWindow()
+                || IsWindowVisible(fg) == 0
+                || IsIconic(fg) != 0
+            {
+                return false;
+            }
+            let mut pid = 0_u32;
+            GetWindowThreadProcessId(fg, &mut pid);
+            if pid == std::process::id() {
+                return false;
+            }
+            let mut class_buf = [0_u16; 64];
+            let class_len = GetClassNameW(fg, class_buf.as_mut_ptr(), class_buf.len() as i32);
+            if class_len > 0 {
+                let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+                if matches!(
+                    class_name.as_str(),
+                    "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+                ) {
+                    return false;
+                }
+            }
+            let mut win_rect: RECT = std::mem::zeroed();
+            if GetWindowRect(fg, &mut win_rect) == 0 {
+                return false;
+            }
+            let monitor = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+            if monitor.is_null() {
+                return false;
+            }
+            let mut info: MONITORINFO = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(monitor, &mut info) == 0 {
+                return false;
+            }
+            rect_covers_monitor(
+                (win_rect.left, win_rect.top, win_rect.right, win_rect.bottom),
+                (
+                    info.rcMonitor.left,
+                    info.rcMonitor.top,
+                    info.rcMonitor.right,
+                    info.rcMonitor.bottom,
+                ),
+            )
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Resolves the physical usable work area `(left, top, right, bottom)` for a
+/// window, falling back to the monitor under the mouse cursor when `handle` is
+/// `None` or parked at `(-32000, -32000)` / `(0, 0)`.
+pub fn work_area(handle: Option<i64>) -> Option<(i32, i32, i32, i32)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::{HWND, POINT, RECT},
+            Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO,
+                MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+            },
+            UI::WindowsAndMessaging::{
+                GetCursorPos, GetWindowRect, SystemParametersInfoW, SPI_GETWORKAREA,
+            },
+        };
+
+        unsafe {
+            let monitor = handle
+                .and_then(|raw| {
+                    let hwnd = raw as HWND;
+                    let mut rect: RECT = std::mem::zeroed();
+                    if GetWindowRect(hwnd, &mut rect) != 0
+                        && !is_parked_window_rect((rect.left, rect.top, rect.right, rect.bottom))
+                    {
+                        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                        (!mon.is_null()).then_some(mon)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    let mut cursor = POINT { x: 0, y: 0 };
+                    if GetCursorPos(&mut cursor) != 0 {
+                        let mon = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+                        (!mon.is_null()).then_some(mon)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| {
+                    MonitorFromWindow(std::ptr::null_mut(), MONITOR_DEFAULTTOPRIMARY)
+                });
+
+            if !monitor.is_null() {
+                let mut info: MONITORINFO = std::mem::zeroed();
+                info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+                if GetMonitorInfoW(monitor, &mut info) != 0
+                    && info.rcWork.right > info.rcWork.left
+                    && info.rcWork.bottom > info.rcWork.top
+                {
+                    return Some((
+                        info.rcWork.left,
+                        info.rcWork.top,
+                        info.rcWork.right,
+                        info.rcWork.bottom,
+                    ));
+                }
+            }
+
+            let mut work: RECT = std::mem::zeroed();
+            if SystemParametersInfoW(SPI_GETWORKAREA, 0, std::ptr::from_mut(&mut work).cast(), 0)
+                != 0
+                && work.right > work.left
+                && work.bottom > work.top
+            {
+                return Some((work.left, work.top, work.right, work.bottom));
+            }
+            None
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = handle;
+        None
+    }
+}
+
 /// Computes the top-left physical position for a bottom-right toast inside
 /// `work_area = (left, top, right, bottom)` with physical `margin`.
 /// Never pushes the window above `top` or left of `left`.
@@ -153,9 +367,8 @@ pub fn bottom_right_toast_position(
     (x, y)
 }
 
-/// Adds `WS_EX_NOACTIVATE` to an already-created HWND so showing or clicking the
-/// toast never steals keyboard focus from active user applications.
-pub fn mark_no_activate(window: &Window) {
+/// Sets or clears `WS_EX_NOACTIVATE` on an already-created HWND.
+pub fn set_no_activate(window: &Window, no_activate: bool) {
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -164,13 +377,25 @@ pub fn mark_no_activate(window: &Window) {
         unsafe {
             let hwnd = handle as windows_sys::Win32::Foundation::HWND;
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if style & WS_EX_NOACTIVATE as isize == 0 {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE as isize);
+            let flag = WS_EX_NOACTIVATE as isize;
+            let next = if no_activate {
+                style | flag
+            } else {
+                style & !flag
+            };
+            if style != next {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
             }
         }
     }
     #[cfg(not(windows))]
-    let _ = window;
+    let _ = (window, no_activate);
+}
+
+/// Adds `WS_EX_NOACTIVATE` to an already-created HWND so showing or clicking the
+/// toast never steals keyboard focus from active user applications.
+pub fn mark_no_activate(window: &Window) {
+    set_no_activate(window, true);
 }
 
 /// Places a toast window in the bottom-right corner above the taskbar with
@@ -181,34 +406,18 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
     {
         use windows_sys::Win32::{
             Foundation::{HWND, RECT},
-            Graphics::Gdi::{
-                GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
-            },
             UI::WindowsAndMessaging::{
-                GetWindowRect, IsWindowVisible, SetWindowPos, ShowWindow, SystemParametersInfoW,
-                HWND_TOPMOST, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
+                GetWindowRect, IsWindowVisible, SetWindowPos, ShowWindow, HWND_TOPMOST,
+                SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
             },
         };
         let Some(handle) = hwnd(window) else {
             return false;
         };
-        let hwnd = handle as HWND;
-        let mut work: RECT = unsafe { std::mem::zeroed() };
-        let has_work_area = unsafe {
-            SystemParametersInfoW(SPI_GETWORKAREA, 0, std::ptr::from_mut(&mut work).cast(), 0) != 0
+        let Some(work) = work_area(Some(handle)) else {
+            return false;
         };
-        if !has_work_area {
-            let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
-            if monitor.is_null() {
-                return false;
-            }
-            let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-            if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-                return false;
-            }
-            work = info.rcWork;
-        }
+        let hwnd = handle as HWND;
         let mut rect: RECT = unsafe { std::mem::zeroed() };
         let (width, height) = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0
             && rect.right > rect.left
@@ -227,11 +436,7 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
                 1.0
             })
         .round() as i32;
-        let (x, y) = bottom_right_toast_position(
-            (work.left, work.top, work.right, work.bottom),
-            (width, height),
-            margin,
-        );
+        let (x, y) = bottom_right_toast_position(work, (width, height), margin);
         unsafe {
             let positioned =
                 SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE) != 0;
@@ -248,17 +453,32 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
     }
 }
 
-/// Prepares a frameless notification toast: hides it from the taskbar, marks it
-/// non-activating, clamps to the work area, and anchors it in the bottom-right
-/// corner above the taskbar without ever stealing focus.
-pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
+/// Shows a popup or HUD window without stealing foreground focus: cloaks via DWM
+/// before showing when an HWND already exists, applies `WS_EX_NOACTIVATE`,
+/// positions/clamps inside the monitor work area, shows via `SW_SHOWNOACTIVATE`,
+/// and uncloaks cleanly.
+pub fn show_non_activating<C: slint::ComponentHandle + 'static>(
     component: &C,
-    logical_margin: f32,
-) where
+    center: bool,
+    topmost: bool,
+) -> Result<(), slint::PlatformError>
+where
     for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
 {
     #[cfg(windows)]
+    if let Some(handle) = hwnd(component.window()) {
+        set_window_cloaked(handle, true);
+        hls_client::hide_window_from_taskbar(handle);
+        set_no_activate(component.window(), true);
+    }
+    component.show()?;
+    #[cfg(windows)]
     {
+        if let Some(handle) = hwnd(component.window()) {
+            set_window_cloaked(handle, true);
+            hls_client::hide_window_from_taskbar(handle);
+            set_no_activate(component.window(), true);
+        }
         let weak = component.as_weak();
         let _ = slint::spawn_local(async move {
             let Some(component) = weak.upgrade() else {
@@ -268,6 +488,104 @@ pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
             if component.window().winit_window().await.is_err() {
                 return;
             }
+            if let Some(handle) = hwnd(component.window()) {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                    SWP_NOZORDER, SW_SHOWNOACTIVATE,
+                };
+                set_window_cloaked(handle, true);
+                let tokens = component.global::<crate::Tokens>();
+                apply_caption_theme(
+                    component.window(),
+                    tokens.get_dark(),
+                    tokens.get_surface(),
+                    tokens.get_ink(),
+                    tokens.get_line(),
+                );
+                hls_client::hide_window_from_taskbar(handle);
+                set_no_activate(component.window(), true);
+                fit_to_work_area(component.window());
+                if center {
+                    if let Some((left, top, right, bottom)) = work_area(Some(handle)) {
+                        let size = component.window().size();
+                        let w = size.width as i32;
+                        let h = size.height as i32;
+                        let x = left + ((right - left - w).max(0) / 2);
+                        let y = top + ((bottom - top - h).max(0) / 2);
+                        unsafe {
+                            SetWindowPos(
+                                handle as _,
+                                if topmost {
+                                    HWND_TOPMOST
+                                } else {
+                                    std::ptr::null_mut()
+                                },
+                                x,
+                                y,
+                                0,
+                                0,
+                                SWP_NOSIZE
+                                    | SWP_NOACTIVATE
+                                    | if topmost { 0 } else { SWP_NOZORDER },
+                            );
+                        }
+                    } else {
+                        hls_client::center_window(handle);
+                    }
+                } else if topmost {
+                    unsafe {
+                        SetWindowPos(
+                            handle as _,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+                unsafe {
+                    ShowWindow(handle as _, SW_SHOWNOACTIVATE);
+                }
+                set_window_cloaked(handle, false);
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (center, topmost);
+    Ok(())
+}
+
+/// Prepares a frameless notification toast: cloaks during setup, hides it from
+/// the taskbar, marks it non-activating, clamps to the work area, and anchors it
+/// in the bottom-right corner above the taskbar without ever stealing focus.
+pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
+    component: &C,
+    logical_margin: f32,
+) where
+    for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
+{
+    #[cfg(windows)]
+    {
+        if let Some(handle) = hwnd(component.window()) {
+            set_window_cloaked(handle, true);
+            hls_client::hide_window_from_taskbar(handle);
+            mark_no_activate(component.window());
+        }
+        let weak = component.as_weak();
+        let _ = slint::spawn_local(async move {
+            let Some(component) = weak.upgrade() else {
+                return;
+            };
+            use slint::winit_030::WinitWindowAccessor;
+            if component.window().winit_window().await.is_err() {
+                return;
+            }
+            let handle = hwnd(component.window());
+            if let Some(handle) = handle {
+                set_window_cloaked(handle, true);
+            }
             let tokens = component.global::<crate::Tokens>();
             apply_caption_theme(
                 component.window(),
@@ -276,12 +594,15 @@ pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
                 tokens.get_ink(),
                 tokens.get_line(),
             );
-            if let Some(handle) = hwnd(component.window()) {
+            if let Some(handle) = handle {
                 hls_client::hide_window_from_taskbar(handle);
             }
             mark_no_activate(component.window());
             fit_to_work_area(component.window());
             position_bottom_right_toast(component.window(), logical_margin);
+            if let Some(handle) = handle {
+                set_window_cloaked(handle, false);
+            }
         });
     }
     #[cfg(not(windows))]
@@ -429,20 +750,15 @@ pub fn fit_to_work_area(window: &Window) {
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
         use slint::winit_030::WinitWindowAccessor;
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        use windows_sys::Win32::{
+            Foundation::{HWND, RECT},
+            UI::WindowsAndMessaging::{
+                GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            },
         };
-        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if unsafe {
-            GetMonitorInfoW(
-                MonitorFromWindow(handle as _, MONITOR_DEFAULTTONEAREST),
-                &mut info,
-            )
-        } == 0
-        {
+        let Some(work) = work_area(Some(handle)) else {
             return;
-        }
+        };
         let border = window
             .with_winit_window(|native| {
                 let outer = native.outer_size();
@@ -454,15 +770,36 @@ pub fn fit_to_work_area(window: &Window) {
             })
             .unwrap_or_default();
         let size = window.size();
-        let width = size
-            .width
-            .min(((info.rcWork.right - info.rcWork.left) as u32).saturating_sub(border.0))
-            .max(1);
-        let height = size
-            .height
-            .min(((info.rcWork.bottom - info.rcWork.top) as u32).saturating_sub(border.1))
-            .max(1);
-        window.set_size(slint::PhysicalSize::new(width, height));
+        let outer_width = size.width.saturating_add(border.0).max(1);
+        let outer_height = size.height.saturating_add(border.1).max(1);
+        let hwnd = handle as HWND;
+        let mut rect: RECT = unsafe { std::mem::zeroed() };
+        let origin = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
+            (rect.left, rect.top)
+        } else {
+            let pos = window.position();
+            (pos.x, pos.y)
+        };
+        let ((clamped_x, clamped_y), (clamped_outer_w, clamped_outer_h)) =
+            clamp_window_to_work_area(work, origin, (outer_width, outer_height));
+        let width = clamped_outer_w.saturating_sub(border.0).max(1);
+        let height = clamped_outer_h.saturating_sub(border.1).max(1);
+        if width != size.width || height != size.height {
+            window.set_size(slint::PhysicalSize::new(width, height));
+        }
+        if (clamped_x, clamped_y) != origin {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    clamped_x,
+                    clamped_y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
     }
     #[cfg(not(windows))]
     let _ = window;
@@ -502,14 +839,13 @@ pub fn restore_geometry(window: &Window) {
     let mut height = value("height", 820);
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        };
-        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        let monitor = unsafe { MonitorFromWindow(handle as _, MONITOR_DEFAULTTONEAREST) };
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+        if let Some((left, top, right, bottom)) = work_area(Some(handle)) {
             let scale = window.scale_factor();
+            let scale = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            };
             use slint::winit_030::WinitWindowAccessor;
             let border = window
                 .with_winit_window(|native| {
@@ -521,21 +857,17 @@ pub fn restore_geometry(window: &Window) {
                     )
                 })
                 .unwrap_or_default();
-            let area_width = (((info.rcWork.right - info.rcWork.left) as u32)
-                .saturating_sub(border.0) as f32
-                / scale)
+            let area_width = (((right - left) as u32).saturating_sub(border.0) as f32 / scale)
                 .floor()
                 .max(1.0) as u32;
-            let area_height = (((info.rcWork.bottom - info.rcWork.top) as u32)
-                .saturating_sub(border.1) as f32
-                / scale)
+            let area_height = (((bottom - top) as u32).saturating_sub(border.1) as f32 / scale)
                 .floor()
                 .max(1.0) as u32;
             width = width.clamp(560.min(area_width), area_width);
             height = height.clamp(360.min(area_height), area_height);
             window.set_position(slint::PhysicalPosition::new(
-                info.rcWork.left + ((area_width - width) as f32 * scale / 2.0) as i32,
-                info.rcWork.top + ((area_height - height) as f32 * scale / 2.0) as i32,
+                left + ((area_width - width) as f32 * scale / 2.0) as i32,
+                top + ((area_height - height) as f32 * scale / 2.0) as i32,
             ));
         }
     }
@@ -572,7 +904,10 @@ pub fn save_geometry(window: &Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bottom_right_toast_position, dwm_color_ref};
+    use super::{
+        bottom_right_toast_position, clamp_window_to_work_area, dwm_color_ref,
+        is_parked_window_rect, quns_is_fullscreen_or_busy, rect_covers_monitor,
+    };
 
     #[test]
     fn dwm_color_ref_packs_rgb_in_win32_bgr_order() {
@@ -583,6 +918,53 @@ mod tests {
         assert_eq!(
             dwm_color_ref(slint::Color::from_rgb_u8(0xff, 0x00, 0x80)),
             0x0080_00ff
+        );
+    }
+
+    #[test]
+    fn fullscreen_and_parked_rect_predicates_classify_window_states() {
+        assert!(!quns_is_fullscreen_or_busy(1)); // QUNS_NOT_PRESENT
+        assert!(quns_is_fullscreen_or_busy(2)); // QUNS_BUSY
+        assert!(quns_is_fullscreen_or_busy(3)); // QUNS_RUNNING_D3D_FULL_SCREEN
+        assert!(quns_is_fullscreen_or_busy(4)); // QUNS_PRESENTATION_MODE
+        assert!(!quns_is_fullscreen_or_busy(5)); // QUNS_ACCEPTS_NOTIFICATIONS
+
+        assert!(rect_covers_monitor((0, 0, 1920, 1080), (0, 0, 1920, 1080)));
+        assert!(rect_covers_monitor(
+            (-1920, -8, 0, 1088),
+            (-1920, 0, 0, 1080)
+        ));
+        assert!(!rect_covers_monitor((0, 0, 1920, 1040), (0, 0, 1920, 1080)));
+
+        assert!(is_parked_window_rect((-32_000, -32_000, -31_480, -31_600)));
+        assert!(is_parked_window_rect((0, 0, 520, 400)));
+        assert!(is_parked_window_rect((100, 100, 100, 100)));
+        assert!(!is_parked_window_rect((240, 160, 760, 560)));
+        assert!(!is_parked_window_rect((-1600, 120, -1080, 520)));
+    }
+
+    #[test]
+    fn clamp_window_to_work_area_shifts_expanded_hud_above_taskbar_and_keeps_prewarm_offscreen() {
+        let work = (0, 0, 1920, 1040);
+        // ProgressWindow near bottom-right expanding from 256px to 468px shifts up cleanly.
+        assert_eq!(
+            clamp_window_to_work_area(work, (1500, 760), (380, 468)),
+            ((1500, 572), (380, 468))
+        );
+        // Window partially off left/top on secondary display clamps into work area.
+        assert_eq!(
+            clamp_window_to_work_area((-1920, 0, 0, 1040), (-2050, -40), (520, 400)),
+            ((-1920, 0), (520, 400))
+        );
+        // Oversized window shrinks to fit work area and pins to top-left of work area.
+        assert_eq!(
+            clamp_window_to_work_area((100, 50, 500, 350), (200, 200), (800, 600)),
+            ((100, 50), (400, 300))
+        );
+        // Off-screen prewarm at (-32000, -32000) must never be pulled onto the visible screen.
+        assert_eq!(
+            clamp_window_to_work_area(work, (-32_000, -32_000), (520, 400)),
+            ((-32_000, -32_000), (520, 400))
         );
     }
 

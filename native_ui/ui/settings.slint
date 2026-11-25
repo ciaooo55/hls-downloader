@@ -32,11 +32,10 @@ export component SettingsWindow inherits Window {
         HorizontalLayout {
             spacing: 0px;
             Rectangle {
-            width: 156px; background: Tokens.rail;
+            width: 172px; background: Tokens.rail;
             nav-scroll := HotScrollView {
                 width: parent.width; height: parent.height; horizontal-scrollbar-policy: always-off;
                 VerticalLayout {
-                    // 分组多到需要滚动时，右侧让出覆盖式滚动条的宽度（与队列侧栏一致）。
                     padding: 12px; padding-right: root.groups.length * 40px + 20px > nav-scroll.visible-height ? 18px : 12px; spacing: 4px;
                     for group in root.groups: NavigationItem {
                         label: group; active: root.selected-group == group; show-count: false; enabled: !root.busy;

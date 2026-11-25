@@ -212,6 +212,99 @@ pub fn shorten_to_fit(directory: &str, filename: &str) -> Option<String> {
     Some(shortened)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskSpaceStatus {
+    pub hint: String,
+    pub low_space: bool,
+}
+
+pub fn format_disk_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Formats free disk space for `ConfirmWindow`, raising `low_space = true` when
+/// `expected_size > 0 && free_bytes < expected_size`.
+pub fn format_disk_space_status(free_bytes: u64, expected_size: u64) -> DiskSpaceStatus {
+    if expected_size > 0 && free_bytes < expected_size {
+        DiskSpaceStatus {
+            hint: format!(
+                "磁盘剩余空间不足（需 {}，剩余 {}）",
+                format_disk_bytes(expected_size),
+                format_disk_bytes(free_bytes)
+            ),
+            low_space: true,
+        }
+    } else {
+        DiskSpaceStatus {
+            hint: format!("磁盘可用 {}", format_disk_bytes(free_bytes)),
+            low_space: false,
+        }
+    }
+}
+
+/// Queries free disk bytes available to the current user for `directory`,
+/// walking up to the nearest existing ancestor directory when leaf folders have
+/// not been created yet.
+pub fn query_available_space(directory: &str) -> Option<u64> {
+    let trimmed = directory.trim();
+    if trimmed.split(['/', '\\']).any(|part| part == "..") {
+        return None;
+    }
+    let mut existing = if trimmed.is_empty() {
+        hls_client::default_v7_download_dir()
+    } else {
+        PathBuf::from(trimmed)
+    };
+    while !existing.exists() {
+        match existing.parent() {
+            Some(parent) if parent != existing && !parent.as_os_str().is_empty() => {
+                existing = parent.to_path_buf();
+            }
+            _ => return None,
+        }
+    }
+    if !existing.is_dir() {
+        return None;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lpdirectoryname: *const u16,
+                lpfreebytesavailabletocaller: *mut u64,
+                lptotalnumberofbytes: *mut u64,
+                lptotalnumberoffreebytes: *mut u64,
+            ) -> i32;
+        }
+        let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut free_available = 0_u64;
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        (ok != 0).then_some(free_available)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = existing;
+        None
+    }
+}
+
 /// `name.ext` → `name (2).ext`, skipping names already in `taken`.
 pub fn unique_name(directory: &str, filename: &str, taken: &[String]) -> Result<String, String> {
     let directory = if directory.is_empty() {
@@ -348,5 +441,39 @@ mod tests {
             "v (4).mp4"
         );
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn disk_space_status_formats_available_and_warns_when_insufficient() {
+        let gib = 1024_u64 * 1024 * 1024;
+        let mib = 1024_u64 * 1024;
+
+        let plenty = format_disk_space_status(42 * gib + 512 * mib, 2 * gib);
+        assert!(!plenty.low_space);
+        assert_eq!(plenty.hint, "磁盘可用 42.5 GB");
+
+        let unknown_size = format_disk_space_status(512 * mib, 0);
+        assert!(!unknown_size.low_space);
+        assert_eq!(unknown_size.hint, "磁盘可用 512.0 MB");
+
+        let tight = format_disk_space_status(800 * mib, 2 * gib);
+        assert!(tight.low_space);
+        assert_eq!(tight.hint, "磁盘剩余空间不足（需 2.0 GB，剩余 800.0 MB）");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn query_available_space_resolves_existing_and_missing_nested_directories() {
+        let base = std::env::temp_dir().join(format!("hls-space-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let direct = query_available_space(base.to_str().unwrap());
+        assert!(direct.is_some_and(|bytes| bytes > 0));
+
+        let nested_missing = base.join("uncreated").join("child");
+        let inherited = query_available_space(nested_missing.to_str().unwrap());
+        assert!(inherited.is_some_and(|bytes| bytes > 0));
+
+        assert_eq!(query_available_space(r"D:\safe\..\escape"), None);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

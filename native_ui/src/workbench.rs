@@ -61,10 +61,71 @@ pub struct Workbench {
     outstanding: RefCell<HashSet<u64>>,
     dropped_paths: RefCell<Vec<String>>,
     closing: Cell<bool>,
+    engine_online: Cell<bool>,
+    notice_expires_at: Cell<Option<std::time::Instant>>,
     status_timer: slint::Timer,
 }
 
 impl Workbench {
+    const NOTICE_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(5);
+
+    pub fn set_engine_online(&self, online: bool) {
+        self.engine_online.set(online);
+        self.window.set_engine_online(online);
+        self.window.set_connection(
+            if online {
+                "下载引擎已连接"
+            } else {
+                "正在重连下载引擎…"
+            }
+            .into(),
+        );
+    }
+
+    pub fn show_notice(&self, tone: &str, message: impl Into<slint::SharedString>) {
+        self.show_notice_at(tone, message, std::time::Instant::now());
+    }
+
+    fn show_notice_at(
+        &self,
+        tone: &str,
+        message: impl Into<slint::SharedString>,
+        now: std::time::Instant,
+    ) {
+        let message: slint::SharedString = message.into();
+        if message.is_empty() {
+            self.clear_notice();
+            return;
+        }
+        let normalized = match tone {
+            "error" | "warning" | "success" => tone,
+            _ => "info",
+        };
+        self.window.set_notice_tone(normalized.into());
+        self.window.set_notice(message);
+        if matches!(normalized, "info" | "success") {
+            self.notice_expires_at
+                .set(Some(now + Self::NOTICE_AUTO_DISMISS));
+        } else {
+            self.notice_expires_at.set(None);
+        }
+    }
+
+    pub fn clear_notice(&self) {
+        self.notice_expires_at.set(None);
+        if !self.window.get_notice().is_empty() {
+            self.window.set_notice("".into());
+        }
+    }
+
+    fn expire_notice_at(&self, now: std::time::Instant) {
+        if let Some(deadline) = self.notice_expires_at.get() {
+            if now >= deadline {
+                self.clear_notice();
+            }
+        }
+    }
+
     fn apply_appearance(&self, dark: bool, reduce_motion: bool) {
         native_window::apply_appearance(&self.window, dark, reduce_motion);
         if let Some(editor) = self.editor.borrow().as_ref() {
@@ -283,6 +344,8 @@ impl Workbench {
             status_timer: slint::Timer::default(),
             outstanding: RefCell::new(HashSet::new()),
             closing: Cell::new(false),
+            engine_online: Cell::new(true),
+            notice_expires_at: Cell::new(None),
             dropped_paths: RefCell::new(Vec::new()),
         });
         let request_owner = Rc::downgrade(&controller);
@@ -387,6 +450,7 @@ impl Workbench {
                     if !paths.is_empty() {
                         this.send(CoreCommand::ImportPaths { paths });
                     }
+                    this.expire_notice_at(std::time::Instant::now());
                     this.refresh_theme();
                     this.render_details();
                     if let Some(tools) = this.tools.borrow().as_ref() {
@@ -416,7 +480,14 @@ impl Workbench {
         let weak = Rc::downgrade(self);
         self.window.on_inspector_opened(move || {
             if let Some(this) = weak.upgrade() {
+                this.render_columns();
                 this.render_inspector();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.window.on_dismiss_notice(move || {
+            if let Some(this) = weak.upgrade() {
+                this.clear_notice();
             }
         });
         let weak = Rc::downgrade(self);
@@ -424,8 +495,7 @@ impl Workbench {
             if let Some(this) = weak.upgrade() {
                 let state = this.state.borrow();
                 if state.sort != "queue:asc" && state.sort != "queue" {
-                    this.window
-                        .set_notice("请先在工具中选择“队列顺序”，再拖动排序".into());
+                    this.show_notice("warning", "请先在工具中选择“队列顺序”，再拖动排序");
                     return;
                 }
                 if id == target {
@@ -438,8 +508,7 @@ impl Workbench {
                     return;
                 };
                 if source.queue_id != destination.queue_id {
-                    this.window
-                        .set_notice("请使用“移动到队列”跨队列调整任务".into());
+                    this.show_notice("warning", "请使用“移动到队列”跨队列调整任务");
                     return;
                 }
                 let before = if source.queue_index < destination.queue_index {
@@ -583,9 +652,7 @@ impl Workbench {
             if let Some(this) = weak.upgrade() {
                 match serde_json::from_str::<CorePipeResponse>(&json) {
                     Ok(response) => this.response(response),
-                    Err(error) => this
-                        .window
-                        .set_notice(format!("响应无法读取：{error}").into()),
+                    Err(error) => this.show_notice("error", format!("响应无法读取：{error}")),
                 }
             }
         });
@@ -755,8 +822,11 @@ impl Workbench {
             }
         }
         match &event.event {
-            CoreEvent::Error { message, .. } | CoreEvent::Toast { message, .. } => {
-                self.window.set_notice(message.clone().into())
+            CoreEvent::Error { message, .. } => {
+                self.show_notice("error", message.clone());
+            }
+            CoreEvent::Toast { message, .. } => {
+                self.show_notice(infer_toast_tone(message), message.clone());
             }
             CoreEvent::BrowserStatus { connected, .. } => self.window.set_browser_status(
                 if *connected {
@@ -793,7 +863,7 @@ impl Workbench {
         } else {
             "new"
         };
-        self.open_editor(mode_action);
+        self.open_editor_with_prefill(mode_action, false);
         if let Some(editor) = self.editor.borrow().as_ref() {
             editor.set_url(urls.join("\n").into());
             update_batch_preview(editor);
@@ -817,7 +887,7 @@ impl Workbench {
         queue_id: &str,
     ) {
         let _ = self.show();
-        self.open_editor("new");
+        self.open_editor_with_prefill("new", false);
         if let Some(editor) = self.editor.borrow().as_ref() {
             editor.set_url(offer.url.clone().into());
             if !filename.trim().is_empty() {
@@ -906,9 +976,15 @@ impl Workbench {
     }
 
     fn table_viewport(&self) -> f32 {
+        let inspector_space = if self.window.get_inspector_width() > 0.0 {
+            self.window.get_inspector_width() + 12.0
+        } else {
+            0.0
+        };
         self.window.get_viewport_width()
             - self.window.get_sidebar_width()
             - self.window.get_content_inset() * 2.0
+            - inspector_space
             - 19.0
     }
 
@@ -933,6 +1009,7 @@ impl Workbench {
                 ("paste", "粘贴链接", "paste"),
                 ("start", "全部开始", "play"),
                 ("pause", "全部暂停", "pause"),
+                ("clear_completed", "清空已完成", "clear-done"),
             ]
             .into_iter()
             .map(|(action, label, icon)| crate::ToolbarItem {
@@ -985,6 +1062,7 @@ impl Workbench {
             self.window.set_inspector_av("".into());
             self.window.set_inspector_av_tone("".into());
             self.window.set_inspector_diagnostic("".into());
+            self.window.set_inspector_logs("".into());
             self.window.set_inspector_segments(ModelRc::default());
             self.window.set_inspector_speed_history(ModelRc::default());
             self.window.set_inspector_can_open_folder(false);
@@ -997,10 +1075,9 @@ impl Workbench {
         } else {
             task.task_id.as_str()
         };
-        let kind = hls_client::download_category(&task.filename, &task.url, task.resource_kind);
+        let kind = file_tile_kind(&task.filename, &task.url, task.resource_kind);
         self.window.set_inspector_title(title.into());
-        self.window
-            .set_inspector_kind(if kind == "other" { "file" } else { kind }.into());
+        self.window.set_inspector_kind(kind.into());
         self.window
             .set_inspector_status(crate::task_status_label(&task.status).into());
         self.window
@@ -1077,6 +1154,21 @@ impl Workbench {
             )));
         self.window
             .set_inspector_can_open_folder(task_action_allowed(task, "open_folder"));
+        let logs = if task.log_tail.is_empty() {
+            String::new()
+        } else {
+            task.log_tail
+                .iter()
+                .rev()
+                .take(24)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        self.window.set_inspector_logs(logs.into());
     }
 
     fn render_menu(&self) {
@@ -1229,6 +1321,19 @@ impl Workbench {
             .values()
             .map(|task| task.speed_bytes_per_sec)
             .sum();
+        let active_count = state
+            .tasks
+            .values()
+            .filter(|task| crate::task_is_active(&task.status))
+            .count() as i32;
+        let has_completed = state
+            .tasks
+            .values()
+            .any(|task| matches!(task.status.as_str(), "completed" | "done"));
+        self.window.set_active_task_count(active_count);
+        self.window.set_can_clear_completed(has_completed);
+        self.window
+            .set_telemetry_speed(format!("{}/s", crate::format_bytes(speed)).into());
         self.window.set_summary(
             format!(
                 "{} 个任务 · {} /s",
@@ -1241,7 +1346,16 @@ impl Workbench {
         self.window.set_all_selected(
             !state.visible.is_empty() && state.selected.len() == state.visible.len(),
         );
-        self.window.set_connection("下载引擎已连接".into());
+        let online = self.engine_online.get();
+        self.window.set_engine_online(online);
+        self.window.set_connection(
+            if online {
+                "下载引擎已连接"
+            } else {
+                "正在重连下载引擎…"
+            }
+            .into(),
+        );
     }
 
     fn id(&self) -> u64 {
@@ -1260,8 +1374,7 @@ impl Workbench {
             WorkbenchJob::Request(request) => request.request_id(),
         };
         if commands.try_send(job).is_err() {
-            self.window
-                .set_notice("操作队列已满或连接关闭，请稍后重试".into());
+            self.show_notice("error", "操作队列已满或连接关闭，请稍后重试");
             false
         } else {
             if let Some(id) = id {
@@ -1309,18 +1422,20 @@ impl Workbench {
                         .collect()
                 };
                 if urls.is_empty() {
-                    self.window
-                        .set_notice("所选任务没有可复制的下载链接".into());
+                    self.show_notice("warning", "所选任务没有可复制的下载链接");
                     return;
                 }
                 let joined = urls.join("\n");
                 match file_dialogs::write_clipboard_text(&joined) {
-                    Ok(()) => self.window.set_notice(if urls.len() == 1 {
-                        "已复制下载链接".into()
-                    } else {
-                        format!("已复制 {} 条下载链接", urls.len()).into()
-                    }),
-                    Err(error) => self.window.set_notice(error.into()),
+                    Ok(()) => self.show_notice(
+                        "success",
+                        if urls.len() == 1 {
+                            "已复制下载链接".into()
+                        } else {
+                            format!("已复制 {} 条下载链接", urls.len())
+                        },
+                    ),
+                    Err(error) => self.show_notice("error", error),
                 }
             }
             "task:refresh_browser" => {
@@ -1343,36 +1458,37 @@ impl Workbench {
                         .map(|task| (task.task_id.clone(), task.source_page_url.trim().to_owned()))
                 };
                 let Some((task_id, source_page_url)) = target else {
-                    self.window
-                        .set_notice("请选择失败或已暂停的 HTTP/HLS/DASH 任务".into());
+                    self.show_notice("warning", "请选择失败或已暂停的 HTTP/HLS/DASH 任务");
                     return;
                 };
                 self.send(CoreCommand::ArmTaskRefresh { task_id });
                 if !source_page_url.is_empty() && file_dialogs::is_safe_web_url(&source_page_url) {
                     match file_dialogs::open(&source_page_url) {
-                        Ok(()) => self.window.set_notice(
-                            "已在浏览器打开来源页面，请重新点击下载链接以自动刷新地址并续传".into(),
+                        Ok(()) => self.show_notice(
+                            "info",
+                            "已在浏览器打开来源页面，请重新点击下载链接以自动刷新地址并续传",
                         ),
                         Err(error) => {
-                            self.window.set_notice(
+                            self.show_notice(
+                                "warning",
                                 format!(
                                     "已开启刷新监听，但未能打开来源页面（{error}），可在详情中手动更新地址"
-                                )
-                                .into(),
+                                ),
                             );
                             self.open_details();
                         }
                     }
                 } else {
                     self.open_details();
-                    self.window.set_notice(
-                        "已开启浏览器刷新监听；未记录来源页面，可在详情中手动更新下载地址".into(),
+                    self.show_notice(
+                        "info",
+                        "已开启浏览器刷新监听；未记录来源页面，可在详情中手动更新下载地址",
                     );
                 }
             }
-            "drag_help" => self
-                .window
-                .set_notice("按住左键拖至目标文件夹；也可用 Ctrl+C 复制后粘贴".into()),
+            "drag_help" => {
+                self.show_notice("info", "按住左键拖至目标文件夹；也可用 Ctrl+C 复制后粘贴")
+            }
             "task:copy_file" | "task:drag_file" => {
                 let paths = {
                     let state = self.state.borrow();
@@ -1386,23 +1502,29 @@ impl Workbench {
                 };
                 let result = paths.and_then(|paths| {
                     if action == "task:copy_file" {
-                        hls_client::file_transfer::write_files(&paths)
-                            .map(|()| format!("已复制 {} 个文件，可粘贴到目标文件夹", paths.len()))
+                        hls_client::file_transfer::write_files(&paths).map(|()| {
+                            (
+                                "success",
+                                format!("已复制 {} 个文件，可粘贴到目标文件夹", paths.len()),
+                            )
+                        })
                     } else {
                         hls_client::file_transfer::begin_file_drag(&paths).map(|outcome| {
                             match outcome {
                                 hls_client::file_transfer::DragOutcome::Dropped => {
-                                    format!("已拖出 {} 个文件", paths.len())
+                                    ("success", format!("已拖出 {} 个文件", paths.len()))
                                 }
                                 hls_client::file_transfer::DragOutcome::Canceled => {
-                                    "已取消拖出".into()
+                                    ("info", "已取消拖出".into())
                                 }
                             }
                         })
                     }
                 });
-                self.window
-                    .set_notice(result.unwrap_or_else(|error| error).into());
+                match result {
+                    Ok((tone, text)) => self.show_notice(tone, text),
+                    Err(error) => self.show_notice("warning", error),
+                }
             }
             "队列顺序" => {
                 self.state.borrow_mut().sort = "queue:asc".into();
@@ -1471,7 +1593,7 @@ impl Workbench {
                         .collect()
                 };
                 if ids.is_empty() {
-                    self.window.set_notice("请选择可删除的任务".into());
+                    self.show_notice("warning", "请选择可删除的任务");
                     return;
                 }
                 let message = format!(
@@ -1580,6 +1702,9 @@ impl Workbench {
                     self.job(WorkbenchJob::Batch(self.id(), commands));
                 }
             }
+            "clear_completed" | "清空已完成" => {
+                self.send(CoreCommand::ClearCompleted);
+            }
             "new" | "批量添加" | "导入 cURL" => self.open_editor(action),
             "queues" | "移动到队列" => self.open_queues(),
             "页面抓取" => self.open_resource_tools("harvest", String::new()),
@@ -1627,13 +1752,14 @@ impl Workbench {
             "refresh" => {
                 self.job(WorkbenchJob::Snapshot(self.id()));
             }
-            "import" => match file_dialogs::files(native_window::hwnd(self.window.window()), false)
-            {
-                Ok(paths) if !paths.is_empty() => self.send(CoreCommand::ImportPaths { paths }),
-                Err(error) => self.window.set_notice(error.into()),
-                _ => {}
-            },
-            "export" => {
+            "import" | "导入" => {
+                match file_dialogs::files(native_window::hwnd(self.window.window()), false) {
+                    Ok(paths) if !paths.is_empty() => self.send(CoreCommand::ImportPaths { paths }),
+                    Err(error) => self.show_notice("error", error),
+                    _ => {}
+                }
+            }
+            "export" | "导出" => {
                 match file_dialogs::files(native_window::hwnd(self.window.window()), true) {
                     Ok(paths) if !paths.is_empty() => {
                         let id = self.id();
@@ -1653,7 +1779,7 @@ impl Workbench {
                             },
                         });
                     }
-                    Err(error) => self.window.set_notice(error.into()),
+                    Err(error) => self.show_notice("error", error),
                     _ => {}
                 }
             }
@@ -1665,9 +1791,7 @@ impl Workbench {
                     });
                 }
             }
-            _ => self
-                .window
-                .set_notice(format!("功能入口尚未完成迁移：{action}").into()),
+            _ => self.show_notice("warning", format!("功能入口尚未完成迁移：{action}")),
         }
     }
 
@@ -1686,16 +1810,14 @@ impl Workbench {
                 } else {
                     "new"
                 };
-                self.open_editor(action);
+                self.open_editor_with_prefill(action, false);
                 if let Some(editor) = self.editor.borrow().as_ref() {
                     editor.set_url(text.trim().into());
                     update_batch_preview(editor);
                 }
             }
-            Ok(_) => self
-                .window
-                .set_notice("剪贴板中没有链接或可导入的文件".into()),
-            Err(error) => self.window.set_notice(error.into()),
+            Ok(_) => self.show_notice("info", "剪贴板中没有链接或可导入的文件"),
+            Err(error) => self.show_notice("error", error),
         }
     }
 
@@ -1720,6 +1842,7 @@ impl Workbench {
         }
         match response {
             CorePipeResponse::Events { request_id, events } => {
+                self.set_engine_online(true);
                 for event in &events {
                     self.apply(event);
                 }
@@ -1796,12 +1919,10 @@ impl Workbench {
                         }
                     }) {
                         match file_dialogs::write_export(&path, data) {
-                            Ok(()) => self
-                                .window
-                                .set_notice(format!("已导出：{}", path.display()).into()),
-                            Err(error) => {
-                                self.window.set_notice(format!("导出失败：{error}").into())
+                            Ok(()) => {
+                                self.show_notice("success", format!("已导出：{}", path.display()))
                             }
+                            Err(error) => self.show_notice("error", format!("导出失败：{error}")),
                         }
                     }
                 }
@@ -1817,6 +1938,7 @@ impl Workbench {
                 }
             }
             response @ CorePipeResponse::Settings { request_id, .. } => {
+                self.set_engine_online(true);
                 if let CorePipeResponse::Settings {
                     task_sort,
                     reduce_motion,
@@ -1884,13 +2006,19 @@ impl Workbench {
                 tasks,
                 latest_sequence,
                 ..
-            } => self.merge_snapshot(tasks, latest_sequence),
+            } => {
+                self.set_engine_online(true);
+                self.merge_snapshot(tasks, latest_sequence);
+            }
             CorePipeResponse::Error {
                 request_id,
+                code,
                 message,
-                ..
             } => {
-                self.window.set_notice(message.clone().into());
+                if code == "ui_connection" {
+                    self.set_engine_online(false);
+                }
+                self.show_notice("error", message.clone());
                 if request_id == Some(self.editor_id.get()) {
                     if let Some(editor) = self.editor.borrow().as_ref() {
                         editor.set_busy(false);
@@ -1928,6 +2056,10 @@ impl Workbench {
     }
 
     fn open_editor(self: &Rc<Self>, action: &str) {
+        self.open_editor_with_prefill(action, action == "new");
+    }
+
+    fn open_editor_with_prefill(self: &Rc<Self>, action: &str, allow_passive_clipboard: bool) {
         if let Some(previous) = self.editor.borrow().as_ref() {
             let _ = previous.hide();
         }
@@ -1952,6 +2084,16 @@ impl Workbench {
             editor.set_download_dir(download_dir.clone().into());
             editor.set_legal_accepted(*legal_accepted);
         }
+        #[cfg(not(test))]
+        if allow_passive_clipboard {
+            if let Ok(hls_client::file_transfer::ClipboardContent::Text(text)) =
+                hls_client::file_transfer::read_clipboard()
+            {
+                apply_passive_clipboard_prefill(&editor, &text);
+            }
+        }
+        #[cfg(test)]
+        let _ = allow_passive_clipboard;
         self.sync_editor_queues(&editor, None);
         update_batch_preview(&editor);
         let has_advanced = editor.get_has_advanced_values();
@@ -2136,7 +2278,7 @@ impl Workbench {
             .find(|id| self.state.borrow().selected.contains(*id))
             .cloned()
         else {
-            self.window.set_notice("请选择任务".into());
+            self.show_notice("warning", "请选择任务");
             return;
         };
         let Ok(window) = DetailsWindow::new() else {
@@ -2187,7 +2329,7 @@ impl Workbench {
                         let source_url = window.get_source_page_url().trim().to_owned();
                         if !source_url.is_empty() {
                             if let Err(error) = file_dialogs::open(&source_url) {
-                                this.window.set_notice(error.into());
+                                this.show_notice("error", error);
                             }
                         }
                     }
@@ -2195,8 +2337,8 @@ impl Workbench {
                         let source_url = window.get_source_page_url().trim().to_owned();
                         if !source_url.is_empty() {
                             match file_dialogs::write_clipboard_text(&source_url) {
-                                Ok(()) => this.window.set_notice("已复制来源页面链接".into()),
-                                Err(error) => this.window.set_notice(error.into()),
+                                Ok(()) => this.show_notice("success", "已复制来源页面链接"),
+                                Err(error) => this.show_notice("error", error),
                             }
                         }
                     }
@@ -2344,7 +2486,7 @@ impl Workbench {
                     native_window::hwnd(self.window.window()),
                 );
             }
-            Err(error) => self.window.set_notice(error.to_string().into()),
+            Err(error) => self.show_notice("error", error.to_string()),
         }
     }
 
@@ -2658,9 +2800,202 @@ impl Workbench {
                 }
                 service.show(native_window::hwnd(self.window.window()));
             }
-            Err(error) => self.window.set_notice(error.to_string().into()),
+            Err(error) => self.show_notice("error", error.to_string()),
         }
     }
+}
+
+fn infer_toast_tone(message: &str) -> &'static str {
+    if message.contains("失败") || message.contains("错误") || message.contains("异常") {
+        "error"
+    } else if message.contains("警告") || message.contains("取消") || message.contains("空间不足")
+    {
+        "warning"
+    } else if message.contains("已完成")
+        || message.contains("已保存")
+        || message.contains("已导入")
+        || message.contains("已导出")
+        || message.contains("已清理")
+        || message.contains("已清空")
+        || message.contains("已复制")
+        || message.contains("成功")
+    {
+        "success"
+    } else {
+        "info"
+    }
+}
+
+fn file_tile_kind(filename: &str, url: &str, resource_kind: ResourceKind) -> &'static str {
+    if resource_kind == ResourceKind::Torrent
+        || url.trim_start().to_ascii_lowercase().starts_with("magnet:")
+    {
+        return "torrent";
+    }
+    let ext = filename
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(filename)
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(filename)
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "torrent" {
+        return "torrent";
+    }
+    match hls_client::download_category(filename, url, resource_kind) {
+        "media" => "media",
+        "program" => "program",
+        "archive" => "archive",
+        _ => {
+            if matches!(
+                ext.as_str(),
+                "pdf"
+                    | "doc"
+                    | "docx"
+                    | "xls"
+                    | "xlsx"
+                    | "ppt"
+                    | "pptx"
+                    | "txt"
+                    | "md"
+                    | "csv"
+                    | "epub"
+                    | "mobi"
+                    | "rtf"
+                    | "json"
+                    | "xml"
+            ) {
+                "document"
+            } else {
+                "file"
+            }
+        }
+    }
+}
+
+fn percent_decode_utf8(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_owned())
+}
+
+/// Validates whether `raw` clipboard text is a single-line `<= 4096`-char
+/// supported download URL (`http://`, `https://`, `ftp://`, `sftp://`, `magnet:?`)
+/// and returns `(normalized_url, inferred_filename)`.
+pub(crate) fn passive_clipboard_url_prefill(raw: &str) -> Option<(String, String)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 4096
+        || trimmed.contains(['\r', '\n'])
+        || trimmed.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("magnet:?") {
+        let query = &trimmed["magnet:?".len()..];
+        if !query
+            .split('&')
+            .any(|kv| kv.to_ascii_lowercase().starts_with("xt=urn:"))
+        {
+            return None;
+        }
+        let dn = query
+            .split('&')
+            .find_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                k.eq_ignore_ascii_case("dn").then_some(v)
+            })
+            .map(|v| percent_decode_utf8(&v.replace('+', " ")))
+            .map(|name| crate::target_check::fix_name(&name))
+            .filter(|name| !name.is_empty() && name != "download")
+            .unwrap_or_default();
+        return Some((trimmed.to_owned(), dn));
+    }
+
+    let (scheme, rest) = trimmed.split_once("://")?;
+    if !matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ftp" | "sftp"
+    ) {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("").trim();
+    if host.is_empty()
+        || (!host.contains('.')
+            && !host.eq_ignore_ascii_case("localhost")
+            && !host.starts_with('['))
+    {
+        return None;
+    }
+    let without_tail = rest.split(['?', '#']).next().unwrap_or(rest);
+    let path = without_tail
+        .split_once('/')
+        .map(|(_, path)| path)
+        .unwrap_or("");
+    let leaf = path.rsplit('/').find(|seg| !seg.is_empty()).unwrap_or("");
+    let inferred = if let Some((stem, ext)) = leaf.rsplit_once('.') {
+        if !stem.is_empty() && !ext.is_empty() && ext.len() <= 12 {
+            let decoded = percent_decode_utf8(leaf);
+            let clean = crate::target_check::fix_name(&decoded);
+            if clean == "download" {
+                String::new()
+            } else {
+                clean
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    Some((trimmed.to_owned(), inferred))
+}
+
+pub(crate) fn apply_passive_clipboard_prefill(editor: &TaskEditorWindow, raw: &str) -> bool {
+    if editor.get_mode().as_str() != "new" || !editor.get_url().trim().is_empty() {
+        return false;
+    }
+    let Some((url, filename)) = passive_clipboard_url_prefill(raw) else {
+        return false;
+    };
+    let lower_url = url.to_ascii_lowercase();
+    let lower_name = filename.to_ascii_lowercase();
+    let kind = if lower_url.starts_with("magnet:?") || lower_name.ends_with(".torrent") {
+        "种子 / 磁力"
+    } else if lower_name.ends_with(".m3u8") {
+        "HLS"
+    } else if lower_name.ends_with(".mpd") {
+        "DASH"
+    } else {
+        "普通文件"
+    };
+    editor.set_url(url.into());
+    if !filename.is_empty() && editor.get_filename().trim().is_empty() {
+        editor.set_filename(filename.into());
+    }
+    editor.set_kind(kind.into());
+    editor.set_result_tone("info".into());
+    editor.set_result("已自动填入剪贴板链接".into());
+    true
 }
 
 fn kind_label(kind: ResourceKind) -> &'static str {
@@ -2998,25 +3333,49 @@ fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
     } else {
         &task.filename
     };
-    let kind = hls_client::download_category(&task.filename, &task.url, task.resource_kind);
-    let protocol: String = match task.resource_kind {
-        ResourceKind::Hls => "HLS".into(),
-        ResourceKind::Dash => "DASH".into(),
-        ResourceKind::Live => "直播".into(),
-        ResourceKind::Torrent => "BT".into(),
-        _ => task
-            .url
-            .split_once(':')
-            .map_or("HTTP".into(), |(scheme, _)| scheme.to_uppercase()),
+    let kind = file_tile_kind(&task.filename, &task.url, task.resource_kind);
+    let scheme = task
+        .url
+        .split_once(':')
+        .map_or("HTTP", |(scheme, _)| scheme)
+        .to_ascii_uppercase();
+    let protocol_badge: &str = match task.resource_kind {
+        ResourceKind::Hls => "HLS",
+        ResourceKind::Dash => "DASH",
+        ResourceKind::Live => "LIVE",
+        ResourceKind::Torrent => "BT",
+        ResourceKind::Ftp => "FTP",
+        ResourceKind::Sftp => "SFTP",
+        ResourceKind::File => match scheme.as_str() {
+            "FTP" => "FTP",
+            "SFTP" => "SFTP",
+            "MAGNET" => "BT",
+            _ => "",
+        },
     };
     let extension = name
         .rsplit_once('.')
         .map(|(_, extension)| extension)
         .filter(|extension| !extension.is_empty() && extension.len() <= 10);
-    let metadata = extension.map_or_else(
-        || protocol.to_string(),
-        |extension| format!("{protocol} · {}", extension.to_uppercase()),
-    );
+    let host = crate::url_host(&task.url);
+    let mut meta_parts = Vec::with_capacity(3);
+    if protocol_badge.is_empty() {
+        meta_parts.push(if matches!(scheme.as_str(), "HTTP" | "HTTPS") {
+            scheme
+        } else {
+            "HTTP".into()
+        });
+    }
+    if let Some(ext) = extension {
+        meta_parts.push(ext.to_ascii_uppercase());
+    }
+    if !host.is_empty() {
+        meta_parts.push(host);
+    }
+    if meta_parts.is_empty() {
+        meta_parts.push("文件下载".into());
+    }
+    let metadata = meta_parts.join(" · ");
     let actions: &[(&str, &str)] = if matches!(task.status.as_str(), "completed" | "done") {
         &[
             ("play", "播放"),
@@ -3065,7 +3424,8 @@ fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
             .into(),
         progress: crate::task_progress(task),
         selected,
-        kind: if kind == "other" { "file" } else { kind }.into(),
+        kind: kind.into(),
+        protocol: protocol_badge.into(),
         metadata: metadata.into(),
         status_code: task.status.clone().into(),
         primary_action: primary.map_or("", |(action, _)| action).into(),
@@ -3743,5 +4103,137 @@ mod file_selection_tests {
         assert!(editor.get_batch_preview_warning());
         let _ = editor.hide();
         workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn passive_clipboard_url_prefill_accepts_single_supported_url_and_infers_filename() {
+        crate::offscreen::OffscreenPlatform::init_test();
+
+        assert_eq!(passive_clipboard_url_prefill(""), None);
+        assert_eq!(passive_clipboard_url_prefill("just plain notes"), None);
+        assert_eq!(
+            passive_clipboard_url_prefill("https://a.test/1.zip\nhttps://a.test/2.zip"),
+            None
+        );
+        assert_eq!(
+            passive_clipboard_url_prefill(&format!("https://a.test/{}", "x".repeat(4100))),
+            None
+        );
+        assert_eq!(passive_clipboard_url_prefill("javascript:alert(1)"), None);
+
+        let (http_url, http_name) = passive_clipboard_url_prefill(
+            "  https://cdn.example.test/releases/app%20setup-1.2.exe?sig=abc#dl  ",
+        )
+        .unwrap();
+        assert_eq!(
+            http_url,
+            "https://cdn.example.test/releases/app%20setup-1.2.exe?sig=abc#dl"
+        );
+        assert_eq!(http_name, "app setup-1.2.exe");
+
+        let (_, bare_path_name) =
+            passive_clipboard_url_prefill("https://example.test/watch?v=42").unwrap();
+        assert_eq!(bare_path_name, "");
+
+        let (magnet_url, magnet_name) = passive_clipboard_url_prefill(
+            "magnet:?xt=urn:btih:0123456789abcdef&dn=Ubuntu+24.04.iso",
+        )
+        .unwrap();
+        assert!(magnet_url.starts_with("magnet:?xt=urn:btih:"));
+        assert_eq!(magnet_name, "Ubuntu 24.04.iso");
+
+        let editor = TaskEditorWindow::new().unwrap();
+        editor.set_mode("new".into());
+        assert!(apply_passive_clipboard_prefill(
+            &editor,
+            "https://cdn.example.test/live/index.m3u8?token=xyz"
+        ));
+        assert_eq!(
+            editor.get_url().as_str(),
+            "https://cdn.example.test/live/index.m3u8?token=xyz"
+        );
+        assert_eq!(editor.get_filename().as_str(), "index.m3u8");
+        assert_eq!(editor.get_kind().as_str(), "HLS");
+
+        // Does not overwrite an already-populated URL or batch mode.
+        assert!(!apply_passive_clipboard_prefill(
+            &editor,
+            "https://cdn.example.test/other.mp4"
+        ));
+    }
+
+    #[test]
+    fn engine_online_and_dismissible_semantic_notices_track_ipc_health_and_expiry() {
+        use std::time::{Duration, Instant};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, true, true).unwrap();
+        assert!(workbench.window.get_engine_online());
+        assert_eq!(workbench.window.get_connection().as_str(), "下载引擎已连接");
+
+        // Transport connection failure flips engine-online to false and shows an error notice
+        // that does NOT auto-expire after 5s.
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(99),
+            code: "ui_connection".into(),
+            message: "命名管道连接中断".into(),
+        });
+        assert!(!workbench.window.get_engine_online());
+        assert_eq!(
+            workbench.window.get_connection().as_str(),
+            "正在重连下载引擎…"
+        );
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+        assert_eq!(workbench.window.get_notice().as_str(), "命名管道连接中断");
+        workbench.expire_notice_at(Instant::now() + Duration::from_secs(10));
+        assert_eq!(workbench.window.get_notice().as_str(), "命名管道连接中断");
+
+        // User clicking × dismisses the notice immediately.
+        workbench.window.invoke_dismiss_notice();
+        assert_eq!(workbench.window.get_notice().as_str(), "");
+
+        // Receiving a valid snapshot restores engine-online = true.
+        workbench.response(CorePipeResponse::Snapshot {
+            request_id: 100,
+            tasks: Vec::new(),
+            latest_sequence: 2,
+            browser_connected: true,
+        });
+        assert!(workbench.window.get_engine_online());
+        assert_eq!(workbench.window.get_connection().as_str(), "下载引擎已连接");
+
+        // Info and success notices auto-expire cleanly after 5 seconds.
+        let t0 = Instant::now();
+        workbench.show_notice_at("success", "已复制下载链接", t0);
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "success");
+        workbench.expire_notice_at(t0 + Duration::from_secs(4));
+        assert_eq!(workbench.window.get_notice().as_str(), "已复制下载链接");
+        workbench.expire_notice_at(t0 + Duration::from_secs(5));
+        assert_eq!(workbench.window.get_notice().as_str(), "");
+    }
+
+    #[test]
+    fn inspector_dock_shrinks_table_viewport_and_populates_logs() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let task = TaskSnapshot {
+            task_id: "log-1".into(),
+            filename: "manual.pdf".into(),
+            url: "https://docs.example.test/manual.pdf".into(),
+            status: "completed".into(),
+            log_tail: vec!["[12:00:01] 连接建立".into(), "[12:00:03] 校验完成".into()],
+            ..Default::default()
+        };
+        let workbench = Workbench::new(vec![task], 1, false, true).unwrap();
+        workbench.window.set_viewport_width(1400.0);
+        let closed_viewport = workbench.table_viewport();
+        workbench.state.borrow_mut().select("log-1", false, false);
+        workbench.window.set_inspector_open(true);
+        workbench.window.invoke_inspector_opened();
+        assert!(workbench.window.get_inspector_docked());
+        let docked_viewport = workbench.table_viewport();
+        assert!((closed_viewport - docked_viewport - 328.0).abs() < 1.0);
+        assert_eq!(workbench.window.get_inspector_kind().as_str(), "document");
+        assert!(workbench.window.get_inspector_logs().contains("校验完成"));
+        assert!(workbench.window.get_can_clear_completed());
     }
 }
