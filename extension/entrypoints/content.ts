@@ -1,8 +1,9 @@
 import { browser } from 'wxt/browser'
 import { HOVER_DISMISS_DELAY_MS, clampOverlayPosition, mediaElementAtPoint, mediaOverlayAncestors, overlayActionFallback, overlayQualityOptions, overlayResourceDetails, overlaySendKey, safeResourceLocation, shouldKeepHoverOpen, shouldShowMediaOverlay, visibleMediaRect, type OverlayAction, type OverlayQualityOption, type OverlayRect } from '../lib/mediaOverlay'
-import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isPlayableMediaResource, isSameDocumentPlaybackFallback, mergeResources, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
+import { boundedConfidence, classifyPlaybackSource, classifyResource, compactResources, isGenericMediaName, isPlayableMediaResource, isSameDocumentPlaybackFallback, isSiteHostExcluded, mergeResources, normalizeHost, playerPlaybackResources, resourceFingerprint, resourceId, resourceMatchesPlaybackSource, resourceRank, selectMediaVariant, visiblePlaybackResources, type MediaResource, type PlaybackContext } from '../lib/resources'
 import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../lib/domPatch'
 import { resourceQuality } from '../lib/hlsManifest'
+import { isMseMediaSliceUrl } from '../lib/manifestSniff'
 import { THEME_BASE_CSS, THEME_STORAGE_KEY, THEME_TOKENS_CSS, applyTheme, normalizeThemePreference } from '../lib/theme'
 import { withDeadline } from '../lib/asyncDeadline'
 import { waitForDownloadConfirmation } from '../lib/downloadConfirmation'
@@ -59,6 +60,11 @@ export default defineContentScript({
       return (path.find(value => value instanceof HTMLVideoElement)
         || (event.target instanceof HTMLVideoElement ? event.target : null)) as HTMLVideoElement | null
     }
+    const eventAudio = (event: Event): HTMLAudioElement | null => {
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+      return (path.find(value => value instanceof HTMLAudioElement)
+        || (event.target instanceof HTMLAudioElement ? event.target : null)) as HTMLAudioElement | null
+    }
     let activateContent: (() => void) | null = null
     let activationRequested = false
     const activation = new Promise<void>(resolve => { activateContent = resolve })
@@ -74,10 +80,17 @@ export default defineContentScript({
     // after the real listeners are installed.
     document.documentElement.setAttribute('data-hls-downloader-extension', 'loading')
     const pendingPlaybackVideos = new Set<HTMLVideoElement>()
+    const pendingPlaybackAudios = new Set<HTMLAudioElement>()
     const rememberPendingPlayback = (event: Event) => {
       const video = eventVideo(event)
       if (video) {
         pendingPlaybackVideos.add(video)
+        requestActivation()
+        return
+      }
+      const audio = eventAudio(event)
+      if (audio) {
+        pendingPlaybackAudios.add(audio)
         requestActivation()
       }
     }
@@ -268,9 +281,36 @@ export default defineContentScript({
     let hoveredVideo: HTMLVideoElement | null = null
     let playerDismissTimer: ReturnType<typeof setTimeout> | undefined
     const knownVideos = new Set<HTMLVideoElement>()
+    const knownAudios = new Set<HTMLAudioElement>()
     const observedVideoSizes = new WeakSet<HTMLVideoElement>()
     let videoResizeObserver: ResizeObserver | null = null
     let videoIntersectionObserver: IntersectionObserver | null = null
+    let excludedSiteHosts: string[] = []
+    let suppressedHintHosts: string[] = []
+    let tvboxConfigured: boolean | undefined
+    const normalizeHostList = (value: unknown): string[] => Array.isArray(value)
+      ? value.map(item => normalizeHost(String(item || ''))).filter(Boolean)
+      : []
+    const currentSiteHosts = (): string[] => {
+      const hosts = new Set<string>()
+      const own = normalizeHost(location.hostname)
+      if (own) hosts.add(own)
+      const frameLocation = location as Location & { ancestorOrigins?: DOMStringList }
+      for (const origin of Array.from(frameLocation.ancestorOrigins || [])) {
+        const ancestorHost = normalizeHost(origin)
+        if (ancestorHost) hosts.add(ancestorHost)
+      }
+      if (window !== window.top && document.referrer) {
+        const refHost = normalizeHost(document.referrer)
+        if (refHost) hosts.add(refHost)
+      }
+      return [...hosts]
+    }
+    const isCurrentSiteExcluded = (): boolean => {
+      if (!excludedSiteHosts.length && !suppressedHintHosts.length) return false
+      const combined = [...excludedSiteHosts, ...suppressedHintHosts]
+      return currentSiteHosts().some(siteHost => isSiteHostExcluded(siteHost, combined))
+    }
     const mediaOwnerIds = new WeakMap<HTMLMediaElement, string>()
     let nextMediaOwnerId = 1
     const mediaOwner = (media: HTMLMediaElement) => {
@@ -301,7 +341,7 @@ export default defineContentScript({
         resourceFingerprint(resource), resource.url, resource.audioUrl || '', resource.title || '', resource.filename || '',
         resource.kind, resource.mimeType || '', resource.size || 0, resource.estimatedSize || 0,
         resource.width || 0, resource.height || 0, resource.bandwidth || 0, resource.duration || 0,
-        resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0,
+        resource.isLive === true ? 1 : resource.isLive === false ? 0 : '', resource.inspected ? 1 : 0, resource.drmProtected ? 1 : 0,
         (resource.variants || []).map(variant => `${variant.url}:${variant.audioUrl || ''}:${variant.width || 0}:${variant.height || 0}:${variant.bandwidth || 0}`).join(','),
         includePlaybackEvidence ? (resource.playbackUrls || []).join(',') : '',
         includePlaybackEvidence ? (resource.playbackPatterns || []).join(',') : '',
@@ -1305,10 +1345,10 @@ export default defineContentScript({
         updateQualityPill,
       )
 
-      const playableChoice = Boolean(primaryChoice && isPlayableMediaResource(primaryChoice))
-      state.hoverDownload.hidden = !oneClickChoice || hasInlineQualities
+      const playableChoice = Boolean(primaryChoice && isPlayableMediaResource(primaryChoice) && !primaryChoice.drmProtected)
+      state.hoverDownload.hidden = !oneClickChoice || hasInlineQualities || Boolean(primaryChoice?.drmProtected)
       state.hoverCast.hidden = !matched || !playableChoice
-      state.hoverTvbox.hidden = !matched || !playableChoice
+      state.hoverTvbox.hidden = !matched || !playableChoice || tvboxConfigured === false
       state.hoverPanelBtn.className = !oneClickChoice && !hasInlineQualities ? 'hover-action primary' : 'hover-action'
       setTextIfChanged(state.hoverPanelBtn, !oneClickChoice && !hasInlineQualities ? '查看并选择' : '更多')
       if (primaryChoice) {
@@ -1330,6 +1370,30 @@ export default defineContentScript({
       state.positionHover()
     }
 
+    const confirmPlaybackChoices = (playback: PlaybackContext | null): MediaResource[] => {
+      if (!playback) return []
+      const candidates = playerPlaybackResources([...resources.values()], playback, 8)
+      const exact = candidates.filter(resource => playback.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
+      const choices = (exact.length ? exact : candidates)
+        .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
+      for (const resource of choices) {
+        if (resource.evidence?.includes('playback_confirmed')) continue
+        const confirmed = { ...resource, evidence: [...(resource.evidence || []), 'playback_confirmed'].slice(-16) }
+        resources.set(resourceFingerprint(resource), confirmed)
+        const write = runtimeMessage({ type: 'resource', resource: confirmed }).catch(() => undefined)
+        pendingResourceWrites.add(write)
+        void write.finally(() => pendingResourceWrites.delete(write))
+      }
+      return choices
+    }
+
+    const confirmAllKnownVideoPlaybacks = () => {
+      for (const video of currentVideos()) {
+        const playback = playbackByVideo.get(video) || null
+        if (playback) confirmPlaybackChoices(playback)
+      }
+    }
+
     const updateVideoButtons = () => {
       if (ctx.isInvalid) return
       const layer = ui.shadow.querySelector<HTMLElement>('.video-buttons')
@@ -1337,38 +1401,30 @@ export default defineContentScript({
       // Players emit timeupdate while the pointer is down. Replacing the
       // control in that interval cancels pointer capture before it can move.
       if (videoControlDragging) return
+      const siteExcluded = isCurrentSiteExcluded()
       const buttonBounds = videoButtonBounds()
-      const videos = currentVideos()
-        .flatMap(video => {
-          const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
-          return rect ? [{ video, rect, playback: playbackByVideo.get(video) || null }] : []
-        })
-        .filter((item): item is { video: HTMLVideoElement; rect: OverlayRect; playback: PlaybackContext } => Boolean(item.playback)
-          && (item.video === activeVideo || (!item.video.paused && !item.video.ended))
-          && item.rect.width >= 180 && item.rect.height >= 100)
-        .map(item => {
-          const candidates = playerPlaybackResources([...resources.values()], item.playback, 8)
-          const exact = candidates.filter(resource => item.playback.sourceUrls.some(source => resourceMatchesPlaybackSource(resource, source)))
-          const matched = candidates.length > 0
-          const choices = (exact.length ? exact : candidates)
-            .sort((left, right) => resourceRank(right) - resourceRank(left) || (right.height || 0) - (left.height || 0) || (right.bandwidth || 0) - (left.bandwidth || 0) || (right.size || right.estimatedSize || 0) - (left.size || left.estimatedSize || 0))
-          // 只把具体播放器的来源证据用于日常列表；网络候选仍留给手动嗅探。
-          for (const resource of choices) {
-            if (resource.evidence?.includes('playback_confirmed')) continue
-            const confirmed = { ...resource, evidence: [...(resource.evidence || []), 'playback_confirmed'].slice(-16) }
-            resources.set(resourceFingerprint(resource), confirmed)
-            const write = runtimeMessage({ type: 'resource', resource: confirmed }).catch(() => undefined)
-            pendingResourceWrites.add(write)
-            void write.finally(() => pendingResourceWrites.delete(write))
-          }
-          return { ...item, choices, matched }
-        })
-        .filter(({ video, choices }) => video === hoveredVideo
-          && shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length }))
-        .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
-          || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+      const videos = siteExcluded
+        ? []
+        : currentVideos()
+            .flatMap(video => {
+              const rect = visibleMediaRect(video, { width: innerWidth, height: innerHeight })
+              return rect ? [{ video, rect, playback: playbackByVideo.get(video) || null }] : []
+            })
+            .filter((item): item is { video: HTMLVideoElement; rect: OverlayRect; playback: PlaybackContext } => Boolean(item.playback)
+              && (item.video === activeVideo || (!item.video.paused && !item.video.ended))
+              && item.rect.width >= 180 && item.rect.height >= 100)
+            .map(item => {
+              const allChoices = confirmPlaybackChoices(item.playback)
+              const choices = allChoices.filter(resource => !resource.drmProtected)
+              const matched = choices.length > 0
+              return { ...item, choices, matched }
+            })
+            .filter(({ video, choices }) => video === hoveredVideo
+              && shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length }))
+            .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
+              || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
-        innerWidth, innerHeight, buttonBounds, selectionMode, [...resourceSendStates],
+        innerWidth, innerHeight, buttonBounds, selectionMode, siteExcluded, tvboxConfigured, [...resourceSendStates],
         videos.map(({ video, rect, playback, choices, matched }) => [
           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback.sourceUrls, playback.startedAt,
           resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
@@ -1582,14 +1638,21 @@ export default defineContentScript({
         } else {
           preferredVariants.delete(fp)
         }
-        const playable = isPlayableMediaResource(rowState.selected)
+        const playable = isPlayableMediaResource(rowState.selected) && !rowState.selected.drmProtected
         castBtn.hidden = !playable
-        pushBtn.hidden = !playable
-        applySendState(rowState.selected, downloadBtn, '下载')
-        const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(rowState.selected), 'download'))?.state
-        resendBtn.hidden = !canForceResend(sendState)
+        pushBtn.hidden = !playable || tvboxConfigured === false
+        if (rowState.selected.drmProtected) {
+          downloadBtn.disabled = true
+          setTextIfChanged(downloadBtn, 'DRM 加密保护')
+          setAttrIfChanged(downloadBtn, 'title', 'DRM 加密保护 · 不支持直接下载')
+          resendBtn.hidden = true
+        } else {
+          applySendState(rowState.selected, downloadBtn, '下载')
+          const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(rowState.selected), 'download'))?.state
+          resendBtn.hidden = !canForceResend(sendState)
+        }
         if (playable) {
-          applySendState(rowState.selected, pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+          if (!pushBtn.hidden) applySendState(rowState.selected, pushBtn, overlayActionFallback('tvbox'), 'tvbox')
           applySendState(rowState.selected, castBtn, overlayActionFallback('cast'), 'cast')
         }
       })
@@ -1635,7 +1698,7 @@ export default defineContentScript({
       const selected = selectedIndex >= 0 ? selectMediaVariant(resource, resource.variants![selectedIndex]) : resource
       rowState.selected = selected
 
-      if (resource.variants?.length) {
+      if (resource.variants?.length && !resource.drmProtected) {
         rowState.select.hidden = false
         syncSelectOptions(
           rowState.select,
@@ -1652,15 +1715,22 @@ export default defineContentScript({
         rowState.select.hidden = true
       }
 
-      const playable = isPlayableMediaResource(selected)
+      const playable = isPlayableMediaResource(selected) && !selected.drmProtected
       rowState.castBtn.hidden = !playable
-      rowState.pushBtn.hidden = !playable
-      applySendState(selected, rowState.downloadBtn, '下载')
-      const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(selected), 'download'))?.state
-      rowState.resendBtn.hidden = !canForceResend(sendState)
+      rowState.pushBtn.hidden = !playable || tvboxConfigured === false
+      if (selected.drmProtected) {
+        rowState.downloadBtn.disabled = true
+        setTextIfChanged(rowState.downloadBtn, 'DRM 加密保护')
+        setAttrIfChanged(rowState.downloadBtn, 'title', 'DRM 加密保护 · 不支持直接下载')
+        rowState.resendBtn.hidden = true
+      } else {
+        applySendState(selected, rowState.downloadBtn, '下载')
+        const sendState = resourceSendStates.get(overlaySendKey(resourceFingerprint(selected), 'download'))?.state
+        rowState.resendBtn.hidden = !canForceResend(sendState)
+      }
       if (playable) {
         applySendState(selected, rowState.castBtn, overlayActionFallback('cast'), 'cast')
-        applySendState(selected, rowState.pushBtn, overlayActionFallback('tvbox'), 'tvbox')
+        if (!rowState.pushBtn.hidden) applySendState(selected, rowState.pushBtn, overlayActionFallback('tvbox'), 'tvbox')
       }
     }
 
@@ -1733,12 +1803,12 @@ export default defineContentScript({
       }
 
       const signature = JSON.stringify([
-        selectionMode, harvestMode, harvestCategory, harvestQuery, harvestBatchBusy,
+        selectionMode, harvestMode, harvestCategory, harvestQuery, harvestBatchBusy, tvboxConfigured,
         [...harvestCheckedIds], selectionResourceIds?.size, selectionEmptyMessage,
         entries.map(resource => [
           resource.id, resource.url, resource.audioUrl, resource.title, resource.filename, resource.kind,
           resource.size, resource.estimatedSize, resource.width, resource.height, resource.bandwidth,
-          resource.quality, resource.duration, resource.isLive, resource.variants,
+          resource.quality, resource.duration, resource.isLive, resource.drmProtected, resource.variants,
           preferredVariants.get(resourceFingerprint(resource)),
         ]),
         [...resourceSendStates],
@@ -2040,6 +2110,7 @@ export default defineContentScript({
         ...(inspection?.inspected === true ? {
           inspected: true, manifestType: inspection.manifestType, isLive: inspection.isLive,
           lowLatencyLive: inspection.lowLatencyLive, partOnlyLive: inspection.partOnlyLive,
+          ...(inspection.drmProtected === true ? { drmProtected: true } : {}),
           duration: inspection.duration, variants: safeVariants, audioTracks: safeAudioTracks,
           renditionUrls: safeUrlList(inspection.renditionUrls, 24),
           playbackUrls: safeUrlList(inspection.playbackUrls, 48),
@@ -2058,23 +2129,48 @@ export default defineContentScript({
         ...(observedIdentity ? { responseIdentity: observedIdentity } : {}),
       }
       const changed = addResource(resource)
-      if (changed) scheduleRender()
+      if (changed) {
+        confirmAllKnownVideoPlaybacks()
+        scheduleRender()
+      }
       const write = runtimeMessage({ type: 'resource', resource }).catch(() => undefined)
       pendingResourceWrites.add(write)
       void write.finally(() => pendingResourceWrites.delete(write))
       return write
     }
 
+    const markAudioPlayback = (audio: HTMLAudioElement) => {
+      if (ctx.isInvalid || !audio.isConnected) return
+      if (audio.paused && audio.readyState < 1 && !audio.currentSrc) return
+      const directSources = mediaElementSources(audio)
+      const seenDirectSources = new Set<string>()
+      directSources.forEach(source => {
+        if (!source.url || seenDirectSources.has(source.url)) return
+        seenDirectSources.add(source.url)
+        add(source.url, source.mimeType || 'audio/mpeg', true, ['current_src', 'playback_confirmed'], mediaOwner(audio), 0.98)
+      })
+    }
+
     const markVideoPlayback = (video: HTMLVideoElement, eventType: string) => {
       if (ctx.isInvalid) return
       const rect = video.getBoundingClientRect()
-      if (rect.width < 180 || rect.height < 100 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) return
+      const tinyDecorative = rect.width > 0 && rect.height > 0 && (rect.width < 64 || rect.height < 48)
+      if (tinyDecorative) return
+      const visibleInViewport = rect.width >= 180
+        && rect.height >= 100
+        && rect.bottom >= 0
+        && rect.top <= innerHeight
+        && rect.right >= 0
+        && rect.left <= innerWidth
+      const hasMediaEvidence = !video.paused || video.readyState >= 1 || Boolean(video.currentSrc)
+      if (!visibleInViewport && !hasMediaEvidence) return
       const previousActiveVideo = activeVideo
       const explicitActivation = ['play', 'playing', 'initializing'].includes(eventType)
       // timeupdate fires several times per second for every playing element.
       // It may refresh source evidence, but must not continuously steal the
       // active-player identity or rebuild the complete overlay DOM.
-      if (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended) {
+      if (visibleInViewport && (!video.paused || explicitActivation)
+        && (explicitActivation || !activeVideo || !activeVideo.isConnected || activeVideo.paused || activeVideo.ended)) {
         const changedPlayer = activeVideo !== video
         activeVideo = video
         if (changedPlayer && explicitActivation) {
@@ -2099,13 +2195,16 @@ export default defineContentScript({
         // instead of waiting for PerformanceObserver/webRequest: Firefox can
         // omit those observations for dynamically created iframe media.
         const seenDirectSources = new Set<string>()
+        const sourceEvidence = hasMediaEvidence ? ['current_src', 'playback_confirmed'] : ['current_src']
         directSources.forEach(source => {
           if (!source.url || seenDirectSources.has(source.url)) return
           seenDirectSources.add(source.url)
-          add(source.url, source.mimeType, true, ['current_src'], mediaOwner(video), 0.98)
+          add(source.url, source.mimeType, true, sourceEvidence, mediaOwner(video), 0.98)
         })
+        confirmPlaybackChoices(playback)
       } else {
         if (video === activeVideo) activePlayback = previousPlayback
+        confirmPlaybackChoices(previousPlayback)
         if (previousActiveVideo !== activeVideo) scheduleVideoButtons()
         return
       }
@@ -2113,22 +2212,41 @@ export default defineContentScript({
     }
     const markPlayback = (event: Event) => {
       const video = eventVideo(event)
-      if (!video) return
-      if (
-        video.paused
-        && !playbackByVideo.has(video)
-        && ['loadedmetadata', 'loadeddata', 'timeupdate'].includes(event.type)
-      ) return
-      markVideoPlayback(video, event.type)
+      if (video) {
+        if (
+          video.paused
+          && video.readyState < 1
+          && !video.currentSrc
+          && !playbackByVideo.has(video)
+          && ['loadedmetadata', 'loadeddata', 'timeupdate'].includes(event.type)
+        ) return
+        markVideoPlayback(video, event.type)
+        return
+      }
+      const audio = eventAudio(event)
+      if (audio) markAudioPlayback(audio)
     }
     const syncPlayingVideos = () => {
       currentVideos().forEach(video => {
         if (!video.paused && !video.ended) markVideoPlayback(video, 'sync')
+        else if (video.readyState >= 1 || Boolean(video.currentSrc)) markVideoPlayback(video, 'loadedmetadata')
       })
+      for (const audio of knownAudios) {
+        if (!audio.isConnected) {
+          knownAudios.delete(audio)
+          continue
+        }
+        if (!audio.paused || audio.readyState >= 1 || Boolean(audio.currentSrc)) {
+          markAudioPlayback(audio)
+        }
+      }
     }
     const observedMediaRoots = new WeakSet<Document | ShadowRoot>()
     const knownShadowRoots = new Set<ShadowRoot>()
     const mediaEvents = ['play', 'playing', 'loadedmetadata', 'loadeddata', 'timeupdate'] as const
+    const trackAudio = (audio: HTMLAudioElement) => {
+      knownAudios.add(audio)
+    }
     const registerMediaRoot = (root: Document | ShadowRoot) => {
       if (observedMediaRoots.has(root)) return
       observedMediaRoots.add(root)
@@ -2136,7 +2254,9 @@ export default defineContentScript({
       const discover = (node: ParentNode | Element) => {
         discoverSubtitlePlayers(node)
         if (node instanceof HTMLVideoElement) trackVideo(node)
+        if (node instanceof HTMLAudioElement) trackAudio(node)
         node.querySelectorAll<HTMLVideoElement>('video').forEach(trackVideo)
+        node.querySelectorAll<HTMLAudioElement>('audio').forEach(trackAudio)
         const inspect = (element: Element) => {
           if (element.shadowRoot) registerMediaRoot(element.shadowRoot)
         }
@@ -2211,6 +2331,37 @@ export default defineContentScript({
     activationMediaRoots.length = 0
     pendingPlaybackVideos.forEach(video => markVideoPlayback(video, 'initializing'))
     pendingPlaybackVideos.clear()
+    pendingPlaybackAudios.forEach(audio => markAudioPlayback(audio))
+    pendingPlaybackAudios.clear()
+    const applyStoredOverlayPrefs = (values: Record<string, unknown>) => {
+      if ('excludedHosts' in values) excludedSiteHosts = normalizeHostList(values.excludedHosts)
+      if ('suppressedSiteHints' in values) suppressedHintHosts = normalizeHostList(values.suppressedSiteHints)
+      if ('tvboxConfigured' in values) {
+        tvboxConfigured = typeof values.tvboxConfigured === 'boolean' ? values.tvboxConfigured : undefined
+      }
+      if (isCurrentSiteExcluded() && !selectionMode && !harvestMode) {
+        if (pinned) setPinned(false)
+        setOpen(false)
+        panelPosition = null
+      }
+      renderedListSignature = ''
+      renderedVideoSignature = ''
+      scheduleRender()
+      scheduleVideoButtons()
+    }
+    void browser.storage.local.get(['excludedHosts', 'suppressedSiteHints', 'tvboxConfigured'])
+      .then(applyStoredOverlayPrefs)
+      .catch(() => undefined)
+    const onOverlayStorageChanged = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area !== 'local' || ctx.isInvalid) return
+      const patch: Record<string, unknown> = {}
+      if ('excludedHosts' in changes) patch.excludedHosts = changes.excludedHosts?.newValue
+      if ('suppressedSiteHints' in changes) patch.suppressedSiteHints = changes.suppressedSiteHints?.newValue
+      if ('tvboxConfigured' in changes) patch.tvboxConfigured = changes.tvboxConfigured?.newValue
+      if (Object.keys(patch).length) applyStoredOverlayPrefs(patch)
+    }
+    browser.storage.onChanged.addListener(onOverlayStorageChanged)
+    ctx.onInvalidated(() => browser.storage.onChanged.removeListener(onOverlayStorageChanged))
     syncPlayingVideos()
     document.documentElement.setAttribute('data-hls-downloader-extension', '1')
 
@@ -2294,9 +2445,10 @@ export default defineContentScript({
               add(candidateUrl, 'video/mp4', false, ['mse_source_buffer', 'mse_full_track'], owner, 0.97, undefined, undefined, mediaUrl)
             }
           }
-        } else {
+        } else if (!isMseMediaSliceUrl(mediaUrl)) {
           add(mediaUrl, '', false, ['mse_source_buffer'], owner, 0.97)
         }
+        confirmAllKnownVideoPlaybacks()
         scheduleRender()
       }
     }
@@ -2310,7 +2462,9 @@ export default defineContentScript({
     earlyResourceEvents.splice(0).forEach(event => handleResourceEvent(new CustomEvent('__hls_downloader_resource__', { detail: JSON.stringify(event) })))
     earlyMseEvents.splice(0).forEach(event => handleMseEvent(new CustomEvent('__hls_downloader_mse__', { detail: JSON.stringify(event) })))
     document.querySelectorAll<HTMLVideoElement | HTMLAudioElement>('video,audio').forEach(media => {
-      mediaElementSources(media).forEach(source => add(source.url, source.mimeType, true, ['current_src'], mediaOwner(media), 0.98))
+      const confirmed = !media.paused || media.readyState >= 1 || Boolean(media.currentSrc)
+      const ev = confirmed ? ['current_src', 'playback_confirmed'] : ['current_src']
+      mediaElementSources(media).forEach(source => add(source.url, source.mimeType || (media instanceof HTMLAudioElement ? 'audio/mpeg' : ''), true, ev, mediaOwner(media), 0.98))
     })
     document.querySelectorAll<HTMLSourceElement>('source').forEach(source => {
       const url = explicitElementSource(source)

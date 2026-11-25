@@ -126,6 +126,9 @@ article:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; 
 .resource-facts-row { display: flex; flex-wrap: wrap; gap: 4px; }
 .resource-fact { display: inline-flex; align-items: center; height: 19px; max-width: 100%; overflow: hidden; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); border-radius: 5px; background: var(--surface-2); color: var(--muted); font: 600 10px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .resource-fact:first-child { border-color: color-mix(in srgb, var(--primary) 32%, transparent); background: color-mix(in srgb, var(--primary) 13%, var(--surface-2)); color: var(--primary-ink); }
+.drm-badge { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; padding: 3px 8px; border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--amber) 12%, var(--surface-2)); color: var(--amber-ink); font: 600 10.5px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+article[data-drm=true] { border-color: color-mix(in srgb, var(--amber) 34%, var(--border)); }
+.article-actions .hlsd-button[data-state=drm] { border-color: color-mix(in srgb, var(--amber) 36%, var(--border)); background: var(--surface-2); color: var(--muted); box-shadow: none; opacity: .82; }
 .quality-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .quality-chip { display: inline-flex; align-items: center; gap: 3px; height: 23px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border)); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--primary) 10%, var(--surface-2)); color: var(--primary-ink); cursor: pointer; font: 700 10.5px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; transition: background-color .12s ease, color .12s ease, border-color .12s ease, transform .1s ease; }
 .quality-chip:hover:not(:disabled) { border-color: transparent; background: var(--primary); color: var(--on-primary); }
@@ -172,15 +175,10 @@ article:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; 
 .article-actions .hlsd-button[data-state=canceled] { background: var(--surface-2); color: var(--muted); box-shadow: none; }
 .article-actions .hlsd-button[data-state=retry] { border-color: color-mix(in srgb, var(--red) 36%, transparent); background: color-mix(in srgb, var(--red) 10%, var(--surface)); color: var(--red-ink); box-shadow: none; }
 
-/* 底部紧凑折叠快捷设置抽屉（发现媒体时保持视频列表置顶） */
-.quick-settings-drawer { flex: none; border-top: 1px solid var(--border); background: var(--surface); }
-.quick-settings-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 12px; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 600; list-style: none; user-select: none; transition: background-color .12s ease, color .12s ease; }
-.quick-settings-summary::-webkit-details-marker { display: none; }
-.quick-settings-summary:hover { background: var(--surface-2); color: var(--text); }
-.quick-settings-summary::after { content: ""; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(45deg); transition: transform .12s ease; }
-.quick-settings-drawer[open] .quick-settings-summary::after { transform: translateY(2px) rotate(225deg); }
-.quick-settings-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 10px; }
-.quick-setting-pill { display: inline-flex; flex: 1; align-items: center; justify-content: center; gap: 4px; min-width: 96px; height: 27px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--muted); cursor: pointer; font: 600 11px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; transition: background-color .12s ease, color .12s ease, border-color .12s ease, transform .1s ease; }
+/* 底部常驻单行快捷开关条（panel-0 激活时即刻可见、单行紧凑） */
+.quick-settings-bar { flex: none; border-top: 1px solid var(--border); background: var(--surface); }
+.quick-settings-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 6px 12px; }
+.quick-setting-pill { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; height: 26px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--muted); cursor: pointer; font: 600 11px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background-color .12s ease, color .12s ease, border-color .12s ease, transform .1s ease; }
 .quick-setting-pill:hover:not(:disabled) { border-color: color-mix(in srgb, var(--primary) 42%, var(--border)); color: var(--text); }
 .quick-setting-pill:active:not(:disabled) { transform: scale(.97); }
 .quick-setting-pill[aria-pressed=true] { border-color: color-mix(in srgb, var(--green) 38%, var(--border)); background: color-mix(in srgb, var(--green) 14%, var(--surface)); color: var(--green-ink); }

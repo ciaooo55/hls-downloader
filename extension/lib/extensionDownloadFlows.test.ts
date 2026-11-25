@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { pageDownloadUrls } from './selectionLinks'
 import { mediaElementAtPoint } from './mediaOverlay'
 import { bilibiliPlayinfoCandidates, sitePageVideoId } from './siteManifest'
-import { playerPlaybackResources, type MediaResource } from './resources'
+import { isDefaultPopupResource, isSiteHostExcluded, playerPlaybackResources, type MediaResource } from './resources'
+import { isDirectDownloadLink } from './directLink'
 
 describe('extension content script flows (page links, shadow players, Bilibili MSE)', () => {
   const content = readFileSync(fileURLToPath(new URL('../entrypoints/content.ts', import.meta.url)), 'utf8')
@@ -120,5 +121,39 @@ describe('extension content script flows (page links, shadow players, Bilibili M
     for (const child of [topMask, dmCanvas, video]) Object.assign(child, { getRootNode: () => shadowRoot })
     stack = [shadowHost]
     expect(mediaElementAtPoint([video], { x: 400, y: 200 })).toBe(video)
+  })
+
+  it('wires excludedHosts/suppressedSiteHints overlay hiding, DRM guards, visible quick bar, and expanded direct links', () => {
+    const popupMain = readFileSync(fileURLToPath(new URL('../entrypoints/popup/main.ts', import.meta.url)), 'utf8')
+
+    // 1. Content script checks excludedHosts & suppressedSiteHints via storage.local + onChanged and hides video buttons.
+    expect(content).toContain("browser.storage.local.get(['excludedHosts', 'suppressedSiteHints', 'tvboxConfigured'])")
+    expect(content).toContain('const siteExcluded = isCurrentSiteExcluded()')
+    expect(content).toContain('const choices = allChoices.filter(resource => !resource.drmProtected)')
+    expect(isSiteHostExcluded('sub.example.com', ['example.com'])).toBe(true)
+    expect(isSiteHostExcluded('other.org', ['example.com'])).toBe(false)
+
+    // 2. Popup uses an always-visible quick-settings-bar (not closed <details>), keeps non-colliding aria-labels,
+    //    preserves 本站提示：已显示/已隐藏 aria-label contract, and hides TVBox when tvboxConfigured === false.
+    expect(popupMain).toContain("el('div', 'quick-settings-bar')")
+    expect(popupMain).not.toContain("el('details', 'quick-settings-drawer')")
+    expect(popupMain).toContain('[excludeBtn, \'本站提示与接管\', \'在此网站隐藏悬浮下载按钮，并暂停自动接管下载。\']')
+    expect(popupMain).toContain('`本站提示：${excludeBtn.textContent}`')
+    expect(popupMain).toContain("activePanelIndex === 2 ? `自动接管：${enableStateLabel}` : `全局自动接管：${enableStateLabel}`")
+    expect(popupMain).toContain('DRM 加密保护 · 不支持直接下载')
+    expect(popupMain).toContain('tvboxConfigured === false')
+
+    // 3. takeover.content.ts falls back cleanly when runtime.sendMessage rejects instead of swallowing the click.
+    expect(takeoverContent).toContain('void fallback()')
+
+    // 4. Expanded directLink extensions (.safetensors, .gguf, .whl, .mp4, .pdf, .zst, .appimage).
+    for (const ext of ['model.safetensors', 'weights.gguf', 'pkg-1.0-py3-none-any.whl', 'video.mp4', 'paper.pdf', 'archive.tar.zst', 'tool.AppImage']) {
+      expect(isDirectDownloadLink(`https://cdn.test/files/${ext}`, 'https://site.test/', false)).toBe(true)
+    }
+
+    // 5. Popup default view includes high-confidence inspected manifests, Bilibili dual-track, and audio/current_src media.
+    expect(isDefaultPopupResource({ id: '1', url: 'https://cdn.test/master.m3u8', kind: 'hls', inspected: true, seenAt: 1 })).toBe(true)
+    expect(isDefaultPopupResource({ id: '2', url: 'https://cdn.test/song.mp3', kind: 'media', mimeType: 'audio/mpeg', seenAt: 1 })).toBe(true)
+    expect(isDefaultPopupResource({ id: '3', url: 'https://cdn.test/paused.mp4', kind: 'media', evidence: ['current_src'], seenAt: 1 })).toBe(true)
   })
 })

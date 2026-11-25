@@ -436,7 +436,7 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.browser.tabs.sendMessage.mock.calls.filter(([, message]) => message.type === 'captured-resource')).toEqual([])
   })
 
-  function response(early = false, method = 'GET') {
+  function response(early = false, method = 'GET', extraHeaders: Array<{ name: string, value: string }> = []) {
     const request = { requestId: 'download-request', url: item.url, method, tabId: 7,
       frameId: 0, type: 'main_frame', documentUrl: item.referrer, timeStamp: Date.now() }
     listener(mocks.browser.webRequest.onBeforeRequest)({ ...request,
@@ -446,7 +446,8 @@ describe('browser download ownership through registered event listeners', () => 
     return listener(mocks.browser.webRequest.onHeadersReceived)({ ...request, statusCode: 200,
       responseHeaders: [{ name: 'Content-Type', value: 'application/octet-stream' },
         ...(early ? [{ name: 'Content-Disposition', value: 'attachment; filename="export.bin"' }] : []),
-        { name: 'Content-Length', value: '1024' }] })
+        { name: 'Content-Length', value: '1024' },
+        ...extraHeaders] })
   }
 
   function directLink(href = 'https://site.test/export.zip') {
@@ -533,7 +534,7 @@ describe('browser download ownership through registered event listeners', () => 
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
   })
 
-  it.each([{ method: 'POST' }, { type: 'xmlhttprequest' }, { url: 'https://site.test/video.mp4' },
+  it.each([{ method: 'POST' }, { type: 'xmlhttprequest' }, { url: 'https://site.test/watch' },
     { proxyInfo: { type: 'socks', host: '127.0.0.1', port: 1080 } }])('preserves Firefox requests outside explicit file GET takeover: %j', async details => {
     const { blocked } = await firefoxFileRequest({ ...details, requestHeaders: [] })
     await vi.advanceTimersByTimeAsync(1500)
@@ -1049,7 +1050,7 @@ describe('browser download ownership through registered event listeners', () => 
     vi.stubEnv('CHROME', family === 'chromium' ? 'true' : '')
     vi.stubEnv('FIREFOX', family === 'firefox' ? 'true' : '')
     item.state = 'in_progress'
-    const originalResponse = response(true)
+    const originalResponse = response(true, 'GET', [{ name: 'Cache-Control', value: 'no-store' }])
     await vi.advanceTimersByTimeAsync(500)
     expect(await originalResponse).toBeUndefined()
     const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
@@ -1069,7 +1070,7 @@ describe('browser download ownership through registered event listeners', () => 
   it('imports the finalized browser filename when it changes after onCreated', async () => {
     item.state = 'in_progress'
     item.filename = 'C:\\Downloads\\image.bin'
-    response(true)
+    response(true, 'GET', [{ name: 'Cache-Control', value: 'no-store' }])
     const created = listener(mocks.browser.downloads.onCreated)({ ...item })
     await vi.advanceTimersByTimeAsync(500)
     await created
@@ -1087,7 +1088,7 @@ describe('browser download ownership through registered event listeners', () => 
 
   it('retains the original import identity across duplicate download events and worker restart', async () => {
     item.state = 'in_progress'
-    response(true)
+    response(true, 'GET', [{ name: 'Cache-Control', value: 'no-store' }])
     const firstEvent = listener(mocks.browser.downloads.onCreated)({ ...item })
     await vi.advanceTimersByTimeAsync(500)
     await firstEvent
@@ -1112,7 +1113,7 @@ describe('browser download ownership through registered event listeners', () => 
 
   it.each(['missing-id', 'reused-id', 'ambiguous'])('restores local import identity after download IDs change: %s', async scenario => {
     item.state = 'in_progress'
-    response(true)
+    response(true, 'GET', [{ name: 'Cache-Control', value: 'no-store' }])
     const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
     await vi.advanceTimersByTimeAsync(500)
     await takeover
@@ -1493,7 +1494,7 @@ describe('browser download ownership through registered event listeners', () => 
     const blocked = response(true)
     await vi.advanceTimersByTimeAsync(500)
     expect(await blocked).toBeUndefined()
-    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(false)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer')).toBe(true)
     expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
   })
 
@@ -1680,17 +1681,14 @@ describe('browser download ownership through registered event listeners', () => 
   })
 
   it.each([
-    { label: 'no Accept-Ranges', overrides: { acceptRanges: '' } },
-    { label: 'Accept-Ranges: none', overrides: { acceptRanges: 'none' } },
     { label: 'no-store without validator', overrides: { etag: '', cacheControl: 'private, no-store' } },
-    { label: 'small file under 1 MiB', overrides: { size: 512 * 1024 } },
     { label: 'POST method', overrides: { method: 'POST' } },
     { label: 'unauthorized request cookies', overrides: { cookieHeader: 'sid=secret' } },
   ])('falls back to preserveBrowserDownload (offer_local_file) for $label', async ({ overrides }) => {
     item.url = item.finalUrl = 'https://cdn.test/releases/ubuntu.iso'
     item.filename = 'C:\\Downloads\\ubuntu.iso'
     item.state = 'in_progress'
-    item.totalBytes = overrides.size ?? 50 * 1024 * 1024
+    item.totalBytes = 50 * 1024 * 1024
     item.fileSize = item.totalBytes
 
     largeResumableResponse({ early: true, ...overrides })
@@ -1705,6 +1703,115 @@ describe('browser download ownership through registered event listeners', () => 
     listener(mocks.browser.downloads.onChanged)({ id: 42, state: { current: 'complete' } })
     await flush()
     expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(true)
+  })
+
+  it('accelerates active Chrome GET downloads with canResume=false, no ETag, or missing Accept-Ranges directly via offer', async () => {
+    const expectedUrl = 'https://release-assets.githubusercontent.com/12345/app.zip?X-Amz-Signature=deadbeef&X-Amz-Expires=300'
+    item.url = item.finalUrl = expectedUrl
+    item.referrer = 'https://github.com/org/repo/releases'
+    item.filename = 'C:\\Downloads\\app.zip'
+    item.state = 'in_progress'
+    item.canResume = false
+    item.totalBytes = 64 * 1024
+    item.fileSize = 64 * 1024
+    mocks.browser.downloads.cancel.mockImplementation(async () => { if (item) item.state = 'interrupted' })
+    // Referrer github.com has cookies, while CDN request sent NO Cookie header.
+    mocks.browser.cookies.getAll.mockImplementation(async query =>
+      String(query.url || '').includes('github.com')
+        ? [{ name: 'user_session', value: 'gh-cookie', domain: 'github.com', path: '/', hostOnly: true, secure: true }]
+        : [],
+    )
+
+    largeResumableResponse({ early: true, size: 64 * 1024, acceptRanges: '', etag: '' })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+    await flush()
+
+    const offers = mocks.native.mock.calls.filter(([message]) => message.op === 'offer')
+    expect(offers).toHaveLength(1)
+    expect(offers[0][0].resource.url).toBe(expectedUrl)
+    expect(mocks.native.mock.calls.some(([message]) => message.op === 'offer_local_file')).toBe(false)
+    expect(mocks.browser.downloads.cancel).toHaveBeenCalledWith(42)
+  })
+
+  it('does not block pre-click CDN link interception because topPageUrl holds cookies', async () => {
+    const cdnHref = 'https://cas-bridge.xethub.hf.co/xet-bridge-us/model.safetensors?X-Amz-Signature=abcd'
+    mocks.browser.cookies.getAll.mockImplementation(async query => {
+      if (query.partitionKey?.topLevelSite === 'https://huggingface.co') {
+        return [{ name: 'hf_token', value: 'secret', domain: 'huggingface.co', path: '/', hostOnly: true, secure: true }]
+      }
+      return []
+    })
+    ;(mocks.browser.cookies as Record<string, unknown>).getPartitionKey = vi.fn().mockRejectedValue(
+      new Error('No host permissions for cookies at url: "https://huggingface.co/".'),
+    )
+    try {
+      const reply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+        { type: 'intercept-download-link', href: cdnHref, filename: 'model.safetensors' },
+        { url: 'https://huggingface.co/org/model', tab: { id: 7 }, frameId: 0 },
+        resolve,
+      ))
+      expect(reply.ok).toBe(true)
+      expect(reply.browserFallback).toBe(false)
+      expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
+    } finally {
+      delete (mocks.browser.cookies as Record<string, unknown>).getPartitionKey
+    }
+  })
+
+  it('leaves small downloads completely untouched in the browser when minimumBytes > 0 without queuing local handoffs', async () => {
+    local.minimumBytes = 10 * 1024 * 1024
+    item.url = item.finalUrl = 'https://cdn.test/small-doc.pdf'
+    item.filename = 'C:\\Downloads\\small-doc.pdf'
+    item.state = 'in_progress'
+    item.totalBytes = 512 * 1024
+    item.fileSize = 512 * 1024
+
+    largeResumableResponse({ early: true, size: 512 * 1024 })
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+    await flush()
+
+    expect(mocks.native.mock.calls.some(([message]) => ['offer', 'offer_local_file'].includes(message.op))).toBe(false)
+    expect(local['local-browser-download-handoffs']).toBeUndefined()
+    expect(mocks.browser.downloads.pause).not.toHaveBeenCalled()
+    expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+  })
+
+  it('leaves background downloads in the browser during user_shutdown while explicit popup/button download wakes Core', async () => {
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') {
+        return { ok: false, code: 'core_unreachable', error_code: 'user_shutdown', user_shutdown: true, error: '已退出' }
+      }
+      if (message.op === 'offer') {
+        return { ok: true, handoff: { id: 'woken-handoff', status: 'pending' } }
+      }
+      return { ok: false }
+    })
+
+    // Background POST download while user_shutdown is active: left in browser, NOT queued into localDownloadHandoffs!
+    item.state = 'in_progress'
+    response(false, 'POST')
+    const bgPost = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await bgPost
+    await flush()
+    expect(mocks.native.mock.calls.some(([message]) => ['offer', 'offer_local_file'].includes(message.op))).toBe(false)
+    expect(local['local-browser-download-handoffs']).toBeUndefined()
+
+    // Explicit user click from Popup / floating button (`download-now`) wakes Core directly via `offer`!
+    const explicitReply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      {
+        type: 'download-now',
+        resource: { id: 'vid-1', url: 'https://cdn.test/video.mp4', kind: 'media', pageUrl: 'https://site.test/', seenAt: Date.now() },
+      },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    expect(explicitReply).toMatchObject({ ok: true, handoff: { id: 'woken-handoff' } })
+    expect(mocks.native.mock.calls.filter(([message]) => message.op === 'offer')).toHaveLength(1)
   })
 
   it('accelerates an authenticated large resumable GET when authorized cookies match exactly', async () => {
@@ -2020,7 +2127,7 @@ describe('browser download ownership through registered event listeners', () => 
     item.totalBytes = 128 * 1024
     item.fileSize = 128 * 1024
 
-    largeResumableResponse({ early: true, size: 128 * 1024, acceptRanges: 'none' })
+    largeResumableResponse({ early: true, size: 128 * 1024, acceptRanges: 'none', etag: '', cacheControl: 'no-store' })
     const created = listener(mocks.browser.downloads.onCreated)({ ...item })
     await vi.advanceTimersByTimeAsync(500)
     await created

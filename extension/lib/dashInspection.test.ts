@@ -251,5 +251,23 @@ describe('DASH browser inspection', () => {
 
     expect(parseDashManifest(direct, 'https://cdn.test/path/manifest.mpd')?.playbackUrls)
       .toEqual(['https://cdn.test/path/files/movie-v.mp4'])
+    expect(parseDashManifest(direct, 'https://cdn.test/path/manifest.mpd')?.drmProtected).toBeUndefined()
+  })
+
+  it('detects Widevine, PlayReady, FairPlay, and cenc/mp4protection ContentProtection schemes as drmProtected', () => {
+    const widevineMpd = `<MPD type="static" mediaPresentationDuration="PT60S"><Period>
+      <AdaptationSet mimeType="video/mp4">
+        <ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="cenc" cenc:default_KID="00112233-4455-6677-8899-aabbccddeeff"/>
+        <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"><cenc:pssh>AAAA</cenc:pssh></ContentProtection>
+        <Representation id="1080" width="1920" height="1080" bandwidth="5000000"/>
+      </AdaptationSet></Period></MPD>`
+    const playreadyMpd = `<MPD type="static" mediaPresentationDuration="PT60S"><Period>
+      <AdaptationSet mimeType="video/mp4">
+        <ContentProtection schemeIdUri="urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"/>
+        <Representation id="720" width="1280" height="720" bandwidth="2500000"/>
+      </AdaptationSet></Period></MPD>`
+
+    expect(parseDashManifest(widevineMpd, 'https://cdn.test/wv.mpd')?.drmProtected).toBe(true)
+    expect(parseDashManifest(playreadyMpd, 'https://cdn.test/pr.mpd')?.drmProtected).toBe(true)
   })
 })
