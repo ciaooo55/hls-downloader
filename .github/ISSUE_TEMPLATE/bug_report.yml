@@ -1,0 +1,93 @@
+name: Bug 反馈 / Bug Report
+description: 报告桌面工作台、Rust Core 下载引擎或浏览器扩展中的缺陷、崩溃或站点兼容问题
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！请尽量填写以下信息以便快速定位复现。
+        - **安全漏洞请勿公开提交**：若问题涉及权限绕过、Native Messaging / 本地 IPC 安全、更新器校验或凭据泄露，请通过仓库 **Security → Report a vulnerability** 私下报告（参见 `SECURITY.md`）。
+        - **注意隐私脱敏**：**切勿**在 Issue 中粘贴原始 `Cookie`、`Authorization`、API Key、代理密码或带有私有鉴权签名的完整链接。
+
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本与安装形态 / App Version & Package Type
+      description: 请注明版本号与安装包类型（EXE / MSI / Portable），或源码构建的 Commit SHA。
+      placeholder: "例如：10.0.0 (MSI) 或 main @ d6d72a90"
+    validations:
+      required: true
+
+  - type: input
+    id: windows_build
+    attributes:
+      label: Windows 系统版本 / Windows Edition & Build
+      description: 可按 Win+R 输入 winver 查看系统版本与内部版本号（仅支持 Windows 10/11 x64）。
+      placeholder: "例如：Windows 11 23H2 (OS Build 22631.4460) x64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 问题所属范围 / Affected Component
+      options:
+        - Desktop UI (Slint 主工作台 / 检视抽屉 / 确认与进度弹窗 / 设置)
+        - Rust Core (HTTP / HLS / DASH / FTP / SFTP / BT 下载引擎与混流)
+        - Browser Extension - Chromium (Chrome / Edge 扩展接管与嗅探)
+        - Browser Extension - Firefox (Firefox 扩展接管与嗅探)
+        - Media & Cast (内置 libmpv 播放 / 在线字幕 / DLNA / Chromecast / TVBox)
+        - Installer / Updater / CLI (安装升级、Portable 或命令行工具)
+    validations:
+      required: true
+
+  - type: input
+    id: browser_info
+    attributes:
+      label: 浏览器与扩展版本 / Browser & Extension Version（如适用）
+      description: 若问题涉及网页视频嗅探、Cookie 授权或下载接管，请填写浏览器及扩展版本号。
+      placeholder: "例如：Microsoft Edge 131.0.x + Chromium Extension 10.0.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: repro_steps
+    attributes:
+      label: 复现步骤 / Steps to Reproduce
+      description: 请按顺序列出触发问题的最小操作步骤（如涉及公开网页兼容性，可附上不含私人鉴权参数的示例页面）。
+      placeholder: |
+        1. 打开 ...
+        2. 点击 ...
+        3. 观察到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_vs_actual
+    attributes:
+      label: 预期行为与实际行为 / Expected vs. Actual Behavior
+      description: 说明你期望发生什么，以及实际出现了什么结果或报错提示。
+      placeholder: |
+        预期行为：
+        实际行为：
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs_and_screenshots
+    attributes:
+      label: 诊断日志与截图补充 / Logs & Screenshots（请先脱敏）
+      description: |
+        可附上任务检视抽屉中的传输诊断信息、错误提示文本或界面截图。
+        ⚠️ 再次确认已移除所有原始 Cookie、Bearer Token、API Key、账号密码与私有签名查询参数！
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认 / Pre-submission Check
+      options:
+        - label: 我已确认报告内容与截图中不包含原始 Cookie、Token、密钥或个人隐私凭据。
+          required: true
