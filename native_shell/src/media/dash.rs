@@ -296,7 +296,11 @@ fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
                 return true;
             }
         }
-        for child in node.descendants().skip(1).filter(|child| child.is_element()) {
+        for child in node
+            .descendants()
+            .skip(1)
+            .filter(|child| child.is_element())
+        {
             let tag = child.tag_name().name();
             if tag.eq_ignore_ascii_case("pssh") || tag.eq_ignore_ascii_case("pro") {
                 return true;

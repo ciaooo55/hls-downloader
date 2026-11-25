@@ -334,7 +334,10 @@ impl NativeHostSession {
         )?)))
     }
 
-    fn open_for_policy(policy: CoreConnectPolicy, explicit_autostart: bool) -> Result<Self, String> {
+    fn open_for_policy(
+        policy: CoreConnectPolicy,
+        explicit_autostart: bool,
+    ) -> Result<Self, String> {
         match policy {
             CoreConnectPolicy::ExistingOnly => Self::open_existing(),
             CoreConnectPolicy::AllowAutostart => Self::open_or_start(explicit_autostart),
@@ -857,7 +860,10 @@ impl NativeHostSession {
             .or_else(|| message.get("browser_quick_download_enabled"))
             .and_then(Value::as_bool)
         {
-            updates.insert("browser_quick_download_enabled".into(), json!(quick_download));
+            updates.insert(
+                "browser_quick_download_enabled".into(),
+                json!(quick_download),
+            );
         }
         let requested_speed_enabled = message
             .get("speed_limit_enabled")
@@ -883,10 +889,7 @@ impl NativeHostSession {
             }
             (None, Some(limit_kib)) => {
                 updates.insert("download_speed_limit_kib".into(), json!(limit_kib));
-                updates.insert(
-                    "download_speed_limit_enabled".into(),
-                    json!(limit_kib > 0),
-                );
+                updates.insert("download_speed_limit_enabled".into(), json!(limit_kib > 0));
             }
             (None, None) => {}
         }
@@ -1122,7 +1125,9 @@ fn connect_or_start_core_with<C>(
             }
             // 非显式冷启动操作在进入启动锁临界区后必须重查托盘退出标记，防止并发托盘退出被竞态拉活。
             if !explicit_autostart && is_user_shutdown() {
-                return Err(format!("v7 Core unavailable (user_shutdown): {first_error}"));
+                return Err(format!(
+                    "v7 Core unavailable (user_shutdown): {first_error}"
+                ));
             }
             start_core(&first_error)?;
 
@@ -1263,8 +1268,7 @@ fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectP
     // (`user-shutdown.marker` absent). All other passive/polling/background ops
     // connect only to an already-running Core.
     if is_explicit_autostart_op(op)
-        || (!user_shutdown_active
-            && matches!(op, "ping" | "offer_local_file" | "recover_offer"))
+        || (!user_shutdown_active && matches!(op, "ping" | "offer_local_file" | "recover_offer"))
     {
         CoreConnectPolicy::AllowAutostart
     } else {
@@ -2790,7 +2794,7 @@ mod tests {
     #[test]
     fn write_response_replaces_oversized_payload_with_correlatable_fallback_error() {
         assert_eq!(MAX_OUTBOUND_MESSAGE_BYTES, 1_000_000);
-        assert!(MAX_OUTBOUND_MESSAGE_BYTES <= 1_048_576);
+        const { assert!(MAX_OUTBOUND_MESSAGE_BYTES <= 1_048_576) };
         let mut output = Vec::new();
         let oversized = json!({
             "ok": true,
@@ -3339,10 +3343,7 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(offered["ok"], true);
-        assert_eq!(
-            offered["handoff"]["audio_url"],
-            audio_url.trim()
-        );
+        assert_eq!(offered["handoff"]["audio_url"], audio_url.trim());
         assert_eq!(
             offered["handoff"]["resource_key"],
             "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/11/22/333-1-30080.m4s"
@@ -3406,7 +3407,8 @@ mod tests {
     }
 
     #[test]
-    fn offer_local_file_and_recover_offer_autostart_only_when_not_user_shutdown_and_recheck_under_lock() {
+    fn offer_local_file_and_recover_offer_autostart_only_when_not_user_shutdown_and_recheck_under_lock(
+    ) {
         let source = std::env::temp_dir().join(format!(
             "hls-local-autostart-{}-{}.bin",
             std::process::id(),

@@ -170,8 +170,7 @@ pub fn canonical_resource_key(url: &str) -> String {
         && without_fragment[..7].eq_ignore_ascii_case("http://")
     {
         ("http", 80u16, &without_fragment[7..])
-    } else if without_fragment.len() >= 8
-        && without_fragment[..8].eq_ignore_ascii_case("https://")
+    } else if without_fragment.len() >= 8 && without_fragment[..8].eq_ignore_ascii_case("https://")
     {
         ("https", 443u16, &without_fragment[8..])
     } else {
@@ -370,7 +369,9 @@ mod tests {
             "http://example.com/files/ubuntu.iso"
         );
         assert_eq!(
-            canonical_resource_key("https://[::1]:8443/stream/master.m3u8?hdnts=exp=1~hmac=abc#live"),
+            canonical_resource_key(
+                "https://[::1]:8443/stream/master.m3u8?hdnts=exp=1~hmac=abc#live"
+            ),
             "https://[::1]:8443/stream/master.m3u8"
         );
         assert_eq!(

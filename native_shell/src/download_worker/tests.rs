@@ -8635,10 +8635,16 @@ fn dual_track_audio_url_downloads_both_streams_and_muxes_to_mp4() {
         )
         .unwrap();
     coordinator
-        .set_setting("default_referer", serde_json::json!("https://www.bilibili.com/video/BV1test"))
+        .set_setting(
+            "default_referer",
+            serde_json::json!("https://www.bilibili.com/video/BV1test"),
+        )
         .unwrap();
     coordinator
-        .set_setting("default_user_agent", serde_json::json!("DualTrackTestUA/1.0"))
+        .set_setting(
+            "default_user_agent",
+            serde_json::json!("DualTrackTestUA/1.0"),
+        )
         .unwrap();
 
     // Unsafe audio_url scheme must be rejected before starting a task.
@@ -8697,7 +8703,11 @@ fn dual_track_audio_url_downloads_both_streams_and_muxes_to_mp4() {
     assert_eq!(completed.filename, "30280.mp4");
 
     let final_mp4 = out_dir.join("30280.mp4");
-    assert!(final_mp4.is_file(), "expected muxed output at {}", final_mp4.display());
+    assert!(
+        final_mp4.is_file(),
+        "expected muxed output at {}",
+        final_mp4.display()
+    );
 
     // Verify task-scoped video.part.m4s and audio.part.m4s were cleaned up.
     let task_work_dir = out_dir.join(".hls-tasks").join(&task_id);
@@ -8917,13 +8927,15 @@ fn refresh_task_url_preserves_halfway_checkpoint_without_redownloading_completed
     let completed = wait_for_task_status(&coordinator, "completed");
     assert_eq!(completed.task_id, task_id);
     assert_eq!(
-        coordinator.lock().unwrap().task_spec(&task_id).unwrap().resource_key,
+        coordinator
+            .lock()
+            .unwrap()
+            .task_spec(&task_id)
+            .unwrap()
+            .resource_key,
         saved_key_before
     );
-    assert_eq!(
-        fs::read(out_dir.join("archive.bin")).unwrap(),
-        *payload
-    );
+    assert_eq!(fs::read(out_dir.join("archive.bin")).unwrap(), *payload);
 
     let ranges = new_token_ranges.lock().unwrap().clone();
     // Under `new_sig`, only the 1-byte probe (`0..=0`) and the uncovered second half (`131072..=262143`)

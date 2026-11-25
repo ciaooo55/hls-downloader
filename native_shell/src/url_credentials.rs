@@ -836,7 +836,10 @@ mod tests {
         let after: i64 = observer
             .query_row("PRAGMA data_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(before, after, "cold boot with migration flag set must not write");
+        assert_eq!(
+            before, after,
+            "cold boot with migration flag set must not write"
+        );
         assert_eq!(reopened.load_task_specs().unwrap().len(), 1);
         drop(reopened);
         drop(observer);

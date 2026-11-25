@@ -3496,14 +3496,9 @@ fn is_bilibili_cdn_host(url: &str) -> bool {
     }
     .trim_end_matches('.')
     .to_ascii_lowercase();
-    [
-        "bilivideo.com",
-        "bilivideo.cn",
-        "hdslb.com",
-        "bilibili.com",
-    ]
-    .iter()
-    .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+    ["bilivideo.com", "bilivideo.cn", "hdslb.com", "bilibili.com"]
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
 fn build_audio_track_headers(
@@ -3722,7 +3717,8 @@ fn run_dual_track_http_file(
                         ap.as_ref().map_or(0, |p| p.total)
                     };
                     let downloaded = v_done.saturating_add(a_done);
-                    let total = (v_total > 0 && a_total > 0).then(|| v_total.saturating_add(a_total));
+                    let total =
+                        (v_total > 0 && a_total > 0).then(|| v_total.saturating_add(a_total));
                     post_progress_speed(
                         &core,
                         task_id,
@@ -3796,11 +3792,7 @@ fn run_dual_track_http_file(
     let combined_bytes = fs::metadata(&video_tmp)
         .map(|meta| meta.len())
         .unwrap_or(0)
-        .saturating_add(
-            fs::metadata(&audio_tmp)
-                .map(|meta| meta.len())
-                .unwrap_or(0),
-        );
+        .saturating_add(fs::metadata(&audio_tmp).map(|meta| meta.len()).unwrap_or(0));
     mark_progress(
         &core,
         task_id,

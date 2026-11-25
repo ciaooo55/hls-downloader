@@ -459,6 +459,8 @@ export component WorkbenchWindow inherits Window {
                         // 品牌头 + 引擎在线胶囊
                         Rectangle {
                             height: 60px;
+                            accessible-role: text;
+                            accessible-label: root.connection;
                             HorizontalLayout {
                                 padding-left: root.compact-sidebar ? 0px : 14px;
                                 padding-right: root.compact-sidebar ? 0px : 12px;
@@ -479,7 +481,11 @@ export component WorkbenchWindow inherits Window {
                                 }
                                 if !root.compact-sidebar: VerticalLayout {
                                     alignment: center; spacing: 3px; horizontal-stretch: 1; min-width: 0px;
-                                    Text { text: "HLS Downloader"; color: Tokens.ink; font-size: 13.5px; font-weight: 700; overflow: elide; }
+                                    HorizontalLayout {
+                                        spacing: 6px; alignment: start;
+                                        Text { text: "HLS Downloader"; color: Tokens.ink; font-size: 13.5px; font-weight: 700; overflow: elide; }
+                                        Text { text: "v" + root.product-version; color: Tokens.faint; font-size: 10px; vertical-alignment: center; overflow: elide; }
+                                    }
                                     HorizontalLayout {
                                         spacing: 6px; alignment: start;
                                         Rectangle {
@@ -497,15 +503,15 @@ export component WorkbenchWindow inherits Window {
                                                     background: root.engine-online ? Tokens.done : Tokens.warn;
                                                 }
                                                 Text {
-                                                    text: root.engine-online ? "引擎在线" : "正在连接";
+                                                    text: root.connection;
                                                     color: root.engine-online ? Tokens.done : Tokens.warn;
                                                     font-size: 10px;
                                                     font-weight: 600;
                                                     vertical-alignment: center;
+                                                    overflow: elide;
                                                 }
                                             }
                                         }
-                                        Text { text: "v" + root.product-version; color: Tokens.faint; font-size: 10px; vertical-alignment: center; overflow: elide; }
                                     }
                                 }
                             }
@@ -675,7 +681,7 @@ export component WorkbenchWindow inherits Window {
                         HorizontalLayout {
                             padding-left: root.content-inset;
                             padding-right: root.content-inset;
-                            spacing: 8px;
+                            spacing: root.viewport-width < 760px ? 4px : 8px;
 
                             // 视图标题 + 计数胶囊
                             HorizontalLayout {
@@ -687,11 +693,11 @@ export component WorkbenchWindow inherits Window {
                                     font-weight: 700;
                                     font-size: root.viewport-width < 920px ? 15px : 17px;
                                     vertical-alignment: center;
-                                    max-width: root.viewport-width < 920px ? 96px : 156px;
+                                    max-width: root.viewport-width < 760px ? 68px : root.viewport-width < 920px ? 96px : 156px;
                                     overflow: elide;
                                     Tooltip { text: @markdown("\{root.heading}"); }
                                 }
-                                Rectangle {
+                                if root.viewport-width >= 720px: Rectangle {
                                     width: max(24px, total.preferred-width + 12px);
                                     height: 21px;
                                     y: (parent.height - self.height) / 2;
@@ -710,14 +716,14 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
 
-                            Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.hairline; }
+                            if root.viewport-width >= 720px: Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.hairline; }
 
                             // 核心动作与队列控制条（主实心按钮 -> 柔和次主按钮 -> 轻量操作）
                             HotScrollView {
                                 vertical-scrollbar-policy: always-off;
                                 horizontal-scrollbar-policy: always-off;
                                 horizontal-stretch: 1;
-                                min-width: 80px;
+                                min-width: 40px;
                                 HorizontalLayout {
                                     height: 60px;
                                     spacing: 6px;
@@ -748,7 +754,7 @@ export component WorkbenchWindow inherits Window {
                                         border-color: Tokens.accent-border;
                                         sel-layout := HorizontalLayout {
                                             padding-left: 10px; padding-right: 4px; spacing: 2px;
-                                            Text { text: "已选 " + root.selected-count; color: Tokens.accent; font-size: 11.5px; font-weight: 600; vertical-alignment: center; }
+                                            Text { text: "已选 " + root.selected-count + " 项"; color: Tokens.accent; font-size: 11.5px; font-weight: 600; vertical-alignment: center; }
                                             WorkbenchButton { label: "移动到队列"; icon: "queue"; icon-only: true; subtle: true; width: 26px; height: 26px; y: (parent.height - self.height) / 2; clicked => { root.action("移动到队列"); } }
                                             WorkbenchButton { label: "删除所选任务"; icon: "delete"; danger: true; icon-only: true; subtle: true; width: 26px; height: 26px; y: (parent.height - self.height) / 2; enabled: root.can-delete; clicked => { root.action("delete"); } }
                                             WorkbenchButton { label: "取消选择"; icon: "close"; icon-only: true; subtle: true; width: 26px; height: 26px; y: (parent.height - self.height) / 2; clicked => { root.key-command("clear_selection", false, false); } }
@@ -759,7 +765,7 @@ export component WorkbenchWindow inherits Window {
 
                             // 胶囊搜索框
                             Rectangle {
-                                width: root.viewport-width < 740px ? 112px : root.viewport-width < 1040px ? 164px : 228px;
+                                width: root.viewport-width < 760px ? 88px : root.viewport-width < 1040px ? 164px : 228px;
                                 height: Tokens.control-height;
                                 y: (parent.height - self.height) / 2;
                                 background: search.has-focus ? Tokens.surface : Tokens.surface-2;
@@ -780,7 +786,7 @@ export component WorkbenchWindow inherits Window {
                                         horizontal-stretch: 1;
                                         if root.query == "": Text {
                                             x: 0px; y: 0px; width: parent.width; height: parent.height;
-                                            text: root.viewport-width < 1040px ? "搜索 (Ctrl+F)" : "搜索任务或链接  Ctrl+F";
+                                            text: root.viewport-width < 760px ? "搜索" : root.viewport-width < 1040px ? "搜索 (Ctrl+F)" : "搜索任务或链接  Ctrl+F";
                                             color: Tokens.faint; font-size: 12px; vertical-alignment: center; horizontal-alignment: left; overflow: elide;
                                         }
                                         search := TextInput {
@@ -799,17 +805,17 @@ export component WorkbenchWindow inherits Window {
                                 }
                             }
 
-                            // 轻量次级图标按钮群（带悬停提示）
-                            if root.viewport-width >= 820px: WorkbenchButton { label: "导入"; hint: "导入种子或链接列表"; icon: "import"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("import"); } }
-                            if root.viewport-width >= 860px: WorkbenchButton { label: "导出"; hint: "导出任务列表"; icon: "export"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("export"); } }
-                            WorkbenchButton { label: "刷新"; hint: "刷新任务快照"; icon: "refresh"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("refresh"); } }
+                            // 轻量次级图标按钮群（带悬停提示；620x480 窄窗下亦保持导入/导出/工具/设置完整可见）
+                            WorkbenchButton { label: "导入"; hint: "导入种子或链接列表"; icon: "import"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("import"); } }
+                            WorkbenchButton { label: "导出"; hint: "导出任务列表"; icon: "export"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("export"); } }
+                            if root.viewport-width >= 760px: WorkbenchButton { label: "刷新"; hint: "刷新任务快照"; icon: "refresh"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("refresh"); } }
                             tools-button := WorkbenchButton {
                                 label: "工具"; hint: "更多批量、抓取、投屏与系统工具"; icon: "more"; open: root.tools-open; subtle: true;
                                 icon-only: root.viewport-width < 1280px;
                                 y: (parent.height - self.height) / 2;
                                 clicked => { root.context-open = false; root.tools-x = self.absolute-position.x; root.tools-y = self.absolute-position.y + self.height + 4px; root.tools-open = !root.tools-open; }
                             }
-                            WorkbenchButton {
+                            if root.viewport-width >= 780px: WorkbenchButton {
                                 label: root.inspector-open ? "收起检视" : "任务检视";
                                 hint: "切换右侧实时任务检视抽屉 (Alt+I)";
                                 icon: root.inspector-open ? "chevron-right" : "chevron-left";
@@ -823,9 +829,9 @@ export component WorkbenchWindow inherits Window {
                                     root.viewport-resized(root.viewport-width / 1px);
                                 }
                             }
-                            Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.hairline; }
+                            if root.viewport-width >= 760px: Rectangle { width: 1px; height: 20px; y: (parent.height - self.height) / 2; background: Tokens.hairline; }
                             WorkbenchButton { label: "设置"; hint: "设置 (Ctrl+,)"; icon: "settings"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("settings"); } }
-                            WorkbenchButton { label: "切换主题 / Cycle System, Light, Dark"; icon: Tokens.dark ? "sun" : "theme"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
+                            if root.viewport-width >= 720px: WorkbenchButton { label: "切换主题 / Cycle System, Light, Dark"; icon: Tokens.dark ? "sun" : "theme"; subtle: true; icon-only: true; y: (parent.height - self.height) / 2; clicked => { root.action("theme"); } }
                         }
                         Rectangle { y: parent.height - 1px; height: 1px; background: Tokens.line; }
                     }

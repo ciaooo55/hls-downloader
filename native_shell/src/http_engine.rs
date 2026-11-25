@@ -10975,7 +10975,10 @@ mod tests {
         let s3_b = canonical_url_key(
             "https://bucket.s3.amazonaws.com/archive.iso?versionId=7&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2&X-Amz-Date=20260102T000000Z&X-Amz-Expires=3600&X-Amz-Signature=cafebabe",
         );
-        assert_eq!(s3_a, "https://bucket.s3.amazonaws.com/archive.iso?versionId=7");
+        assert_eq!(
+            s3_a,
+            "https://bucket.s3.amazonaws.com/archive.iso?versionId=7"
+        );
         assert_eq!(s3_a, s3_b);
 
         let different = canonical_url_key(
@@ -11077,7 +11080,9 @@ mod tests {
                     if let Some(spec) = range_hdr.and_then(|r| {
                         r.strip_prefix("bytes=")
                             .and_then(|s| s.split_once('-'))
-                            .and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+                            .and_then(|(a, b)| {
+                                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                            })
                     }) {
                         let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
                         let _ = peak.fetch_max(now_active, Ordering::SeqCst);

@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn singleton_job_object_initializes_and_kills_assigned_child_on_close() {
-        assert!(imp::singleton().is_some(), "singleton Win32 job object must initialize");
+        assert!(
+            imp::singleton().is_some(),
+            "singleton Win32 job object must initialize"
+        );
 
         let job = imp::JobHandle::create_kill_on_close().expect("create test job object");
         let mut child = Command::new("ping.exe")
@@ -159,10 +162,16 @@ mod tests {
             .creation_flags(0x0800_0000)
             .spawn()
             .expect("spawn ping child");
-        assert!(job.assign(&child), "AssignProcessToJobObject should succeed");
+        assert!(
+            job.assign(&child),
+            "AssignProcessToJobObject should succeed"
+        );
         std::thread::sleep(Duration::from_millis(80));
         assert!(
-            child.try_wait().expect("poll child before job close").is_none(),
+            child
+                .try_wait()
+                .expect("poll child before job close")
+                .is_none(),
             "ping -n 30 child must still be running before job handle is closed"
         );
 

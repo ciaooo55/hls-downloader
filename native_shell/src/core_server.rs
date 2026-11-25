@@ -2003,7 +2003,10 @@ mod tests {
         let started = std::time::Instant::now();
         server.shutdown();
         let joined = worker.join().expect("named pipe listener should not panic");
-        assert!(joined.is_ok(), "named pipe listener returned error: {joined:?}");
+        assert!(
+            joined.is_ok(),
+            "named pipe listener returned error: {joined:?}"
+        );
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "NamedPipeStopHandle should wake ConnectNamedPipe promptly, took {:?}",
