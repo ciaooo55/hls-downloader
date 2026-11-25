@@ -781,9 +781,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     complete.hide()?;
     apply_runtime_settings(&confirm, &progress, &complete, initial_runtime);
     let open_folder_on_complete = Rc::new(std::cell::Cell::new(false));
-    if let Ok(settings) = presenter_settings.lock() {
+    let initial_hud_baseline = if let Ok(settings) = presenter_settings.lock() {
         sync_progress_settings(&progress, &settings, open_folder_on_complete.get());
-    }
+        HudSettingsBaseline::from_settings(&settings, open_folder_on_complete.get())
+    } else {
+        HudSettingsBaseline::default()
+    };
+    let hud_settings_gen = Rc::new(std::cell::Cell::new(0u64));
+    let hud_settings_settled_gen = Rc::new(std::cell::Cell::new(0u64));
+    let hud_settings_baseline = Rc::new(RefCell::new(initial_hud_baseline));
+    let (hud_settings_results_tx, hud_settings_results_rx) = mpsc::channel::<HudSettingsResult>();
+    let hud_settings_tx = {
+        let confirm = confirm.as_weak();
+        spawn_hud_settings_worker(execute_hud_settings_op, move |completed| {
+            hud_settings_results_tx.send(completed).is_ok()
+                && confirm
+                    .upgrade_in_event_loop(|ui| ui.invoke_core_events_ready())
+                    .is_ok()
+        })
+    };
+    let hud_action_gen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (complete_results_tx, complete_results_rx) = mpsc::channel::<CompleteCommandResult>();
     let theme_timer = Timer::default();
     theme_timer.start(TimerMode::Repeated, Duration::from_secs(1), {
         let settings = Rc::clone(&runtime_settings);
@@ -981,6 +999,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let ui_sequence = Rc::clone(&ui_sequence);
         let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
+        let hud_action_gen = Arc::clone(&hud_action_gen);
         let runtime_settings = Rc::clone(&runtime_settings);
         let core_online = Arc::clone(&core_online);
         let browser_connected = Arc::clone(&browser_connected);
@@ -1022,6 +1041,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     reset_progress_action_for_new_task(
                         &progress,
                         &rendered_hud_task,
+                        &hud_action_gen,
                         &primary.task_id,
                     );
                     render_progress_hud(
@@ -1035,9 +1055,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 None => {
-                    if let Ok(mut rendered) = rendered_hud_task.lock() {
-                        *rendered = None;
-                    }
+                    clear_progress_hud_task_state(&rendered_hud_task, &hud_action_gen);
                     if let Some(item) = progress.upgrade() {
                         item.set_action_busy(false);
                         item.set_action_error(false);
@@ -1083,9 +1101,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     progress.on_command({
         let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
+        let hud_action_gen = Arc::clone(&hud_action_gen);
         let presenter_settings = Arc::clone(&presenter_settings);
         let runtime_settings = Rc::clone(&runtime_settings);
         let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
+        let hud_settings_gen = Rc::clone(&hud_settings_gen);
+        let hud_settings_settled_gen = Rc::clone(&hud_settings_settled_gen);
+        let hud_settings_baseline = Rc::clone(&hud_settings_baseline);
+        let hud_settings_tx = hud_settings_tx.clone();
         let settings_reload = settings_reload.clone();
         let workbench = Rc::clone(&workbench);
         let progress_user_moved = Arc::clone(&progress_user_moved);
@@ -1101,9 +1124,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .ok()
                         .and_then(|mut hud| hud.dismiss_paused());
                     if remaining.is_none() {
-                        if let Ok(mut rendered) = rendered_hud_task.lock() {
-                            *rendered = None;
-                        }
+                        clear_progress_hud_task_state(&rendered_hud_task, &hud_action_gen);
                     }
                     if let Some(item) = window.upgrade() {
                         item.set_hidden_by_user(true);
@@ -1140,6 +1161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         reset_progress_action_for_new_task(
                             &window,
                             &rendered_hud_task,
+                            &hud_action_gen,
                             &snapshot.task_id,
                         );
                         render_progress_hud(
@@ -1204,29 +1226,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let current_kib = item.get_speed_limit_kib().max(0) as u64;
                     let (next_enabled, effective_kib, values) =
                         toggle_hud_speed_limit(current_enabled, current_kib);
-                    item.set_speed_limit_enabled(next_enabled);
-                    item.set_speed_limit_kib(effective_kib.min(i32::MAX as u64) as i32);
-                    if let Ok(mut settings) = presenter_settings.lock() {
-                        settings.speed_limit_enabled = next_enabled;
-                        settings.speed_limit_kib = effective_kib;
-                    }
                     let label = format_hud_speed_limit_feedback(next_enabled, effective_kib);
-                    let result_window = window.clone();
-                    let reload = settings_reload.clone();
-                    thread::spawn(move || {
-                        let result = store_settings_via_ipc(values);
-                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
-                            Ok(()) => {
-                                item.set_action_error(false);
-                                item.set_action_text(label.into());
-                            }
-                            Err(error) => {
-                                item.set_action_error(true);
-                                item.set_action_text(format!("限速保存失败：{error}").into());
-                                let _ = reload.send(());
-                            }
-                        });
-                    });
+                    stage_hud_settings_write(
+                        &item,
+                        &presenter_settings,
+                        &open_folder_on_complete,
+                        &hud_settings_gen,
+                        &hud_settings_settled_gen,
+                        &hud_settings_baseline,
+                        &hud_settings_tx,
+                        &settings_reload,
+                        HudSettingsWriteOp::SpeedLimit {
+                            enabled: next_enabled,
+                            kib: effective_kib,
+                            values,
+                        },
+                        label,
+                        "限速保存失败",
+                    );
                 }
                 value if value.starts_with("speed_limit:") => {
                     let Some(kib) = value
@@ -1235,33 +1252,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     else {
                         return;
                     };
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
                     let enabled = kib > 0;
                     let values = build_speed_limit_settings(enabled, kib);
-                    if let Some(item) = window.upgrade() {
-                        item.set_speed_limit_enabled(enabled);
-                        item.set_speed_limit_kib(kib.min(i32::MAX as u64) as i32);
-                    }
-                    if let Ok(mut settings) = presenter_settings.lock() {
-                        settings.speed_limit_enabled = enabled;
-                        settings.speed_limit_kib = kib;
-                    }
                     let label = format_hud_speed_limit_feedback(enabled, kib);
-                    let result_window = window.clone();
-                    let reload = settings_reload.clone();
-                    thread::spawn(move || {
-                        let result = store_settings_via_ipc(values);
-                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
-                            Ok(()) => {
-                                item.set_action_error(false);
-                                item.set_action_text(label.into());
-                            }
-                            Err(error) => {
-                                item.set_action_error(true);
-                                item.set_action_text(format!("限速保存失败：{error}").into());
-                                let _ = reload.send(());
-                            }
-                        });
-                    });
+                    stage_hud_settings_write(
+                        &item,
+                        &presenter_settings,
+                        &open_folder_on_complete,
+                        &hud_settings_gen,
+                        &hud_settings_settled_gen,
+                        &hud_settings_baseline,
+                        &hud_settings_tx,
+                        &settings_reload,
+                        HudSettingsWriteOp::SpeedLimit {
+                            enabled,
+                            kib,
+                            values,
+                        },
+                        label,
+                        "限速保存失败",
+                    );
                 }
                 value if value.starts_with("completion_action:") => {
                     let Some(index) = value
@@ -1270,14 +1283,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     else {
                         return;
                     };
+                    let Some(item) = window.upgrade() else {
+                        return;
+                    };
                     let (wire_action, open_folder) = completion_action_from_index(index);
-                    open_folder_on_complete.set(open_folder);
-                    if let Some(item) = window.upgrade() {
-                        item.set_completion_action_index(index);
-                    }
-                    if let Ok(mut settings) = presenter_settings.lock() {
-                        settings.completion_power_action = wire_action.to_owned();
-                    }
                     let feedback = format!(
                         "完成后：{}",
                         COMPLETION_ACTION_LABELS
@@ -1285,31 +1294,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .copied()
                             .unwrap_or("无操作")
                     );
-                    let result_window = window.clone();
-                    let reload = settings_reload.clone();
-                    thread::spawn(move || {
-                        let result = CoreIpcClient::connect().and_then(|mut client| {
-                            client.store_setting(
-                                "completion_power_action",
-                                serde_json::Value::String(wire_action.to_owned()),
-                            )
-                        });
-                        let _ = result_window.upgrade_in_event_loop(move |item| match result {
-                            Ok(()) => {
-                                item.set_action_error(false);
-                                item.set_action_text(feedback.into());
-                            }
-                            Err(error) => {
-                                item.set_action_error(true);
-                                item.set_action_text(format!("完成动作保存失败：{error}").into());
-                                let _ = reload.send(());
-                            }
-                        });
-                    });
+                    stage_hud_settings_write(
+                        &item,
+                        &presenter_settings,
+                        &open_folder_on_complete,
+                        &hud_settings_gen,
+                        &hud_settings_settled_gen,
+                        &hud_settings_baseline,
+                        &hud_settings_tx,
+                        &settings_reload,
+                        HudSettingsWriteOp::CompletionAction {
+                            index,
+                            open_folder_on_complete: open_folder,
+                            wire_action: wire_action.to_owned(),
+                        },
+                        feedback,
+                        "完成动作保存失败",
+                    );
                 }
                 "pause" | "resume" | "cancel" => {
                     let task_id = active_hud.lock().ok().and_then(|hud| hud.primary_task_id());
                     if let Some(task_id) = task_id {
+                        let action_gen =
+                            hud_action_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
                         if action == "pause" {
                             if let Ok(mut hud) = active_hud.lock() {
                                 hud.mark_pause_requested(&task_id);
@@ -1331,6 +1338,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let result_task_id = task_id.clone();
                         let result_hud_task = Arc::clone(&rendered_hud_task);
                         let result_active_hud = Arc::clone(&active_hud);
+                        let result_action_gen = Arc::clone(&hud_action_gen);
                         let sent_action = action.clone();
                         thread::spawn(move || {
                             let result = CoreIpcClient::connect().and_then(|mut client| {
@@ -1339,25 +1347,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     .and_then(core_feedback::command_result)
                             });
                             let _ = result_window.upgrade_in_event_loop(move |item| {
-                                if result.is_err() && sent_action == "pause" {
-                                    if let Ok(mut hud) = result_active_hud.lock() {
-                                        hud.clear_pause_pin(&result_task_id);
-                                    }
-                                }
-                                if result_hud_task.lock().ok().and_then(|task| task.clone())
-                                    != Some(result_task_id)
-                                {
-                                    return;
-                                }
-                                item.set_action_busy(false);
-                                item.set_action_error(result.is_err());
-                                item.set_action_text(match result {
-                                    Ok(()) if sent_action == "pause" || sent_action == "resume" => {
-                                        "".into()
-                                    }
-                                    Ok(()) => "指令已发送".into(),
-                                    Err(error) => format!("操作失败：{error}").into(),
-                                });
+                                apply_hud_task_action_result(
+                                    &item,
+                                    &result_active_hud,
+                                    &result_hud_task,
+                                    &result_action_gen,
+                                    action_gen,
+                                    &result_task_id,
+                                    &sent_action,
+                                    result,
+                                );
                             });
                         });
                     } else if let Some(item) = window.upgrade() {
@@ -1495,6 +1494,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     trusted_ui: true,
                                     start_paused,
                                     queue_id,
+                                    spec_override: None,
                                 })?;
                                 for envelope in &events {
                                     update_known_tasks(&known_tasks, &envelope.event);
@@ -1783,51 +1783,43 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     if item.get_busy() {
                         return;
                     }
-                    let offer = pending.lock().ok().and_then(|items| items.front().cloned());
-                    let filename = item.get_filename().to_string();
-                    let download_dir = item.get_download_dir().trim().to_string();
-                    let queue_id = presenter_settings
-                        .lock()
-                        .map(|settings| settings.queue_id_at(item.get_queue_index()))
-                        .unwrap_or_else(|_| hls_client::DEFAULT_QUEUE_ID.to_string());
-                    item.invoke_open_workbench(true, "".into());
-                    if let Some(offer) = offer {
-                        let current = workbench.borrow().clone();
-                        if let Some(wb) = current.as_ref() {
-                            wb.open_editor_from_offer(&offer, &filename, &download_dir, &queue_id);
-                        }
-                        item.set_rejecting(true);
-                        item.set_busy_action("reject".into());
-                        item.set_busy(true);
-                        clear_confirm_issue(&item);
-                        let weak = item.as_weak();
-                        let active_handoff = Arc::clone(&active_handoff);
-                        thread::spawn(move || {
-                            let handoff_id = offer.handoff_id;
-                            let result = CoreIpcClient::connect().and_then(|mut client| {
-                                client
-                                    .command(CoreCommand::RejectHandoff {
-                                        handoff_id: handoff_id.clone(),
-                                        suppress_site_kind: false,
-                                    })
-                                    .and_then(core_feedback::command_result)
-                            });
-                            if let Err(error) = result {
-                                let _ = weak.upgrade_in_event_loop(move |item| {
-                                    if active_handoff.lock().ok().is_some_and(|id| {
-                                        id.as_deref() == Some(handoff_id.as_str())
-                                    }) {
-                                        item.set_busy(false);
-                                        item.set_busy_action("".into());
-                                        set_confirm_issue(
-                                            &item,
-                                            &format!("未能关闭确认窗口：{error}"),
-                                            [("重试关闭", "reject"), ("", "")],
-                                        );
-                                    }
+                    let Some(taken) = take_offer_for_workbench_editor(
+                        &item,
+                        &pending,
+                        &active_handoff,
+                        &presenter_settings,
+                    ) else {
+                        return;
+                    };
+                    match taken {
+                        Some((offer, filename, download_dir, queue_id)) => {
+                            show_next_offer(&window, &offer_state);
+                            item.invoke_open_workbench(true, "".into());
+                            let current = workbench.borrow().clone();
+                            if let Some(wb) = current.as_ref() {
+                                wb.open_editor_from_offer(
+                                    &offer,
+                                    &filename,
+                                    &download_dir,
+                                    &queue_id,
+                                );
+                            }
+                            if !offer.handoff_id.is_empty() {
+                                let handoff_id = offer.handoff_id;
+                                thread::spawn(move || {
+                                    let _ = CoreIpcClient::connect().and_then(|mut client| {
+                                        client.command(CoreCommand::PresentHandoff {
+                                            handoff_id,
+                                            ok: false,
+                                            presenter_id: presenter_id().into(),
+                                        })
+                                    });
                                 });
                             }
-                        });
+                        }
+                        None => {
+                            item.invoke_open_workbench(true, "".into());
+                        }
                     }
                     return;
                 }
@@ -1868,6 +1860,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     complete.on_command({
         let completed_task = Rc::clone(&completed_task);
         let complete_shown_at = Rc::clone(&complete_shown_at);
+        let workbench = Rc::clone(&workbench);
+        let runtime_settings = Rc::clone(&runtime_settings);
+        let complete_results_tx = complete_results_tx.clone();
+        let confirm = confirm.as_weak();
         let window = complete.as_weak();
         move |command| {
             let Some(item) = window.upgrade() else { return };
@@ -1876,12 +1872,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = item.hide();
                 return;
             }
+            if command == "power_expired" {
+                if let Some(wb) = workbench.borrow().as_ref() {
+                    wb.window.set_power_action_pending(false);
+                }
+                clear_complete_power_state(
+                    &item,
+                    &complete_shown_at,
+                    runtime_settings.borrow().show_complete,
+                );
+                return;
+            }
             if item.get_action_busy() {
                 return;
             }
             let cancel_power = command == "cancel_power";
             let confirm_power = command == "confirm_power";
-            let power_action = cancel_power || confirm_power;
             let task_id = completed_task.borrow().clone();
             let request = if cancel_power {
                 CoreCommand::CancelPowerAction
@@ -1901,41 +1907,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             item.set_action_busy(true);
             item.set_action_text("".into());
-            let result_window = window.clone();
+            let results_tx = complete_results_tx.clone();
+            let confirm_weak = confirm.clone();
             thread::spawn(move || {
                 let result = CoreIpcClient::connect()
                     .and_then(|mut client| client.command(request))
                     .and_then(core_feedback::command_result);
-                let _ = result_window.upgrade_in_event_loop(move |item| {
-                    // 下一项下载完成后，旧窗口的打开文件结果不能隐藏新通知；
-                    // 但取消/立即执行电源动作是全局指令，不绑定特定任务 ID。
-                    if !power_action
-                        && item.get_task_id().as_str() != task_id.as_deref().unwrap_or("")
-                    {
-                        return;
-                    }
-                    item.set_action_busy(false);
-                    match result {
-                        Ok(_) if cancel_power => {
-                            item.set_power_hint("".into());
-                            item.set_power_action_label("".into());
-                            item.set_power_seconds(0);
-                            if item.get_task_id().is_empty() {
-                                let _ = item.hide();
-                            }
-                        }
-                        Ok(_) if confirm_power => {
-                            item.set_power_hint("".into());
-                            item.set_power_action_label("".into());
-                            item.set_power_seconds(0);
-                            let _ = item.hide();
-                        }
-                        Ok(_) => {
-                            let _ = item.hide();
-                        }
-                        Err(error) => item.set_action_text(format!("操作失败：{error}").into()),
-                    }
-                });
+                if results_tx
+                    .send(CompleteCommandResult {
+                        cancel_power,
+                        confirm_power,
+                        task_id,
+                        result,
+                    })
+                    .is_ok()
+                {
+                    let _ = confirm_weak.upgrade_in_event_loop(|ui| ui.invoke_core_events_ready());
+                }
             });
         }
     });
@@ -1954,6 +1942,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let ui_sequence = Rc::clone(&ui_sequence);
         let active_hud = Arc::clone(&active_hud);
         let rendered_hud_task = Arc::clone(&rendered_hud_task);
+        let hud_action_gen = Arc::clone(&hud_action_gen);
         let completed_task = Rc::clone(&completed_task);
         let completed_notified = Rc::clone(&completed_notified);
         let complete_shown_at = Rc::clone(&complete_shown_at);
@@ -1962,42 +1951,90 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let runtime_settings = Rc::clone(&runtime_settings);
         let presenter_settings = Arc::clone(&presenter_settings);
         let open_folder_on_complete = Rc::clone(&open_folder_on_complete);
+        let hud_settings_gen = Rc::clone(&hud_settings_gen);
+        let hud_settings_settled_gen = Rc::clone(&hud_settings_settled_gen);
+        let hud_settings_baseline = Rc::clone(&hud_settings_baseline);
         let progress_user_moved = Arc::clone(&progress_user_moved);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
         let complete = complete.as_weak();
         move || {
+            while let Ok(hud_result) = hud_settings_results_rx.try_recv() {
+                if let Some(progress_win) = progress.upgrade() {
+                    apply_hud_settings_result(
+                        &progress_win,
+                        &presenter_settings,
+                        &open_folder_on_complete,
+                        &hud_settings_gen,
+                        &hud_settings_settled_gen,
+                        &hud_settings_baseline,
+                        &settings_reload,
+                        hud_result,
+                    );
+                }
+            }
+            while let Ok(complete_result) = complete_results_rx.try_recv() {
+                if let Some(complete_win) = complete.upgrade() {
+                    let wb = workbench.borrow().clone();
+                    apply_complete_command_result(
+                        &complete_win,
+                        wb.as_deref(),
+                        &complete_shown_at,
+                        runtime_settings.borrow().show_complete,
+                        complete_result,
+                    );
+                }
+            }
             while let Ok(response) = settings_responses.try_recv() {
-                let next = presenter_settings.lock().ok().and_then(|mut settings| {
-                    update_presenter_settings(
-                        &response,
-                        &mut settings,
-                        &mut runtime_settings.borrow_mut(),
-                    )
-                });
+                let hud_in_flight = hud_settings_settled_gen.get() < hud_settings_gen.get();
+                let next = if hud_in_flight {
+                    if matches!(response, CorePipeResponse::Settings { .. }) {
+                        let updated = PresenterRuntimeSettings::from_response(Some(&response));
+                        *runtime_settings.borrow_mut() = updated;
+                        Some(updated)
+                    } else {
+                        None
+                    }
+                } else {
+                    presenter_settings.lock().ok().and_then(|mut settings| {
+                        update_presenter_settings(
+                            &response,
+                            &mut settings,
+                            &mut runtime_settings.borrow_mut(),
+                        )
+                    })
+                };
                 if let Some(next) = next {
                     if let (Some(confirm), Some(progress), Some(complete)) =
                         (confirm.upgrade(), progress.upgrade(), complete.upgrade())
                     {
                         apply_runtime_settings(&confirm, &progress, &complete, next);
-                        if let Ok(settings) = presenter_settings.lock() {
-                            if !matches!(settings.completion_power_action.trim(), "" | "none") {
-                                open_folder_on_complete.set(false);
-                            }
-                            sync_progress_settings(
-                                &progress,
-                                &settings,
-                                open_folder_on_complete.get(),
-                            );
-                            if confirm.window().is_visible() {
-                                let current_dir = confirm.get_download_dir().to_string();
-                                sync_confirm_selectors(&confirm, &settings, &current_dir, None);
+                        if !hud_in_flight {
+                            if let Ok(settings) = presenter_settings.lock() {
+                                if !matches!(settings.completion_power_action.trim(), "" | "none") {
+                                    open_folder_on_complete.set(false);
+                                }
+                                *hud_settings_baseline.borrow_mut() =
+                                    HudSettingsBaseline::from_settings(
+                                        &settings,
+                                        open_folder_on_complete.get(),
+                                    );
+                                sync_progress_settings(
+                                    &progress,
+                                    &settings,
+                                    open_folder_on_complete.get(),
+                                );
+                                if confirm.window().is_visible() {
+                                    let current_dir = confirm.get_download_dir().to_string();
+                                    sync_confirm_selectors(&confirm, &settings, &current_dir, None);
+                                }
                             }
                         }
                         if !next.show_progress {
                             let _ = progress.hide();
                         }
-                        if !next.show_complete {
+                        if !next.show_complete && !has_active_power_countdown(&complete) {
+                            complete_shown_at.set(None);
                             let _ = complete.hide();
                         }
                     }
@@ -2016,18 +2053,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = slint::quit_event_loop();
                         return;
                     }
-                    if native_workbench.get()
-                        && workbench.borrow().is_none()
-                        && (matches!(
-                            &envelope.event,
-                            CoreEvent::UiShow { surface }
-                                if surface == "main" || surface == "new_download"
-                        ) || matches!(
-                            &envelope.event,
-                            CoreEvent::MediaPushRequested { .. }
-                                | CoreEvent::DuplicateOffered { .. }
-                        ))
-                    {
+                    if should_auto_open_workbench(
+                        native_workbench.get(),
+                        workbench.borrow().is_none(),
+                        &envelope.event,
+                    ) {
                         if let Some(confirm) = confirm.upgrade() {
                             confirm.invoke_open_workbench(true, "".into());
                         }
@@ -2040,6 +2070,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
                         CoreEvent::SettingsChanged { .. } => {
                             let _ = settings_reload.send(());
+                        }
+                        CoreEvent::Toast { level, message } => {
+                            if is_power_action_cleared_toast(&level, &message) {
+                                if let Some(item) = complete.upgrade() {
+                                    clear_complete_power_state(
+                                        &item,
+                                        &complete_shown_at,
+                                        runtime_settings.borrow().show_complete,
+                                    );
+                                }
+                            }
                         }
                         CoreEvent::ClipboardOffer { urls } => {
                             if let Some(urls) = clipboard_filter
@@ -2079,6 +2120,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 &complete,
                                 &active_hud,
                                 &rendered_hud_task,
+                                &hud_action_gen,
                                 &completed_task,
                                 &completed_notified,
                                 Some(&complete_shown_at),
@@ -2089,10 +2131,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             completed_notified.borrow_mut().remove(&task_id);
                             if completed_task.borrow().as_deref() == Some(task_id.as_str()) {
                                 *completed_task.borrow_mut() = None;
-                                complete_shown_at.set(None);
                                 if let Some(item) = complete.upgrade() {
                                     item.set_task_id("".into());
-                                    let _ = item.hide();
+                                    if !has_active_power_countdown(&item) {
+                                        complete_shown_at.set(None);
+                                        let _ = item.hide();
+                                    }
+                                } else {
+                                    complete_shown_at.set(None);
                                 }
                             }
                             let (primary, position, processing_elapsed) = active_hud
@@ -2118,6 +2164,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     reset_progress_action_for_new_task(
                                         &progress,
                                         &rendered_hud_task,
+                                        &hud_action_gen,
                                         &primary.task_id,
                                     );
                                     render_progress_hud(
@@ -2136,9 +2183,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     )
                                 }
                                 None => {
-                                    if let Ok(mut rendered) = rendered_hud_task.lock() {
-                                        *rendered = None;
-                                    }
+                                    clear_progress_hud_task_state(
+                                        &rendered_hud_task,
+                                        &hud_action_gen,
+                                    );
                                     if let Some(item) = progress.upgrade() {
                                         item.set_action_busy(false);
                                         item.set_action_error(false);
@@ -3115,6 +3163,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
                         trusted_ui: true,
                         start_paused: false,
                         queue_id: plan.queue_id.clone(),
+                        spec_override: None,
                     })?;
                     for envelope in &events {
                         update_known_tasks(&offer_state.known_tasks, &envelope.event);
@@ -3830,6 +3879,419 @@ fn store_settings_via_ipc(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HudSettingsWriteOp {
+    SpeedLimit {
+        enabled: bool,
+        kib: u64,
+        values: std::collections::BTreeMap<String, serde_json::Value>,
+    },
+    CompletionAction {
+        index: i32,
+        open_folder_on_complete: bool,
+        wire_action: String,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HudSettingsBaseline {
+    speed_limit_enabled: bool,
+    speed_limit_kib: u64,
+    completion_action_index: i32,
+    open_folder_on_complete: bool,
+    completion_power_action: String,
+}
+
+impl HudSettingsBaseline {
+    fn from_settings(settings: &PresenterSettings, open_folder_on_complete: bool) -> Self {
+        let effective_open_folder = open_folder_on_complete
+            && matches!(settings.completion_power_action.trim(), "" | "none");
+        Self {
+            speed_limit_enabled: settings.speed_limit_enabled && settings.speed_limit_kib > 0,
+            speed_limit_kib: settings.speed_limit_kib,
+            completion_action_index: completion_action_index_for(
+                &settings.completion_power_action,
+                effective_open_folder,
+            ),
+            open_folder_on_complete: effective_open_folder,
+            completion_power_action: settings.completion_power_action.clone(),
+        }
+    }
+
+    fn record_committed(&mut self, op: &HudSettingsWriteOp) {
+        match op {
+            HudSettingsWriteOp::SpeedLimit { enabled, kib, .. } => {
+                self.speed_limit_enabled = *enabled && *kib > 0;
+                self.speed_limit_kib = *kib;
+            }
+            HudSettingsWriteOp::CompletionAction {
+                index,
+                open_folder_on_complete,
+                wire_action,
+            } => {
+                self.completion_action_index = *index;
+                self.open_folder_on_complete = *open_folder_on_complete;
+                self.completion_power_action = wire_action.clone();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HudSettingsJob {
+    gen: u64,
+    op: HudSettingsWriteOp,
+    success_text: String,
+    error_prefix: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct HudSettingsResult {
+    gen: u64,
+    op: HudSettingsWriteOp,
+    success_text: String,
+    error_prefix: &'static str,
+    result: Result<(), String>,
+}
+
+fn execute_hud_settings_op(op: &HudSettingsWriteOp) -> Result<(), String> {
+    match op {
+        HudSettingsWriteOp::SpeedLimit { values, .. } => store_settings_via_ipc(values.clone()),
+        HudSettingsWriteOp::CompletionAction { wire_action, .. } => CoreIpcClient::connect()
+            .and_then(|mut client| {
+                client.store_setting(
+                    "completion_power_action",
+                    serde_json::Value::String(wire_action.clone()),
+                )
+            }),
+    }
+}
+
+fn spawn_hud_settings_worker(
+    mut execute: impl FnMut(&HudSettingsWriteOp) -> Result<(), String> + Send + 'static,
+    mut notify: impl FnMut(HudSettingsResult) -> bool + Send + 'static,
+) -> mpsc::Sender<HudSettingsJob> {
+    let (tx, rx) = mpsc::channel::<HudSettingsJob>();
+    thread::spawn(move || {
+        while let Ok(job) = rx.recv() {
+            let result = execute(&job.op);
+            let completed = HudSettingsResult {
+                gen: job.gen,
+                op: job.op,
+                success_text: job.success_text,
+                error_prefix: job.error_prefix,
+                result,
+            };
+            if !notify(completed) {
+                break;
+            }
+        }
+    });
+    tx
+}
+
+fn apply_hud_settings_rollback(
+    item: &ProgressWindow,
+    presenter_settings: &Mutex<PresenterSettings>,
+    open_folder_on_complete: &std::cell::Cell<bool>,
+    baseline: &HudSettingsBaseline,
+) {
+    item.set_speed_limit_enabled(baseline.speed_limit_enabled);
+    item.set_speed_limit_kib(baseline.speed_limit_kib.min(i32::MAX as u64) as i32);
+    item.set_completion_action_index(baseline.completion_action_index);
+    open_folder_on_complete.set(baseline.open_folder_on_complete);
+    if let Ok(mut settings) = presenter_settings.lock() {
+        settings.speed_limit_enabled = baseline.speed_limit_enabled;
+        settings.speed_limit_kib = baseline.speed_limit_kib;
+        settings.completion_power_action = baseline.completion_power_action.clone();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stage_hud_settings_write(
+    item: &ProgressWindow,
+    presenter_settings: &Mutex<PresenterSettings>,
+    open_folder_on_complete: &std::cell::Cell<bool>,
+    hud_settings_gen: &std::cell::Cell<u64>,
+    hud_settings_settled_gen: &std::cell::Cell<u64>,
+    hud_settings_baseline: &RefCell<HudSettingsBaseline>,
+    hud_settings_tx: &mpsc::Sender<HudSettingsJob>,
+    settings_reload: &mpsc::Sender<()>,
+    op: HudSettingsWriteOp,
+    success_text: String,
+    error_prefix: &'static str,
+) {
+    if hud_settings_settled_gen.get() == hud_settings_gen.get() {
+        if let Ok(settings) = presenter_settings.lock() {
+            *hud_settings_baseline.borrow_mut() =
+                HudSettingsBaseline::from_settings(&settings, open_folder_on_complete.get());
+        }
+    }
+    let next_gen = hud_settings_gen.get().wrapping_add(1);
+    hud_settings_gen.set(next_gen);
+    match &op {
+        HudSettingsWriteOp::SpeedLimit { enabled, kib, .. } => {
+            item.set_speed_limit_enabled(*enabled);
+            item.set_speed_limit_kib((*kib).min(i32::MAX as u64) as i32);
+            if let Ok(mut settings) = presenter_settings.lock() {
+                settings.speed_limit_enabled = *enabled;
+                settings.speed_limit_kib = *kib;
+            }
+        }
+        HudSettingsWriteOp::CompletionAction {
+            index,
+            open_folder_on_complete: open_folder,
+            wire_action,
+        } => {
+            open_folder_on_complete.set(*open_folder);
+            item.set_completion_action_index(*index);
+            if let Ok(mut settings) = presenter_settings.lock() {
+                settings.completion_power_action = wire_action.clone();
+            }
+        }
+    }
+    if hud_settings_tx
+        .send(HudSettingsJob {
+            gen: next_gen,
+            op,
+            success_text,
+            error_prefix,
+        })
+        .is_err()
+    {
+        hud_settings_settled_gen.set(next_gen);
+        apply_hud_settings_rollback(
+            item,
+            presenter_settings,
+            open_folder_on_complete,
+            &hud_settings_baseline.borrow(),
+        );
+        item.set_action_error(true);
+        item.set_action_text(format!("{error_prefix}：后台通道已关闭").into());
+        let _ = settings_reload.send(());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_hud_settings_result(
+    item: &ProgressWindow,
+    presenter_settings: &Mutex<PresenterSettings>,
+    open_folder_on_complete: &std::cell::Cell<bool>,
+    hud_settings_gen: &std::cell::Cell<u64>,
+    hud_settings_settled_gen: &std::cell::Cell<u64>,
+    hud_settings_baseline: &RefCell<HudSettingsBaseline>,
+    settings_reload: &mpsc::Sender<()>,
+    completed: HudSettingsResult,
+) {
+    if completed.gen > hud_settings_settled_gen.get() {
+        hud_settings_settled_gen.set(completed.gen);
+    }
+    if completed.result.is_ok() {
+        hud_settings_baseline
+            .borrow_mut()
+            .record_committed(&completed.op);
+    } else if completed.gen < hud_settings_gen.get() {
+        let _ = settings_reload.send(());
+    }
+    if completed.gen != hud_settings_gen.get() {
+        return;
+    }
+    match completed.result {
+        Ok(()) => {
+            item.set_action_error(false);
+            item.set_action_text(completed.success_text.into());
+        }
+        Err(error) => {
+            apply_hud_settings_rollback(
+                item,
+                presenter_settings,
+                open_folder_on_complete,
+                &hud_settings_baseline.borrow(),
+            );
+            item.set_action_error(true);
+            item.set_action_text(format!("{}：{error}", completed.error_prefix).into());
+            let _ = settings_reload.send(());
+        }
+    }
+}
+
+struct CompleteCommandResult {
+    cancel_power: bool,
+    confirm_power: bool,
+    task_id: Option<String>,
+    result: Result<(), String>,
+}
+
+fn is_power_action_cleared_toast(level: &str, message: &str) -> bool {
+    level == "power_action_cleared"
+        || matches!(
+            message,
+            "已取消完成后电源动作" | "已执行完成后电源动作" | "没有待执行的电源动作"
+        )
+}
+
+fn has_active_power_countdown(item: &CompleteWindow) -> bool {
+    item.get_power_seconds() > 0 || !item.get_power_hint().is_empty()
+}
+
+fn clear_complete_power_state(
+    item: &CompleteWindow,
+    complete_shown_at: &std::cell::Cell<Option<std::time::Instant>>,
+    show_complete: bool,
+) {
+    item.set_power_hint("".into());
+    item.set_power_action_label("".into());
+    item.set_power_seconds(0);
+    if item.get_task_id().is_empty() || !show_complete {
+        complete_shown_at.set(None);
+        let _ = item.hide();
+    } else {
+        complete_shown_at.set(Some(std::time::Instant::now()));
+    }
+}
+
+fn apply_complete_command_result(
+    item: &CompleteWindow,
+    workbench: Option<&workbench::Workbench>,
+    complete_shown_at: &std::cell::Cell<Option<std::time::Instant>>,
+    show_complete: bool,
+    completed: CompleteCommandResult,
+) {
+    // 下一项下载完成后，旧窗口的打开文件结果不能隐藏新通知；
+    // 但取消/立即执行电源动作是全局指令，不绑定特定任务 ID。
+    let power_action = completed.cancel_power || completed.confirm_power;
+    if !power_action && item.get_task_id().as_str() != completed.task_id.as_deref().unwrap_or("") {
+        return;
+    }
+    item.set_action_busy(false);
+    match completed.result {
+        Ok(()) if completed.cancel_power => {
+            if let Some(wb) = workbench {
+                wb.window.set_power_action_pending(false);
+            }
+            clear_complete_power_state(item, complete_shown_at, show_complete);
+        }
+        Ok(()) if completed.confirm_power => {
+            if let Some(wb) = workbench {
+                wb.window.set_power_action_pending(false);
+            }
+            item.set_power_hint("".into());
+            item.set_power_action_label("".into());
+            item.set_power_seconds(0);
+            complete_shown_at.set(None);
+            let _ = item.hide();
+        }
+        Ok(()) => {
+            complete_shown_at.set(None);
+            let _ = item.hide();
+        }
+        Err(error) => item.set_action_text(format!("操作失败：{error}").into()),
+    }
+}
+
+fn should_auto_open_workbench(
+    native_workbench: bool,
+    workbench_missing: bool,
+    event: &CoreEvent,
+) -> bool {
+    native_workbench
+        && workbench_missing
+        && (matches!(
+            event,
+            CoreEvent::UiShow { surface } if surface == "main" || surface == "new_download"
+        ) || matches!(
+            event,
+            CoreEvent::MediaPushRequested { .. }
+                | CoreEvent::DuplicateOffered { .. }
+                | CoreEvent::UpdateInstallResult { .. }
+        ))
+}
+
+#[allow(clippy::type_complexity)]
+fn take_offer_for_workbench_editor(
+    item: &ConfirmWindow,
+    pending: &Mutex<VecDeque<ResourceOffer>>,
+    active_handoff: &Mutex<Option<String>>,
+    presenter_settings: &Mutex<PresenterSettings>,
+) -> Option<Option<(ResourceOffer, String, String, String)>> {
+    let offer = pending.lock().ok().and_then(|items| items.front().cloned());
+    if item.get_is_local_payload()
+        || offer
+            .as_ref()
+            .is_some_and(|entry| entry.local_source_path.is_some())
+    {
+        return None;
+    }
+    let Some(offer) = offer else {
+        return Some(None);
+    };
+    let filename = item.get_filename().to_string();
+    let download_dir = item.get_download_dir().trim().to_string();
+    let queue_id = presenter_settings
+        .lock()
+        .map(|settings| settings.queue_id_at(item.get_queue_index()))
+        .unwrap_or_else(|_| hls_client::DEFAULT_QUEUE_ID.to_string());
+    if let Ok(mut items) = pending.lock() {
+        if offer.handoff_id.is_empty() {
+            let _ = items.pop_front();
+        } else {
+            items.retain(|entry| entry.handoff_id != offer.handoff_id);
+        }
+    }
+    if let Ok(mut active) = active_handoff.lock() {
+        if active.as_deref() == Some(offer.handoff_id.as_str()) {
+            *active = None;
+        }
+    }
+    Some(Some((offer, filename, download_dir, queue_id)))
+}
+
+fn clear_progress_hud_task_state(
+    rendered_hud_task: &Mutex<Option<String>>,
+    hud_action_gen: &std::sync::atomic::AtomicU64,
+) {
+    if let Ok(mut rendered) = rendered_hud_task.lock() {
+        if rendered.take().is_some() {
+            hud_action_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_hud_task_action_result(
+    item: &ProgressWindow,
+    active_hud: &Mutex<ActiveTaskHud>,
+    rendered_hud_task: &Mutex<Option<String>>,
+    hud_action_gen: &std::sync::atomic::AtomicU64,
+    action_gen: u64,
+    result_task_id: &str,
+    sent_action: &str,
+    result: Result<(), String>,
+) {
+    if result.is_err() && sent_action == "pause" {
+        if let Ok(mut hud) = active_hud.lock() {
+            hud.clear_pause_pin(result_task_id);
+        }
+    }
+    if rendered_hud_task
+        .lock()
+        .ok()
+        .and_then(|task| task.clone())
+        .as_deref()
+        != Some(result_task_id)
+        || hud_action_gen.load(std::sync::atomic::Ordering::Acquire) != action_gen
+    {
+        return;
+    }
+    item.set_action_busy(false);
+    item.set_action_error(result.is_err());
+    item.set_action_text(match result {
+        Ok(()) if sent_action == "pause" || sent_action == "resume" => "".into(),
+        Ok(()) => "指令已发送".into(),
+        Err(error) => format!("操作失败：{error}").into(),
+    });
+}
+
 fn completion_action_index_for(power_action: &str, open_folder_on_complete: bool) -> i32 {
     match power_action.trim() {
         "sleep" => 2,
@@ -4374,7 +4836,7 @@ pub(crate) fn should_hold_complete_toast(
 }
 
 fn present_complete_toast(item: &CompleteWindow) {
-    if item.get_power_seconds() <= 0 && native_window::is_foreground_fullscreen_or_busy() {
+    if !has_active_power_countdown(item) && native_window::is_foreground_fullscreen_or_busy() {
         trace("suppressing complete toast while foreground fullscreen/busy");
         return;
     }
@@ -4397,7 +4859,7 @@ fn present_complete_toast(item: &CompleteWindow) {
 fn apply_completed_snapshot_to_toast(item: &CompleteWindow, snapshot: &TaskSnapshot) {
     item.set_details(format!("{} · 已保存到本地", format_bytes(snapshot.downloaded_bytes)).into());
     item.set_filename(snapshot.filename.clone().into());
-    if item.get_power_seconds() <= 0 && item.get_power_hint().is_empty() {
+    if item.get_power_seconds() <= 0 {
         item.set_power_hint("".into());
         item.set_power_action_label("".into());
         item.set_power_seconds(0);
@@ -4414,6 +4876,7 @@ fn update_task_windows(
     complete: &slint::Weak<CompleteWindow>,
     active_hud: &Mutex<ActiveTaskHud>,
     rendered_hud_task: &Mutex<Option<String>>,
+    hud_action_gen: &std::sync::atomic::AtomicU64,
     completed_task: &RefCell<Option<String>>,
     completed_notified: &RefCell<HashSet<String>>,
     complete_shown_at: Option<&std::cell::Cell<Option<std::time::Instant>>>,
@@ -4436,7 +4899,12 @@ fn update_task_windows(
         .unwrap_or((None, (0, 0), None));
     match primary {
         Some(primary) => {
-            reset_progress_action_for_new_task(progress, rendered_hud_task, &primary.task_id);
+            reset_progress_action_for_new_task(
+                progress,
+                rendered_hud_task,
+                hud_action_gen,
+                &primary.task_id,
+            );
             render_progress_hud(
                 progress,
                 settings,
@@ -4448,9 +4916,7 @@ fn update_task_windows(
             )
         }
         None => {
-            if let Ok(mut rendered) = rendered_hud_task.lock() {
-                *rendered = None;
-            }
+            clear_progress_hud_task_state(rendered_hud_task, hud_action_gen);
             if let Some(item) = progress.upgrade() {
                 item.set_action_busy(false);
                 item.set_action_error(false);
@@ -4504,6 +4970,7 @@ fn update_task_windows(
 fn reset_progress_action_for_new_task(
     progress: &slint::Weak<ProgressWindow>,
     rendered_hud_task: &Mutex<Option<String>>,
+    hud_action_gen: &std::sync::atomic::AtomicU64,
     task_id: &str,
 ) {
     let Ok(mut rendered) = rendered_hud_task.lock() else {
@@ -4511,8 +4978,9 @@ fn reset_progress_action_for_new_task(
     };
     if rendered.as_deref() == Some(task_id) {
         return;
-    }
+    };
     *rendered = Some(task_id.to_string());
+    hud_action_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     if let Some(item) = progress.upgrade() {
         item.set_hidden_by_user(false);
         item.set_action_busy(false);
@@ -6417,5 +6885,437 @@ mod tests {
             )
         };
         assert_eq!(null_rc, 0);
+    }
+
+    #[test]
+    fn confirm_more_transfers_remote_handoff_without_rejecting_and_guards_local_payload() {
+        use hls_client::{ResourceKind, ResourceOffer};
+        use std::{collections::VecDeque, sync::Mutex};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = super::ConfirmWindow::new().unwrap();
+        let settings = Mutex::new(super::PresenterSettings {
+            queue_profiles: crate::queue_editor::ordered_profiles(&[
+                hls_client::QueueProfile::default(),
+                hls_client::QueueProfile {
+                    id: "vip".into(),
+                    name: "高速优先".into(),
+                    priority: -10,
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        });
+
+        // 1. Local browser-completed payload (local_source_path.is_some()) is rejected early
+        // without popping pending or clearing active_handoff.
+        let local_offer = ResourceOffer {
+            handoff_id: "h-local".into(),
+            url: "https://example.test/done.zip".into(),
+            local_source_path: Some(r"C:\Temp\done.zip.crdownload".into()),
+            ..Default::default()
+        };
+        let pending = Mutex::new(VecDeque::from([local_offer]));
+        let active = Mutex::new(Some("h-local".to_string()));
+        confirm.set_is_local_payload(true);
+        assert!(
+            super::take_offer_for_workbench_editor(&confirm, &pending, &active, &settings)
+                .is_none()
+        );
+        assert_eq!(pending.lock().unwrap().len(), 1);
+        assert_eq!(active.lock().unwrap().as_deref(), Some("h-local"));
+
+        // Even if is_local_payload UI flag wasn't set yet, local_source_path.is_some() blocks it.
+        confirm.set_is_local_payload(false);
+        assert!(
+            super::take_offer_for_workbench_editor(&confirm, &pending, &active, &settings)
+                .is_none()
+        );
+        assert_eq!(pending.lock().unwrap().len(), 1);
+
+        // 2. Remote HTTP/HLS handoff transfers cleanly out of ConfirmWindow pending queue,
+        // clears active_handoff, and preserves user-edited filename/dir/queue.
+        let first = ResourceOffer {
+            handoff_id: "h-remote-1".into(),
+            url: "https://cdn.example.test/video.m3u8".into(),
+            resource_kind: ResourceKind::Hls,
+            ..Default::default()
+        };
+        let second = ResourceOffer {
+            handoff_id: "h-remote-2".into(),
+            url: "https://cdn.example.test/next.mp4".into(),
+            ..Default::default()
+        };
+        let pending = Mutex::new(VecDeque::from([first.clone(), second]));
+        let active = Mutex::new(Some("h-remote-1".to_string()));
+        confirm.set_filename("custom-lecture.mp4".into());
+        confirm.set_download_dir(r"  D:\Courses  ".into());
+        confirm.set_queue_index(0); // "vip" after priority ordering
+
+        let (taken_offer, filename, dir, queue_id) =
+            super::take_offer_for_workbench_editor(&confirm, &pending, &active, &settings)
+                .expect("not local")
+                .expect("front offer present");
+        assert_eq!(taken_offer.handoff_id, "h-remote-1");
+        assert_eq!(filename, "custom-lecture.mp4");
+        assert_eq!(dir, r"D:\Courses");
+        assert_eq!(queue_id, "vip");
+        assert!(active.lock().unwrap().is_none());
+        let remaining: Vec<String> = pending
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|o| o.handoff_id.clone())
+            .collect();
+        assert_eq!(remaining, vec!["h-remote-2"]);
+    }
+
+    #[test]
+    fn power_countdown_syncs_across_complete_toast_and_workbench_and_clears_stale_hints() {
+        use hls_client::TaskSnapshot;
+        use slint::ComponentHandle;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let complete = super::CompleteWindow::new().unwrap();
+        let workbench = crate::workbench::Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let shown_at = std::cell::Cell::new(None);
+
+        // Stale power_hint at 0s is cleared by apply_completed_snapshot_to_toast, while >0s stays.
+        complete.set_power_seconds(0);
+        complete.set_power_hint("关机 将在 0 秒后执行".into());
+        complete.set_power_action_label("关机".into());
+        let finished = TaskSnapshot {
+            task_id: "t-done".into(),
+            filename: "episode.mp4".into(),
+            status: "completed".into(),
+            downloaded_bytes: 1024,
+            ..Default::default()
+        };
+        super::apply_completed_snapshot_to_toast(&complete, &finished);
+        assert_eq!(complete.get_power_hint().as_str(), "");
+        assert_eq!(complete.get_power_action_label().as_str(), "");
+        assert_eq!(complete.get_power_seconds(), 0);
+
+        // Active countdown syncs cancel_power -> clears both CompleteWindow and Workbench banner!
+        workbench.window.set_power_action_pending(true);
+        complete.set_task_id("t-done".into());
+        complete.set_power_hint("关机 将在 45 秒后执行".into());
+        complete.set_power_action_label("关机".into());
+        complete.set_power_seconds(45);
+        complete.set_action_busy(true);
+        assert!(super::has_active_power_countdown(&complete));
+
+        super::apply_complete_command_result(
+            &complete,
+            Some(&workbench),
+            &shown_at,
+            true,
+            super::CompleteCommandResult {
+                cancel_power: true,
+                confirm_power: false,
+                task_id: Some("t-done".into()),
+                result: Ok(()),
+            },
+        );
+        assert!(!complete.get_action_busy());
+        assert!(!super::has_active_power_countdown(&complete));
+        assert!(!workbench.window.get_power_action_pending());
+        assert!(
+            shown_at.get().is_some(),
+            "retains completion toast timer when task_id is non-empty and show_complete is true"
+        );
+
+        // Reverse direction: power_action_cleared / cancellation toast clears CompleteWindow state.
+        assert!(super::is_power_action_cleared_toast(
+            "power_action_cleared",
+            "任意提示"
+        ));
+        assert!(super::is_power_action_cleared_toast(
+            "info",
+            "已取消完成后电源动作"
+        ));
+        assert!(super::is_power_action_cleared_toast(
+            "info",
+            "已执行完成后电源动作"
+        ));
+        assert!(super::is_power_action_cleared_toast(
+            "info",
+            "没有待执行的电源动作"
+        ));
+        assert!(!super::is_power_action_cleared_toast("info", "普通提示"));
+
+        complete.set_task_id("".into());
+        complete.set_power_hint("睡眠 将在 30 秒后执行".into());
+        complete.set_power_action_label("睡眠".into());
+        complete.set_power_seconds(30);
+        super::clear_complete_power_state(&complete, &shown_at, true);
+        assert!(!super::has_active_power_countdown(&complete));
+        assert!(
+            shown_at.get().is_none(),
+            "empty task_id hides toast and clears shown_at when countdown ends"
+        );
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn hud_settings_fifo_worker_serializes_writes_ignores_stale_gen_and_rolls_back_on_failure() {
+        use std::{
+            cell::RefCell,
+            sync::{mpsc, Arc, Mutex},
+            time::Duration,
+        };
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let progress = super::ProgressWindow::new().unwrap();
+        let presenter_settings = Mutex::new(super::PresenterSettings::default());
+        let open_folder = std::cell::Cell::new(false);
+        let gen = std::cell::Cell::new(0u64);
+        let settled_gen = std::cell::Cell::new(0u64);
+        let baseline = RefCell::new(super::HudSettingsBaseline::default());
+        let (reload_tx, reload_rx) = mpsc::channel();
+
+        // 1. Verify single-worker FIFO execution order across rapid clicks.
+        let (done_tx, done_rx) = mpsc::channel();
+        let executed = Arc::new(Mutex::new(Vec::new()));
+        let executed_log = Arc::clone(&executed);
+        let worker_tx = super::spawn_hud_settings_worker(
+            move |op| {
+                executed_log.lock().unwrap().push(op.clone());
+                match op {
+                    super::HudSettingsWriteOp::SpeedLimit { kib: 512, .. } => Ok(()),
+                    super::HudSettingsWriteOp::SpeedLimit { kib: 2048, .. } => {
+                        Err("管道写入失败".into())
+                    }
+                    super::HudSettingsWriteOp::CompletionAction { .. } => Err("权限不足".into()),
+                    _ => Ok(()),
+                }
+            },
+            move |res| done_tx.send(res).is_ok(),
+        );
+
+        // Rapid Click 1 (512 KiB/s) followed immediately by Click 2 (2048 KiB/s).
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &worker_tx,
+            &reload_tx,
+            super::HudSettingsWriteOp::SpeedLimit {
+                enabled: true,
+                kib: 512,
+                values: super::build_speed_limit_settings(true, 512),
+            },
+            "已限速 512 KB/s".into(),
+            "限速保存失败",
+        );
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &worker_tx,
+            &reload_tx,
+            super::HudSettingsWriteOp::SpeedLimit {
+                enabled: true,
+                kib: 2048,
+                values: super::build_speed_limit_settings(true, 2048),
+            },
+            "已限速 2 MB/s".into(),
+            "限速保存失败",
+        );
+        assert_eq!(gen.get(), 2);
+        assert_eq!(progress.get_speed_limit_kib(), 2048);
+
+        let r1 = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let r2 = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(r1.gen, 1);
+        assert_eq!(r2.gen, 2);
+        assert_eq!(executed.lock().unwrap().len(), 2);
+
+        // Stale gen=1 success records committed baseline (512 KiB/s) without clobbering gen=2 UI!
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &reload_tx,
+            r1,
+        );
+        assert_eq!(progress.get_speed_limit_kib(), 2048);
+        assert_eq!(progress.get_action_text().as_str(), "");
+
+        // Latest gen=2 failure rolls back to last committed baseline (true, 512 KiB/s) & triggers reload!
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &reload_tx,
+            r2,
+        );
+        assert!(progress.get_speed_limit_enabled());
+        assert_eq!(progress.get_speed_limit_kib(), 512);
+        assert_eq!(presenter_settings.lock().unwrap().speed_limit_kib, 512);
+        assert!(progress.get_action_error());
+        assert!(progress.get_action_text().contains("限速保存失败"));
+        assert!(reload_rx.try_recv().is_ok());
+
+        // 2. CompletionAction failure rolls back completion_action_index & open_folder_on_complete.
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &worker_tx,
+            &reload_tx,
+            super::HudSettingsWriteOp::CompletionAction {
+                index: 1,
+                open_folder_on_complete: true,
+                wire_action: "none".into(),
+            },
+            "完成后：打开目录".into(),
+            "完成动作保存失败",
+        );
+        assert!(open_folder.get());
+        assert_eq!(progress.get_completion_action_index(), 1);
+        let r3 = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &reload_tx,
+            r3,
+        );
+        assert!(!open_folder.get());
+        assert_eq!(progress.get_completion_action_index(), 0);
+        assert!(progress.get_action_error());
+        assert!(progress.get_action_text().contains("完成动作保存失败"));
+    }
+
+    #[test]
+    fn hud_task_action_generation_guard_blocks_stale_pause_reply_and_update_install_opens_workbench(
+    ) {
+        use hls_client::{CoreEvent, EventEnvelope, TaskSnapshot};
+        use slint::ComponentHandle;
+        use std::sync::Mutex;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let progress = super::ProgressWindow::new().unwrap();
+        let active_hud = Mutex::new(super::ActiveTaskHud::default());
+        let rendered_hud_task = Mutex::new(None);
+        let hud_action_gen = std::sync::atomic::AtomicU64::new(0);
+
+        let mut snap = TaskSnapshot {
+            task_id: "task-race".into(),
+            filename: "ubuntu.iso".into(),
+            status: "downloading".into(),
+            ..Default::default()
+        };
+        active_hud.lock().unwrap().observe(snap.clone());
+        super::reset_progress_action_for_new_task(
+            &progress.as_weak(),
+            &rendered_hud_task,
+            &hud_action_gen,
+            "task-race",
+        );
+
+        // Action 1 ("pause") starts at gen = 2.
+        let pause_gen = hud_action_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+        active_hud.lock().unwrap().mark_pause_requested("task-race");
+        progress.set_action_busy(true);
+        progress.set_action_text("正在暂停…".into());
+
+        // TaskUpdated(paused) unlocks action_busy before Action 1's RPC reply arrives.
+        snap.status = "paused".into();
+        active_hud.lock().unwrap().observe(snap);
+        super::render_progress_hud(
+            &progress.as_weak(),
+            super::PresenterRuntimeSettings {
+                show_progress: true,
+                ..Default::default()
+            },
+            &active_hud.lock().unwrap().current_snapshot().unwrap(),
+            (1, 1),
+            "",
+            None,
+            None,
+        );
+        assert!(!progress.get_action_busy());
+
+        // User immediately clicks Action 2 ("resume") at gen = 3.
+        let resume_gen = hud_action_gen.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+        progress.set_action_busy(true);
+        progress.set_action_text("正在继续…".into());
+
+        // Late RPC completion for Action 1 ("pause", pause_gen) must NOT clobber Action 2!
+        super::apply_hud_task_action_result(
+            &progress,
+            &active_hud,
+            &rendered_hud_task,
+            &hud_action_gen,
+            pause_gen,
+            "task-race",
+            "pause",
+            Ok(()),
+        );
+        assert!(progress.get_action_busy());
+        assert_eq!(progress.get_action_text().as_str(), "正在继续…");
+
+        // Matching Action 2 ("resume", resume_gen) settles cleanly.
+        super::apply_hud_task_action_result(
+            &progress,
+            &active_hud,
+            &rendered_hud_task,
+            &hud_action_gen,
+            resume_gen,
+            "task-race",
+            "resume",
+            Ok(()),
+        );
+        assert!(!progress.get_action_busy());
+        assert_eq!(progress.get_action_text().as_str(), "");
+
+        // M9-1: UpdateInstallResult triggers Workbench auto-instantiation and routes into SystemTools.
+        let install_failed = CoreEvent::UpdateInstallResult {
+            latest: "10.2.0".into(),
+            status: "failed".into(),
+            exit_code: 1,
+            message: "安装程序退出码异常".into(),
+            install_log: r"C:\Temp\update.log".into(),
+        };
+        assert!(super::should_auto_open_workbench(
+            true,
+            true,
+            &install_failed
+        ));
+        assert!(!super::should_auto_open_workbench(
+            true,
+            false,
+            &install_failed
+        ));
+        let workbench = crate::workbench::Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        workbench.apply(&EventEnvelope {
+            sequence: 88,
+            event: install_failed,
+        });
+        assert!(
+            !workbench.ready_to_release(),
+            "SystemTools update dialog keeps newly instantiated Workbench alive to surface install failure"
+        );
+        workbench.window.hide().unwrap();
     }
 }
