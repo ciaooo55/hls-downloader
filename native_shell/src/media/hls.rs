@@ -551,14 +551,21 @@ pub fn select_audio_track<'a>(
         .filter(|item| {
             item.kind.eq_ignore_ascii_case("AUDIO")
                 && (variant.audio_group.is_empty() || item.group_id == variant.audio_group)
-                && item.uri.is_some()
         })
         .collect();
-    if !preferred.trim().is_empty() {
-        if let Some(hit) = tracks.iter().copied().find(|item| {
-            item.name.eq_ignore_ascii_case(preferred)
-                || item.language.eq_ignore_ascii_case(preferred)
-        }) {
+    let preferred = preferred.trim();
+    if !preferred.is_empty() {
+        if let Some(hit) = tracks
+            .iter()
+            .copied()
+            .find(|item| item.name.eq_ignore_ascii_case(preferred))
+            .or_else(|| {
+                tracks
+                    .iter()
+                    .copied()
+                    .find(|item| item.language.eq_ignore_ascii_case(preferred))
+            })
+        {
             return Some(hit);
         }
     }
@@ -5259,5 +5266,37 @@ mod tests {
     #[test]
     fn hls_download_options_default_enables_ts_to_mp4_remux() {
         assert!(HlsDownloadOptions::default().remux_ts_to_mp4);
+    }
+
+    #[test]
+    fn select_audio_track_preserves_embedded_default_audio_over_external_commentary() {
+        let master = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-VERSION:4\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Original\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Commentary\",LANGUAGE=\"en\",DEFAULT=NO,AUTOSELECT=NO,URI=\"commentary.m3u8\"\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1920x1080,AUDIO=\"aud\"\n",
+            "video.m3u8\n",
+        );
+        let playlist = parse_playlist(master, "https://cdn.example.test/master.m3u8").unwrap();
+        let variant = select_variant_for(&playlist, 0, 0, "").unwrap();
+
+        let default_track = select_audio_track(&playlist, variant, "").unwrap();
+        assert_eq!(default_track.name, "Original");
+        assert!(
+            default_track.uri.is_none(),
+            "embedded DEFAULT=YES audio must keep uri=None so muxing retains 0:a:0"
+        );
+
+        let commentary_track = select_audio_track(&playlist, variant, "Commentary").unwrap();
+        assert_eq!(commentary_track.name, "Commentary");
+        assert_eq!(
+            commentary_track.uri.as_deref(),
+            Some("https://cdn.example.test/commentary.m3u8")
+        );
+
+        let explicit_original = select_audio_track(&playlist, variant, "Original").unwrap();
+        assert_eq!(explicit_original.name, "Original");
+        assert!(explicit_original.uri.is_none());
     }
 }

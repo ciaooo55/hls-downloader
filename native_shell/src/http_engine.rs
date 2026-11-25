@@ -1835,14 +1835,19 @@ fn download_ranges(job: &Job, session_accept_ranges: bool) -> Result<(), EngineE
     let progress_downloaded = Arc::clone(&downloaded);
     let progress_path = job.progress.clone();
     let progress_control = job.control.clone();
+    let progress_outer_stop = job.range_stop.clone();
     let progress_scheduler = Arc::clone(&scheduler);
     let mut rate = TransferRate::new(downloaded.load(Ordering::SeqCst));
     let progress = thread::spawn(move || {
         while !progress_stop.load(Ordering::SeqCst) {
-            if matches!(
-                read_control(&progress_control),
-                Control::Pause | Control::Cancel
-            ) {
+            if progress_outer_stop
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::SeqCst))
+                || matches!(
+                    read_control(&progress_control),
+                    Control::Pause | Control::Cancel
+                )
+            {
                 progress_stop.store(true, Ordering::SeqCst);
                 break;
             }
@@ -2301,12 +2306,24 @@ fn range_worker(
     // 本次下载是否从零开始（无已保留片段、无续传偏移），含义见 fetch_range。
     fresh: bool,
 ) -> Option<FetchResult> {
+    let outer_stop = job.range_stop.clone();
     let mut transport_job = job.clone();
     transport_job.range_stop = Some(Arc::clone(&stop));
     let job = &transport_job;
     // 尚未领取范围的 worker 不打开文件或分配写缓冲；首次启用后复用同一个 writer。
     let mut writer: Option<BufWriter<File>> = None;
     loop {
+        if outer_stop
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            let mut slot = failed.lock().unwrap_or_else(|err| err.into_inner());
+            if slot.is_none() {
+                *slot = Some(EngineErrorCode::Pause);
+            }
+            stop.store(true, Ordering::SeqCst);
+            return None;
+        }
         if stop.load(Ordering::SeqCst) {
             return None;
         }
