@@ -13,15 +13,24 @@ pub(crate) fn hls_input_options(command: &mut Command) {
             let mut probe = Command::new(command.get_program());
             probe.args(["-hide_banner", "-h", "demuxer=hls"]);
             probe.stdin(Stdio::null());
+            probe.stdout(Stdio::piped());
+            probe.stderr(Stdio::piped());
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
                 probe.creation_flags(0x08000000);
             }
-            probe.output().is_ok_and(|output| {
-                output.status.success()
-                    && (has_extension_picky(&output.stdout) || has_extension_picky(&output.stderr))
-            })
+            probe
+                .spawn()
+                .and_then(|child| {
+                    crate::job_object::assign_child(&child);
+                    child.wait_with_output()
+                })
+                .is_ok_and(|output| {
+                    output.status.success()
+                        && (has_extension_picky(&output.stdout)
+                            || has_extension_picky(&output.stderr))
+                })
         });
     command.args(hls_input_args(supported));
 }
@@ -105,7 +114,17 @@ pub fn locate_ffmpeg() -> Option<PathBuf> {
     which("ffmpeg")
 }
 
+#[cfg(test)]
 pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Result<(), String> {
+    merge_with_ffmpeg_opts(task_dir, output, control, true)
+}
+
+pub(crate) fn merge_with_ffmpeg_opts(
+    task_dir: &Path,
+    output: &Path,
+    control: &Path,
+    faststart: bool,
+) -> Result<(), String> {
     let playlist = task_dir.join("local.m3u8");
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let input = if playlist.exists() {
@@ -124,10 +143,10 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
     ]);
     // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
     hls_input_options(&mut command);
-    command
-        .arg("-i")
-        .arg(&input)
-        .args(["-c", "copy", "-movflags", "+faststart"]);
+    command.arg("-i").arg(&input).args(["-c", "copy"]);
+    if faststart {
+        command.args(["-movflags", "+faststart"]);
+    }
     run_ffmpeg_to_output(
         &mut command,
         output,
@@ -138,24 +157,26 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
 
 /// Rewraps a concatenated MPEG-TS stream as MP4 without re-encoding (stream
 /// copy; data and bitmap-subtitle streams, which MP4 cannot carry, are dropped).
+#[cfg(test)]
 pub fn remux_ts_to_mp4(input: &Path, output: &Path, control: &Path) -> Result<(), String> {
+    remux_ts_to_mp4_opts(input, output, control, true)
+}
+
+pub(crate) fn remux_ts_to_mp4_opts(
+    input: &Path,
+    output: &Path,
+    control: &Path,
+    faststart: bool,
+) -> Result<(), String> {
     let ffmpeg = locate_ffmpeg().ok_or_else(|| "ffmpeg not found".to_string())?;
     let mut command = Command::new(ffmpeg);
     command
         .args(["-y", "-nostdin", "-loglevel", "error", "-f", "mpegts", "-i"])
         .arg(input)
-        .args([
-            "-map",
-            "0:v?",
-            "-map",
-            "0:a?",
-            "-dn",
-            "-sn",
-            "-c",
-            "copy",
-            "-movflags",
-            "+faststart",
-        ]);
+        .args(["-map", "0:v?", "-map", "0:a?", "-dn", "-sn", "-c", "copy"]);
+    if faststart {
+        command.args(["-movflags", "+faststart"]);
+    }
     run_ffmpeg_to_output(
         &mut command,
         output,
@@ -294,6 +315,7 @@ fn run_ffmpeg(command: &mut Command, log_path: &Path, control: &Path) -> Result<
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("ffmpeg 启动失败: {error}"))?;
+    crate::job_object::assign_child(&child);
     let stderr = child.stderr.take().ok_or("ffmpeg stderr 不可用")?;
     let logging = match std::thread::Builder::new()
         .name("ffmpeg-log".into())

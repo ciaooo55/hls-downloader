@@ -43,6 +43,8 @@ mod harvest;
 #[cfg(feature = "full-core")]
 mod http_engine;
 #[cfg(feature = "full-core")]
+mod job_object;
+#[cfg(feature = "full-core")]
 mod url_credentials;
 use hls_client::instance;
 #[cfg(feature = "full-core")]
@@ -142,7 +144,7 @@ pub use core_ipc::{
     CoreIpcClient, CorePipeRequest, CorePipeResponse, PlayerEmbed, V7_PIPE_NAME, V7_TCP_PORT,
 };
 #[cfg(windows)]
-pub use core_ipc::{NamedPipeClient, NamedPipeServer};
+pub use core_ipc::{NamedPipeClient, NamedPipeServer, NamedPipeStopHandle};
 #[cfg(feature = "full-core")]
 pub use core_runtime::CoreRuntime;
 #[cfg(feature = "full-core")]

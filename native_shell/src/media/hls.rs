@@ -5,7 +5,7 @@ use crate::http_engine::{
     fetch_manifest_bytes, media_network_scope, public_entry, retryable_http_status,
     set_media_network_scope, validate_media_target, EngineError, Job, MediaTransferError,
 };
-use crate::media::merge::{concat_files, merge_with_ffmpeg, mux_av};
+use crate::media::merge::{concat_files, mux_av};
 use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -1128,7 +1128,7 @@ fn download_hls_scoped(
             crate::http_engine::write_media_merging(progress);
         }
         let output = audio_dir.join("merged.mp4");
-        merge_with_ffmpeg(&audio_dir, &output, control)?;
+        super::merge::merge_with_ffmpeg_opts(&audio_dir, &output, control, false)?;
         audio_merged = Some(output);
     }
     let mut subtitles = Vec::new();
@@ -1170,11 +1170,12 @@ fn download_hls_scoped(
             && !entry.discontinuity
             && extension(entry.path.to_string_lossy().as_ref()).eq_ignore_ascii_case("ts")
     });
+    let needs_final_mux = audio_merged.is_some() || !subtitles.is_empty();
     if can_concat && options.remux_ts_to_mp4 && super::merge::locate_ffmpeg().is_some() {
         // 可选：先拼接到 merged.ts，再无损重封装为 MP4；FFmpeg 失败时回落为原拼接结果。
         let staged = task_dir.join(REMUX_STAGING_TS);
         concat_files(&files, &staged)?;
-        match super::merge::remux_ts_to_mp4(&staged, &output, control) {
+        match super::merge::remux_ts_to_mp4_opts(&staged, &output, control, !needs_final_mux) {
             Ok(()) => {
                 let _ = fs::remove_file(&staged);
             }
@@ -1188,9 +1189,9 @@ fn download_hls_scoped(
     } else if can_concat {
         concat_files(&files, &output)?;
     } else {
-        merge_with_ffmpeg(task_dir, &output, control)?;
+        super::merge::merge_with_ffmpeg_opts(task_dir, &output, control, !needs_final_mux)?;
     }
-    if audio_merged.is_some() || !subtitles.is_empty() {
+    if needs_final_mux {
         let muxed = task_dir.join("muxed.mp4");
         mux_av(
             &output,
@@ -1199,6 +1200,10 @@ fn download_hls_scoped(
             &muxed,
             control,
         )?;
+        let _ = fs::remove_file(&output);
+        if let Some(audio) = &audio_merged {
+            let _ = fs::remove_file(audio);
+        }
         return Ok(muxed);
     }
     Ok(output)

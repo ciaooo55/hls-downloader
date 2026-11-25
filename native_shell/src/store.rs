@@ -77,7 +77,9 @@ impl CoreStore {
             .connection
             .set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         store.initialize(existing)?;
-        store.migrate_url_passwords()?;
+        if store.setting_string("url_passwords_migrated_v1", "")? != "1" {
+            store.migrate_url_passwords()?;
+        }
         mark("initialized");
         Ok(store)
     }
@@ -372,20 +374,21 @@ impl CoreStore {
         {
             return Ok(());
         }
+        let needs_store_write = handoff.is_some()
+            || spec.is_some()
+            || settings.is_some_and(|map| !map.is_empty())
+            || events
+                .iter()
+                .any(|envelope| event_requires_store_write(&envelope.event));
+        if !needs_store_write {
+            return Ok(());
+        }
         let durable = handoff.is_some()
             || spec.is_some()
-            || settings.is_some()
-            || events.iter().any(|envelope| match &envelope.event {
-                CoreEvent::TaskProgress { snapshot } => !matches!(
-                    snapshot.status.as_str(),
-                    "downloading" | "processing" | "merging" | "recording" | "checking"
-                ),
-                CoreEvent::PlayerSession { .. }
-                | CoreEvent::CastSession { .. }
-                | CoreEvent::BrowserStatus { .. }
-                | CoreEvent::Shutdown => false,
-                _ => true,
-            });
+            || settings.is_some_and(|map| !map.is_empty())
+            || events
+                .iter()
+                .any(|envelope| is_durable_event(&envelope.event));
         let wrote_settings = settings.is_some_and(|map| !map.is_empty());
         let values = (
             events.to_vec(),
@@ -893,6 +896,16 @@ impl CoreStore {
             .map_err(|error| format!("initialize Core schema: {error}"))?;
         // 同值赋值也会产生写事务；已是当前版本时，只补齐实际缺少的表和索引。
         if existing_version != CURRENT_SCHEMA_VERSION {
+            if existing_version == 0 {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO settings(key, value_json) VALUES ('url_passwords_migrated_v1', '\"1\"')",
+                        [],
+                    )
+                    .map_err(|error| {
+                        format!("mark fresh Core database URL credentials migrated: {error}")
+                    })?;
+            }
             transaction
                 .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
                 .map_err(|error| format!("set Core schema version: {error}"))?;
@@ -981,6 +994,45 @@ fn configured_proxy_keys(
         }
     }
     Ok(keys)
+}
+
+pub(crate) fn is_durable_event(event: &CoreEvent) -> bool {
+    match event {
+        CoreEvent::TaskProgress { snapshot } => !matches!(
+            snapshot.status.as_str(),
+            "downloading" | "processing" | "merging" | "recording" | "checking"
+        ),
+        CoreEvent::Ready { .. }
+        | CoreEvent::Toast { .. }
+        | CoreEvent::ProbeResult { .. }
+        | CoreEvent::TaskLog { .. }
+        | CoreEvent::UiShow { .. }
+        | CoreEvent::UiReady { .. }
+        | CoreEvent::PlayerSession { .. }
+        | CoreEvent::CastSession { .. }
+        | CoreEvent::BrowserStatus { .. }
+        | CoreEvent::Shutdown => false,
+        _ => true,
+    }
+}
+
+fn event_requires_store_write(event: &CoreEvent) -> bool {
+    if is_durable_event(event) {
+        return true;
+    }
+    matches!(
+        event,
+        CoreEvent::TaskCreated { .. }
+            | CoreEvent::TaskUpdated { .. }
+            | CoreEvent::TaskProgress { .. }
+            | CoreEvent::TaskDeleted { .. }
+            | CoreEvent::HandoffResolved { .. }
+            | CoreEvent::MediaPushRequested { .. }
+            | CoreEvent::MediaPushResolved { .. }
+            | CoreEvent::PlayerSession { .. }
+            | CoreEvent::CastSession { .. }
+            | CoreEvent::BrowserStatus { .. }
+    )
 }
 
 fn sync_event_side_rows(transaction: &Transaction<'_>, event: &CoreEvent) -> Result<(), String> {
@@ -1844,5 +1896,89 @@ mod tests {
             checkpoint, 500,
             "persisting an earlier sequence must not overwrite a higher reserved checkpoint"
         );
+    }
+
+    #[test]
+    fn ephemeral_telemetry_events_do_not_commit_sqlite_writes() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-zero-idle-flush-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let database = root.join("data.db");
+        let mut core = crate::PersistentCore::open(&database).unwrap();
+        let observer = Connection::open(&database).unwrap();
+        let data_version = || {
+            observer
+                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        let baseline_version = data_version();
+        let base_seq = core.latest_sequence();
+
+        let ping_events = core.handle(crate::CoreCommand::Ping).unwrap();
+        assert_eq!(ping_events.len(), 1);
+        assert!(matches!(ping_events[0].event, CoreEvent::Ready { .. }));
+        assert!(!is_durable_event(&ping_events[0].event));
+
+        let ephemeral_events = [
+            CoreEvent::Toast {
+                level: "info".into(),
+                message: "idle check".into(),
+            },
+            CoreEvent::ProbeResult {
+                url: "https://cdn.example.test/video.mp4".into(),
+                resource_kind: crate::ResourceKind::File,
+                label: "MP4 Video".into(),
+                variants: Vec::new(),
+            },
+            CoreEvent::TaskLog {
+                task_id: "task-1".into(),
+                lines: vec!["line 1".into()],
+            },
+            CoreEvent::UiShow {
+                surface: "main".into(),
+            },
+            CoreEvent::UiReady {
+                launch_id: "launch-1".into(),
+                surface: "main".into(),
+            },
+        ];
+
+        let mut expected_seq = base_seq + 1;
+        assert_eq!(ping_events[0].sequence, expected_seq);
+        for event in ephemeral_events {
+            assert!(!is_durable_event(&event), "expected non-durable: {event:?}");
+            let emitted = core.emit(event).unwrap();
+            expected_seq += 1;
+            assert_eq!(emitted[0].sequence, expected_seq);
+        }
+
+        // Durable state-mutating events remain durable.
+        assert!(is_durable_event(&CoreEvent::TaskDeleted {
+            task_id: "t1".into()
+        }));
+        assert!(is_durable_event(&CoreEvent::SettingsChanged {
+            keys: vec!["download_dir".into()]
+        }));
+
+        // Subscribers still see every monotonic sequence in the runtime ring buffer.
+        let batch = core.events_after(base_seq, 32);
+        assert_eq!(batch.len(), 6);
+        assert_eq!(batch.last().unwrap().sequence, expected_seq);
+
+        // Zero SQLite disk commits occurred during the entire idle/telemetry sequence.
+        assert_eq!(
+            data_version(),
+            baseline_version,
+            "ephemeral Ready/Toast/ProbeResult/TaskLog/UiShow/UiReady must not write to SQLite"
+        );
+
+        drop(observer);
+        drop(core);
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -914,7 +914,13 @@ impl PersistentCore {
         if let Some(mut writer) = self.progress_writer.take() {
             writer.shutdown();
         }
-        self.flush_volatile_progress()
+        self.flush_volatile_progress()?;
+        let latest = self.runtime.latest_sequence();
+        if latest > self.reserved_sequence {
+            self.store.reserve_event_sequence(latest)?;
+            self.reserved_sequence = latest;
+        }
+        Ok(())
     }
 }
 
@@ -1158,9 +1164,10 @@ mod tests {
                 message: index.to_string(),
             });
         }
-        core.emit(crate::CoreEvent::Toast {
-            level: "info".into(),
-            message: "history ready".into(),
+        core.emit(crate::CoreEvent::TaskExport {
+            format: "json".into(),
+            data: "{}".into(),
+            task_count: 0,
         })
         .unwrap();
         let tasks = core.tasks();
@@ -1202,13 +1209,12 @@ mod tests {
         // 在快照和日志已写入事务后再失败，二者仍必须与事件检查点一起回滚。
         connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON event_checkpoints BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;").unwrap();
         assert!(core.handle(progress.clone()).is_err());
-        let player_event = serde_json::from_value(serde_json::json!({
-            "kind": "player_session", "active": true, "title": "Video",
-            "task_id": "task-1", "status": "PAUSED", "paused": true,
-            "position_seconds": 12.5, "duration_seconds": 100.0
-        }))
-        .unwrap();
-        assert!(core.emit(player_event).is_err());
+        assert!(core
+            .emit(crate::CoreEvent::Error {
+                code: "inject".into(),
+                message: "checkpoint blocked".into(),
+            })
+            .is_err());
         assert!(core
             .emit(crate::CoreEvent::MediaPushRequested {
                 request: crate::MediaPushRequest {

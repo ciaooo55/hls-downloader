@@ -1095,7 +1095,8 @@ mod tests {
             preferred_bandwidth: 2_500_000,
             preferred_height: 720,
             preferred_variant_id: "v2".into(),
-            ..Default::default()
+            audio_url: String::new(),
+            resource_key: String::new(),
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
         let encoded_value: Value = serde_json::from_slice(&encoded).unwrap();
