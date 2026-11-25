@@ -12,8 +12,9 @@ pub fn locate_core_executable(root: &Path) -> Option<PathBuf> {
     }
     for dir in [
         Some(root.to_path_buf()),
-        Some(root.join("app/resources")),
-        root.parent().map(|parent| parent.join("app/resources")),
+        Some(root.join("app").join("resources")),
+        root.parent()
+            .map(|parent| parent.join("app").join("resources")),
     ]
     .into_iter()
     .flatten()
@@ -42,8 +43,9 @@ pub fn locate_presenter_executable(root: &Path) -> Option<PathBuf> {
     }
     for dir in [
         Some(root.to_path_buf()),
-        Some(root.join("app/resources")),
-        root.parent().map(|parent| parent.join("app/resources")),
+        Some(root.join("app").join("resources")),
+        root.parent()
+            .map(|parent| parent.join("app").join("resources")),
     ]
     .into_iter()
     .flatten()
@@ -142,11 +144,38 @@ pub fn clear_std_handle_inheritance() -> Result<(), String> {
 }
 
 pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
+    spawn_core_with(root, spawn_core_process)
+}
+
+fn spawn_core_process(root: &Path, command: &mut Command) -> Result<(), String> {
+    let _ = root;
+    #[cfg(windows)]
+    {
+        // Firefox 会终止 Native Host 的整个 Job；下载核心必须跨插件断线继续运行。
+        spawn_with_optional_breakaway(command, 0x08000000) // CREATE_NO_WINDOW
+            .map(|_| ())
+            .map_err(|err| format!("Unable to start download core: {err}"))
+    }
+    #[cfg(not(windows))]
+    {
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Unable to start download core: {err}"))
+    }
+}
+
+pub fn spawn_core_with(
+    root: &Path,
+    spawner: impl FnOnce(&Path, &mut Command) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    let _launch_guard = crate::instance::lock_core_launch()?;
     clear_std_handle_inheritance()?;
     let started = std::time::Instant::now();
     let profile = std::env::var_os("HLS_V7_STARTUP_PROFILE").is_some();
     let executable = locate_core_executable(root)
         .ok_or_else(|| "HLSDownloaderEngine.exe is not next to the desktop UI".to_string())?;
+    crate::profile_paths::clear_user_shutdown_for_exe(&executable);
     let mut command = Command::new(&executable);
     command.current_dir(executable.parent().unwrap_or(root));
     command.stdin(std::process::Stdio::null());
@@ -163,18 +192,7 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
             started.elapsed().as_micros()
         );
     }
-    #[cfg(windows)]
-    {
-        // Firefox 会终止 Native Host 的整个 Job；下载核心必须跨插件断线继续运行。
-        spawn_with_optional_breakaway(&mut command, 0x08000000) // CREATE_NO_WINDOW
-            .map_err(|err| format!("Unable to start download core: {err}"))?;
-    }
-    #[cfg(not(windows))]
-    {
-        command
-            .spawn()
-            .map_err(|err| format!("Unable to start download core: {err}"))?;
-    }
+    spawner(root, &mut command)?;
     if profile {
         eprintln!(
             "core_spawn stage=spawn_return elapsed_us={}",
@@ -182,6 +200,32 @@ pub fn spawn_core(root: &Path) -> Result<PathBuf, String> {
         );
     }
     Ok(executable)
+}
+
+pub fn ensure_core_running(
+    root: &Path,
+    probe_timeout: std::time::Duration,
+) -> Result<crate::CoreIpcClient, String> {
+    if let Ok(client) = crate::CoreIpcClient::connect_existing(probe_timeout) {
+        return Ok(client);
+    }
+    let _launch_guard = crate::instance::lock_core_launch()?;
+    if let Ok(client) = crate::CoreIpcClient::connect_existing(probe_timeout) {
+        return Ok(client);
+    }
+    spawn_core(root)?;
+    let mut last_error = None;
+    for _ in 0..3 {
+        match crate::CoreIpcClient::connect() {
+            Ok(client) => return Ok(client),
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Err(format!(
+        "v7 Core did not become ready: {}",
+        last_error.unwrap_or_else(|| "no connection attempt was made".to_string())
+    ))
 }
 
 pub fn spawn_desktop_ui(root: &Path, launch_id: Option<&str>) -> bool {
@@ -299,5 +343,44 @@ mod tests {
         fs::write(&exe, b"ui").unwrap();
         assert_eq!(locate_desktop_executable(&dir), Some(exe));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn spawn_core_with_is_reentrant_under_launch_lock_and_clears_portable_shutdown_marker() {
+        let portable_root = temp_dir();
+        let resources = portable_root.join("app").join("resources");
+        let data_dir = portable_root.join("data");
+        fs::create_dir_all(&resources).unwrap();
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(portable_root.join("portable"), b"").unwrap();
+        fs::write(portable_root.join("HLSDownloader.exe"), b"launcher").unwrap();
+        let engine = resources.join("HLSDownloaderEngine.exe");
+        fs::write(&engine, b"engine").unwrap();
+        let marker = data_dir.join("user-shutdown.marker");
+
+        // 1. Calling `spawn_core_with` while already holding `lock_core_launch()`
+        //    must not deadlock and must clear `<portable_root>/data/user-shutdown.marker`
+        //    both from `<portable_root>` and from `<portable_root>/app/resources`.
+        for candidate_root in [&portable_root, &resources] {
+            fs::write(&marker, b"tray-quit\n").unwrap();
+            assert!(marker.is_file());
+            let _outer_guard = crate::instance::lock_core_launch().unwrap();
+            let mut spawned = false;
+            let resolved = spawn_core_with(candidate_root, |_, cmd| {
+                spawned = true;
+                assert_eq!(Path::new(cmd.get_program()), engine.as_path());
+                Ok(())
+            })
+            .unwrap();
+            assert!(spawned);
+            assert_eq!(resolved, engine);
+            assert!(
+                !marker.exists(),
+                "expected portable user-shutdown.marker cleared for root {}",
+                candidate_root.display()
+            );
+        }
+
+        let _ = fs::remove_dir_all(portable_root);
     }
 }

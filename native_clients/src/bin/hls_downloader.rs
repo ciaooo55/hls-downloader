@@ -53,6 +53,7 @@ fn launch() -> Result<(), String> {
     if args.iter().any(|arg| arg == "--self-test") {
         return Ok(());
     }
+    hls_client::clear_user_shutdown();
     let mut command = Command::new(&presenter);
     command
         .current_dir(&resources)

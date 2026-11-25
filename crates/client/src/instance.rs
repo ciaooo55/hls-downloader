@@ -16,17 +16,30 @@ static KEEP_LOCK: OnceLock<File> = OnceLock::new();
 static KEEP_PRESENTER_LOCK: OnceLock<File> = OnceLock::new();
 
 #[cfg(windows)]
-pub struct CoreLaunchGuard(windows_sys::Win32::Foundation::HANDLE);
+thread_local! {
+    static LAUNCH_LOCK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(windows)]
+pub struct CoreLaunchGuard(Option<windows_sys::Win32::Foundation::HANDLE>);
 
 #[cfg(windows)]
 impl Drop for CoreLaunchGuard {
     fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::System::Threading::ReleaseMutex(self.0);
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        LAUNCH_LOCK_DEPTH.with(|depth| {
+            depth.set(depth.get().saturating_sub(1));
+        });
+        if let Some(handle) = self.0.take() {
+            unsafe {
+                windows_sys::Win32::System::Threading::ReleaseMutex(handle);
+                windows_sys::Win32::Foundation::CloseHandle(handle);
+            }
         }
     }
 }
+
+#[cfg(not(windows))]
+pub struct CoreLaunchGuard(());
 
 #[cfg(windows)]
 pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
@@ -34,6 +47,19 @@ pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
         CloseHandle, GetLastError, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+
+    let already_held = LAUNCH_LOCK_DEPTH.with(|depth| {
+        let current = depth.get();
+        if current > 0 {
+            depth.set(current + 1);
+            true
+        } else {
+            false
+        }
+    });
+    if already_held {
+        return Ok(CoreLaunchGuard(None));
+    }
 
     // Core 的实例锁在进程进入 main 后才建立；浏览器必须在启动进程前协调，避免同时加载多个 Core。
     let name = session_mutex_name("Local\\HLSDownloader.v7.launch");
@@ -45,7 +71,8 @@ pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
     }
     let wait = unsafe { WaitForSingleObject(handle, 10_000) };
     if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
-        return Ok(CoreLaunchGuard(handle));
+        LAUNCH_LOCK_DEPTH.with(|depth| depth.set(1));
+        return Ok(CoreLaunchGuard(Some(handle)));
     }
     let error = if wait == WAIT_TIMEOUT {
         "等待其他浏览器启动 Core 超时，请重试".to_string()
@@ -57,6 +84,11 @@ pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
     };
     unsafe { CloseHandle(handle) };
     Err(error)
+}
+
+#[cfg(not(windows))]
+pub fn lock_core_launch() -> Result<CoreLaunchGuard, String> {
+    Ok(CoreLaunchGuard(()))
 }
 
 /// Produces the duplicate-instance error text. The engine binary treats this

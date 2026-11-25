@@ -19,8 +19,11 @@ use std::{
 };
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-/// Chrome/Firefox 对 Host → 浏览器的单条消息限制为 1 MiB，超限会直接断开端口。
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+/// Chrome/Firefox 对 Host → 浏览器的单条消息硬上限为 1 MiB (1,048,576 字节)；
+/// 预留安全帧头与编码余量，单条响应载荷上限设为 1,000,000 字节。
+const MAX_OUTBOUND_MESSAGE_BYTES: usize = 1_000_000;
+const _: () = assert!(MAX_OUTBOUND_MESSAGE_BYTES <= 1024 * 1024);
+const DEFAULT_POPUP_SPEED_LIMIT_KIB: u64 = 1024;
 const RECOMMENDED_EXTENSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MINIMUM_EXTENSION_VERSION: &str = "2.0.11";
 const EXTENSION_RELEASE_URL: &str = "https://github.com/ciaooo55/hls-downloader/releases";
@@ -74,6 +77,15 @@ enum HostCore {
     #[cfg(test)]
     Local(crate::PersistentCore),
     Remote(CoreIpcClient),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PopupSettingsSnapshot {
+    takeover_enabled: bool,
+    takeover_minimum_bytes: u64,
+    quick_download_enabled: bool,
+    speed_limit_enabled: bool,
+    speed_limit_kib: u64,
 }
 
 impl HostCore {
@@ -181,39 +193,59 @@ impl HostCore {
         }
     }
 
-    fn takeover_settings(&mut self) -> Result<(bool, u64), String> {
+    fn popup_settings(&mut self) -> Result<PopupSettingsSnapshot, String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => Ok((
-                core.store()
-                    .setting_bool("browser_takeover_enabled", true)?,
-                core.store()
-                    .setting_u64("browser_takeover_minimum_bytes", 0)?,
-            )),
+            Self::Local(core) => {
+                let speed_limit_kib = core.store().setting_u64("download_speed_limit_kib", 0)?;
+                let speed_limit_enabled = core
+                    .store()
+                    .setting_bool("download_speed_limit_enabled", speed_limit_kib > 0)?;
+                Ok(PopupSettingsSnapshot {
+                    takeover_enabled: core
+                        .store()
+                        .setting_bool("browser_takeover_enabled", true)?,
+                    takeover_minimum_bytes: core
+                        .store()
+                        .setting_u64("browser_takeover_minimum_bytes", 0)?,
+                    quick_download_enabled: core
+                        .store()
+                        .setting_bool("browser_quick_download_enabled", false)?,
+                    speed_limit_enabled,
+                    speed_limit_kib,
+                })
+            }
             Self::Remote(client) => match client.load_settings()? {
                 crate::CorePipeResponse::Settings {
                     takeover_enabled,
                     takeover_minimum_bytes,
+                    speed_limit_kib,
+                    speed_limit_enabled,
+                    quick_download_enabled,
                     ..
-                } => Ok((takeover_enabled, takeover_minimum_bytes)),
+                } => Ok(PopupSettingsSnapshot {
+                    takeover_enabled,
+                    takeover_minimum_bytes,
+                    quick_download_enabled,
+                    speed_limit_enabled,
+                    speed_limit_kib,
+                }),
                 other => Err(format!("unexpected takeover settings response: {other:?}")),
             },
         }
     }
 
-    fn set_setting_bool(&mut self, key: &str, value: bool) -> Result<(), String> {
-        match self {
-            #[cfg(test)]
-            Self::Local(core) => core.store_mut().set_setting(key, value),
-            Self::Remote(client) => client.store_setting(key, json!(value)),
+    fn set_settings_batch(
+        &mut self,
+        values: std::collections::BTreeMap<String, Value>,
+    ) -> Result<(), String> {
+        if values.is_empty() {
+            return Ok(());
         }
-    }
-
-    fn set_setting_u64(&mut self, key: &str, value: u64) -> Result<(), String> {
         match self {
             #[cfg(test)]
-            Self::Local(core) => core.store_mut().set_setting(key, value),
-            Self::Remote(client) => client.store_setting(key, json!(value)),
+            Self::Local(core) => core.store_mut().set_settings(&values),
+            Self::Remote(client) => client.store_settings(values),
         }
     }
 
@@ -296,16 +328,16 @@ impl NativeHostSession {
         )?)))
     }
 
-    fn open_or_start() -> Result<Self, String> {
-        Ok(Self::from_backend(HostCore::Remote(
-            connect_or_start_core()?
-        )))
+    fn open_or_start(explicit_autostart: bool) -> Result<Self, String> {
+        Ok(Self::from_backend(HostCore::Remote(connect_or_start_core(
+            explicit_autostart,
+        )?)))
     }
 
-    fn open_for_policy(policy: CoreConnectPolicy) -> Result<Self, String> {
+    fn open_for_policy(policy: CoreConnectPolicy, explicit_autostart: bool) -> Result<Self, String> {
         match policy {
             CoreConnectPolicy::ExistingOnly => Self::open_existing(),
-            CoreConnectPolicy::AllowAutostart => Self::open_or_start(),
+            CoreConnectPolicy::AllowAutostart => Self::open_or_start(explicit_autostart),
         }
     }
 
@@ -440,12 +472,9 @@ impl NativeHostSession {
         let batch = match self.core.events_after(since_sequence, wait_ms) {
             Ok(result) => result,
             Err(error) => {
-                return Ok(json!({
-                    "ok": false,
-                    "code": "core_unreachable",
-                    "stage": "core",
-                    "error": error,
-                }))
+                let mut response = core_unreachable_response();
+                response["error"] = json!(error);
+                return Ok(response);
             }
         };
         if batch.resync_required {
@@ -472,14 +501,17 @@ impl NativeHostSession {
             version: env!("CARGO_PKG_VERSION").into(),
             browser: "extension".into(),
         });
-        let (takeover_enabled, minimum_bytes) = self.core.takeover_settings()?;
+        let settings = self.core.popup_settings()?;
         Ok(json!({
             "ok": true,
             "protocol": V7_PROTOCOL_NAME,
             "protocol_version": V7_PROTOCOL_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
-            "takeover_enabled": takeover_enabled,
-            "takeover_minimum_bytes": minimum_bytes,
+            "takeover_enabled": settings.takeover_enabled,
+            "takeover_minimum_bytes": settings.takeover_minimum_bytes,
+            "quick_download_enabled": settings.quick_download_enabled,
+            "speed_limit_enabled": settings.speed_limit_enabled,
+            "speed_limit_kib": settings.speed_limit_kib,
             "recommended_extension_version": RECOMMENDED_EXTENSION_VERSION,
             "minimum_extension_version": MINIMUM_EXTENSION_VERSION,
             "extension_release_url": EXTENSION_RELEASE_URL,
@@ -617,6 +649,9 @@ impl NativeHostSession {
                     .and_then(Value::as_u64)
                     .and_then(|height| u32::try_from(height).ok())
                     .unwrap_or(0),
+                source_page_url: offer.source_page_url,
+                audio_url: offer.audio_url,
+                resource_key: offer.resource_key,
                 ..Default::default()
             },
             owned_credential_ref,
@@ -801,19 +836,73 @@ impl NativeHostSession {
     }
 
     fn set_takeover_settings(&mut self, message: &Value) -> Result<Value, String> {
-        if let Some(enabled) = message.get("enabled").and_then(Value::as_bool) {
-            self.core
-                .set_setting_bool("browser_takeover_enabled", enabled)?;
+        let current = self.core.popup_settings()?;
+        let mut updates = std::collections::BTreeMap::new();
+        if let Some(enabled) = message
+            .get("enabled")
+            .or_else(|| message.get("takeover_enabled"))
+            .and_then(Value::as_bool)
+        {
+            updates.insert("browser_takeover_enabled".into(), json!(enabled));
         }
-        if let Some(bytes) = message.get("minimum_bytes").and_then(Value::as_u64) {
-            self.core
-                .set_setting_u64("browser_takeover_minimum_bytes", bytes)?;
+        if let Some(bytes) = message
+            .get("minimum_bytes")
+            .or_else(|| message.get("takeover_minimum_bytes"))
+            .and_then(Value::as_u64)
+        {
+            updates.insert("browser_takeover_minimum_bytes".into(), json!(bytes));
         }
-        let (enabled, minimum_bytes) = self.core.takeover_settings()?;
+        if let Some(quick_download) = message
+            .get("quick_download_enabled")
+            .or_else(|| message.get("browser_quick_download_enabled"))
+            .and_then(Value::as_bool)
+        {
+            updates.insert("browser_quick_download_enabled".into(), json!(quick_download));
+        }
+        let requested_speed_enabled = message
+            .get("speed_limit_enabled")
+            .or_else(|| message.get("download_speed_limit_enabled"))
+            .and_then(Value::as_bool);
+        let requested_speed_kib = message
+            .get("speed_limit_kib")
+            .or_else(|| message.get("download_speed_limit_kib"))
+            .and_then(Value::as_u64);
+        match (requested_speed_enabled, requested_speed_kib) {
+            (Some(limit_enabled), Some(limit_kib)) => {
+                updates.insert("download_speed_limit_enabled".into(), json!(limit_enabled));
+                updates.insert("download_speed_limit_kib".into(), json!(limit_kib));
+            }
+            (Some(limit_enabled), None) => {
+                updates.insert("download_speed_limit_enabled".into(), json!(limit_enabled));
+                if limit_enabled && current.speed_limit_kib == 0 {
+                    updates.insert(
+                        "download_speed_limit_kib".into(),
+                        json!(DEFAULT_POPUP_SPEED_LIMIT_KIB),
+                    );
+                }
+            }
+            (None, Some(limit_kib)) => {
+                updates.insert("download_speed_limit_kib".into(), json!(limit_kib));
+                updates.insert(
+                    "download_speed_limit_enabled".into(),
+                    json!(limit_kib > 0),
+                );
+            }
+            (None, None) => {}
+        }
+        let settings = if updates.is_empty() {
+            current
+        } else {
+            self.core.set_settings_batch(updates)?;
+            self.core.popup_settings()?
+        };
         Ok(json!({
             "ok": true,
-            "takeover_enabled": enabled,
-            "takeover_minimum_bytes": minimum_bytes,
+            "takeover_enabled": settings.takeover_enabled,
+            "takeover_minimum_bytes": settings.takeover_minimum_bytes,
+            "quick_download_enabled": settings.quick_download_enabled,
+            "speed_limit_enabled": settings.speed_limit_enabled,
+            "speed_limit_kib": settings.speed_limit_kib,
         }))
     }
 
@@ -992,36 +1081,57 @@ fn connect_existing_core(timeout: Duration) -> Result<CoreIpcClient, String> {
     CoreIpcClient::connect_existing(timeout)
 }
 
-/// Start the packaged Core only for explicit user-initiated operations after
-/// probing an already-running Core fails.
-fn connect_or_start_core() -> Result<CoreIpcClient, String> {
-    // 未运行时尽快启动；首次启动协调持续到 IPC 就绪，启动后的完整重试仍保留。
-    match connect_existing_core(Duration::from_millis(10)) {
-        Ok(client) => Ok(client),
-        Err(first_error) => {
-            #[cfg(windows)]
-            let _launch = crate::instance::lock_core_launch()?;
-            // 等待启动锁时，另一个 Host 可能已经使 Core 就绪。
-            if let Ok(client) = connect_existing_core(Duration::from_millis(10)) {
-                return Ok(client);
-            }
+/// Start the packaged Core only for allowed operations after probing an
+/// already-running Core fails. Non-explicit autostart operations (`ping`,
+/// `offer_local_file`, `recover_offer`) re-check `user-shutdown.marker` inside
+/// the launch mutex so a concurrent tray quit can never be raced.
+fn connect_or_start_core(explicit_autostart: bool) -> Result<CoreIpcClient, String> {
+    connect_or_start_core_with(
+        explicit_autostart,
+        || connect_existing_core(Duration::from_millis(10)),
+        hls_client::is_user_shutdown_active,
+        |first_error| {
             let root = crate::install_root()
                 .ok_or_else(|| format!("v7 Core unavailable: {first_error}"))?;
-            // Reaching here means the current request is explicitly allowed to
-            // start Core (e.g. activate/offer/download/media_push, or a cold
-            // ping when not tray-quit). Clear any stale user-shutdown marker
-            // before spawning so the new resident Core session starts clean.
-            hls_client::clear_user_shutdown();
-            crate::spawn_core(&root).map_err(|error| {
+            if explicit_autostart {
+                hls_client::clear_user_shutdown();
+            }
+            crate::spawn_core(&root).map(|_| ()).map_err(|error| {
                 format!("v7 Core unavailable: {first_error}; start failed: {error}")
-            })?;
+            })
+        },
+        CoreIpcClient::connect,
+    )
+}
+
+fn connect_or_start_core_with<C>(
+    explicit_autostart: bool,
+    mut probe_existing: impl FnMut() -> Result<C, String>,
+    mut is_user_shutdown: impl FnMut() -> bool,
+    mut start_core: impl FnMut(&str) -> Result<(), String>,
+    mut connect_ready: impl FnMut() -> Result<C, String>,
+) -> Result<C, String> {
+    // 未运行时尽快启动；首次启动协调持续到 IPC 就绪，启动后的完整重试仍保留。
+    match probe_existing() {
+        Ok(client) => Ok(client),
+        Err(first_error) => {
+            let _launch = hls_client::instance::lock_core_launch()?;
+            // 等待启动锁时，另一个 Host 可能已经使 Core 就绪。
+            if let Ok(client) = probe_existing() {
+                return Ok(client);
+            }
+            // 非显式冷启动操作在进入启动锁临界区后必须重查托盘退出标记，防止并发托盘退出被竞态拉活。
+            if !explicit_autostart && is_user_shutdown() {
+                return Err(format!("v7 Core unavailable (user_shutdown): {first_error}"));
+            }
+            start_core(&first_error)?;
 
             // On a first launch the Core may still be opening its database when
             // the browser host reconnects. The engine's single-instance lock
             // makes this retry safe when several browser processes start at once.
             let mut last_error = None;
             for _ in 0..3 {
-                match CoreIpcClient::connect() {
+                match connect_ready() {
                     Ok(client) => return Ok(client),
                     Err(error) => last_error = Some(error),
                 }
@@ -1060,6 +1170,12 @@ fn public_handoff(handoff: &Handoff, task: Option<&TaskSnapshot>) -> Value {
         "presentation_queued": matches!(handoff.presentation.as_str(), "queued" | "presenting" | "fallback"),
         "presentable": true,
     });
+    if !handoff.offer.audio_url.is_empty() {
+        value["audio_url"] = json!(handoff.offer.audio_url);
+    }
+    if !handoff.offer.resource_key.is_empty() {
+        value["resource_key"] = json!(handoff.offer.resource_key);
+    }
     if !handoff.request_id.is_empty() {
         value["client_request_id"] = json!(handoff.request_id);
     }
@@ -1115,7 +1231,10 @@ pub fn run() -> i32 {
         let response = dispatch_session_message(
             &mut session,
             &message,
-            NativeHostSession::open_for_policy,
+            |policy| {
+                let op = message.get("op").and_then(Value::as_str).unwrap_or("");
+                NativeHostSession::open_for_policy(policy, is_explicit_autostart_op(op))
+            },
             |active, msg| active.dispatch(msg),
         );
         let response = attach_request_id(response, request_id);
@@ -1132,24 +1251,30 @@ enum CoreConnectPolicy {
     AllowAutostart,
 }
 
-fn core_connect_policy(message: &Value) -> CoreConnectPolicy {
-    core_connect_policy_with(message, hls_client::is_user_shutdown_active())
+fn is_explicit_autostart_op(op: &str) -> bool {
+    matches!(op, "activate" | "offer" | "download" | "media_push")
+}
+
+fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectPolicy {
+    // Explicit user-initiated launch/action operations may always cold-start
+    // HLSDownloaderEngine (clearing any prior tray-quit marker on spawn).
+    // `ping`, `offer_local_file`, and `recover_offer` may cold-start Core only
+    // when the user has NOT explicitly quit the engine from the system tray
+    // (`user-shutdown.marker` absent). All other passive/polling/background ops
+    // connect only to an already-running Core.
+    if is_explicit_autostart_op(op)
+        || (!user_shutdown_active
+            && matches!(op, "ping" | "offer_local_file" | "recover_offer"))
+    {
+        CoreConnectPolicy::AllowAutostart
+    } else {
+        CoreConnectPolicy::ExistingOnly
+    }
 }
 
 fn core_connect_policy_with(message: &Value, user_shutdown_active: bool) -> CoreConnectPolicy {
-    // Explicit user-initiated launch/action operations may always cold-start
-    // HLSDownloaderEngine (clearing any prior tray-quit marker on spawn).
-    // `ping` may cold-start Core only when the user has NOT explicitly quit
-    // the engine from the system tray (`user-shutdown.marker` absent),
-    // preserving fresh-profile cold-start contracts while ensuring Tray
-    // "退出下载引擎" is never undone by Chrome's 30s heartbeat or MV3 wake-up
-    // pings. All other passive/polling/background ops connect only to an
-    // already-running Core.
-    match message.get("op").and_then(Value::as_str).unwrap_or("") {
-        "activate" | "offer" | "download" | "media_push" => CoreConnectPolicy::AllowAutostart,
-        "ping" if !user_shutdown_active => CoreConnectPolicy::AllowAutostart,
-        _ => CoreConnectPolicy::ExistingOnly,
-    }
+    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
+    autostart_policy_for_op(op, user_shutdown_active)
 }
 
 fn is_pipe_transport_error(error: &str) -> bool {
@@ -1195,27 +1320,79 @@ fn dispatch_session_message<S>(
     open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
-    dispatch_session_message_with_policy(session, message, core_connect_policy, open, dispatch)
+    dispatch_session_message_with_state(
+        session,
+        message,
+        hls_client::is_user_shutdown_active,
+        open,
+        dispatch,
+    )
 }
 
+fn dispatch_session_message_with_state<S>(
+    session: &mut Option<S>,
+    message: &Value,
+    is_user_shutdown: impl FnMut() -> bool,
+    open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
+    dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
+) -> Value {
+    dispatch_session_message_inner(
+        session,
+        message,
+        |msg, is_shutdown| core_connect_policy_with(msg, is_shutdown()),
+        is_user_shutdown,
+        open,
+        dispatch,
+    )
+}
+
+#[cfg(test)]
 fn dispatch_session_message_with_policy<S>(
     session: &mut Option<S>,
     message: &Value,
-    mut policy_for: impl FnMut(&Value) -> CoreConnectPolicy,
+    policy_for: impl FnMut(&Value) -> CoreConnectPolicy,
+    open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
+    dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
+) -> Value {
+    // Infer whether `policy_for` is blocking `ping` due to user-shutdown so
+    // existing policy-closure tests also observe `error_code: "user_shutdown"`.
+    let probe_ping = json!({"op": "ping"});
+    let policy_cell = std::cell::RefCell::new(policy_for);
+    dispatch_session_message_inner(
+        session,
+        message,
+        |msg, _| (policy_cell.borrow_mut())(msg),
+        || (policy_cell.borrow_mut())(&probe_ping) == CoreConnectPolicy::ExistingOnly,
+        open,
+        dispatch,
+    )
+}
+
+fn dispatch_session_message_inner<S>(
+    session: &mut Option<S>,
+    message: &Value,
+    mut policy_for: impl FnMut(&Value, &mut dyn FnMut() -> bool) -> CoreConnectPolicy,
+    mut is_user_shutdown: impl FnMut() -> bool,
     mut open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
+    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
+    let report_user_shutdown = |is_shutdown: &mut dyn FnMut() -> bool| -> bool {
+        !is_explicit_autostart_op(op) && is_shutdown()
+    };
     for attempt in 0..2 {
         if session.is_none() {
             // Evaluate policy right before reconnecting so a tray quit written
             // while an earlier in-flight request was hitting the closing pipe
             // still blocks autostart on retry.
-            let policy = policy_for(message);
+            let policy = policy_for(message, &mut is_user_shutdown);
             match open(policy) {
                 Ok(connected) => *session = Some(connected),
                 Err(error) => {
                     eprintln!("v7 Core still unavailable: {error}");
-                    return core_unreachable_response();
+                    let shutdown_flag = report_user_shutdown(&mut is_user_shutdown)
+                        || error.contains("(user_shutdown)");
+                    return core_unreachable_response_with(shutdown_flag);
                 }
             }
         }
@@ -1237,21 +1414,30 @@ fn dispatch_session_message_with_policy<S>(
                 if attempt == 0 && is_safe_to_retry_after_transport_error(message) {
                     continue;
                 }
-                return core_unreachable_response();
+                return core_unreachable_response_with(report_user_shutdown(&mut is_user_shutdown));
             }
             Err(error) => return json!({"ok": false, "error": error}),
         }
     }
-    core_unreachable_response()
+    core_unreachable_response_with(report_user_shutdown(&mut is_user_shutdown))
 }
 
 fn core_unreachable_response() -> Value {
-    json!({
+    core_unreachable_response_with(hls_client::is_user_shutdown_active())
+}
+
+fn core_unreachable_response_with(user_shutdown: bool) -> Value {
+    let mut response = json!({
         "ok": false,
         "code": "core_unreachable",
         "stage": "core",
         "error": "下载引擎未启动或无响应，请重试；仍失败时从开始菜单启动 HLS Downloader",
-    })
+    });
+    if user_shutdown {
+        response["error_code"] = json!("user_shutdown");
+        response["user_shutdown"] = json!(true);
+    }
+    response
 }
 
 fn attach_request_id(response: Value, request_id: String) -> Value {
@@ -1319,6 +1505,38 @@ fn parse_offer(
         }
         None
     };
+    let audio_url = match payload.get("audio_url") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(raw)) => {
+            if raw.chars().any(char::is_control) {
+                return Err("音频流 URL 不受支持".into());
+            }
+            let trimmed = raw.trim().trim_start_matches('\u{feff}').trim();
+            if trimmed.is_empty() {
+                String::new()
+            } else if allow_local_file {
+                return Err("本地文件接管不支持独立音频流 URL".into());
+            } else if trimmed.chars().nth(4096).is_some() {
+                return Err("音频流 URL 过长".into());
+            } else if !hls_client::request_validation::http_fetch_url_allowed(trimmed) {
+                return Err("音频流 URL 不受支持".into());
+            } else {
+                trimmed.to_string()
+            }
+        }
+        Some(_) => return Err("音频流 URL 格式无效".into()),
+    };
+    let explicit_resource_key = payload
+        .get("resource_key")
+        .and_then(Value::as_str)
+        .filter(|raw| !raw.chars().any(char::is_control))
+        .map(str::trim)
+        .filter(|trimmed| !trimmed.is_empty() && trimmed.chars().nth(4096).is_none());
+    let resource_key = match explicit_resource_key {
+        Some(explicit) => hls_client::request_validation::canonical_resource_key(explicit),
+        None if allow_local_file => String::new(),
+        None => hls_client::request_validation::canonical_resource_key(&url),
+    };
     let resource_kind = if allow_local_file {
         ResourceKind::File
     } else {
@@ -1356,13 +1574,10 @@ fn parse_offer(
         evidence,
         confidence,
         source_page_url: field(payload, "source_page_url"),
-        credential_ref: None,
-        replay_context_ref: None,
         request_method: hls_client::request_validation::sanitize_http_method(&field(
             payload,
             "request_method",
         )),
-        handoff_id: String::new(),
         filename: field(payload, "filename"),
         title: field(payload, "title"),
         mime_type: field(payload, "mime_type"),
@@ -1382,6 +1597,8 @@ fn parse_offer(
             .and_then(Value::as_u64)
             .and_then(|height| u32::try_from(height).ok())
             .unwrap_or(0),
+        audio_url,
+        resource_key,
         // 浏览器捕获的是清单响应长度，不能用它校验下载并合流后的媒体文件。
         size: if matches!(
             resource_kind,
@@ -1391,6 +1608,7 @@ fn parse_offer(
         } else {
             payload.get("size").and_then(Value::as_u64).unwrap_or(0)
         },
+        ..Default::default()
     })
 }
 
@@ -1564,14 +1782,14 @@ fn read_message(input: &mut impl Read) -> Result<Option<Value>, String> {
 
 fn write_response(output: &mut impl Write, response: &Value) -> Result<(), String> {
     let mut payload = serde_json::to_vec(response).map_err(|error| error.to_string())?;
-    if payload.len() > MAX_RESPONSE_BYTES {
+    if payload.len() > MAX_OUTBOUND_MESSAGE_BYTES {
         // 超限响应会让浏览器断开端口；改为回一条可关联的错误，保持会话存活。
         let mut fallback = json!({"ok": false, "error": "Native Messaging 响应过大"});
         if let Some(request_id) = response.get("__request_id") {
             fallback["__request_id"] = request_id.clone();
         }
         payload = serde_json::to_vec(&fallback).map_err(|error| error.to_string())?;
-        if payload.len() > MAX_RESPONSE_BYTES {
+        if payload.len() > MAX_OUTBOUND_MESSAGE_BYTES {
             return Err("Native Messaging 响应过大".into());
         }
     }
@@ -2571,14 +2789,16 @@ mod tests {
 
     #[test]
     fn write_response_replaces_oversized_payload_with_correlatable_fallback_error() {
+        assert_eq!(MAX_OUTBOUND_MESSAGE_BYTES, 1_000_000);
+        assert!(MAX_OUTBOUND_MESSAGE_BYTES <= 1_048_576);
         let mut output = Vec::new();
         let oversized = json!({
             "ok": true,
             "__request_id": "req-oversized-42",
-            "blob": "x".repeat(MAX_RESPONSE_BYTES + 1024),
+            "blob": "x".repeat(MAX_OUTBOUND_MESSAGE_BYTES),
         });
         write_response(&mut output, &oversized).unwrap();
-        assert!(output.len() >= 4 && output.len() - 4 <= MAX_RESPONSE_BYTES);
+        assert!(output.len() >= 4 && output.len() - 4 <= MAX_OUTBOUND_MESSAGE_BYTES);
         let decoded = read_message(&mut Cursor::new(output))
             .unwrap()
             .expect("expected fallback response frame");
@@ -2705,21 +2925,24 @@ mod tests {
             }
         }
 
-        // `ping` cold-starts Core on fresh/normal startup, but MUST NOT autostart
-        // once the user has explicitly quit from the tray.
+        // `ping`, `offer_local_file`, and `recover_offer` cold-start Core on
+        // fresh/normal startup, but MUST NOT autostart once the user has
+        // explicitly quit from the tray.
         for message in [
             json!({"op": "ping"}),
             json!({"op": "ping", "interactive": true}),
+            json!({"op": "offer_local_file"}),
+            json!({"op": "recover_offer"}),
         ] {
             assert_eq!(
                 core_connect_policy_with(&message, false),
                 CoreConnectPolicy::AllowAutostart,
-                "cold-start ping must autostart when user has not tray-quit: {message}"
+                "conditional autostart op must autostart when user has not tray-quit: {message}"
             );
             assert_eq!(
                 core_connect_policy_with(&message, true),
                 CoreConnectPolicy::ExistingOnly,
-                "ping must never respawn Core after tray quit: {message}"
+                "conditional autostart op must never respawn Core after tray quit: {message}"
             );
         }
 
@@ -2729,8 +2952,6 @@ mod tests {
             json!({"op": "media_push_status", "request_id": "m-1"}),
             json!({"op": "workbench_status", "launch_id": "l-1", "since_sequence": 0}),
             json!({"op": "set_takeover_settings", "enabled": false}),
-            json!({"op": "offer_local_file"}),
-            json!({"op": "recover_offer"}),
             json!({"op": "subtitle", "request": {"action": "configuration"}}),
             json!({"op": "accept_handoff", "handoff_id": "h-1"}),
             json!({"op": "reject_handoff", "handoff_id": "h-1"}),
@@ -2815,6 +3036,14 @@ mod tests {
                 response["code"], "core_unreachable",
                 "message={message} response={response}"
             );
+            assert_eq!(
+                response["error_code"], "user_shutdown",
+                "message={message} response={response}"
+            );
+            assert_eq!(
+                response["user_shutdown"], true,
+                "message={message} response={response}"
+            );
             assert_eq!(response["stage"], "core");
             assert!(
                 !response["error"].as_str().unwrap_or("").is_empty(),
@@ -2890,6 +3119,14 @@ mod tests {
             );
             assert_eq!(
                 response["code"], "core_unreachable",
+                "message={message} response={response}"
+            );
+            assert_eq!(
+                response["error_code"], "user_shutdown",
+                "message={message} response={response}"
+            );
+            assert_eq!(
+                response["user_shutdown"], true,
                 "message={message} response={response}"
             );
             assert_eq!(response["stage"], "core");
@@ -2996,5 +3233,269 @@ mod tests {
         assert_eq!(activated["stage"], "launching");
         assert_eq!(autostart_calls, 1);
         assert!(session.is_some());
+    }
+
+    #[test]
+    fn ping_and_set_takeover_settings_roundtrip_popup_quick_download_and_speed_limit_over_ipc() {
+        let server = crate::CoreServer::in_memory().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = NativeHostSession::from_backend(HostCore::Remote(client));
+
+        // 1. Default settings on `ping`.
+        let initial_ping = session.dispatch(&json!({"op": "ping"})).unwrap();
+        assert_eq!(initial_ping["ok"], true);
+        assert_eq!(initial_ping["takeover_enabled"], true);
+        assert_eq!(initial_ping["takeover_minimum_bytes"], 0);
+        assert_eq!(initial_ping["quick_download_enabled"], false);
+        assert_eq!(initial_ping["speed_limit_enabled"], false);
+        assert_eq!(initial_ping["speed_limit_kib"], 0);
+
+        // 2. Enabling `speed_limit_enabled` when `speed_limit_kib == 0` defaults to 1024 KiB/s
+        //    and persists `quick_download_enabled` to Core storage.
+        let enabled_reply = session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "enabled": false,
+                "minimum_bytes": 4096,
+                "quick_download_enabled": true,
+                "speed_limit_enabled": true
+            }))
+            .unwrap();
+        assert_eq!(enabled_reply["ok"], true);
+        assert_eq!(enabled_reply["takeover_enabled"], false);
+        assert_eq!(enabled_reply["takeover_minimum_bytes"], 4096);
+        assert_eq!(enabled_reply["quick_download_enabled"], true);
+        assert_eq!(enabled_reply["speed_limit_enabled"], true);
+        assert_eq!(enabled_reply["speed_limit_kib"], 1024);
+
+        // 3. Explicit custom `speed_limit_kib` updates Core settings cleanly.
+        let custom_kib = session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "speed_limit_kib": 512,
+                "speed_limit_enabled": true
+            }))
+            .unwrap();
+        assert_eq!(custom_kib["speed_limit_enabled"], true);
+        assert_eq!(custom_kib["speed_limit_kib"], 512);
+
+        // 4. Toggling `speed_limit_enabled` OFF disables throttling in Core while
+        //    preserving saved `speed_limit_kib = 512`, and `ping` reflects it.
+        let paused_limit = session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "speed_limit_enabled": false
+            }))
+            .unwrap();
+        assert_eq!(paused_limit["speed_limit_enabled"], false);
+        assert_eq!(paused_limit["speed_limit_kib"], 512);
+        let core_settings = server.coordinator().settings().unwrap();
+        assert!(!core_settings.speed_limit_enabled);
+        assert_eq!(core_settings.speed_limit_kib, 512);
+        assert!(core_settings.quick_download_enabled);
+
+        let mid_ping = session.dispatch(&json!({"op": "ping"})).unwrap();
+        assert_eq!(mid_ping["takeover_enabled"], false);
+        assert_eq!(mid_ping["takeover_minimum_bytes"], 4096);
+        assert_eq!(mid_ping["quick_download_enabled"], true);
+        assert_eq!(mid_ping["speed_limit_enabled"], false);
+        assert_eq!(mid_ping["speed_limit_kib"], 512);
+
+        // 5. Toggling `speed_limit_enabled` back ON restores saved `512` KiB/s.
+        let resumed_limit = session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "speed_limit_enabled": true
+            }))
+            .unwrap();
+        assert_eq!(resumed_limit["speed_limit_enabled"], true);
+        assert_eq!(resumed_limit["speed_limit_kib"], 512);
+
+        let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
+        shutdown_client.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown_client);
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn parse_offer_and_download_wire_audio_url_and_canonical_resource_key() {
+        let video_url = "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/11/22/333-1-30080.m4s?e=ig8&deadline=1730000000&trid=abc&upsig=1111";
+        let audio_url = "  https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/11/22/333-1-30280.m4s?e=ig8&deadline=1730000000&trid=abc&upsig=2222  ";
+        let mut session = NativeHostSession::in_memory().unwrap();
+
+        let offered = session
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": {
+                    "url": video_url,
+                    "audio_url": audio_url,
+                    "filename": "bili.mp4",
+                    "title": "Bili Video",
+                    "source_page_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+                }
+            }))
+            .unwrap();
+        assert_eq!(offered["ok"], true);
+        assert_eq!(
+            offered["handoff"]["audio_url"],
+            audio_url.trim()
+        );
+        assert_eq!(
+            offered["handoff"]["resource_key"],
+            "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/11/22/333-1-30080.m4s"
+        );
+
+        let downloaded = session
+            .dispatch(&json!({
+                "op": "download",
+                "resource": {
+                    "url": video_url,
+                    "audio_url": audio_url,
+                    "filename": "bili-direct.mp4",
+                    "title": "Bili Direct",
+                    "source_page_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+                }
+            }))
+            .unwrap();
+        assert_eq!(downloaded["ok"], true);
+        let specs = session.core.local().store().load_task_specs().unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].1.audio_url, audio_url.trim());
+        assert_eq!(
+            specs[0].1.resource_key,
+            "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/11/22/333-1-30080.m4s"
+        );
+        assert_eq!(
+            specs[0].1.source_page_url,
+            "https://www.bilibili.com/video/BV1xx411c7mD"
+        );
+
+        // Absent or empty `audio_url` normalizes to empty string.
+        for empty_audio in [json!(null), json!(""), json!("   ")] {
+            let parsed = parse_offer(
+                json!({"url": "https://cdn.test/video.mp4?token=xyz&id=7", "audio_url": empty_audio})
+                    .as_object()
+                    .unwrap(),
+                false,
+            )
+            .unwrap();
+            assert!(parsed.audio_url.is_empty());
+            assert_eq!(parsed.resource_key, "https://cdn.test/video.mp4?id=7");
+        }
+
+        // Invalid `audio_url` schemes, control chars, or >4096 chars are rejected.
+        for bad_audio in [
+            json!("javascript:alert(1)"),
+            json!("file:///C:/Windows/win.ini"),
+            json!("ftp://cdn.test/audio.m4s"),
+            json!("https://cdn.test/audio.m4s\r\n"),
+            json!(format!("https://cdn.test/{}", "a".repeat(4090))),
+            json!(123),
+        ] {
+            let err = parse_offer(
+                json!({"url": "https://cdn.test/video.m4s", "audio_url": bad_audio})
+                    .as_object()
+                    .unwrap(),
+                false,
+            );
+            assert!(err.is_err(), "expected error for bad audio_url={bad_audio}");
+        }
+    }
+
+    #[test]
+    fn offer_local_file_and_recover_offer_autostart_only_when_not_user_shutdown_and_recheck_under_lock() {
+        let source = std::env::temp_dir().join(format!(
+            "hls-local-autostart-{}-{}.bin",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let bytes = b"local-autostart-payload";
+        std::fs::write(&source, bytes).unwrap();
+
+        for message in [
+            json!({
+                "op": "offer_local_file",
+                "resource": {
+                    "url": "blob:https://site.test/local-1",
+                    "local_source_path": source.to_string_lossy(),
+                    "filename": "local.bin",
+                    "size": bytes.len(),
+                    "client_request_id": "local-req-1"
+                }
+            }),
+            json!({
+                "op": "recover_offer",
+                "resource": {
+                    "url": "https://cdn.test/recover.bin",
+                    "filename": "recover.bin",
+                    "client_request_id": "recover-req-1"
+                }
+            }),
+        ] {
+            let mut session: Option<NativeHostSession> = None;
+            let mut autostart_calls = 0usize;
+            let ok_resp = dispatch_session_message_with_state(
+                &mut session,
+                &message,
+                || false,
+                |policy| {
+                    assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                    autostart_calls += 1;
+                    NativeHostSession::in_memory()
+                },
+                |active, msg| active.dispatch(msg),
+            );
+            assert_eq!(ok_resp["ok"], true, "message={message} resp={ok_resp}");
+            assert_eq!(autostart_calls, 1);
+        }
+        let _ = std::fs::remove_file(source);
+
+        // Concurrent tray shutdown racing before `lock_core_launch()` is entered:
+        // non-explicit autostart must abort without calling `start_core`, whereas
+        // explicit autostart proceeds cleanly.
+        let mut non_explicit_started = false;
+        let raced = connect_or_start_core_with(
+            false,
+            || Err::<u32, String>("pipe missing".into()),
+            || true,
+            |_| {
+                non_explicit_started = true;
+                Ok(())
+            },
+            || Ok(1u32),
+        );
+        assert!(raced.is_err());
+        assert!(!non_explicit_started);
+
+        let mut explicit_started = false;
+        let explicit_ok = connect_or_start_core_with(
+            true,
+            || Err::<u32, String>("pipe missing".into()),
+            || true,
+            |_| {
+                explicit_started = true;
+                Ok(())
+            },
+            || Ok(42u32),
+        )
+        .unwrap();
+        assert!(explicit_started);
+        assert_eq!(explicit_ok, 42);
+
+        // Offline passive op without user_shutdown does NOT tag `error_code: "user_shutdown"`.
+        let mut offline_session: Option<NativeHostSession> = None;
+        let crashed_resp = dispatch_session_message_with_state(
+            &mut offline_session,
+            &json!({"op": "handoff_status", "handoff_id": "h-missing"}),
+            || false,
+            |_| Err("Core not running".into()),
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(crashed_resp["code"], "core_unreachable");
+        assert!(crashed_resp.get("error_code").is_none());
+        assert!(crashed_resp.get("user_shutdown").is_none());
     }
 }

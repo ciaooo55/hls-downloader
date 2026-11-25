@@ -56,6 +56,20 @@ pub fn clear_user_shutdown() {
     clear_user_shutdown_at(&user_shutdown_marker_path());
 }
 
+pub(crate) fn user_shutdown_marker_path_from_exe(exe_path: &Path) -> PathBuf {
+    if let Some(root) = env_override("HLS_V7_DATA_DIR") {
+        return user_shutdown_marker_path_for(&root.join("data.db"));
+    }
+    if let Some(root) = portable_v7_root_from(exe_path).or_else(portable_v7_root) {
+        return user_shutdown_marker_path_for(&root.join("data").join("data.db"));
+    }
+    user_shutdown_marker_path()
+}
+
+pub(crate) fn clear_user_shutdown_for_exe(exe_path: &Path) {
+    clear_user_shutdown_at(&user_shutdown_marker_path_from_exe(exe_path));
+}
+
 fn clear_user_shutdown_at(marker_path: &Path) {
     let _ = std::fs::remove_file(marker_path);
 }
@@ -141,10 +155,25 @@ fn nonempty_path(value: Option<OsString>) -> Option<PathBuf> {
     value.filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
-fn portable_v7_root() -> Option<PathBuf> {
+pub fn portable_v7_root_from(exe_path: &Path) -> Option<PathBuf> {
+    let exe_dir = exe_path.parent()?;
+    if exe_dir.join("portable").is_file() && exe_dir.join("app").join("resources").is_dir() {
+        return Some(exe_dir.to_path_buf());
+    }
+    let app_dir = exe_dir.parent()?;
+    let root = app_dir.parent()?;
+    let in_app_resources = exe_dir
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("resources"))
+        && app_dir
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("app"));
+    (in_app_resources && root.join("portable").is_file()).then(|| root.to_path_buf())
+}
+
+pub fn portable_v7_root() -> Option<PathBuf> {
     let executable = env::current_exe().ok()?;
-    let root = executable.parent()?.parent()?.parent()?;
-    root.join("portable").is_file().then(|| root.to_path_buf())
+    portable_v7_root_from(&executable)
 }
 
 #[cfg(test)]
@@ -213,5 +242,50 @@ mod tests {
             super::user_shutdown_marker_path_for(std::path::Path::new("v7-data.db")),
             PathBuf::from("user-shutdown.marker")
         );
+    }
+
+    #[test]
+    fn portable_v7_root_from_supports_top_level_launcher_and_nested_engine() {
+        let unique = format!(
+            "hls-portable-root-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        );
+        let root = std::env::temp_dir().join(unique);
+        let resources = root.join("app").join("resources");
+        std::fs::create_dir_all(&resources).unwrap();
+
+        let top_launcher = root.join("HLSDownloader.exe");
+        let nested_engine = resources.join("HLSDownloaderEngine.exe");
+        std::fs::write(&top_launcher, b"launcher").unwrap();
+        std::fs::write(&nested_engine, b"engine").unwrap();
+
+        // Without the `portable` marker file, neither layout resolves as portable.
+        assert_eq!(super::portable_v7_root_from(&top_launcher), None);
+        assert_eq!(super::portable_v7_root_from(&nested_engine), None);
+
+        // With `<root>/portable` + `<root>/app/resources`, BOTH top-level launcher
+        // and nested `<root>/app/resources/*.exe` resolve to `<root>`.
+        std::fs::write(root.join("portable"), b"").unwrap();
+        assert_eq!(
+            super::portable_v7_root_from(&top_launcher),
+            Some(root.clone())
+        );
+        assert_eq!(
+            super::portable_v7_root_from(&nested_engine),
+            Some(root.clone())
+        );
+
+        // Top-level exe without `app/resources` directory is not treated as a v7 portable root.
+        let bare_dir = root.join("stray");
+        std::fs::create_dir_all(&bare_dir).unwrap();
+        std::fs::write(bare_dir.join("portable"), b"").unwrap();
+        let bare_exe = bare_dir.join("HLSDownloader.exe");
+        std::fs::write(&bare_exe, b"stray").unwrap();
+        assert_eq!(super::portable_v7_root_from(&bare_exe), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

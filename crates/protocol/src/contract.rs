@@ -88,6 +88,10 @@ pub struct ResourceOffer {
     pub preferred_height: u32,
     #[serde(default)]
     pub preferred_variant_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resource_key: String,
 }
 
 impl Default for ResourceOffer {
@@ -111,6 +115,8 @@ impl Default for ResourceOffer {
             preferred_bandwidth: 0,
             preferred_height: 0,
             preferred_variant_id: String::new(),
+            audio_url: String::new(),
+            resource_key: String::new(),
         }
     }
 }
@@ -411,6 +417,10 @@ pub struct TaskSpec {
     pub torrent_piece_count: u64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_page_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resource_key: String,
 }
 
 impl std::fmt::Debug for TaskSpec {
@@ -464,6 +474,8 @@ impl Default for TaskSpec {
             torrent_selection: Vec::new(),
             torrent_piece_count: 0,
             source_page_url: String::new(),
+            audio_url: String::new(),
+            resource_key: String::new(),
         }
     }
 }
@@ -1083,10 +1095,51 @@ mod tests {
             preferred_bandwidth: 2_500_000,
             preferred_height: 720,
             preferred_variant_id: "v2".into(),
+            ..Default::default()
         };
         let encoded = serde_json::to_vec(&offer).unwrap();
+        let encoded_value: Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(encoded_value.get("audio_url").is_none());
+        assert!(encoded_value.get("resource_key").is_none());
         let restored: ResourceOffer = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(restored, offer);
+
+        let dual_track = ResourceOffer {
+            url: "https://upos.example/video-30080.m4s?upsig=1".into(),
+            audio_url: "https://upos.example/audio-30280.m4s?upsig=2".into(),
+            resource_key: "https://upos.example/video-30080.m4s".into(),
+            ..Default::default()
+        };
+        let dual_json = serde_json::to_value(&dual_track).unwrap();
+        assert_eq!(
+            dual_json["audio_url"],
+            "https://upos.example/audio-30280.m4s?upsig=2"
+        );
+        assert_eq!(
+            dual_json["resource_key"],
+            "https://upos.example/video-30080.m4s"
+        );
+        assert_eq!(
+            serde_json::from_value::<ResourceOffer>(dual_json).unwrap(),
+            dual_track
+        );
+
+        let spec = TaskSpec {
+            url: "https://upos.example/video-30080.m4s?upsig=1".into(),
+            audio_url: "https://upos.example/audio-30280.m4s?upsig=2".into(),
+            resource_key: "https://upos.example/video-30080.m4s".into(),
+            ..Default::default()
+        };
+        let spec_json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(
+            spec_json["audio_url"],
+            "https://upos.example/audio-30280.m4s?upsig=2"
+        );
+        assert_eq!(
+            spec_json["resource_key"],
+            "https://upos.example/video-30080.m4s"
+        );
+        assert_eq!(serde_json::from_value::<TaskSpec>(spec_json).unwrap(), spec);
     }
 
     #[test]
