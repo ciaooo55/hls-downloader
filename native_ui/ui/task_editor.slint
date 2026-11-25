@@ -1,6 +1,6 @@
 import { LineEdit, TextEdit, SpinBox } from "std-widgets.slint";
 import { Tokens, HotButton, FieldLabel, HotCheckBox, HotScrollView, HotComboBox, Panel, WorkbenchIcon } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 
 export component TaskEditorWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
@@ -8,7 +8,7 @@ export component TaskEditorWindow inherits Window {
     default-font-family: Tokens.type-face;
     default-font-size: 13px;
     background: Tokens.canvas;
-    preferred-width: 720px; preferred-height: 660px;
+    preferred-width: 720px; preferred-height: 580px;
     min-width: 460px; min-height: 360px;
     in-out property <string> mode: "new";
     in-out property <string> url;
@@ -34,7 +34,7 @@ export component TaskEditorWindow inherits Window {
     in-out property <string> audio;
     in-out property <bool> start-paused: false;
     in-out property <bool> allow-duplicate: false;
-    in-out property <bool> legal-accepted: false;
+    in-out property <bool> legal-accepted: true;
     in property <string> batch-preview: "支持通配符：[001-050]、[1-100:2]、[a-z]";
     in property <bool> batch-preview-active: false;
     in property <bool> batch-preview-warning: false;
@@ -50,7 +50,6 @@ export component TaskEditorWindow inherits Window {
     callback url-edited(string);
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: root.title; description: root.mode == "batch" ? "每行一个链接，批量添加到下载队列" : root.mode == "curl" ? "粘贴浏览器复制的 cURL 命令" : "粘贴下载地址，选择保存位置与下载选项"; icon: root.mode == "new" ? "new" : root.mode == "curl" ? "import" : "batch"; }
         HotScrollView {
             horizontal-scrollbar-policy: always-off;
             viewport-width: self.width;
@@ -113,8 +112,8 @@ export component TaskEditorWindow inherits Window {
                             LineEdit { height: Tokens.control-height; text <=> root.download-dir; accessible-label: "保存位置"; }
                             HotButton { label: "浏览…"; icon: "folder"; clicked => { root.action("folder"); } }
                         }
-                        HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "文件名"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.filename; accessible-label: "文件名"; placeholder-text: "留空自动确定"; } }
-                        HorizontalLayout {
+                        if root.mode == "new": HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "文件名"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.filename; accessible-label: "文件名"; placeholder-text: "留空自动确定"; } }
+                        if root.mode != "batch": HorizontalLayout {
                             spacing: Tokens.control-gap;
                             FieldLabel { label: "类型"; width: 80px; }
                             HotComboBox {
@@ -125,10 +124,10 @@ export component TaskEditorWindow inherits Window {
                                 changed bound => { self.current-index = root.kind == "种子 / 磁力" ? 5 : root.kind == "直播" ? 4 : root.kind == "DASH" ? 3 : root.kind == "HLS" ? 2 : root.kind == "普通文件" ? 1 : 0; }
                                 selected(value) => { root.kind = value; }
                             }
-                            HotButton { label: "识别 / 探测"; icon: "search"; enabled: !root.busy; clicked => { root.action("probe"); } }
+                            HotButton { label: "识别 / 探测"; icon: "search"; enabled: !root.busy && root.url != ""; clicked => { root.action("probe"); } }
                         }
-                        if root.variants.length > 0: HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "清晰度"; width: 80px; } HotComboBox { height: Tokens.control-height; model: root.variants; current-index <=> root.variant-index; } }
-                        HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "音轨"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.audio; accessible-label: "音轨标识"; placeholder-text: "语言或音轨标识，留空自动选择"; } }
+                        if root.mode != "batch" && root.variants.length > 0: HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "清晰度"; width: 80px; } HotComboBox { height: Tokens.control-height; model: root.variants; current-index <=> root.variant-index; } }
+                        if root.mode == "new": HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "音轨"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.audio; accessible-label: "音轨标识"; placeholder-text: "语言或音轨标识，留空自动选择"; } }
                     }
                 }
                 // 高级选项折叠卡片：新建默认收起，已有高级参数时由 Rust 初始展开，用户可随时自由收起或展开。
@@ -182,7 +181,12 @@ export component TaskEditorWindow inherits Window {
                                         FieldLabel { label: "并发连接"; }
                                         SpinBox { value <=> root.concurrency; accessible-label: "并发连接"; height: Tokens.control-height; minimum: 0; maximum: 128; }
                                     }
-                                    HorizontalLayout { spacing: Tokens.control-gap; FieldLabel { label: "正文文件"; width: 80px; } LineEdit { height: Tokens.control-height; text <=> root.body-path; accessible-label: "正文文件"; placeholder-text: "POST 等请求的可重放正文文件"; } }
+                                    HorizontalLayout {
+                                        spacing: Tokens.control-gap;
+                                        FieldLabel { label: "正文文件"; width: 80px; }
+                                        LineEdit { height: Tokens.control-height; text <=> root.body-path; accessible-label: "正文文件"; placeholder-text: "POST 等请求的可重放正文文件"; }
+                                        HotButton { label: "浏览…"; icon: "folder"; enabled: !root.busy; clicked => { root.action("body_file"); } }
+                                    }
                                     HorizontalLayout {
                                         spacing: Tokens.control-gap;
                                         FieldLabel { label: "请求头"; width: 80px; height: Tokens.control-height; vertical-alignment: center; y: 0px; }
@@ -225,7 +229,6 @@ export component TaskEditorWindow inherits Window {
                         padding: 14px; padding-left: 16px; padding-right: 16px; spacing: 8px;
                         HotCheckBox { text: "添加后暂不开始"; checked <=> root.start-paused; }
                         HotCheckBox { text: "允许重复任务"; checked <=> root.allow-duplicate; }
-                        HotCheckBox { text: "我已确认有权下载，并接受使用条款"; checked <=> root.legal-accepted; }
                     }
                 }
             }
@@ -233,7 +236,7 @@ export component TaskEditorWindow inherits Window {
         DialogFooter {
             status: root.result; tone: root.result-tone;
             HotButton { label: root.busy ? "关闭" : "取消"; clicked => { root.action("close"); } }
-            HotButton { label: root.busy ? "处理中…" : "添加任务"; icon: "new"; primary: true; enabled: !root.busy && root.legal-accepted && root.url != ""; clicked => { root.action("create"); } }
+            HotButton { label: root.busy ? "处理中…" : "添加任务"; icon: "new"; primary: true; enabled: !root.busy && root.url != ""; clicked => { root.action("create"); } }
         }
     }
 }

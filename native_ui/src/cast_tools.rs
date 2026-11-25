@@ -23,9 +23,71 @@ enum Pending {
     Capabilities,
 }
 
+#[derive(Clone)]
+struct CastUiState {
+    page: String,
+    mode: String,
+    source_kind: String,
+    path: String,
+    url: String,
+    media_title: String,
+    locked_source: bool,
+    source_label: String,
+    selected_device: i32,
+    discovering: bool,
+    busy: bool,
+    notice: String,
+    notice_tone: String,
+    active: bool,
+    session_label: String,
+    session_status: String,
+    session_url: String,
+    can_pause: bool,
+    can_play: bool,
+    can_seek: bool,
+    can_stop: bool,
+    position: f32,
+    duration: f32,
+    time: String,
+    browser_request: bool,
+}
+
+impl Default for CastUiState {
+    fn default() -> Self {
+        Self {
+            page: "source".into(),
+            mode: "cast".into(),
+            source_kind: "url".into(),
+            path: String::new(),
+            url: String::new(),
+            media_title: String::new(),
+            locked_source: false,
+            source_label: String::new(),
+            selected_device: -1,
+            discovering: false,
+            busy: false,
+            notice: String::new(),
+            notice_tone: "warning".into(),
+            active: false,
+            session_label: String::new(),
+            session_status: String::new(),
+            session_url: String::new(),
+            can_pause: false,
+            can_play: false,
+            can_seek: false,
+            can_stop: false,
+            position: 0.0,
+            duration: 0.0,
+            time: String::new(),
+            browser_request: false,
+        }
+    }
+}
+
 pub struct CastTools {
     main: WorkbenchWindow,
-    window: CastWindow,
+    window: RefCell<Option<CastWindow>>,
+    state: RefCell<CastUiState>,
     jobs: mpsc::SyncSender<CorePipeRequest>,
     id: Rc<dyn Fn() -> u64>,
     pending: RefCell<HashMap<u64, Pending>>,
@@ -38,18 +100,29 @@ pub struct CastTools {
     sequence: Cell<u64>,
     session: Cell<u64>,
     controls_supported: Cell<bool>,
+    rescan_after_discover: Cell<bool>,
     next_poll: Cell<Instant>,
     refresh_when_idle: Cell<bool>,
     timer: slint::Timer,
 }
 
 impl CastTools {
+    #[cfg(test)]
+    pub(crate) fn has_allocated_window(&self) -> bool {
+        self.window.borrow().is_some()
+    }
+
     pub fn sync_appearance(&self) {
-        native_window::inherit_appearance(&self.window, &self.main);
+        if let Some(window) = self.window.borrow().as_ref() {
+            native_window::inherit_appearance(window, &self.main);
+        }
     }
 
     pub fn keeps_ui_alive(&self) -> bool {
-        self.window.window().is_visible()
+        self.window
+            .borrow()
+            .as_ref()
+            .is_some_and(|w| w.window().is_visible())
             || self.current_push.borrow().is_some()
             || !self.pushes.borrow().is_empty()
             || !self.pending.borrow().is_empty()
@@ -60,10 +133,6 @@ impl CastTools {
         main: WorkbenchWindow,
         id: Rc<dyn Fn() -> u64>,
     ) -> Result<Rc<Self>, slint::PlatformError> {
-        let window = CastWindow::new()?;
-        window
-            .window()
-            .set_size(slint::LogicalSize::new(720.0, 640.0));
         // Discovery and receiver requests can wait for the network. A separate
         // bounded connection keeps download and local-player controls usable.
         let (jobs, receiver) = mpsc::sync_channel::<CorePipeRequest>(4);
@@ -101,9 +170,19 @@ impl CastTools {
                 }
             }
         });
+        Self::with_sender(main, jobs, id, true)
+    }
+
+    fn with_sender(
+        main: WorkbenchWindow,
+        jobs: mpsc::SyncSender<CorePipeRequest>,
+        id: Rc<dyn Fn() -> u64>,
+        bootstrap: bool,
+    ) -> Result<Rc<Self>, slint::PlatformError> {
         let this = Rc::new(Self {
             main,
-            window,
+            window: RefCell::new(None),
+            state: RefCell::new(CastUiState::default()),
             jobs,
             id,
             pending: RefCell::new(HashMap::new()),
@@ -116,28 +195,10 @@ impl CastTools {
             sequence: Cell::new(0),
             session: Cell::new(0),
             controls_supported: Cell::new(false),
+            rescan_after_discover: Cell::new(false),
             next_poll: Cell::new(Instant::now()),
             refresh_when_idle: Cell::new(false),
             timer: slint::Timer::default(),
-        });
-        let weak = Rc::downgrade(&this);
-        this.window.on_action(move |action| {
-            if let Some(this) = weak.upgrade() {
-                this.action(&action)
-            }
-        });
-        let weak = Rc::downgrade(&this);
-        this.window.on_seek(move |seconds| {
-            if let Some(this) = weak.upgrade() {
-                this.control(&format!("seek_to:{}", seconds.max(0.0) as u64));
-            }
-        });
-        let weak = Rc::downgrade(&this);
-        this.window.window().on_close_requested(move || {
-            if let Some(this) = weak.upgrade() {
-                this.action("close");
-            }
-            slint::CloseRequestResponse::KeepWindowShown
         });
         let weak = Rc::downgrade(&this);
         this.timer.start(
@@ -148,33 +209,138 @@ impl CastTools {
                     if this.refresh_when_idle.get() && this.pending.borrow().is_empty() {
                         this.refresh();
                     }
-                    if this.window.window().is_visible()
-                        && this.window.get_page() == "session"
-                        && this.window.get_active()
-                        && !this.window.get_busy()
-                        && Instant::now() >= this.next_poll.get()
-                    {
+                    let should_poll = this
+                        .window
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|w| w.window().is_visible() && w.get_page() == "session")
+                        && this.state.borrow().active
+                        && !this.state.borrow().busy
+                        && Instant::now() >= this.next_poll.get();
+                    if should_poll {
                         this.control("status");
                     }
                 }
             },
         );
-        this.restore(None);
-        this.send(
-            CorePipeRequest::Capabilities {
-                request_id: (this.id)(),
-            },
-            Pending::Capabilities,
-        );
-        this.control("status");
+        if bootstrap {
+            this.restore(None);
+            this.send(
+                CorePipeRequest::Capabilities {
+                    request_id: (this.id)(),
+                },
+                Pending::Capabilities,
+            );
+            this.control("status");
+        }
         Ok(this)
+    }
+
+    fn ensure_window(self: &Rc<Self>) -> Result<CastWindow, slint::PlatformError> {
+        if let Some(existing) = self.window.borrow().as_ref() {
+            return Ok(existing.clone_strong());
+        }
+        let window = CastWindow::new()?;
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(720.0, 610.0));
+        native_window::inherit_appearance(&window, &self.main);
+        self.apply_state_to_window(&window);
+        let weak = Rc::downgrade(self);
+        window.on_action(move |action| {
+            if let Some(this) = weak.upgrade() {
+                this.action(&action);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.on_seek(move |seconds| {
+            if let Some(this) = weak.upgrade() {
+                this.control(&format!("seek_to:{}", seconds.max(0.0) as u64));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        window.window().on_close_requested(move || {
+            if let Some(this) = weak.upgrade() {
+                this.action("close");
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+        *self.window.borrow_mut() = Some(window.clone_strong());
+        Ok(window)
+    }
+
+    fn pull_window_inputs(&self) {
+        if let Some(window) = self.window.borrow().as_ref() {
+            let mut st = self.state.borrow_mut();
+            st.page = window.get_page().to_string();
+            st.mode = window.get_mode().to_string();
+            st.source_kind = window.get_source_kind().to_string();
+            st.path = window.get_path().to_string();
+            st.url = window.get_url().to_string();
+            st.media_title = window.get_media_title().to_string();
+            st.selected_device = window.get_selected_device();
+        }
+    }
+
+    fn apply_state_to_window(&self, window: &CastWindow) {
+        let st = self.state.borrow();
+        window.set_page(st.page.clone().into());
+        window.set_mode(st.mode.clone().into());
+        window.set_source_kind(st.source_kind.clone().into());
+        window.set_path(st.path.clone().into());
+        window.set_url(st.url.clone().into());
+        window.set_media_title(st.media_title.clone().into());
+        window.set_locked_source(st.locked_source);
+        window.set_source_label(st.source_label.clone().into());
+        window.set_devices(ModelRc::new(VecModel::from(
+            self.devices
+                .borrow()
+                .iter()
+                .map(|d| format!("{} · {}", d.label, d.service_type).into())
+                .collect::<Vec<_>>(),
+        )));
+        window.set_selected_device(st.selected_device);
+        window.set_discovering(st.discovering);
+        window.set_busy(st.busy);
+        window.set_notice(st.notice.clone().into());
+        window.set_notice_tone(st.notice_tone.clone().into());
+        window.set_active(st.active);
+        window.set_session_label(st.session_label.clone().into());
+        window.set_session_status(st.session_status.clone().into());
+        window.set_session_url(st.session_url.clone().into());
+        window.set_can_pause(st.can_pause);
+        window.set_can_play(st.can_play);
+        window.set_can_seek(st.can_seek);
+        window.set_can_stop(st.can_stop);
+        window.set_position(st.position);
+        window.set_duration(st.duration);
+        window.set_time(st.time.clone().into());
+        window.set_browser_request(st.browser_request);
+    }
+
+    fn update_state(&self, f: impl FnOnce(&mut CastUiState)) {
+        self.pull_window_inputs();
+        {
+            let mut st = self.state.borrow_mut();
+            f(&mut st);
+        }
+        if let Some(window) = self.window.borrow().as_ref() {
+            self.apply_state_to_window(window);
+        }
+    }
+
+    fn set_notice(&self, tone: &str, text: impl Into<String>) {
+        let text = text.into();
+        self.update_state(|st| {
+            st.notice_tone = tone.to_owned();
+            st.notice = text;
+        });
     }
 
     fn send(&self, request: CorePipeRequest, kind: Pending) -> bool {
         let id = request.request_id().unwrap_or(0);
         if self.jobs.try_send(request).is_err() {
-            self.window.set_notice_tone("error".into());
-            self.window.set_notice("操作队列已满，请稍后重试".into());
+            self.set_notice("error", "操作队列已满，请稍后重试");
             return false;
         }
         self.pending.borrow_mut().insert(id, kind);
@@ -227,105 +393,115 @@ impl CastTools {
         );
     }
 
-    pub fn show(&self, mode: &str, task: Option<(&str, &str)>) {
-        if self.window.get_busy()
-            || self.window.get_discovering()
-            || self.current_push.borrow().is_some()
-        {
+    pub fn show(self: &Rc<Self>, mode: &str, task: Option<(&str, &str)>) {
+        self.pull_window_inputs();
+        if self.state.borrow().busy || self.current_push.borrow().is_some() {
             self.show_window();
             return;
         }
+        let was_discovering = self.state.borrow().discovering;
+        let mode_changed = self.state.borrow().mode != mode;
         *self.task.borrow_mut() = task.map_or(String::new(), |(id, _)| id.to_owned());
-        self.window.set_locked_source(task.is_some());
-        self.window
-            .set_source_label(task.map_or("", |(_, title)| title).into());
-        self.window.set_browser_request(false);
-        self.window.set_mode(mode.into());
-        self.window.set_page("source".into());
-        self.window.set_notice("".into());
-        self.clear_devices();
+        self.update_state(|st| {
+            st.locked_source = task.is_some();
+            st.source_label = task.map_or(String::new(), |(_, title)| title.to_owned());
+            st.browser_request = false;
+            st.mode = mode.to_owned();
+            st.page = "source".into();
+            st.notice.clear();
+        });
+        if !was_discovering || mode_changed {
+            self.clear_devices();
+        }
         self.show_window();
-        if task.is_some() {
+        if was_discovering {
+            if mode_changed || task.is_some() {
+                self.rescan_after_discover.set(true);
+            }
+        } else if task.is_some() {
             self.scan();
         }
     }
 
-    fn show_window(&self) {
+    fn show_window(self: &Rc<Self>) {
+        let Ok(window) = self.ensure_window() else {
+            return;
+        };
         self.sync_appearance();
-        let _ = self.window.show();
-        native_window::prepare_dialog(
-            &self.window,
-            true,
-            true,
-            native_window::hwnd(self.main.window()),
-        );
+        self.apply_state_to_window(&window);
+        let _ = window.show();
+        native_window::prepare_dialog(&window, true, true, native_window::hwnd(self.main.window()));
     }
 
     fn clear_devices(&self) {
         self.devices.borrow_mut().clear();
-        self.window.set_devices(ModelRc::new(VecModel::default()));
-        self.window.set_selected_device(-1);
+        self.update_state(|st| {
+            st.selected_device = -1;
+        });
     }
 
     fn scan(&self) {
-        if self.window.get_busy() || self.window.get_discovering() {
+        self.pull_window_inputs();
+        if self.state.borrow().busy || self.state.borrow().discovering {
             return;
         }
         self.clear_devices();
-        if self.command(
-            CoreCommand::DiscoverCastDevices {
-                mode: self.window.get_mode().to_string(),
-            },
-            Pending::Discover,
-        ) {
-            self.window.set_discovering(true);
+        let mode = self.state.borrow().mode.clone();
+        if self.command(CoreCommand::DiscoverCastDevices { mode }, Pending::Discover) {
+            self.update_state(|st| st.discovering = true);
         }
     }
 
-    fn action(&self, action: &str) {
+    fn action(self: &Rc<Self>, action: &str) {
+        self.pull_window_inputs();
+        let busy = self.state.borrow().busy;
+        let discovering = self.state.borrow().discovering;
         match action {
-            "close" if !self.window.get_busy() => {
+            "close" if !busy => {
                 if self.current_push.borrow().is_some() {
                     self.resolve("canceled", "已取消设备选择", "");
                 } else {
-                    let _ = self.window.hide();
+                    if let Some(window) = self.window.borrow().as_ref() {
+                        let _ = window.hide();
+                    }
                     self.next_push();
                 }
             }
-            "cancel_push" if !self.window.get_busy() => {
-                self.resolve("canceled", "已取消设备选择", "")
-            }
+            "cancel_push" if !busy => self.resolve("canceled", "已取消设备选择", ""),
             "scan" => self.scan(),
             "mode" => self.clear_devices(),
-            "file" if !self.window.get_busy() => {
-                match file_dialogs::files(native_window::hwnd(self.window.window()), false) {
+            "file" if !busy => {
+                let owner = self
+                    .window
+                    .borrow()
+                    .as_ref()
+                    .and_then(|w| native_window::hwnd(w.window()));
+                match file_dialogs::files(owner, false) {
                     Ok(paths) => {
                         if let Some(path) = paths.first() {
-                            self.window.set_path(path.clone().into());
+                            let path = path.clone();
+                            self.update_state(|st| st.path = path);
                         }
                     }
-                    Err(error) => {
-                        self.window.set_notice_tone("error".into());
-                        self.window.set_notice(error.into())
-                    }
+                    Err(error) => self.set_notice("error", error),
                 }
             }
-            "connect" | "publish" if !self.window.get_busy() && !self.window.get_discovering() => {
-                self.connect(action == "publish")
-            }
+            "connect" | "publish" if !busy && !discovering => self.connect(action == "publish"),
             value if value.starts_with("control:") => self.control(&value[8..]),
             _ => {}
         }
     }
 
     fn connect(&self, publish: bool) {
+        self.pull_window_inputs();
+        let st_snapshot = self.state.borrow().clone();
         let device = if publish {
             String::new()
         } else {
             let Some(device) = self
                 .devices
                 .borrow()
-                .get(self.window.get_selected_device().max(0) as usize)
+                .get(st_snapshot.selected_device.max(0) as usize)
                 .cloned()
             else {
                 return;
@@ -345,34 +521,35 @@ impl CastTools {
         } else {
             let (path, url) = if let Some(push) = self.current_push.borrow().as_ref() {
                 (String::new(), push.url.clone())
-            } else if self.window.get_source_kind() == "file" {
-                (self.window.get_path().trim().to_owned(), String::new())
+            } else if st_snapshot.source_kind == "file" {
+                (st_snapshot.path.trim().to_owned(), String::new())
             } else {
-                (String::new(), self.window.get_url().trim().to_owned())
+                (String::new(), st_snapshot.url.trim().to_owned())
             };
             if path.is_empty() && url.is_empty() {
-                self.window.set_notice_tone("warning".into());
-                self.window
-                    .set_notice("请选择媒体文件或输入媒体链接".into());
+                self.set_notice("warning", "请选择媒体文件或输入媒体链接");
                 return;
             }
             CoreCommand::ShareMedia {
                 path,
                 url,
-                title: self.window.get_media_title().to_string(),
+                title: st_snapshot.media_title,
                 device_id: device.clone(),
                 request_id: push.clone(),
             }
         };
         if self.command(command, Pending::Connect { push, device }) {
-            self.window.set_busy(true);
-            self.window.set_notice_tone("info".into());
-            self.window.set_notice("正在连接接收端…".into());
+            self.update_state(|st| {
+                st.busy = true;
+                st.notice_tone = "info".into();
+                st.notice = "正在连接接收端…".into();
+            });
         }
     }
 
     fn control(&self, action: &str) {
-        if self.window.get_busy()
+        self.pull_window_inputs();
+        if self.state.borrow().busy
             || self
                 .pending
                 .borrow()
@@ -381,13 +558,14 @@ impl CastTools {
         {
             return;
         }
-        if !self.window.get_active() && action != "status" {
+        if !self.state.borrow().active && action != "status" {
             return;
         }
         if action != "status" && !self.controls_supported.get() {
-            self.window.set_notice_tone("warning".into());
-            self.window
-                .set_notice("Core 不支持此版本的投屏控制，请使用同版本组件".into());
+            self.set_notice(
+                "warning",
+                "下载引擎版本不匹配，暂不支持投屏控制，请重启或更新全部组件",
+            );
             return;
         }
         let request = if action == "status" {
@@ -407,7 +585,7 @@ impl CastTools {
         if self.send(request, Pending::Control) {
             self.next_poll.set(Instant::now() + Duration::from_secs(2));
             if action != "status" {
-                self.window.set_busy(true);
+                self.update_state(|st| st.busy = true);
             }
         }
     }
@@ -428,11 +606,11 @@ impl CastTools {
                 status: status.into(),
             },
         ) {
-            self.window.set_busy(true);
+            self.update_state(|st| st.busy = true);
         }
     }
 
-    fn offer(&self, request: MediaPushRequest) {
+    fn offer(self: &Rc<Self>, request: MediaPushRequest) {
         if request.status != "pending"
             || self.resolved.borrow().contains(&request.id)
             || self
@@ -461,40 +639,48 @@ impl CastTools {
         self.pushes.borrow_mut().retain(|push| push.id != id);
     }
 
-    fn next_push(&self) {
+    fn next_push(self: &Rc<Self>) {
+        self.pull_window_inputs();
         if self.current_push.borrow().is_some()
-            || self.window.get_busy()
-            || self.window.get_discovering()
+            || self.state.borrow().busy
+            || self.state.borrow().discovering
         {
             return;
         }
-        if self.window.window().is_visible() && self.window.get_page() == "source" {
+        if self
+            .window
+            .borrow()
+            .as_ref()
+            .is_some_and(|w| w.window().is_visible() && w.get_page() == "source")
+        {
             return;
         }
         let Some(request) = self.pushes.borrow_mut().pop_front() else {
             return;
         };
         self.task.borrow_mut().clear();
-        self.window.set_locked_source(true);
-        self.window.set_browser_request(true);
-        self.window.set_source_label(request.title.clone().into());
-        self.window.set_media_title(request.title.clone().into());
-        self.window.set_mode(
-            if request.push_kind == "tvbox" {
-                "tvbox"
-            } else {
-                "cast"
-            }
-            .into(),
-        );
-        self.window.set_page("source".into());
-        self.window.set_notice("".into());
+        let mode = if request.push_kind == "tvbox" {
+            "tvbox"
+        } else {
+            "cast"
+        }
+        .to_owned();
+        let title = request.title.clone();
+        self.update_state(|st| {
+            st.locked_source = true;
+            st.browser_request = true;
+            st.source_label = title.clone();
+            st.media_title = title;
+            st.mode = mode;
+            st.page = "source".into();
+            st.notice.clear();
+        });
         *self.current_push.borrow_mut() = Some(request);
         self.show_window();
         self.scan();
     }
 
-    pub fn event(&self, envelope: &EventEnvelope) {
+    pub fn event(self: &Rc<Self>, envelope: &EventEnvelope) {
         match &envelope.event {
             CoreEvent::MediaPushRequested { request } => self.offer(request.clone()),
             CoreEvent::MediaPushResolved { request } => {
@@ -510,20 +696,22 @@ impl CastTools {
                     && request.status != "pending"
                 {
                     self.current_push.borrow_mut().take();
-                    self.window.set_browser_request(false);
-                    self.window.set_busy(false);
                     if request.status != "done" {
-                        let _ = self.window.hide();
-                    }
-                    self.window.set_notice_tone(
-                        if request.status == "done" {
-                            "success"
-                        } else {
-                            "warning"
+                        if let Some(window) = self.window.borrow().as_ref() {
+                            let _ = window.hide();
                         }
-                        .into(),
-                    );
-                    self.window.set_notice(request.message.clone().into());
+                    }
+                    let tone = if request.status == "done" {
+                        "success"
+                    } else {
+                        "warning"
+                    };
+                    self.update_state(|st| {
+                        st.browser_request = false;
+                        st.busy = false;
+                        st.notice_tone = tone.into();
+                        st.notice = request.message.clone();
+                    });
                     self.next_push();
                 }
             }
@@ -544,31 +732,29 @@ impl CastTools {
                     return;
                 }
                 self.sequence.set(envelope.sequence);
-                if self.session.replace(*session_generation) != *session_generation {
-                    self.window.set_session_label(device.clone().into());
-                    self.window.set_session_url("".into());
-                }
-                self.window.set_active(*active);
-                if !title.is_empty() {
-                    self.window
-                        .set_session_label(format!("{title} · {device}").into());
-                }
-                self.window.set_session_status(status.clone().into());
-                if !media_url.is_empty() || !active {
-                    self.window.set_session_url(media_url.clone().into());
-                }
-                self.window
-                    .set_can_play(supported_actions.iter().any(|s| s == "play"));
-                self.window
-                    .set_can_pause(supported_actions.iter().any(|s| s == "pause"));
-                self.window.set_can_seek(
-                    *position_available && supported_actions.iter().any(|s| s == "seek_to"),
-                );
-                self.window.set_can_stop(*active);
-                self.window.set_position(*position_seconds as f32);
-                self.window.set_duration(*duration_seconds as f32);
-                self.window.set_time(
-                    if *position_available {
+                let generation_changed =
+                    self.session.replace(*session_generation) != *session_generation;
+                self.update_state(|st| {
+                    if generation_changed {
+                        st.session_label = device.clone();
+                        st.session_url.clear();
+                    }
+                    st.active = *active;
+                    if !title.is_empty() {
+                        st.session_label = format!("{title} · {device}");
+                    }
+                    st.session_status = status.clone();
+                    if !media_url.is_empty() || !active {
+                        st.session_url = media_url.clone();
+                    }
+                    st.can_play = supported_actions.iter().any(|s| s == "play");
+                    st.can_pause = supported_actions.iter().any(|s| s == "pause");
+                    st.can_seek =
+                        *position_available && supported_actions.iter().any(|s| s == "seek_to");
+                    st.can_stop = *active;
+                    st.position = *position_seconds as f32;
+                    st.duration = *duration_seconds as f32;
+                    st.time = if *position_available {
                         format!(
                             "{} / {}",
                             clock(*position_seconds),
@@ -576,15 +762,14 @@ impl CastTools {
                         )
                     } else {
                         String::new()
-                    }
-                    .into(),
-                );
+                    };
+                });
             }
             _ => {}
         }
     }
 
-    pub fn response(&self, response: &CorePipeResponse) {
+    pub fn response(self: &Rc<Self>, response: &CorePipeResponse) {
         if let CorePipeResponse::Settings {
             preferred_cast_device_id,
             ..
@@ -619,20 +804,26 @@ impl CastTools {
             }
         }
         if let Some(error) = error {
-            if matches!(kind, Pending::Discover) {
-                self.window.set_discovering(false);
-            } else {
-                self.window.set_busy(false);
-            }
-            let message = if matches!(response,CorePipeResponse::Error{code,..} if code=="cast_connection")
+            let message = if matches!(response, CorePipeResponse::Error { code, .. } if code == "cast_connection")
                 && matches!(kind, Pending::Connect { .. })
             {
                 format!("未能确认投送结果：{error}。请先核对当前会话和接收端，勿重复投送。")
             } else {
                 error
             };
-            self.window.set_notice_tone("error".into());
-            self.window.set_notice(message.into());
+            self.update_state(|st| {
+                if matches!(kind, Pending::Discover) {
+                    st.discovering = false;
+                } else {
+                    st.busy = false;
+                }
+                st.notice_tone = "error".into();
+                st.notice = message;
+            });
+            if matches!(kind, Pending::Discover) && self.rescan_after_discover.replace(false) {
+                self.scan();
+                return;
+            }
             let push_gone = matches!(
                 response,
                 CorePipeResponse::Error { code, .. }
@@ -656,17 +847,21 @@ impl CastTools {
                         .is_some_and(|p| p.id == *push)
                     {
                         self.current_push.borrow_mut().take();
-                        self.window.set_browser_request(false);
-                        self.window.set_busy(false);
+                        self.update_state(|st| {
+                            st.browser_request = false;
+                            st.busy = false;
+                        });
                         if status != "done" {
-                            let _ = self.window.hide();
+                            if let Some(window) = self.window.borrow().as_ref() {
+                                let _ = window.hide();
+                            }
                         }
                     }
                     self.next_push();
                     return;
                 }
             }
-            if matches!(response,CorePipeResponse::Error{code,..} if code=="cast_connection")
+            if matches!(response, CorePipeResponse::Error { code, .. } if code == "cast_connection")
                 && matches!(kind, Pending::Connect { .. } | Pending::Resolve { .. })
             {
                 self.restore_current();
@@ -676,7 +871,11 @@ impl CastTools {
         }
         match kind {
             Pending::Discover => {
-                self.window.set_discovering(false);
+                self.update_state(|st| st.discovering = false);
+                if self.rescan_after_discover.replace(false) {
+                    self.scan();
+                    return;
+                }
                 if let CorePipeResponse::Events { events, .. } = response {
                     if let Some(devices) = events.iter().find_map(|e| {
                         if let CoreEvent::CastDevices { devices } = &e.event {
@@ -686,27 +885,22 @@ impl CastTools {
                         }
                     }) {
                         *self.devices.borrow_mut() = devices.clone();
-                        self.window.set_devices(ModelRc::new(VecModel::from(
-                            devices
-                                .iter()
-                                .map(|d| format!("{} · {}", d.label, d.service_type).into())
-                                .collect::<Vec<_>>(),
-                        )));
-                        self.window.set_selected_device(
-                            devices
-                                .iter()
-                                .position(|d| d.id == *self.preferred.borrow())
-                                .map_or(if devices.is_empty() { -1 } else { 0 }, |n| n as i32),
-                        );
+                        let selected = devices
+                            .iter()
+                            .position(|d| d.id == *self.preferred.borrow())
+                            .map_or(if devices.is_empty() { -1 } else { 0 }, |n| n as i32);
+                        self.update_state(|st| st.selected_device = selected);
                     }
                 }
                 self.next_push();
             }
             Pending::Connect { push, device } => {
-                self.window.set_busy(false);
-                self.window.set_page("session".into());
-                self.window.set_notice_tone("success".into());
-                self.window.set_notice("已提交到接收端".into());
+                self.update_state(|st| {
+                    st.busy = false;
+                    st.page = "session".into();
+                    st.notice_tone = "success".into();
+                    st.notice = "已提交到接收端".into();
+                });
                 if !device.is_empty() {
                     self.command(
                         CoreCommand::SetSetting {
@@ -717,7 +911,8 @@ impl CastTools {
                     );
                 }
                 if !push.is_empty() {
-                    self.resolve("done", "媒体已投送", &self.window.get_session_url());
+                    let session_url = self.state.borrow().session_url.clone();
+                    self.resolve("done", "媒体已投送", &session_url);
                 }
             }
             Pending::Resolve { push, status } => {
@@ -731,10 +926,14 @@ impl CastTools {
                     .is_some_and(|p| p.id == push)
                 {
                     self.current_push.borrow_mut().take();
-                    self.window.set_browser_request(false);
-                    self.window.set_busy(false);
+                    self.update_state(|st| {
+                        st.browser_request = false;
+                        st.busy = false;
+                    });
                     if status != "done" {
-                        let _ = self.window.hide();
+                        if let Some(window) = self.window.borrow().as_ref() {
+                            let _ = window.hide();
+                        }
                     }
                 }
                 self.next_push();
@@ -772,15 +971,17 @@ impl CastTools {
                     {
                         self.remember_resolved(&id);
                         self.current_push.borrow_mut().take();
-                        self.window.set_browser_request(false);
-                        self.window.set_busy(false);
-                        self.window.set_notice_tone("warning".into());
-                        self.window.set_notice("未找到这次浏览器推送的保存记录，请核对接收端状态后关闭窗口；不会自动重复投送。".into());
+                        self.update_state(|st| {
+                            st.browser_request = false;
+                            st.busy = false;
+                            st.notice_tone = "warning".into();
+                            st.notice = "未找到这次浏览器推送的保存记录，请核对接收端状态后关闭窗口；不会自动重复投送。".into();
+                        });
                         self.next_push();
                     }
                 }
             }
-            Pending::Control => self.window.set_busy(false),
+            Pending::Control => self.update_state(|st| st.busy = false),
             Pending::Preference => {}
             Pending::Capabilities => {
                 if let CorePipeResponse::Capabilities { commands, .. } = response {
@@ -796,7 +997,8 @@ impl CastTools {
         // map does not drain the bounded worker queue and can lose these reads.
         self.sequence.set(0);
         self.controls_supported.set(false);
-        self.window.set_active(false);
+        self.rescan_after_discover.set(false);
+        self.update_state(|st| st.active = false);
         self.refresh_when_idle.set(true);
         if self.pending.borrow().is_empty() {
             self.refresh();
@@ -805,8 +1007,11 @@ impl CastTools {
 
     fn refresh(&self) {
         self.refresh_when_idle.set(false);
-        self.window.set_busy(false);
-        self.window.set_discovering(false);
+        self.rescan_after_discover.set(false);
+        self.update_state(|st| {
+            st.busy = false;
+            st.discovering = false;
+        });
         self.restore_current();
         self.restore(None);
         self.send(
@@ -826,4 +1031,82 @@ fn clock(seconds: u64) -> String {
         seconds / 60 % 60,
         seconds % 60
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cast_window_is_lazy_and_show_during_discover_updates_mode_and_task() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let (tx, rx) = mpsc::sync_channel::<CorePipeRequest>(8);
+        let next = Cell::new(0u64);
+        let cast = CastTools::with_sender(
+            WorkbenchWindow::new().unwrap(),
+            tx,
+            Rc::new(move || {
+                next.set(next.get() + 1);
+                next.get()
+            }),
+            false,
+        )
+        .unwrap();
+
+        // Lazy initialization: no CastWindow allocated until show() is called.
+        assert!(cast.window.borrow().is_none());
+
+        // First show with task-1 in DLNA/Cast mode starts discovery (req #1).
+        cast.show("cast", Some(("task-1", "lecture.mp4")));
+        assert!(cast.window.borrow().is_some());
+        assert!(cast.state.borrow().discovering);
+        assert_eq!(cast.state.borrow().mode, "cast");
+        assert_eq!(cast.task.borrow().as_str(), "task-1");
+        let first_req = rx.try_recv().expect("discover request sent");
+        assert!(matches!(
+            first_req,
+            CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::DiscoverCastDevices { ref mode }
+            } if mode == "cast"
+        ));
+
+        // Calling show("tvbox", Some(("task-2", "episode.mp4"))) while discovering is true
+        // must update mode and task immediately and queue a follow-up tvbox scan!
+        cast.show("tvbox", Some(("task-2", "episode.mp4")));
+        assert_eq!(cast.state.borrow().mode, "tvbox");
+        assert_eq!(cast.task.borrow().as_str(), "task-2");
+        assert_eq!(cast.state.borrow().source_label, "episode.mp4");
+        assert!(cast.state.borrow().locked_source);
+        let win = cast.window.borrow().as_ref().unwrap().clone_strong();
+        assert_eq!(win.get_mode().as_str(), "tvbox");
+        assert_eq!(win.get_source_label().as_str(), "episode.mp4");
+
+        // Completing stale discover #1 triggers fresh discover #2 for "tvbox".
+        cast.response(&CorePipeResponse::Events {
+            request_id: 1,
+            events: vec![EventEnvelope {
+                sequence: 1,
+                event: CoreEvent::CastDevices {
+                    devices: vec![CastDeviceInfo {
+                        id: "dlna-1".into(),
+                        label: "Living Room TV".into(),
+                        service_type: "DLNA".into(),
+                        location: String::new(),
+                        control_url: String::new(),
+                    }],
+                },
+            }],
+        });
+        assert!(cast.state.borrow().discovering);
+        let second_req = rx.try_recv().expect("follow-up tvbox discover sent");
+        assert!(matches!(
+            second_req,
+            CorePipeRequest::Command {
+                request_id: 2,
+                command: CoreCommand::DiscoverCastDevices { ref mode }
+            } if mode == "tvbox"
+        ));
+        let _ = win.hide();
+    }
 }

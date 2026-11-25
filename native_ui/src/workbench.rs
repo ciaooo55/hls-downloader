@@ -82,6 +82,17 @@ impl Workbench {
         );
     }
 
+    pub fn set_browser_connected(&self, connected: bool) {
+        self.window.set_browser_status(
+            if connected {
+                "浏览器已连接"
+            } else {
+                "浏览器未连接"
+            }
+            .into(),
+        );
+    }
+
     pub fn show_notice(&self, tone: &str, message: impl Into<slint::SharedString>) {
         self.show_notice_at(tone, message, std::time::Instant::now());
     }
@@ -196,12 +207,16 @@ impl Workbench {
                 match job {
                     WorkbenchJob::Request(request) => client.request(&request),
                     WorkbenchJob::Snapshot(request_id) => {
+                        let browser_connected = client
+                            .task_page(None, 1)
+                            .map(|page| page.browser_connected)
+                            .unwrap_or(false);
                         client.snapshot_state().map(|(tasks, latest_sequence)| {
                             CorePipeResponse::Snapshot {
                                 request_id,
                                 tasks,
                                 latest_sequence,
-                                browser_connected: false,
+                                browser_connected,
                             }
                         })
                     }
@@ -294,11 +309,20 @@ impl Workbench {
     pub fn new(
         tasks: Vec<TaskSnapshot>,
         sequence: u64,
+        browser_connected: bool,
         dark: bool,
         reduce_motion: bool,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let window = WorkbenchWindow::new()?;
         window.set_product_version(env!("CARGO_PKG_VERSION").into());
+        window.set_browser_status(
+            if browser_connected {
+                "浏览器已连接"
+            } else {
+                "浏览器未连接"
+            }
+            .into(),
+        );
         native_window::apply_appearance(&window, dark, reduce_motion);
         let state = Rc::new(RefCell::new(TaskList::default()));
         state.borrow_mut().replace(tasks, sequence);
@@ -672,7 +696,13 @@ impl Workbench {
     pub fn show_for_launch(&self, launch_id: Option<String>) -> Result<(), slint::PlatformError> {
         self.closing.set(false);
         let visible = self.window.window().is_visible();
+        if !visible {
+            native_window::set_cloaked(self.window.window(), true);
+        }
         self.window.show()?;
+        if !visible {
+            native_window::set_cloaked(self.window.window(), true);
+        }
         #[cfg(windows)]
         {
             let weak = self.window.as_weak();
@@ -683,13 +713,18 @@ impl Workbench {
                 };
                 use slint::winit_030::WinitWindowAccessor;
                 if ui.window().winit_window().await.is_err() || !ui.window().is_visible() {
+                    native_window::set_cloaked(ui.window(), false);
                     report_ui_ready(launch_id, "main_failed");
                     return;
+                }
+                if !visible {
+                    native_window::set_cloaked(ui.window(), true);
                 }
                 native_window::apply_theme(&ui, ui.global::<Tokens>().get_dark());
                 if !visible {
                     native_window::restore_geometry(ui.window());
                 }
+                native_window::set_cloaked(ui.window(), false);
                 native_window::activate(ui.window());
                 // Windows can refuse foreground activation. The receipt confirms
                 // the window is visible and can be reached from the taskbar.
@@ -701,6 +736,7 @@ impl Workbench {
             if !visible {
                 native_window::restore_geometry(self.window.window());
             }
+            native_window::set_cloaked(self.window.window(), false);
             report_ui_ready(launch_id, "main");
         }
         Ok(())
@@ -824,18 +860,27 @@ impl Workbench {
         match &event.event {
             CoreEvent::Error { message, .. } => {
                 self.show_notice("error", message.clone());
+                if let Some((_, details)) = self.details.borrow().as_ref() {
+                    if details.window().is_visible() {
+                        details.set_footer_tone("error".into());
+                        details.set_footer_status(message.clone().into());
+                    }
+                }
             }
             CoreEvent::Toast { message, .. } => {
-                self.show_notice(infer_toast_tone(message), message.clone());
-            }
-            CoreEvent::BrowserStatus { connected, .. } => self.window.set_browser_status(
-                if *connected {
-                    "浏览器已连接"
-                } else {
-                    "浏览器未连接"
+                let tone = infer_toast_tone(message);
+                self.show_notice(tone, message.clone());
+                if let Some((_, details)) = self.details.borrow().as_ref() {
+                    if details.window().is_visible() {
+                        details.set_footer_tone(tone.into());
+                        details.set_footer_status(message.clone().into());
+                    }
                 }
-                .into(),
-            ),
+            }
+            CoreEvent::BrowserStatus { connected, .. } => self.set_browser_connected(*connected),
+            CoreEvent::PowerActionPending { .. } => {
+                self.window.set_power_action_pending(true);
+            }
             CoreEvent::SettingsChanged { .. } => {
                 self.request(CorePipeRequest::LoadSettings {
                     request_id: self.id(),
@@ -1082,6 +1127,11 @@ impl Workbench {
             .set_inspector_status(crate::task_status_label(&task.status).into());
         self.window
             .set_inspector_status_code(task.status.clone().into());
+        let active_speed = if crate::task_is_active(&task.status) {
+            task.speed_bytes_per_sec
+        } else {
+            0
+        };
         self.window.set_inspector_transfer(
             format!(
                 "{} / {} · {} /s",
@@ -1089,7 +1139,7 @@ impl Workbench {
                 task.total_bytes
                     .map(crate::format_bytes)
                     .unwrap_or_else(|| "未知".into()),
-                crate::format_bytes(task.speed_bytes_per_sec)
+                crate::format_bytes(active_speed)
             )
             .into(),
         );
@@ -1119,7 +1169,7 @@ impl Workbench {
             .trim()
             .into(),
         );
-        let speeds = crate::speed_stats::summarize(task.speed_bytes_per_sec, &task.speed_history);
+        let speeds = crate::speed_stats::summarize(active_speed, &task.speed_history);
         self.window.set_inspector_speed_stats(
             if speeds.peak > 0 {
                 format!(
@@ -1178,57 +1228,69 @@ impl Workbench {
             .iter()
             .filter_map(|id| state.tasks.get(id))
             .collect();
+        let any_media_selected = selected.iter().any(|task| is_media_capable_task(task));
+        let any_refreshable = selected
+            .iter()
+            .any(|task| task_action_allowed(task, "refresh_browser"));
         let entries = [
-            ("详情与日志", "details", "details"),
-            ("开始 / 继续", "start", "play"),
-            ("暂停", "pause", "pause"),
-            ("取消", "取消", "close"),
-            ("重新下载", "task:retry", "refresh"),
+            ("开始 / 继续", "start", "play", "transfer"),
+            ("暂停", "pause", "pause", "transfer"),
+            ("重新下载", "task:retry", "refresh", "transfer"),
+            ("取消", "cancel", "close", "transfer"),
+            ("播放", "task:play", "play", "media"),
+            ("投屏", "task:cast", "cast", "media"),
+            ("TVBox 推送", "task:push_tvbox", "tvbox", "media"),
+            ("打开文件", "task:open", "file", "file"),
+            ("打开所在位置", "task:open_folder", "folder", "file"),
+            ("复制文件", "task:copy_file", "paste", "file"),
+            ("复制下载链接", "task:copy_url", "link", "file"),
             (
                 "刷新下载地址（浏览器辅助）",
                 "task:refresh_browser",
                 "refresh",
+                "file",
             ),
-            ("复制下载链接", "task:copy_url", "link"),
-            ("播放", "task:play", "play"),
-            ("投屏", "task:cast", "cast"),
-            ("TVBox 推送", "task:push_tvbox", "tvbox"),
-            ("移动到队列", "移动到队列", "queue"),
-            ("上移", "task:queue_up", "up"),
-            ("下移", "task:queue_down", "down"),
-            ("置顶", "task:queue_top", "up"),
-            ("置底", "task:queue_bottom", "down"),
-            ("打开文件", "task:open", "file"),
-            ("打开所在位置", "task:open_folder", "folder"),
-            ("复制文件", "task:copy_file", "paste"),
-            ("按住拖出文件", "task:drag_file", "export"),
-            ("删除任务", "delete", "delete"),
-            ("删除任务和文件", "delete_files", "delete"),
+            ("详情与日志", "details", "details", "file"),
+            ("移动到队列", "queues", "queue", "queue"),
+            ("置顶", "task:queue_top", "up", "queue"),
+            ("上移", "task:queue_up", "up", "queue"),
+            ("下移", "task:queue_down", "down", "queue"),
+            ("置底", "task:queue_bottom", "down", "queue"),
+            ("删除任务", "delete", "delete", "danger"),
+            ("删除任务和文件", "delete_files", "delete", "danger"),
         ];
-        self.window.set_task_menu(ModelRc::new(VecModel::from(
-            entries
-                .iter()
-                .map(|(label, action, icon)| {
-                    let enabled = match *action {
-                        "details" | "移动到队列" => !selected.is_empty(),
-                        "start" => selected
-                            .iter()
-                            .any(|task| task_start_action(task).is_some()),
-                        "pause" => selected.iter().any(|t| task_action_allowed(t, "pause")),
-                        "取消" => selected.iter().any(|t| task_action_allowed(t, "cancel")),
-                        action => selected.iter().any(|t| {
-                            task_action_allowed(t, action.strip_prefix("task:").unwrap_or(action))
-                        }),
-                    };
-                    TaskMenuRow {
-                        label: (*label).into(),
-                        action: (*action).into(),
-                        icon: (*icon).into(),
-                        enabled,
-                    }
-                })
-                .collect::<Vec<_>>(),
-        )));
+        let mut prev_group: Option<&str> = None;
+        let mut rows = Vec::with_capacity(entries.len());
+        for (label, action, icon, group) in &entries {
+            if *group == "media" && !any_media_selected {
+                continue;
+            }
+            if *action == "task:refresh_browser" && !any_refreshable {
+                continue;
+            }
+            let enabled = match *action {
+                "details" | "queues" => !selected.is_empty(),
+                "start" => selected
+                    .iter()
+                    .any(|task| task_start_action(task).is_some()),
+                "pause" => selected.iter().any(|t| task_action_allowed(t, "pause")),
+                "cancel" => selected.iter().any(|t| task_action_allowed(t, "cancel")),
+                action => selected.iter().any(|t| {
+                    task_action_allowed(t, action.strip_prefix("task:").unwrap_or(action))
+                }),
+            };
+            let divider = prev_group.is_some_and(|prev| prev != *group);
+            prev_group = Some(*group);
+            rows.push(TaskMenuRow {
+                label: (*label).into(),
+                action: (*action).into(),
+                icon: (*icon).into(),
+                enabled,
+                divider,
+            });
+        }
+        self.window
+            .set_task_menu(ModelRc::new(VecModel::from(rows)));
     }
 
     fn render_status(&self) {
@@ -1319,6 +1381,7 @@ impl Workbench {
         let speed: u64 = state
             .tasks
             .values()
+            .filter(|task| crate::task_is_active(&task.status))
             .map(|task| task.speed_bytes_per_sec)
             .sum();
         let active_count = state
@@ -1486,10 +1549,7 @@ impl Workbench {
                     );
                 }
             }
-            "drag_help" => {
-                self.show_notice("info", "按住左键拖至目标文件夹；也可用 Ctrl+C 复制后粘贴")
-            }
-            "task:copy_file" | "task:drag_file" => {
+            "task:copy_file" => {
                 let paths = {
                     let state = self.state.borrow();
                     selected_output_paths(
@@ -1501,25 +1561,12 @@ impl Workbench {
                     )
                 };
                 let result = paths.and_then(|paths| {
-                    if action == "task:copy_file" {
-                        hls_client::file_transfer::write_files(&paths).map(|()| {
-                            (
-                                "success",
-                                format!("已复制 {} 个文件，可粘贴到目标文件夹", paths.len()),
-                            )
-                        })
-                    } else {
-                        hls_client::file_transfer::begin_file_drag(&paths).map(|outcome| {
-                            match outcome {
-                                hls_client::file_transfer::DragOutcome::Dropped => {
-                                    ("success", format!("已拖出 {} 个文件", paths.len()))
-                                }
-                                hls_client::file_transfer::DragOutcome::Canceled => {
-                                    ("info", "已取消拖出".into())
-                                }
-                            }
-                        })
-                    }
+                    hls_client::file_transfer::write_files(&paths).map(|()| {
+                        (
+                            "success",
+                            format!("已复制 {} 个文件，可粘贴到目标文件夹", paths.len()),
+                        )
+                    })
                 });
                 match result {
                     Ok((tone, text)) => self.show_notice(tone, text),
@@ -1577,8 +1624,8 @@ impl Workbench {
                     );
                 }
             }
-            "delete" | "delete_files" | "删除任务" | "删除任务和文件" => {
-                let files = matches!(action, "delete_files" | "删除任务和文件");
+            "delete" | "delete_files" => {
+                let files = action == "delete_files";
                 let action = if files { "delete_files" } else { "delete" };
                 let ids: Vec<_> = {
                     let state = self.state.borrow();
@@ -1677,14 +1724,14 @@ impl Workbench {
                     value: mode.code().into(),
                 });
             }
-            "start" | "pause" | "开始 / 继续" | "暂停" | "取消" => {
+            "start" | "pause" | "cancel" => {
                 let state = self.state.borrow();
                 let mut commands = Vec::new();
                 for task in state.toolbar_targets() {
                     let actions = &task.available_actions;
                     let target = match action {
-                        "pause" | "暂停" => "pause",
-                        "取消" => "cancel",
+                        "pause" => "pause",
+                        "cancel" => "cancel",
                         _ => match task_start_action(task) {
                             Some(action) => action,
                             None => continue,
@@ -1702,15 +1749,15 @@ impl Workbench {
                     self.job(WorkbenchJob::Batch(self.id(), commands));
                 }
             }
-            "clear_completed" | "清空已完成" => {
+            "clear_completed" => {
                 self.send(CoreCommand::ClearCompleted);
             }
             "new" | "批量添加" | "导入 cURL" => self.open_editor(action),
-            "queues" | "移动到队列" => self.open_queues(),
+            "queues" => self.open_queues(),
             "页面抓取" => self.open_resource_tools("harvest", String::new()),
             "抓站与同步项目" => self.open_resource_tools("crawl", String::new()),
             "ZIP 内容预览" => self.open_resource_tools("zip", String::new()),
-            "details" | "详情与日志" => self.open_details(),
+            "details" => self.open_details(),
             "浏览器插件" | "通知" | "关于" | "检查更新" => {
                 if let Some(system) = self.system.borrow().as_ref() {
                     system.show(match action {
@@ -1721,7 +1768,10 @@ impl Workbench {
                     });
                 }
             }
-            "取消完成动作" => self.send(CoreCommand::CancelPowerAction),
+            "取消完成动作" => {
+                self.window.set_power_action_pending(false);
+                self.send(CoreCommand::CancelPowerAction);
+            }
             action if action.starts_with("focus_task:") => {
                 let target_id = &action[11..];
                 let needs_reset = {
@@ -1752,14 +1802,14 @@ impl Workbench {
             "refresh" => {
                 self.job(WorkbenchJob::Snapshot(self.id()));
             }
-            "import" | "导入" => {
+            "import" => {
                 match file_dialogs::files(native_window::hwnd(self.window.window()), false) {
                     Ok(paths) if !paths.is_empty() => self.send(CoreCommand::ImportPaths { paths }),
                     Err(error) => self.show_notice("error", error),
                     _ => {}
                 }
             }
-            "export" | "导出" => {
+            "export" => {
                 match file_dialogs::files(native_window::hwnd(self.window.window()), true) {
                     Ok(paths) if !paths.is_empty() => {
                         let id = self.id();
@@ -1781,14 +1831,6 @@ impl Workbench {
                     }
                     Err(error) => self.show_notice("error", error),
                     _ => {}
-                }
-            }
-            "打开所在位置" => {
-                for id in &self.state.borrow().selected {
-                    self.send(CoreCommand::OpenCompleted {
-                        task_id: id.clone(),
-                        folder: true,
-                    });
                 }
             }
             _ => self.show_notice("warning", format!("功能入口尚未完成迁移：{action}")),
@@ -1990,6 +2032,13 @@ impl Workbench {
                 *self.settings_response.borrow_mut() = Some(response.clone());
                 if let Some(editor) = self.editor.borrow().as_ref() {
                     self.sync_editor_queues(editor, None);
+                    if editor.get_download_dir().trim().is_empty() {
+                        if let CorePipeResponse::Settings { download_dir, .. } = &response {
+                            if !download_dir.trim().is_empty() {
+                                editor.set_download_dir(download_dir.clone().into());
+                            }
+                        }
+                    }
                 }
                 if let Some(tools) = self.tools.borrow().as_ref() {
                     tools.set_queues(&self.queue_profiles());
@@ -2005,9 +2054,11 @@ impl Workbench {
             CorePipeResponse::Snapshot {
                 tasks,
                 latest_sequence,
+                browser_connected,
                 ..
             } => {
                 self.set_engine_online(true);
+                self.set_browser_connected(browser_connected);
                 self.merge_snapshot(tasks, latest_sequence);
             }
             CorePipeResponse::Error {
@@ -2075,15 +2126,12 @@ impl Workbench {
             }
             .into(),
         );
-        if let Some(CorePipeResponse::Settings {
-            download_dir,
-            legal_accepted,
-            ..
-        }) = self.settings_response.borrow().as_ref()
+        if let Some(CorePipeResponse::Settings { download_dir, .. }) =
+            self.settings_response.borrow().as_ref()
         {
             editor.set_download_dir(download_dir.clone().into());
-            editor.set_legal_accepted(*legal_accepted);
         }
+        editor.set_legal_accepted(true);
         #[cfg(not(test))]
         if allow_passive_clipboard {
             if let Ok(hls_client::file_transfer::ClipboardContent::Text(text)) =
@@ -2144,7 +2192,7 @@ impl Workbench {
     }
 
     fn editor_action(&self, action: &str) {
-        if action == "folder" {
+        if action == "folder" || action == "body_file" {
             let owner = {
                 let editor = self.editor.borrow();
                 let Some(editor) = editor.as_ref() else {
@@ -2152,18 +2200,37 @@ impl Workbench {
                 };
                 native_window::hwnd(editor.window())
             };
-            let picked = file_dialogs::folder(owner);
-            let editor = self.editor.borrow();
-            let Some(editor) = editor.as_ref() else {
-                return;
-            };
-            match picked {
-                Ok(Some(path)) => editor.set_download_dir(path.into()),
-                Err(error) => {
-                    editor.set_result_tone("error".into());
-                    editor.set_result(error.into());
+            if action == "folder" {
+                let picked = file_dialogs::folder(owner);
+                let editor = self.editor.borrow();
+                let Some(editor) = editor.as_ref() else {
+                    return;
+                };
+                match picked {
+                    Ok(Some(path)) => editor.set_download_dir(path.into()),
+                    Err(error) => {
+                        editor.set_result_tone("error".into());
+                        editor.set_result(error.into());
+                    }
+                    _ => {}
                 }
-                _ => {}
+            } else {
+                let picked = file_dialogs::files(owner, false);
+                let editor = self.editor.borrow();
+                let Some(editor) = editor.as_ref() else {
+                    return;
+                };
+                match picked {
+                    Ok(paths) => {
+                        if let Some(path) = paths.first() {
+                            editor.set_body_path(path.clone().into());
+                        }
+                    }
+                    Err(error) => {
+                        editor.set_result_tone("error".into());
+                        editor.set_result(error.into());
+                    }
+                }
             }
             return;
         }
@@ -2198,11 +2265,25 @@ impl Workbench {
                 };
                 let request_id = self.editor_id.get();
                 let submitted = if action == "probe" {
+                    let probe_url = if editor.get_mode().as_str() == "curl" {
+                        let Some(extracted) = extract_curl_probe_url(&spec.url) else {
+                            editor.set_result_tone("warning".into());
+                            editor.set_result("未能从 cURL 命令中识别出有效链接".into());
+                            return;
+                        };
+                        extracted
+                    } else {
+                        spec.url.clone()
+                    };
+                    let probe_spec = TaskSpec {
+                        url: probe_url.clone(),
+                        ..spec
+                    };
                     let request = CorePipeRequest::Command {
                         request_id,
                         command: CoreCommand::ProbeUrl {
-                            url: spec.url.clone(),
-                            spec: Some(spec),
+                            url: probe_url,
+                            spec: Some(probe_spec),
                         },
                     };
                     self.enqueue(
@@ -2281,6 +2362,9 @@ impl Workbench {
             self.show_notice("warning", "请选择任务");
             return;
         };
+        if let Some((_, previous)) = self.details.borrow().as_ref() {
+            let _ = previous.hide();
+        }
         let Ok(window) = DetailsWindow::new() else {
             return;
         };
@@ -2301,6 +2385,8 @@ impl Workbench {
                         let url: String = window.get_url().into();
                         let cookie: String = window.get_cookie().into();
                         window.set_cookie("".into());
+                        window.set_footer_tone("info".into());
+                        window.set_footer_status("已提交新请求信息并尝试续传".into());
                         this.send(CoreCommand::RefreshTaskRequest {
                             task_id: id.clone(),
                             url,
@@ -2308,20 +2394,40 @@ impl Workbench {
                             auto_resume: true,
                         });
                     }
-                    "speed" => this.send(CoreCommand::TaskAction {
-                        task_id: id.clone(),
-                        action: format!("speed:{}", window.get_speed_limit()),
-                    }),
-                    "logs" => this.send(CoreCommand::GetTaskLog {
-                        task_id: id.clone(),
-                    }),
+                    "speed" => {
+                        let limit = window.get_speed_limit();
+                        window.set_footer_tone("success".into());
+                        window.set_footer_status(
+                            if limit > 0 {
+                                format!("已设置任务限速 {limit} KiB/s")
+                            } else {
+                                "已取消任务限速".into()
+                            }
+                            .into(),
+                        );
+                        this.send(CoreCommand::TaskAction {
+                            task_id: id.clone(),
+                            action: format!("speed:{limit}"),
+                        });
+                    }
+                    "logs" => {
+                        window.set_footer_tone("info".into());
+                        window.set_footer_status("正在刷新任务日志…".into());
+                        this.send(CoreCommand::GetTaskLog {
+                            task_id: id.clone(),
+                        });
+                    }
                     "folder" => this.send(CoreCommand::OpenCompleted {
                         task_id: id.clone(),
                         folder: true,
                     }),
-                    "profile" => this.send(CoreCommand::SaveSiteProfile {
-                        task_id: id.clone(),
-                    }),
+                    "profile" => {
+                        window.set_footer_tone("success".into());
+                        window.set_footer_status("已保存当前站点下载规则".into());
+                        this.send(CoreCommand::SaveSiteProfile {
+                            task_id: id.clone(),
+                        });
+                    }
                     "torrent" if window.get_can_select_torrent_files() => {
                         this.open_resource_tools("torrent", id.clone())
                     }
@@ -2329,6 +2435,8 @@ impl Workbench {
                         let source_url = window.get_source_page_url().trim().to_owned();
                         if !source_url.is_empty() {
                             if let Err(error) = file_dialogs::open(&source_url) {
+                                window.set_footer_tone("error".into());
+                                window.set_footer_status(error.clone().into());
                                 this.show_notice("error", error);
                             }
                         }
@@ -2337,8 +2445,16 @@ impl Workbench {
                         let source_url = window.get_source_page_url().trim().to_owned();
                         if !source_url.is_empty() {
                             match file_dialogs::write_clipboard_text(&source_url) {
-                                Ok(()) => this.show_notice("success", "已复制来源页面链接"),
-                                Err(error) => this.show_notice("error", error),
+                                Ok(()) => {
+                                    window.set_footer_tone("success".into());
+                                    window.set_footer_status("已复制来源页面链接".into());
+                                    this.show_notice("success", "已复制来源页面链接");
+                                }
+                                Err(error) => {
+                                    window.set_footer_tone("error".into());
+                                    window.set_footer_status(error.clone().into());
+                                    this.show_notice("error", error);
+                                }
                             }
                         }
                     }
@@ -2359,6 +2475,7 @@ impl Workbench {
             if let Some(task) = self.state.borrow().tasks.get(&id) {
                 window.set_url(task.url.clone().into());
                 window.set_speed_limit(task.speed_limit_kib.min(i32::MAX as u32) as i32);
+                window.set_can_open_folder(task_action_allowed(task, "open_folder"));
             }
             let _ = window.show();
             native_window::prepare_dialog(
@@ -2385,8 +2502,14 @@ impl Workbench {
             let _ = window.hide();
             return;
         };
+        let active_speed = if crate::task_is_active(&task.status) {
+            task.speed_bytes_per_sec
+        } else {
+            0
+        };
         window.set_filename(task.filename.clone().into());
         window.set_can_select_torrent_files(task.resource_kind == ResourceKind::Torrent);
+        window.set_can_open_folder(task_action_allowed(task, "open_folder"));
         window.set_status(crate::task_status_label(&task.status).into());
         window.set_transfer(
             format!(
@@ -2395,7 +2518,7 @@ impl Workbench {
                 task.total_bytes
                     .map(crate::format_bytes)
                     .unwrap_or_else(|| "未知".into()),
-                crate::format_bytes(task.speed_bytes_per_sec)
+                crate::format_bytes(active_speed)
             )
             .into(),
         );
@@ -2422,7 +2545,7 @@ impl Workbench {
             .trim()
             .into(),
         );
-        let speeds = crate::speed_stats::summarize(task.speed_bytes_per_sec, &task.speed_history);
+        let speeds = crate::speed_stats::summarize(active_speed, &task.speed_history);
         window.set_current_speed(format!("{} /s", crate::format_bytes(speeds.current)).into());
         window.set_peak_speed(format!("{} /s", crate::format_bytes(speeds.peak)).into());
         window.set_average_speed(format!("{} /s", crate::format_bytes(speeds.average)).into());
@@ -2501,6 +2624,9 @@ impl Workbench {
                 return;
             }
         };
+        if let Some(previous) = self.queues.borrow().as_ref() {
+            let _ = previous.window.hide();
+        }
         let Ok(editor) = QueueEditor::new(
             profiles,
             &self.window,
@@ -2588,6 +2714,9 @@ impl Workbench {
     }
 
     fn open_settings(self: &Rc<Self>, response: &CorePipeResponse) {
+        if let Some(previous) = self.settings.borrow().as_ref() {
+            let _ = previous.window.hide();
+        }
         let Ok(editor) = SettingsEditor::new(response, &self.window) else {
             return;
         };
@@ -3038,6 +3167,126 @@ fn task_start_action(task: &TaskSnapshot) -> Option<&'static str> {
         .find(|action| task_action_allowed(task, action))
 }
 
+fn is_media_capable_task(task: &TaskSnapshot) -> bool {
+    if matches!(
+        task.resource_kind,
+        ResourceKind::Hls | ResourceKind::Dash | ResourceKind::Live
+    ) {
+        return true;
+    }
+    let extension = task
+        .filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    hls_client::media_ext::MEDIA_PLAYABLE_EXTENSIONS.contains(&extension.as_str())
+        || task
+            .available_actions
+            .iter()
+            .any(|action| matches!(action.as_str(), "play" | "cast"))
+}
+
+pub(crate) fn extract_curl_probe_url(raw: &str) -> Option<String> {
+    let joined = raw
+        .replace("\\\r\n", " ")
+        .replace("\\\n", " ")
+        .replace("^\r\n", " ")
+        .replace("^\n", " ");
+    let mut tokens = Vec::new();
+    let mut chars = joined.chars().peekable();
+    while let Some(&ch) = chars.peek() {
+        if ch.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut token = String::new();
+        if ch == '\'' || ch == '"' {
+            let quote = chars.next().unwrap();
+            while let Some(c) = chars.next() {
+                if c == '\\' && quote == '"' {
+                    if let Some(escaped) = chars.next() {
+                        token.push(escaped);
+                    }
+                } else if c == quote {
+                    break;
+                } else {
+                    token.push(c);
+                }
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() {
+                    break;
+                }
+                token.push(c);
+                chars.next();
+            }
+        }
+        if !token.is_empty() {
+            tokens.push(token);
+        }
+    }
+    let is_supported = |candidate: &str| -> bool {
+        let trimmed = candidate.trim_matches(|c| c == '\'' || c == '"').trim();
+        let Some((scheme, rest)) = trimmed.split_once("://") else {
+            return false;
+        };
+        matches!(
+            scheme.to_ascii_lowercase().as_str(),
+            "http" | "https" | "ftp" | "sftp"
+        ) && !rest.is_empty()
+    };
+    let mut i = 0;
+    while i < tokens.len() {
+        let current = tokens[i].as_str();
+        if current == "--url" {
+            if let Some(next) = tokens.get(i + 1) {
+                if is_supported(next) {
+                    return Some(next.trim().to_owned());
+                }
+            }
+            i += 2;
+            continue;
+        }
+        if let Some(rest) = current.strip_prefix("--url=") {
+            let unquoted = rest.trim_matches(|c| c == '\'' || c == '"');
+            if is_supported(unquoted) {
+                return Some(unquoted.to_owned());
+            }
+        }
+        if matches!(
+            current,
+            "-H" | "--header"
+                | "-X"
+                | "--request"
+                | "-b"
+                | "--cookie"
+                | "-A"
+                | "--user-agent"
+                | "-e"
+                | "--referer"
+                | "-d"
+                | "--data"
+                | "--data-raw"
+                | "--data-binary"
+                | "-o"
+                | "--output"
+                | "-u"
+                | "--user"
+                | "-x"
+                | "--proxy"
+        ) {
+            i += 2;
+            continue;
+        }
+        if is_supported(current) {
+            return Some(current.trim().to_owned());
+        }
+        i += 1;
+    }
+    None
+}
+
 fn task_action_allowed(task: &TaskSnapshot, action: &str) -> bool {
     let available = |action: &str| task.available_actions.iter().any(|value| value == action);
     match action {
@@ -3411,7 +3660,7 @@ fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
             .map(crate::format_bytes)
             .unwrap_or_else(|| "未知".into())
             .into(),
-        speed: if task.speed_bytes_per_sec > 0 {
+        speed: if crate::task_is_active(&task.status) && task.speed_bytes_per_sec > 0 {
             format!("{} /s", crate::format_bytes(task.speed_bytes_per_sec))
         } else {
             "—".into()
@@ -3678,7 +3927,7 @@ mod file_selection_tests {
             speed_history: vec![100_000, 200_000, 300_000],
             ..Default::default()
         };
-        let workbench = Workbench::new(vec![task], 1, true, true).unwrap();
+        let workbench = Workbench::new(vec![task], 1, false, true, true).unwrap();
         workbench.state.borrow_mut().select("insp-1", false, false);
         workbench.render_selection();
         // While closed, heavy inspector VecModels must not be rebuilt.
@@ -3727,7 +3976,7 @@ mod file_selection_tests {
     #[test]
     fn ui_show_new_download_and_clipboard_offer_open_prefilled_editor_with_queue_combo() {
         crate::offscreen::OffscreenPlatform::init_test();
-        let workbench = Workbench::new(Vec::new(), 1, true, true).unwrap();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
         let settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
             "type": "settings",
             "request_id": 1,
@@ -3831,7 +4080,7 @@ mod file_selection_tests {
             available_actions: vec!["delete".into()],
             ..Default::default()
         };
-        let workbench = Workbench::new(vec![task], 1, true, true).unwrap();
+        let workbench = Workbench::new(vec![task], 1, false, true, true).unwrap();
         workbench.state.borrow_mut().select("del-1", false, false);
         workbench.render_selection();
         workbench.action("delete");
@@ -3930,7 +4179,7 @@ mod file_selection_tests {
             status: "paused".into(),
             ..Default::default()
         };
-        let workbench = Workbench::new(vec![a, b], 1, true, true).unwrap();
+        let workbench = Workbench::new(vec![a, b], 1, false, true, true).unwrap();
 
         // Sort indicator tracks active column and direction.
         workbench.window.invoke_sort("name".into());
@@ -4033,7 +4282,7 @@ mod file_selection_tests {
         assert_eq!(risky_summary.av_tone, "fail");
 
         // Verify live binding into Inspector Drawer and DetailsWindow.
-        let workbench = Workbench::new(vec![task], 1, true, true).unwrap();
+        let workbench = Workbench::new(vec![task], 1, false, true, true).unwrap();
         workbench.state.borrow_mut().select("tel-1", false, false);
         workbench.window.set_inspector_open(true);
         workbench.render_inspector();
@@ -4082,7 +4331,7 @@ mod file_selection_tests {
     #[test]
     fn batch_editor_live_wildcard_preview_updates_on_edit() {
         crate::offscreen::OffscreenPlatform::init_test();
-        let workbench = Workbench::new(Vec::new(), 1, true, true).unwrap();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
         workbench.open_editor("批量添加");
         let editor = workbench.editor.borrow();
         let editor = editor.as_ref().expect("batch editor opened");
@@ -4167,7 +4416,7 @@ mod file_selection_tests {
         use std::time::{Duration, Instant};
 
         crate::offscreen::OffscreenPlatform::init_test();
-        let workbench = Workbench::new(Vec::new(), 1, true, true).unwrap();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
         assert!(workbench.window.get_engine_online());
         assert_eq!(workbench.window.get_connection().as_str(), "下载引擎已连接");
 
@@ -4223,7 +4472,11 @@ mod file_selection_tests {
             log_tail: vec!["[12:00:01] 连接建立".into(), "[12:00:03] 校验完成".into()],
             ..Default::default()
         };
-        let workbench = Workbench::new(vec![task], 1, false, true).unwrap();
+        let workbench = Workbench::new(vec![task], 1, true, false, true).unwrap();
+        assert_eq!(
+            workbench.window.get_browser_status().as_str(),
+            "浏览器已连接"
+        );
         workbench.window.set_viewport_width(1400.0);
         let closed_viewport = workbench.table_viewport();
         workbench.state.borrow_mut().select("log-1", false, false);
@@ -4235,5 +4488,102 @@ mod file_selection_tests {
         assert_eq!(workbench.window.get_inspector_kind().as_str(), "document");
         assert!(workbench.window.get_inspector_logs().contains("校验完成"));
         assert!(workbench.window.get_can_clear_completed());
+    }
+
+    #[test]
+    fn non_active_tasks_display_dash_speed_and_exclude_stale_speed_from_telemetry() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let completed = TaskSnapshot {
+            task_id: "done-1".into(),
+            filename: "archive.zip".into(),
+            status: "completed".into(),
+            speed_bytes_per_sec: 1024 * 1024,
+            available_actions: vec!["open".into(), "open_folder".into(), "delete".into()],
+            ..Default::default()
+        };
+        let paused = TaskSnapshot {
+            task_id: "paused-1".into(),
+            filename: "installer.exe".into(),
+            status: "paused".into(),
+            speed_bytes_per_sec: 512 * 1024,
+            available_actions: vec!["resume".into(), "delete".into()],
+            ..Default::default()
+        };
+        let active = TaskSnapshot {
+            task_id: "run-1".into(),
+            filename: "stream.mp4".into(),
+            status: "downloading".into(),
+            speed_bytes_per_sec: 2 * 1024 * 1024,
+            available_actions: vec!["pause".into(), "cancel".into()],
+            ..Default::default()
+        };
+        assert_eq!(row(&completed, false).speed.as_str(), "—");
+        assert_eq!(row(&paused, false).speed.as_str(), "—");
+        assert_eq!(row(&active, false).speed.as_str(), "2.0 MB /s");
+
+        let workbench =
+            Workbench::new(vec![completed, paused, active], 1, false, false, true).unwrap();
+        assert!(!workbench
+            .system
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .has_allocated_windows());
+        assert!(!workbench
+            .cast
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .has_allocated_window());
+        assert_eq!(workbench.window.get_telemetry_speed().as_str(), "2.0 MB/s");
+
+        // Context menu on non-media (.zip) hides media-only items and drag-file trap.
+        workbench.state.borrow_mut().select("done-1", false, false);
+        workbench.render_selection();
+        let menu_actions: Vec<String> = workbench
+            .window
+            .get_task_menu()
+            .iter()
+            .map(|r| r.action.to_string())
+            .collect();
+        assert!(!menu_actions.contains(&"task:play".to_owned()));
+        assert!(!menu_actions.contains(&"task:cast".to_owned()));
+        assert!(!menu_actions.contains(&"task:push_tvbox".to_owned()));
+        assert!(!menu_actions.contains(&"task:drag_file".to_owned()));
+
+        // Selecting a media task (.mp4) reveals media actions cleanly.
+        workbench.state.borrow_mut().select("run-1", false, false);
+        workbench.render_selection();
+        let media_actions: Vec<String> = workbench
+            .window
+            .get_task_menu()
+            .iter()
+            .map(|r| r.action.to_string())
+            .collect();
+        assert!(media_actions.contains(&"task:play".to_owned()));
+        assert!(media_actions.contains(&"task:cast".to_owned()));
+        assert!(media_actions.contains(&"task:push_tvbox".to_owned()));
+    }
+
+    #[test]
+    fn extract_curl_probe_url_parses_quoted_and_multiline_curl_commands() {
+        assert_eq!(
+            extract_curl_probe_url(
+                "curl 'https://cdn.example.test/video/master.m3u8?token=abc' \\\n  -H 'Referer: https://site.example.test/' \\\n  -H 'Cookie: sid=1'"
+            )
+            .as_deref(),
+            Some("https://cdn.example.test/video/master.m3u8?token=abc")
+        );
+        assert_eq!(
+            extract_curl_probe_url(
+                "curl.exe -X POST --url \"https://api.example.test/v1/file.mp4\" -d \"a=1\""
+            )
+            .as_deref(),
+            Some("https://api.example.test/v1/file.mp4")
+        );
+        assert_eq!(
+            extract_curl_probe_url("curl -H 'Referer: https://only-header.test'"),
+            None
+        );
     }
 }

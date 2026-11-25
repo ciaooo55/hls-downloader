@@ -9,3 +9,9 @@ lto = "thin"
 codegen-units = 1
 # Core catches worker panics; preserve unwind across the workspace.
 panic = "unwind"
+
+[profile.dev.package.hls-native-ui]
+debug = 0
+
+[profile.test.package.hls-native-ui]
+debug = 0

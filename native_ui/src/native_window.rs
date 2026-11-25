@@ -15,6 +15,21 @@ where
     );
 }
 
+pub fn apply_dialog_theme<C: slint::ComponentHandle>(component: &C, dark: bool)
+where
+    for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
+{
+    let tokens = component.global::<crate::Tokens>();
+    tokens.invoke_apply_theme(dark);
+    apply_caption_theme(
+        component.window(),
+        dark,
+        tokens.get_canvas(),
+        tokens.get_ink(),
+        tokens.get_line(),
+    );
+}
+
 pub fn apply_appearance<C: slint::ComponentHandle>(component: &C, dark: bool, reduce_motion: bool)
 where
     for<'a> crate::Tokens<'a>: slint::Global<'a, C>,
@@ -31,7 +46,10 @@ where
 {
     use slint::ComponentHandle;
     let tokens = parent.global::<crate::Tokens>();
-    apply_appearance(component, tokens.get_dark(), tokens.get_reduce_motion());
+    component
+        .global::<crate::Tokens>()
+        .set_reduce_motion(tokens.get_reduce_motion());
+    apply_dialog_theme(component, tokens.get_dark());
 }
 
 #[cfg(any(windows, test))]
@@ -40,7 +58,7 @@ pub(crate) fn dwm_color_ref(color: slint::Color) -> u32 {
 }
 
 #[cfg(windows)]
-fn set_window_cloaked(handle: i64, cloaked: bool) {
+pub(crate) fn set_window_cloaked(handle: i64, cloaked: bool) {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
     let value: u32 = u32::from(cloaked);
     let _ = unsafe {
@@ -51,6 +69,15 @@ fn set_window_cloaked(handle: i64, cloaked: bool) {
             std::mem::size_of_val(&value) as u32,
         )
     };
+}
+
+pub fn set_cloaked(window: &Window, cloaked: bool) {
+    #[cfg(windows)]
+    if let Some(handle) = hwnd(window) {
+        set_window_cloaked(handle, cloaked);
+    }
+    #[cfg(not(windows))]
+    let _ = (window, cloaked);
 }
 
 fn apply_caption_theme(
@@ -440,7 +467,7 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
         unsafe {
             let positioned =
                 SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE) != 0;
-            if IsWindowVisible(hwnd) == 0 {
+            if window.is_visible() && IsWindowVisible(hwnd) == 0 {
                 ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
             positioned
@@ -449,6 +476,86 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
     #[cfg(not(windows))]
     {
         let _ = (window, logical_margin);
+        false
+    }
+}
+
+/// Computes the top-left physical position for a bottom-right HUD window inside
+/// `work_area = (left, top, right, bottom)` with physical `(margin_x, margin_y)`.
+pub fn bottom_right_hud_position(
+    work_area: (i32, i32, i32, i32),
+    window_size: (i32, i32),
+    margins: (i32, i32),
+) -> (i32, i32) {
+    let (left, top, right, bottom) = work_area;
+    let (width, height) = window_size;
+    let mx = margins.0.max(0);
+    let my = margins.1.max(0);
+    let x = (right - width - mx).max(left);
+    let y = (bottom - height - my).max(top);
+    (x, y)
+}
+
+/// Positions a floating HUD window near the bottom-right of the monitor work area
+/// with `(logical_margin_x, logical_margin_y)` breathing room above the taskbar/toast
+/// zone without stealing focus or resurrecting hidden windows.
+pub fn position_bottom_right_hud(
+    window: &Window,
+    logical_margin_x: f32,
+    logical_margin_y: f32,
+) -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::{HWND, RECT},
+            UI::WindowsAndMessaging::{
+                GetWindowRect, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            },
+        };
+        if !window.is_visible() {
+            return false;
+        }
+        let Some(handle) = hwnd(window) else {
+            return false;
+        };
+        let Some(work) = work_area(Some(handle)) else {
+            return false;
+        };
+        let hwnd = handle as HWND;
+        let mut rect: RECT = unsafe { std::mem::zeroed() };
+        let (width, height) = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0
+            && rect.right > rect.left
+            && rect.bottom > rect.top
+        {
+            (rect.right - rect.left, rect.bottom - rect.top)
+        } else {
+            let size = window.size();
+            (size.width as i32, size.height as i32)
+        };
+        let scale = window.scale_factor();
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let mx = (logical_margin_x.max(0.0) * scale).round() as i32;
+        let my = (logical_margin_y.max(0.0) * scale).round() as i32;
+        let (x, y) = bottom_right_hud_position(work, (width, height), (mx, my));
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ) != 0
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, logical_margin_x, logical_margin_y);
         false
     }
 }
@@ -486,6 +593,12 @@ where
             };
             use slint::winit_030::WinitWindowAccessor;
             if component.window().winit_window().await.is_err() {
+                return;
+            }
+            if !component.window().is_visible() {
+                if let Some(handle) = hwnd(component.window()) {
+                    set_window_cloaked(handle, false);
+                }
                 return;
             }
             if let Some(handle) = hwnd(component.window()) {
@@ -583,6 +696,12 @@ pub fn prepare_bottom_right_toast<C: slint::ComponentHandle + 'static>(
                 return;
             }
             let handle = hwnd(component.window());
+            if !component.window().is_visible() {
+                if let Some(handle) = handle {
+                    set_window_cloaked(handle, false);
+                }
+                return;
+            }
             if let Some(handle) = handle {
                 set_window_cloaked(handle, true);
             }
@@ -628,12 +747,22 @@ pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
             if component.window().winit_window().await.is_err() {
                 return;
             }
+            if !component.window().is_visible() {
+                if let Some(handle) = hwnd(component.window()) {
+                    set_window_cloaked(handle, false);
+                }
+                return;
+            }
             // The HWND is created on show; initial form styling alone cannot theme its caption.
             let tokens = component.global::<crate::Tokens>();
             apply_caption_theme(
                 component.window(),
                 tokens.get_dark(),
-                tokens.get_surface(),
+                if owner.is_some() {
+                    tokens.get_canvas()
+                } else {
+                    tokens.get_surface()
+                },
                 tokens.get_ink(),
                 tokens.get_line(),
             );
@@ -822,21 +951,76 @@ pub fn ui_directory() -> std::path::PathBuf {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SavedWindowGeometry {
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub width: u32,
+    pub height: u32,
+    pub maximized: bool,
+}
+
+impl Default for SavedWindowGeometry {
+    fn default() -> Self {
+        Self {
+            x: None,
+            y: None,
+            width: 1400,
+            height: 820,
+            maximized: false,
+        }
+    }
+}
+
+pub(crate) fn parse_geometry_properties(text: &str) -> SavedWindowGeometry {
+    let mut geometry = SavedWindowGeometry::default();
+    for line in text.lines() {
+        let Some((key, raw)) = line.split_once('=') else {
+            continue;
+        };
+        let raw = raw.trim();
+        match key.trim() {
+            "x" => geometry.x = raw.parse::<i32>().ok(),
+            "y" => geometry.y = raw.parse::<i32>().ok(),
+            "width" => {
+                if let Some(w) = raw.parse::<u32>().ok().filter(|w| *w >= 100) {
+                    geometry.width = w;
+                }
+            }
+            "height" => {
+                if let Some(h) = raw.parse::<u32>().ok().filter(|h| *h >= 100) {
+                    geometry.height = h;
+                }
+            }
+            "maximized" => {
+                geometry.maximized = matches!(raw, "1" | "true");
+            }
+            _ => {}
+        }
+    }
+    geometry
+}
+
+pub(crate) fn format_geometry_properties(geometry: SavedWindowGeometry) -> String {
+    let mut out = String::new();
+    if let (Some(x), Some(y)) = (geometry.x, geometry.y) {
+        out.push_str(&format!("x={x}\ny={y}\n"));
+    }
+    out.push_str(&format!(
+        "width={}\nheight={}\nmaximized={}\n",
+        geometry.width,
+        geometry.height,
+        u8::from(geometry.maximized)
+    ));
+    out
+}
+
 pub fn restore_geometry(window: &Window) {
     let text = std::fs::read_to_string(ui_directory().join("window-geometry.properties"))
         .unwrap_or_default();
-    let value = |name: &str, fallback| {
-        text.lines()
-            .find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key == name)
-                    .then(|| value.trim().parse::<u32>().ok())
-                    .flatten()
-            })
-            .unwrap_or(fallback)
-    };
-    let mut width = value("width", 1400);
-    let mut height = value("height", 820);
+    let saved = parse_geometry_properties(&text);
+    let mut width = saved.width;
+    let mut height = saved.height;
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
         if let Some((left, top, right, bottom)) = work_area(Some(handle)) {
@@ -865,19 +1049,115 @@ pub fn restore_geometry(window: &Window) {
                 .max(1.0) as u32;
             width = width.clamp(560.min(area_width), area_width);
             height = height.clamp(360.min(area_height), area_height);
+            let outer_width = ((width as f32 * scale).round() as u32).saturating_add(border.0);
+            let outer_height = ((height as f32 * scale).round() as u32).saturating_add(border.1);
+            let target_origin = match (saved.x, saved.y) {
+                (Some(x), Some(y)) if x > -16_000 && y > -16_000 => {
+                    clamp_window_to_work_area(
+                        (left, top, right, bottom),
+                        (x, y),
+                        (outer_width, outer_height),
+                    )
+                    .0
+                }
+                _ => (
+                    left + ((area_width - width) as f32 * scale / 2.0) as i32,
+                    top + ((area_height - height) as f32 * scale / 2.0) as i32,
+                ),
+            };
+            set_window_logical_size(window, width as f32, height as f32);
             window.set_position(slint::PhysicalPosition::new(
-                left + ((area_width - width) as f32 * scale / 2.0) as i32,
-                top + ((area_height - height) as f32 * scale / 2.0) as i32,
+                target_origin.0,
+                target_origin.1,
             ));
+            if saved.maximized {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                        handle as _,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SW_MAXIMIZE,
+                    );
+                }
+            }
+            return;
         }
     }
     window.set_size(slint::LogicalSize::new(width as f32, height as f32));
 }
 
 pub fn save_geometry(window: &Window) {
+    let directory = ui_directory();
+    let path = directory.join("window-geometry.properties");
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
-        if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(handle as _) } != 0 {
+        use windows_sys::Win32::{
+            Foundation::RECT,
+            UI::WindowsAndMessaging::{
+                GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, WINDOWPLACEMENT,
+            },
+        };
+        unsafe {
+            if IsIconic(handle as _) != 0 {
+                return;
+            }
+            let maximized = IsZoomed(handle as _) != 0;
+            if maximized {
+                let mut previous =
+                    parse_geometry_properties(&std::fs::read_to_string(&path).unwrap_or_default());
+                if previous.x.is_none() || previous.y.is_none() {
+                    let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+                    placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+                    if GetWindowPlacement(handle as _, &mut placement) != 0 {
+                        let normal = placement.rcNormalPosition;
+                        if normal.right > normal.left && normal.bottom > normal.top {
+                            let scale = window.scale_factor();
+                            let scale = if scale.is_finite() && scale > 0.0 {
+                                scale
+                            } else {
+                                1.0
+                            };
+                            previous.x = Some(normal.left);
+                            previous.y = Some(normal.top);
+                            let nw = ((normal.right - normal.left) as f32 / scale).round() as u32;
+                            let nh = ((normal.bottom - normal.top) as f32 / scale).round() as u32;
+                            if nw >= 300 && nh >= 200 {
+                                previous.width = nw;
+                                previous.height = nh;
+                            }
+                        }
+                    }
+                }
+                previous.maximized = true;
+                if std::fs::create_dir_all(&directory).is_ok() {
+                    let _ = std::fs::write(&path, format_geometry_properties(previous));
+                }
+                return;
+            }
+            let size = window.size().to_logical(window.scale_factor());
+            if !size.width.is_finite()
+                || !size.height.is_finite()
+                || size.width < 100.0
+                || size.height < 100.0
+            {
+                return;
+            }
+            let mut rect: RECT = std::mem::zeroed();
+            let (x, y) = if GetWindowRect(handle as _, &mut rect) != 0
+                && !is_parked_window_rect((rect.left, rect.top, rect.right, rect.bottom))
+            {
+                (Some(rect.left), Some(rect.top))
+            } else {
+                (None, None)
+            };
+            let geometry = SavedWindowGeometry {
+                x,
+                y,
+                width: size.width.round() as u32,
+                height: size.height.round() as u32,
+                maximized: false,
+            };
+            if std::fs::create_dir_all(&directory).is_ok() {
+                let _ = std::fs::write(&path, format_geometry_properties(geometry));
+            }
             return;
         }
     }
@@ -889,15 +1169,16 @@ pub fn save_geometry(window: &Window) {
     {
         return;
     }
-    let directory = ui_directory();
     if std::fs::create_dir_all(&directory).is_ok() {
         let _ = std::fs::write(
-            directory.join("window-geometry.properties"),
-            format!(
-                "width={}\nheight={}\n",
-                size.width.round() as u32,
-                size.height.round() as u32
-            ),
+            &path,
+            format_geometry_properties(SavedWindowGeometry {
+                x: None,
+                y: None,
+                width: size.width.round() as u32,
+                height: size.height.round() as u32,
+                maximized: false,
+            }),
         );
     }
 }
@@ -905,8 +1186,10 @@ pub fn save_geometry(window: &Window) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bottom_right_toast_position, clamp_window_to_work_area, dwm_color_ref,
-        is_parked_window_rect, quns_is_fullscreen_or_busy, rect_covers_monitor,
+        bottom_right_hud_position, bottom_right_toast_position, clamp_window_to_work_area,
+        dwm_color_ref, format_geometry_properties, is_parked_window_rect,
+        parse_geometry_properties, quns_is_fullscreen_or_busy, rect_covers_monitor,
+        SavedWindowGeometry,
     };
 
     #[test]
@@ -989,6 +1272,45 @@ mod tests {
         assert_eq!(
             bottom_right_toast_position((0, 0, 1000, 600), (300, 150), -10),
             (700, 450)
+        );
+        assert_eq!(
+            bottom_right_hud_position((0, 0, 1920, 1040), (380, 256), (16, 36)),
+            (1524, 748)
+        );
+    }
+
+    #[test]
+    fn geometry_properties_roundtrip_normal_origin_size_and_maximized_flag() {
+        let normal = SavedWindowGeometry {
+            x: Some(180),
+            y: Some(92),
+            width: 1360,
+            height: 800,
+            maximized: false,
+        };
+        let encoded = format_geometry_properties(normal);
+        assert_eq!(parse_geometry_properties(&encoded), normal);
+
+        let mut maximized = parse_geometry_properties(&encoded);
+        maximized.maximized = true;
+        let max_encoded = format_geometry_properties(maximized);
+        let restored = parse_geometry_properties(&max_encoded);
+        assert!(restored.maximized);
+        assert_eq!(restored.width, 1360);
+        assert_eq!(restored.height, 800);
+        assert_eq!(restored.x, Some(180));
+        assert_eq!(restored.y, Some(92));
+
+        // Legacy properties with only width/height fall back cleanly.
+        assert_eq!(
+            parse_geometry_properties("width=1280\nheight=720\n"),
+            SavedWindowGeometry {
+                x: None,
+                y: None,
+                width: 1280,
+                height: 720,
+                maximized: false,
+            }
         );
     }
 }

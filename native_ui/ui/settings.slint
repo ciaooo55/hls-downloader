@@ -1,6 +1,6 @@
 import { LineEdit } from "std-widgets.slint";
 import { Tokens, HotButton, HotCheckBox, HotScrollView, HotComboBox, FadePanel } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 import { NavigationItem } from "workbench_components.slint";
 import { SiteRulesEditor, SiteRuleRow } from "site_rules.slint";
 export { SiteRuleRow } from "site_rules.slint";
@@ -28,7 +28,6 @@ export component SettingsWindow inherits Window {
     callback site-rule-action(int, string);
     VerticalLayout {
         spacing: 0px;
-        DialogHeader { heading: "设置"; description: "下载、网络与界面偏好"; icon: "settings"; }
         HorizontalLayout {
             spacing: 0px;
             Rectangle {
@@ -69,7 +68,7 @@ export component SettingsWindow inherits Window {
                             spacing: Tokens.control-gap; alignment: start;
                             HotCheckBox { text: field.label; checked <=> field.checked; toggled => { root.edited(field.key, self.checked ? "true" : "false"); } }
                             if field.key == "completion_sound_enabled": HotButton {
-                                label: "试听提示音 / Preview sound"; icon: "play";
+                                label: "试听提示音"; icon: "play";
                                 clicked => { root.action("preview_sound"); }
                             }
                         }

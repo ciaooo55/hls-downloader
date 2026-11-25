@@ -1,6 +1,6 @@
 import { ListView, LineEdit } from "std-widgets.slint";
 import { Tokens, HotButton, FieldLabel, HotCheckBox, HotScrollView, HotComboBox, ScrollCue } from "theme.slint";
-import { DialogHeader, DialogFooter } from "dialog_components.slint";
+import { DialogFooter } from "dialog_components.slint";
 import { WorkbenchIcon } from "workbench_components.slint";
 
 export struct ResourceRow { id: string, label: string, detail: string, selected: bool }
@@ -9,7 +9,7 @@ export component ResourceToolsWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
     title: root.mode == "zip" ? "ZIP 内容预览" : root.mode == "crawl" ? "抓站与同步项目" : root.mode == "torrent" ? "种子文件选择" : "页面资源抓取";
     background: Tokens.canvas; default-font-family: Tokens.type-face; default-font-size: 13px;
-    preferred-width: 880px; preferred-height: 720px; min-width: 640px;
+    preferred-width: 880px; preferred-height: 650px; min-width: 640px;
     // 最小高度跟随内容：各模式下表单、标题、摘要与列表最小高度都能完整放下，最小尺寸时不裁切。
     min-height: max(420px, main-layout.min-height);
     in property <string> mode;
@@ -44,11 +44,6 @@ export component ResourceToolsWindow inherits Window {
     callback queue-selected(int);
     main-layout := VerticalLayout {
         spacing: 0px;
-        DialogHeader {
-            heading: root.title;
-            description: root.mode == "zip" ? "先查看归档内容，再决定需要下载的文件" : root.mode == "crawl" ? "发现站点资源，保存离线页面并按计划同步" : root.mode == "torrent" ? "选择需要下载的文件，保留已有任务与进度" : "发现页面链接，探测并批量添加下载";
-            icon: root.mode == "zip" ? "archive" : root.mode == "torrent" ? "torrent" : root.mode == "crawl" ? "network" : "harvest";
-        }
         VerticalLayout {
         padding: 20px; padding-left: 24px; padding-right: 24px; spacing: 12px;
         if root.mode != "crawl" || root.creating: HorizontalLayout {

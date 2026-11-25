@@ -521,12 +521,12 @@ export component ScrollCue inherits Rectangle {
     private property <length> track: root.height - 32px;
     private property <length> thumb: root.maximum <= 0px ? 0px : max(min(16px, root.height), root.track * (root.visible-height / root.viewport-height));
     width: 14px;
-    visible: Tokens.dark && root.maximum > 0.5px;
+    visible: root.maximum > 0.5px;
     Rectangle {
         x: parent.width - 7px; width: 3px; border-radius: 1.5px;
         y: 16px + (root.track - root.thumb) * Math.clamp(-root.viewport-y / max(1px, root.maximum), 0, 1);
         height: root.thumb;
-        background: Tokens.faint.with-alpha(0.76);
+        background: Tokens.dark ? Tokens.faint.with-alpha(0.76) : Tokens.muted.with-alpha(0.45);
     }
 }
 

@@ -29,6 +29,9 @@ export component DetailsWindow inherits Window {
     in property <string> logs;
     in property <[float]> speed-history;
     in property <bool> can-select-torrent-files;
+    in property <bool> can-open-folder: false;
+    in property <string> footer-status;
+    in property <string> footer-tone: "info";
     in-out property <string> url;
     in-out property <string> cookie;
     in-out property <int> speed-limit;
@@ -173,7 +176,9 @@ export component DetailsWindow inherits Window {
         }
         }
         DialogFooter {
-            HotButton { label: "打开位置"; icon: "folder"; clicked => { root.action("folder"); } }
+            status: root.footer-status;
+            tone: root.footer-tone;
+            HotButton { label: "打开位置"; icon: "folder"; enabled: root.can-open-folder; clicked => { root.action("folder"); } }
             if root.can-select-torrent-files: HotButton { label: "种子文件"; icon: "torrent"; clicked => { root.action("torrent"); } }
             HotButton { label: "保存站点配置"; icon: "save"; clicked => { root.action("profile"); } }
             HotButton { label: "关闭"; clicked => { root.action("close"); } }
