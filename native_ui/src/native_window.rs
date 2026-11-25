@@ -61,6 +61,8 @@ pub(crate) fn dwm_color_ref(color: slint::Color) -> u32 {
 pub(crate) fn set_window_cloaked(handle: i64, cloaked: bool) {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
     let value: u32 = u32::from(cloaked);
+    // SAFETY: `DWMWA_CLOAK` expects a 4-byte `BOOL` (`0` or `1`); `value` is an aligned 4-byte
+    // stack integer matching `cbAttribute`, and invalid HWNDs fail harmlessly with an error `HRESULT`.
     let _ = unsafe {
         DwmSetWindowAttribute(
             handle as _,
@@ -107,6 +109,8 @@ fn apply_caption_theme(
                 (DWMWA_BORDER_COLOR, dwm_color_ref(border)),
                 (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND as u32),
             ] {
+                // SAFETY: Each listed DWM attribute expects a 4-byte `BOOL`, `COLORREF`, or
+                // `DWM_WINDOW_CORNER_PREFERENCE` value; `value` is a 4-byte stack `u32` matching `cbAttribute`.
                 let result = unsafe {
                     DwmSetWindowAttribute(
                         handle as _,
@@ -129,6 +133,7 @@ pub fn initialize_app_id() {
         // Launchers may be packaged apps; do not inherit their taskbar/UIA
         // identity for the downloader's own native windows.
         let identity: Vec<u16> = "HLSDownloader\0".encode_utf16().collect();
+        // SAFETY: `identity` is a valid NUL-terminated UTF-16 string (`PCWSTR`) outliving the call.
         unsafe {
             windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
                 identity.as_ptr(),
@@ -171,6 +176,8 @@ pub fn is_cursor_inside(window: &Window) -> bool {
             Foundation::{HWND, POINT, RECT},
             UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect},
         };
+        // SAFETY: `POINT` and `RECT` are plain integer `#[repr(C)]` structs; `cursor` and `rect`
+        // are writable stack locations and `handle` is the live Win32 `HWND` for `window`.
         unsafe {
             let mut cursor = POINT { x: 0, y: 0 };
             let mut rect: RECT = std::mem::zeroed();
@@ -263,6 +270,10 @@ pub fn is_foreground_fullscreen_or_busy() -> bool {
             },
         };
 
+        // SAFETY: `SHQueryUserNotificationState`, `GetForegroundWindow`, `GetWindowThreadProcessId`,
+        // `GetClassNameW`, `GetWindowRect`, `MonitorFromWindow`, and `GetMonitorInfoW` receive valid
+        // stack-allocated out-buffers (`MONITORINFO.cbSize` initialized to `size_of::<MONITORINFO>()`),
+        // and all returned `HWND` / `HMONITOR` handles and buffer lengths are checked before use.
         unsafe {
             let mut state = 0_i32;
             if SHQueryUserNotificationState(&mut state) >= 0 && quns_is_fullscreen_or_busy(state) {
@@ -285,7 +296,8 @@ pub fn is_foreground_fullscreen_or_busy() -> bool {
             let mut class_buf = [0_u16; 64];
             let class_len = GetClassNameW(fg, class_buf.as_mut_ptr(), class_buf.len() as i32);
             if class_len > 0 {
-                let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]);
+                let len = (class_len as usize).min(class_buf.len());
+                let class_name = String::from_utf16_lossy(&class_buf[..len]);
                 if matches!(
                     class_name.as_str(),
                     "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
@@ -340,6 +352,10 @@ pub fn work_area(handle: Option<i64>) -> Option<(i32, i32, i32, i32)> {
             },
         };
 
+        // SAFETY: `GetWindowRect`, `MonitorFromWindow`, `GetCursorPos`, `MonitorFromPoint`,
+        // `GetMonitorInfoW`, and `SystemParametersInfoW(SPI_GETWORKAREA, ...)` write only into
+        // valid stack-allocated `RECT`, `POINT`, and `MONITORINFO` (`cbSize` initialized) structs;
+        // passing a null `HWND` with `MONITOR_DEFAULTTOPRIMARY` is documented to return the primary monitor.
         unsafe {
             let monitor = handle
                 .and_then(|raw| {
@@ -417,16 +433,60 @@ pub fn bottom_right_toast_position(
     (x, y)
 }
 
+/// Reads a window long-pointer slot, clearing thread-local last error first so a
+/// legitimate zero value is distinguished from Win32 failure (`GetLastError() != 0`).
+#[cfg(windows)]
+pub(crate) fn get_window_long_ptr(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    index: i32,
+) -> Option<isize> {
+    use windows_sys::Win32::{
+        Foundation::{GetLastError, SetLastError},
+        UI::WindowsAndMessaging::GetWindowLongPtrW,
+    };
+    // SAFETY: `SetLastError(0)` and `GetLastError()` access only thread-local Win32 error state,
+    // and `GetWindowLongPtrW` validates `hwnd` and `index` before reading window metadata.
+    unsafe {
+        SetLastError(0);
+        let value = GetWindowLongPtrW(hwnd, index);
+        if value == 0 && GetLastError() != 0 {
+            None
+        } else {
+            Some(value)
+        }
+    }
+}
+
+/// Writes a window style or owner long-pointer slot, clearing thread-local last error first
+/// so a previous value of zero is not misclassified as failure.
+#[cfg(windows)]
+pub(crate) fn set_window_long_ptr(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    index: i32,
+    new_value: isize,
+) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{GetLastError, SetLastError},
+        UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE},
+    };
+    debug_assert!(matches!(index, GWL_STYLE | GWL_EXSTYLE | GWLP_HWNDPARENT));
+    // SAFETY: `SetLastError(0)` before `SetWindowLongPtrW` follows MSDN's required protocol to
+    // distinguish a previous value of 0 from an error; callers only update style bitmasks or
+    // top-level owner handles (`GWL_STYLE`, `GWL_EXSTYLE`, `GWLP_HWNDPARENT`), never `GWLP_WNDPROC`.
+    unsafe {
+        SetLastError(0);
+        let previous = SetWindowLongPtrW(hwnd, index, new_value);
+        previous != 0 || GetLastError() == 0
+    }
+}
+
 /// Sets or clears `WS_EX_NOACTIVATE` on an already-created HWND.
 pub fn set_no_activate(window: &Window, no_activate: bool) {
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
-        };
-        unsafe {
-            let hwnd = handle as windows_sys::Win32::Foundation::HWND;
-            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_NOACTIVATE};
+        let hwnd = handle as windows_sys::Win32::Foundation::HWND;
+        if let Some(style) = get_window_long_ptr(hwnd, GWL_EXSTYLE) {
             let flag = WS_EX_NOACTIVATE as isize;
             let next = if no_activate {
                 style | flag
@@ -434,7 +494,7 @@ pub fn set_no_activate(window: &Window, no_activate: bool) {
                 style & !flag
             };
             if style != next {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+                set_window_long_ptr(hwnd, GWL_EXSTYLE, next);
             }
         }
     }
@@ -468,7 +528,9 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
             return false;
         };
         let hwnd = handle as HWND;
+        // SAFETY: `RECT` is a plain integer `#[repr(C)]` struct valid when zero-initialized.
         let mut rect: RECT = unsafe { std::mem::zeroed() };
+        // SAFETY: `hwnd` came from `window` on this GUI thread and `rect` is a writable stack `RECT`.
         let (width, height) = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0
             && rect.right > rect.left
             && rect.bottom > rect.top
@@ -487,6 +549,8 @@ pub fn position_bottom_right_toast(window: &Window, logical_margin: f32) -> bool
             })
         .round() as i32;
         let (x, y) = bottom_right_toast_position(work, (width, height), margin);
+        // SAFETY: `hwnd` is the live window handle for `window`; `SetWindowPos`, `IsWindowVisible`,
+        // and `ShowWindow` use `SWP_NOACTIVATE` / `SW_SHOWNOACTIVATE` without pointer out-params.
         unsafe {
             let positioned =
                 SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE) != 0;
@@ -545,7 +609,9 @@ pub fn position_bottom_right_hud(
             return false;
         };
         let hwnd = handle as HWND;
+        // SAFETY: `RECT` is a plain integer `#[repr(C)]` struct valid when zero-initialized.
         let mut rect: RECT = unsafe { std::mem::zeroed() };
+        // SAFETY: `hwnd` came from `window` on this GUI thread and `rect` is a writable stack `RECT`.
         let (width, height) = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0
             && rect.right > rect.left
             && rect.bottom > rect.top
@@ -564,6 +630,7 @@ pub fn position_bottom_right_hud(
         let mx = (logical_margin_x.max(0.0) * scale).round() as i32;
         let my = (logical_margin_y.max(0.0) * scale).round() as i32;
         let (x, y) = bottom_right_hud_position(work, (width, height), (mx, my));
+        // SAFETY: `hwnd` is a live window handle; `SWP_NOZORDER` ignores `hWndInsertAfter` (`null_mut()`).
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -648,6 +715,8 @@ where
                         let h = size.height as i32;
                         let x = left + ((right - left - w).max(0) / 2);
                         let y = top + ((bottom - top - h).max(0) / 2);
+                        // SAFETY: `handle` is the live Win32 `HWND` for `component`; `HWND_TOPMOST`
+                        // is used when `topmost` is set, and `SWP_NOZORDER` ignores `null_mut()` otherwise.
                         unsafe {
                             SetWindowPos(
                                 handle as _,
@@ -669,6 +738,7 @@ where
                         hls_client::center_window(handle);
                     }
                 } else if topmost {
+                    // SAFETY: `handle` is the live Win32 `HWND` for `component`, promoted to `HWND_TOPMOST` without activation.
                     unsafe {
                         SetWindowPos(
                             handle as _,
@@ -681,6 +751,7 @@ where
                         );
                     }
                 }
+                // SAFETY: `handle` is the live Win32 `HWND` for `component`, shown via `SW_SHOWNOACTIVATE`.
                 unsafe {
                     ShowWindow(handle as _, SW_SHOWNOACTIVATE);
                 }
@@ -794,50 +865,60 @@ pub fn prepare_dialog<C: slint::ComponentHandle + 'static>(
                 set_window_cloaked(handle, true);
                 if let Some(owner) = owner {
                     use windows_sys::Win32::UI::WindowsAndMessaging::{
-                        GetWindow, GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW,
-                        SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GW_OWNER,
-                        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-                        SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+                        GetWindow, IsWindow, IsWindowVisible, SetWindowPos, ShowWindow,
+                        GWLP_HWNDPARENT, GWL_EXSTYLE, GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+                        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
                     };
-                    unsafe {
-                        let handle = handle as windows_sys::Win32::Foundation::HWND;
-                        let style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+                    let hwnd = handle as windows_sys::Win32::Foundation::HWND;
+                    let owner_hwnd = owner as windows_sys::Win32::Foundation::HWND;
+                    if let Some(style) = get_window_long_ptr(hwnd, GWL_EXSTYLE) {
                         let next = style & !((WS_EX_APPWINDOW | WS_EX_TOOLWINDOW) as isize);
-                        if GetWindow(handle, GW_OWNER) != owner as _ || style != next {
-                            let visible = IsWindowVisible(handle) != 0;
-                            if visible {
-                                ShowWindow(handle, SW_HIDE);
-                            }
-                            // Owned dialogs already share the main taskbar entry. TOOLWINDOW
-                            // would also shrink their caption and close button.
-                            SetWindowLongPtrW(handle, GWLP_HWNDPARENT, owner as isize);
-                            SetWindowLongPtrW(handle, GWL_EXSTYLE, next);
-                            SetWindowPos(
-                                handle,
-                                std::ptr::null_mut(),
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_FRAMECHANGED
-                                    | SWP_NOACTIVATE
-                                    | SWP_NOMOVE
-                                    | SWP_NOSIZE
-                                    | SWP_NOZORDER,
-                            );
-                            if visible {
-                                ShowWindow(handle, SW_SHOWNOACTIVATE);
+                        // SAFETY: `IsWindow`, `GetWindow`, `IsWindowVisible`, `ShowWindow`, and
+                        // `SetWindowPos` validate handles internally; `owner_hwnd` is verified live
+                        // and distinct from `hwnd` before updating `GWLP_HWNDPARENT`.
+                        unsafe {
+                            let valid_owner = owner_hwnd != hwnd && IsWindow(owner_hwnd) != 0;
+                            let update_owner =
+                                valid_owner && GetWindow(hwnd, GW_OWNER) != owner_hwnd;
+                            if update_owner || style != next {
+                                let visible = IsWindowVisible(hwnd) != 0;
+                                if visible {
+                                    ShowWindow(hwnd, SW_HIDE);
+                                }
+                                // Owned dialogs already share the main taskbar entry. TOOLWINDOW
+                                // would also shrink their caption and close button.
+                                if update_owner {
+                                    set_window_long_ptr(hwnd, GWLP_HWNDPARENT, owner as isize);
+                                }
+                                if style != next {
+                                    set_window_long_ptr(hwnd, GWL_EXSTYLE, next);
+                                }
+                                SetWindowPos(
+                                    hwnd,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_FRAMECHANGED
+                                        | SWP_NOACTIVATE
+                                        | SWP_NOMOVE
+                                        | SWP_NOSIZE
+                                        | SWP_NOZORDER,
+                                );
+                                if visible {
+                                    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                                }
                             }
                         }
                     }
                 } else {
-                    use windows_sys::Win32::UI::WindowsAndMessaging::{
-                        GetWindowLongPtrW, GWL_STYLE, WS_CAPTION,
-                    };
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_STYLE, WS_CAPTION};
                     // Frameless handoff popups are transient. A standalone
                     // player keeps its normal caption and taskbar identity.
-                    if unsafe { GetWindowLongPtrW(handle as _, GWL_STYLE) } & WS_CAPTION as isize
-                        == 0
+                    if get_window_long_ptr(handle as _, GWL_STYLE)
+                        .is_some_and(|style| style & WS_CAPTION as isize == 0)
                     {
                         hls_client::hide_window_from_taskbar(handle);
                     }
@@ -884,6 +965,7 @@ pub fn set_window_logical_size(window: &Window, logical_width: f32, logical_heig
                 )
             })
             .unwrap_or_default();
+        // SAFETY: `handle` is the live Win32 `HWND` for `window`; `SWP_NOZORDER` ignores `null_mut()`.
         unsafe {
             SetWindowPos(
                 handle as _,
@@ -925,7 +1007,9 @@ pub fn fit_to_work_area(window: &Window) {
         let outer_width = size.width.saturating_add(border.0).max(1);
         let outer_height = size.height.saturating_add(border.1).max(1);
         let hwnd = handle as HWND;
+        // SAFETY: `RECT` is a plain integer `#[repr(C)]` struct valid when zero-initialized.
         let mut rect: RECT = unsafe { std::mem::zeroed() };
+        // SAFETY: `hwnd` is the live Win32 `HWND` for `window` and `rect` is a writable stack `RECT`.
         let origin = if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
             (rect.left, rect.top)
         } else {
@@ -940,6 +1024,7 @@ pub fn fit_to_work_area(window: &Window) {
             window.set_size(slint::PhysicalSize::new(width, height));
         }
         if (clamped_x, clamped_y) != origin {
+            // SAFETY: `hwnd` is a live `HWND`; `SWP_NOZORDER` ignores `null_mut()`.
             unsafe {
                 SetWindowPos(
                     hwnd,
@@ -1094,6 +1179,7 @@ pub fn restore_geometry(window: &Window) {
                 target_origin.1,
             ));
             if saved.maximized {
+                // SAFETY: `handle` is the live Win32 `HWND` for `window`, maximized via `SW_MAXIMIZE`.
                 unsafe {
                     windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
                         handle as _,
@@ -1118,6 +1204,8 @@ pub fn save_geometry(window: &Window) {
                 GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, WINDOWPLACEMENT,
             },
         };
+        // SAFETY: `IsIconic`, `IsZoomed`, `GetWindowPlacement`, and `GetWindowRect` inspect `handle`
+        // and write into valid stack-allocated `WINDOWPLACEMENT` (`length` initialized) and `RECT` structs.
         unsafe {
             if IsIconic(handle as _) != 0 {
                 return;
@@ -1335,5 +1423,24 @@ mod tests {
                 maximized: false,
             }
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn window_long_ptr_helpers_distinguish_invalid_hwnd_zero_from_valid_zero() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GWL_STYLE};
+        assert_eq!(
+            super::get_window_long_ptr(std::ptr::null_mut(), GWL_STYLE),
+            None
+        );
+        assert_eq!(
+            super::get_window_long_ptr(std::ptr::null_mut(), GWL_EXSTYLE),
+            None
+        );
+        assert!(!super::set_window_long_ptr(
+            std::ptr::null_mut(),
+            GWL_EXSTYLE,
+            0
+        ));
     }
 }

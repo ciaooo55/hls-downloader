@@ -2,6 +2,7 @@
     all(windows, not(debug_assertions), not(test)),
     windows_subsystem = "windows"
 )]
+#![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
 
 slint::include_modules!();
 mod activation;
@@ -706,6 +707,8 @@ fn report_startup_error(error: &str) {
             .is_ok()
     });
     #[cfg(windows)]
+    // SAFETY: `title` and `message` are valid NUL-terminated UTF-16 buffers outliving the
+    // synchronous `MessageBoxW` call, and a null owner HWND creates a standalone error dialog.
     unsafe {
         use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
         let title: Vec<u16> = "HLS Downloader\0".encode_utf16().collect();
@@ -3381,6 +3384,12 @@ fn trace(message: &str) {
     }
 }
 
+/// Subclass procedure suppressing standard non-client chrome on frameless Slint popups.
+///
+/// # Safety
+/// Must only be invoked by `comctl32` subclass dispatch for an `HWND` subclassed via
+/// `SetWindowSubclass` (or directly in unit tests with a valid or zero `WM_STYLECHANGING`
+/// `STYLESTRUCT` pointer when `message == WM_STYLECHANGING` and `wparam as i32 == GWL_STYLE`).
 #[cfg(windows)]
 unsafe extern "system" fn frameless_window_proc(
     hwnd: windows_sys::Win32::Foundation::HWND,
@@ -3403,7 +3412,10 @@ unsafe extern "system" fn frameless_window_proc(
         WM_NCPAINT => 0,
         // Winit 在更新置顶/可见状态时会重新加上 WS_CAPTION；这些自绘浮窗不使用系统标题栏。
         WM_STYLECHANGING if wparam as i32 == GWL_STYLE => {
-            (*(lparam as *mut STYLESTRUCT)).styleNew &= !WS_CAPTION;
+            let style = lparam as *mut STYLESTRUCT;
+            if !style.is_null() {
+                (*style).styleNew &= !WS_CAPTION;
+            }
             0
         }
         WM_NCDESTROY => {
@@ -3440,8 +3452,8 @@ fn round_native_window(window: &slint::Window) {
             Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND},
             Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn},
             UI::WindowsAndMessaging::{
-                GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, GWL_STYLE,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION,
+                GetWindowRect, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION,
             },
         };
         let ready_to_repaint = window.with_winit_window(|native| {
@@ -3451,26 +3463,41 @@ fn round_native_window(window: &slint::Window) {
             let RawWindowHandle::Win32(handle) = handle.as_raw() else {
                 return false;
             };
+            let hwnd = handle.hwnd.get() as _;
+            // SAFETY: `hwnd` belongs to `native` on the current GUI thread. `SetWindowSubclass`
+            // with fixed `(frameless_window_proc, 1)` updates in place if already installed and
+            // unregisters itself on `WM_NCDESTROY`. For the Windows 10 fallback, `SetWindowRgn`
+            // takes OS ownership of `region` when it returns non-zero (so `DeleteObject` MUST NOT
+            // be called), whereas on `SetWindowRgn == 0` `DeleteObject(region)` frees the `HRGN`.
             unsafe {
-                let hwnd = handle.hwnd.get() as _;
                 windows_sys::Win32::UI::Shell::SetWindowSubclass(
                     hwnd,
                     Some(frameless_window_proc),
                     1,
                     0,
                 );
-                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-                if style & WS_CAPTION as isize != 0 {
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, style & !(WS_CAPTION as isize));
-                    SetWindowPos(
-                        hwnd,
-                        std::ptr::null_mut(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
+                if let Some(style) = native_window::get_window_long_ptr(hwnd, GWL_STYLE) {
+                    if style & WS_CAPTION as isize != 0
+                        && native_window::set_window_long_ptr(
+                            hwnd,
+                            GWL_STYLE,
+                            style & !(WS_CAPTION as isize),
+                        )
+                    {
+                        SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_FRAMECHANGED
+                                | SWP_NOMOVE
+                                | SWP_NOSIZE
+                                | SWP_NOZORDER
+                                | SWP_NOACTIVATE,
+                        );
+                    }
                 }
                 // Windows 11：交给 DWM 画抗锯齿圆角、系统描边和阴影，半径 8 与
                 // Tokens.card-radius 一致；此时不能再设窗口区域，否则 DWM 圆角失效。
@@ -3571,6 +3598,8 @@ fn correct_native_click_position(window: &slint::Window) {
             }
             if matches!(event, winit::event::WindowEvent::Focused(false)) {
                 if left_pressed.replace(false) {
+                    // SAFETY: `ReleaseCapture` takes no pointer arguments and releases mouse
+                    // capture held by the calling GUI thread, if any.
                     unsafe {
                         ReleaseCapture();
                     }
@@ -3596,6 +3625,8 @@ fn correct_native_click_position(window: &slint::Window) {
                         position
                     } else {
                         let mut point = POINT { x: 0, y: 0 };
+                        // SAFETY: `point` is a writable stack `POINT`, and `handle.hwnd` is the
+                        // live Win32 `HWND` borrowed from `native` on this GUI thread.
                         unsafe {
                             if GetCursorPos(&mut point) == 0
                                 || ScreenToClient(handle.hwnd.get() as _, &mut point) == 0
@@ -3619,6 +3650,7 @@ fn correct_native_click_position(window: &slint::Window) {
             };
             if *state == winit::event::ElementState::Pressed {
                 // 默认鼠标事件被下方拦截，需自行捕获才能在拖出窗口后继续收到移动和释放。
+                // SAFETY: `hwnd` was obtained from `with_winit_window` on the current GUI thread.
                 unsafe {
                     SetCapture(hwnd);
                 }
@@ -3634,6 +3666,7 @@ fn correct_native_click_position(window: &slint::Window) {
             };
             if *state == winit::event::ElementState::Released {
                 // 先释放鼠标捕获，再派发点击，避免回调里打开系统文件夹模态窗时仍占着捕获。
+                // SAFETY: `ReleaseCapture` takes no pointer arguments and releases mouse capture on this thread.
                 unsafe {
                     ReleaseCapture();
                 }
@@ -5043,12 +5076,15 @@ fn power_label(action: &str) -> &'static str {
 
 #[cfg(windows)]
 fn attach_parent_console() {
+    const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
     #[link(name = "kernel32")]
     extern "system" {
         fn AttachConsole(process_id: u32) -> i32;
     }
+    // SAFETY: `AttachConsole(ATTACH_PARENT_PROCESS)` attaches stdio handles to the parent console
+    // when invoked from a terminal (`--self-test`) and fails harmlessly with 0 when none exists.
     unsafe {
-        let _ = AttachConsole(0xFFFF_FFFF);
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
 
@@ -6385,5 +6421,42 @@ mod tests {
             false
         ));
         assert!(super::should_hold_complete_toast(false, 0, "", true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn frameless_window_proc_strips_ws_caption_and_ignores_null_stylestruct() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GWL_STYLE, STYLESTRUCT, WM_STYLECHANGING, WS_CAPTION, WS_POPUP, WS_VISIBLE,
+        };
+        let mut style = STYLESTRUCT {
+            styleOld: WS_POPUP,
+            styleNew: WS_POPUP | WS_VISIBLE | WS_CAPTION,
+        };
+        let rc = unsafe {
+            super::frameless_window_proc(
+                std::ptr::null_mut(),
+                WM_STYLECHANGING,
+                GWL_STYLE as usize,
+                std::ptr::from_mut(&mut style) as isize,
+                1,
+                0,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(style.styleNew, WS_POPUP | WS_VISIBLE);
+
+        // Synthetic WM_STYLECHANGING with a null lparam must not dereference null.
+        let null_rc = unsafe {
+            super::frameless_window_proc(
+                std::ptr::null_mut(),
+                WM_STYLECHANGING,
+                GWL_STYLE as usize,
+                0,
+                1,
+                0,
+            )
+        };
+        assert_eq!(null_rc, 0);
     }
 }

@@ -146,10 +146,11 @@ impl CastTools {
                 }
                 let request_id = request.request_id();
                 let result = (|| {
-                    if client.is_none() {
-                        client = Some(CoreIpcClient::connect()?);
-                    }
-                    client.as_mut().unwrap().request(&request)
+                    let active = match client.as_mut() {
+                        Some(existing) => existing,
+                        None => client.insert(CoreIpcClient::connect()?),
+                    };
+                    active.request(&request)
                 })();
                 last_request = Instant::now();
                 if result.is_err() {

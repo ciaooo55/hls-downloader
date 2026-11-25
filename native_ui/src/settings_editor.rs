@@ -162,7 +162,7 @@ fn settings_values(response: &CorePipeResponse) -> BTreeMap<String, Value> {
     if let Some(Value::String(url)) = values.get_mut("proxy_url") {
         // Older Core versions can return the full URL. Keep only the editable vault identity.
         *url = hls_client::url_credentials::map_url_passwords(url, true, |_, _| Ok(()))
-            .expect("redaction cannot fail");
+            .unwrap_or_default();
     }
     values
 }
