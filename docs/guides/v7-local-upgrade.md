@@ -8,7 +8,7 @@
 - 默认下载位置通过 Windows Known Folder 获取当前用户的“下载”文件夹，不使用开发机盘符或用户名。用户可在设置中修改。
 - 常规安装的数据默认位于 `%LOCALAPPDATA%\HLS Downloader\v7`，数据库为其中的 `data.db`。数据目录与程序安装目录、下载成品目录分离；显式配置 `HLS_V7_DATA_DIR` 时以配置为准。
 - Portable 使用自身根目录下的 `data` 和 `downloads`，不与普通安装共享状态。
-- 安装镜像包含运行所需 JRE、Core、Native Host、Presenter、FFmpeg 和 libmpv。生产包不包含验收专用 ffprobe，详见 [包体积](package-slimming.md)。
+- 安装镜像包含运行所需 Core、Native Host、Presenter、FFmpeg 和 libmpv。生产包不包含验收专用 ffprobe，详见 [包体积](package-slimming.md)。
 
 未签名包通过手动运行 MSI 更新。自动更新的签名和项目签名者信任检查保持启用，不以关闭检查替代签名。
 
