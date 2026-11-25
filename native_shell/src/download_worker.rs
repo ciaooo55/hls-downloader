@@ -555,6 +555,133 @@ impl CoreCoordinator {
             && crate::http_engine::remote_resource_url_allowed(url)
     }
 
+    fn validate_refresh_offer_urls(
+        offer: &crate::ResourceOffer,
+        allowed_hosts: &str,
+    ) -> Result<(), String> {
+        let url = offer.url.trim();
+        if !crate::http_engine::remote_resource_url_allowed(url) {
+            return Err("下载地址无效或不安全".into());
+        }
+        if !crate::net_policy::url_allowed(url, allowed_hosts) {
+            return Err("地址不在允许的域名白名单中".into());
+        }
+        let refreshed_audio = offer.audio_url.trim();
+        if !refreshed_audio.is_empty() {
+            if !crate::http_engine::remote_resource_url_allowed(refreshed_audio)
+                || !crate::http_engine::http_fetch_url_allowed(refreshed_audio)
+            {
+                return Err("音轨下载地址无效或不安全".into());
+            }
+            if !crate::net_policy::url_allowed(refreshed_audio, allowed_hosts) {
+                return Err("音轨下载地址不在允许的域名白名单中".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn offer_matches_armed_refresh_task(
+        current: &TaskSpec,
+        offer: &crate::ResourceOffer,
+    ) -> bool {
+        if !Self::offer_eligible_for_armed_refresh(offer) {
+            return false;
+        }
+        if current.resource_kind != offer.resource_kind {
+            return false;
+        }
+        let current_dual_track = !current.audio_url.trim().is_empty();
+        let offer_dual_track = !offer.audio_url.trim().is_empty();
+        if current_dual_track != offer_dual_track {
+            return false;
+        }
+
+        let current_key = if !current.resource_key.trim().is_empty() {
+            current.resource_key.trim().to_string()
+        } else {
+            crate::http_engine::canonical_url_key(&current.url)
+        };
+        let offer_key = if !offer.resource_key.trim().is_empty() {
+            offer.resource_key.trim().to_string()
+        } else {
+            crate::http_engine::canonical_url_key(&offer.url)
+        };
+        if !current_key.is_empty() && current_key == offer_key {
+            return true;
+        }
+
+        let cur_page_host = refresh_url_host(&current.source_page_url);
+        let offer_page_host = refresh_url_host(&offer.source_page_url);
+        if let (Some(left), Some(right)) = (cur_page_host.as_deref(), offer_page_host.as_deref()) {
+            if !refresh_same_site_or_host(left, right) {
+                return false;
+            }
+        }
+
+        let cur_url_host = refresh_url_host(&current.url);
+        let offer_url_host = refresh_url_host(&offer.url);
+        let same_url_site = cur_url_host
+            .as_deref()
+            .zip(offer_url_host.as_deref())
+            .is_some_and(|(left, right)| refresh_same_site_or_host(left, right));
+        let same_page_site = cur_page_host
+            .as_deref()
+            .zip(offer_page_host.as_deref())
+            .is_some_and(|(left, right)| refresh_same_site_or_host(left, right));
+        if !same_url_site && !same_page_site {
+            return false;
+        }
+
+        let cur_name = current.filename.trim();
+        let cur_url_name = refresh_url_basename(&current.url);
+        let offer_name = if !offer.filename.trim().is_empty() {
+            offer.filename.trim().to_string()
+        } else {
+            refresh_url_basename(&offer.url)
+        };
+
+        let cur_ext = refresh_specific_extension(if !cur_name.is_empty() {
+            cur_name
+        } else {
+            &cur_url_name
+        });
+        let offer_ext = refresh_specific_extension(&offer_name);
+        if let (Some(left_ext), Some(right_ext)) = (cur_ext.as_deref(), offer_ext.as_deref()) {
+            if !left_ext.eq_ignore_ascii_case(right_ext) {
+                return false;
+            }
+        }
+
+        let name_matches = !offer_name.is_empty()
+            && ((!cur_name.is_empty() && offer_name.eq_ignore_ascii_case(cur_name))
+                || (!cur_url_name.is_empty() && offer_name.eq_ignore_ascii_case(&cur_url_name)));
+        if name_matches {
+            if refresh_is_generic_filename(&offer_name) {
+                let exact_url_host = cur_url_host.is_some() && cur_url_host == offer_url_host;
+                return same_page_site || (cur_page_host.is_none() && exact_url_host);
+            }
+            return true;
+        }
+
+        let is_stream_or_dual_track = current_dual_track
+            || matches!(
+                current.resource_kind,
+                crate::ResourceKind::Hls | crate::ResourceKind::Dash
+            );
+        if is_stream_or_dual_track {
+            let cur_page_key = crate::http_engine::canonical_url_key(&current.source_page_url);
+            let offer_page_key = crate::http_engine::canonical_url_key(&offer.source_page_url);
+            let height_compatible = current.preferred_height == 0
+                || offer.preferred_height == 0
+                || current.preferred_height == offer.preferred_height;
+            if !cur_page_key.is_empty() && cur_page_key == offer_page_key && height_compatible {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn build_refreshed_spec(current: &TaskSpec, offer: &crate::ResourceOffer) -> TaskSpec {
         let mut spec = current.clone();
         if spec.resource_key.trim().is_empty() && spec.local_source_path.is_none() {
@@ -676,25 +803,15 @@ impl CoreCoordinator {
             let Some(armed_task_id) = armed_task_id else {
                 return Ok(None);
             };
-            let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
-            if !crate::net_policy::url_allowed(offer.url.trim(), &allowed_hosts) {
-                return Err("地址不在允许的域名白名单中".into());
-            }
-            let refreshed_audio = offer.audio_url.trim();
-            if !refreshed_audio.is_empty() {
-                if !crate::http_engine::remote_resource_url_allowed(refreshed_audio)
-                    || !crate::http_engine::http_fetch_url_allowed(refreshed_audio)
-                {
-                    return Err("音轨下载地址无效或不安全".into());
-                }
-                if !crate::net_policy::url_allowed(refreshed_audio, &allowed_hosts) {
-                    return Err("音轨下载地址不在允许的域名白名单中".into());
-                }
-            }
             let current = core
                 .task_spec(&armed_task_id)
                 .cloned()
                 .ok_or_else(|| format!("unknown task {armed_task_id}"))?;
+            if !Self::offer_matches_armed_refresh_task(&current, offer) {
+                return Ok(None);
+            }
+            let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
+            Self::validate_refresh_offer_urls(offer, &allowed_hosts)?;
             let spec = Self::build_refreshed_spec(&current, offer);
             let events =
                 core.apply_armed_refresh(&armed_task_id, spec, offer.handoff_id.clone(), None)?;
@@ -837,11 +954,15 @@ impl CoreCoordinator {
                 match guard.as_ref() {
                     Some(armed) if Instant::now() < armed.expires_at => {
                         let task_id = armed.task_id.clone();
-                        if core.task_spec(&task_id).is_none() || core.snapshot(&task_id).is_none() {
-                            *guard = None;
-                            None
-                        } else {
-                            Some(task_id)
+                        match (core.task_spec(&task_id), core.snapshot(&task_id)) {
+                            (Some(current), Some(_)) => {
+                                Self::offer_matches_armed_refresh_task(current, &original.offer)
+                                    .then_some((task_id, current.clone()))
+                            }
+                            _ => {
+                                *guard = None;
+                                None
+                            }
                         }
                     }
                     Some(_) => {
@@ -853,7 +974,7 @@ impl CoreCoordinator {
             } else {
                 None
             };
-            let Some(armed_task_id) = armed_task_id else {
+            let Some((armed_task_id, current)) = armed_task_id else {
                 drop(core);
                 let quick_spec = self.prepare_quick_handoff_spec(&original.offer)?;
                 let (encoded, quick_task_id) = self
@@ -865,13 +986,7 @@ impl CoreCoordinator {
                 return Ok(encoded);
             };
             let allowed_hosts = core.store().setting_string("allowed_hosts", "")?;
-            if !crate::net_policy::url_allowed(original.offer.url.trim(), &allowed_hosts) {
-                return Err("地址不在允许的域名白名单中".into());
-            }
-            let current = core
-                .task_spec(&armed_task_id)
-                .cloned()
-                .ok_or_else(|| format!("unknown task {armed_task_id}"))?;
+            Self::validate_refresh_offer_urls(&original.offer, &allowed_hosts)?;
             let spec = Self::build_refreshed_spec(&current, &original.offer);
             original.status = "accepted".into();
             original.task_id = Some(armed_task_id.clone());
@@ -3608,6 +3723,120 @@ fn build_audio_track_headers(
     headers
 }
 
+fn refresh_url_host(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let (_, rest) = trimmed.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, endpoint)| endpoint)
+        .trim();
+    let host = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        after_bracket.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    }
+    .trim_end_matches('.')
+    .to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
+
+fn refresh_registrable_domain(host: &str) -> &str {
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host;
+    }
+    let parts: Vec<&str> = host.split('.').filter(|part| !part.is_empty()).collect();
+    if parts.len() <= 2 {
+        return host;
+    }
+    let second_level = parts[parts.len() - 2];
+    let top_level = parts[parts.len() - 1];
+    let multipart_tld = top_level.len() == 2
+        && matches!(
+            second_level,
+            "co" | "com" | "net" | "org" | "edu" | "gov" | "ac"
+        );
+    let keep = if multipart_tld && parts.len() >= 3 {
+        3
+    } else {
+        2
+    };
+    let start_label = parts.len() - keep;
+    let byte_offset: usize = parts[..start_label].iter().map(|part| part.len() + 1).sum();
+    &host[byte_offset..]
+}
+
+fn refresh_same_site_or_host(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let left_domain = refresh_registrable_domain(left);
+    let right_domain = refresh_registrable_domain(right);
+    left_domain.contains('.') && left_domain == right_domain
+}
+
+fn refresh_url_basename(url: &str) -> String {
+    let without_query = url.trim().split(['?', '#']).next().unwrap_or("");
+    let Some((_, rest)) = without_query.split_once("://") else {
+        return String::new();
+    };
+    let Some((_, path)) = rest.split_once('/') else {
+        return String::new();
+    };
+    path.rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn refresh_specific_extension(filename: &str) -> Option<String> {
+    let ext = Path::new(filename.trim())
+        .extension()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+    if ext.is_empty()
+        || matches!(
+            ext.as_str(),
+            "bin" | "dat" | "tmp" | "part" | "download" | "php" | "asp" | "aspx" | "jsp" | "cgi"
+        )
+    {
+        None
+    } else {
+        Some(ext)
+    }
+}
+
+fn refresh_is_generic_filename(filename: &str) -> bool {
+    let stem = Path::new(filename.trim())
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        stem.as_str(),
+        "" | "download"
+            | "file"
+            | "index"
+            | "master"
+            | "playlist"
+            | "manifest"
+            | "stream"
+            | "video"
+    )
+}
+
+fn dual_track_part_complete(tmp_path: &Path, progress_path: &Path) -> bool {
+    let Some(progress) = read_progress(progress_path) else {
+        return false;
+    };
+    progress.status == "done"
+        && progress.total > 0
+        && progress.downloaded == progress.total
+        && fs::metadata(tmp_path)
+            .map(|meta| meta.len() == progress.total)
+            .unwrap_or(false)
+}
+
 fn cleanup_dual_track_temp(
     video_tmp: &Path,
     audio_tmp: &Path,
@@ -3695,11 +3924,13 @@ fn run_dual_track_http_file(
         (total_conns / 4).max(1)
     };
 
+    let sibling_abort = Arc::new(AtomicBool::new(false));
     let mut video_job = base_job.clone();
     video_job.output = video_tmp.clone();
     video_job.progress = video_progress.clone();
     video_job.total = 0;
     video_job.connections = video_conns;
+    video_job.range_stop = Some(Arc::clone(&sibling_abort));
 
     let audio_headers = build_audio_track_headers(&spec, &video_job.headers, &audio_url);
     let audio_job = crate::http_engine::Job {
@@ -3722,7 +3953,7 @@ fn run_dual_track_http_file(
         mirrors: Vec::new(),
         replay_json: video_job.replay_json.clone(),
         curl_body_limit: None,
-        range_stop: None,
+        range_stop: Some(Arc::clone(&sibling_abort)),
         installer_download: false,
         origin_boundary: spec.origin_boundary.clone(),
     };
@@ -3738,22 +3969,30 @@ fn run_dual_track_http_file(
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let throttle = crate::net_policy::current_throttle_context();
 
-    let video_sender = sender.clone();
-    let video_throttle = throttle.clone();
-    let video_worker = thread::spawn(move || {
-        let res =
-            crate::net_policy::with_throttle_context(video_throttle, || run_job_report(&video_job));
-        let _ = video_sender.send((DualTrackKind::Video, res));
-    });
-
-    let audio_worker = thread::spawn(move || {
-        let res = crate::net_policy::with_throttle_context(throttle, || run_job_report(&audio_job));
-        let _ = sender.send((DualTrackKind::Audio, res));
-    });
-
-    let mut video_finished = false;
-    let mut audio_finished = false;
+    let mut video_finished = dual_track_part_complete(&video_tmp, &video_progress);
+    let mut audio_finished = dual_track_part_complete(&audio_tmp, &audio_progress);
     let mut video_mirrors = Vec::new();
+
+    let video_worker = (!video_finished).then(|| {
+        let video_sender = sender.clone();
+        let video_throttle = throttle.clone();
+        thread::spawn(move || {
+            let res = crate::net_policy::with_throttle_context(video_throttle, || {
+                run_job_report(&video_job)
+            });
+            let _ = video_sender.send((DualTrackKind::Video, res));
+        })
+    });
+
+    let audio_worker = (!audio_finished).then(|| {
+        let audio_sender = sender.clone();
+        thread::spawn(move || {
+            let res =
+                crate::net_policy::with_throttle_context(throttle, || run_job_report(&audio_job));
+            let _ = audio_sender.send((DualTrackKind::Audio, res));
+        })
+    });
+    drop(sender);
 
     let download_result: Result<(), String> = (|| {
         while !video_finished || !audio_finished {
@@ -3821,31 +4060,41 @@ fn run_dual_track_http_file(
         Ok(())
     })();
 
-    if download_result.is_err()
-        && matches!(
-            crate::http_engine::read_control(&paths.control),
-            crate::http_engine::Control::Run
-        )
-    {
-        let _ = paths.set_control("cancel");
+    let user_canceled_before_join = matches!(
+        download_result.as_ref().map_err(String::as_str),
+        Err("canceled")
+    ) || matches!(
+        crate::http_engine::read_control(&paths.control),
+        crate::http_engine::Control::Cancel
+    );
+    if download_result.is_err() {
+        // Interrupt the sibling worker via the private `sibling_abort` flag without
+        // polluting `paths.control` with `"cancel"`, preserving completed/partial
+        // track payloads and checkpoints for URL refresh or retry.
+        sibling_abort.store(true, Ordering::SeqCst);
     }
-    let video_joined = video_worker.join();
-    let audio_joined = audio_worker.join();
+    let video_joined = video_worker.map(thread::JoinHandle::join);
+    let audio_joined = audio_worker.map(thread::JoinHandle::join);
 
     if let Err(error) = download_result {
-        if error == "canceled"
+        let user_canceled = user_canceled_before_join
             || matches!(
                 crate::http_engine::read_control(&paths.control),
                 crate::http_engine::Control::Cancel
-            )
-        {
+            );
+        if user_canceled {
             cleanup_dual_track_temp(&video_tmp, &audio_tmp, &video_state_dir, &audio_state_dir);
             let _ = fs::remove_file(&merged_mp4);
+            return Err("canceled".into());
         }
         return Err(error);
     }
-    video_joined.map_err(|_| "dual-track video HTTP worker panicked".to_string())?;
-    audio_joined.map_err(|_| "dual-track audio HTTP worker panicked".to_string())?;
+    if let Some(joined) = video_joined {
+        joined.map_err(|_| "dual-track video HTTP worker panicked".to_string())?;
+    }
+    if let Some(joined) = audio_joined {
+        joined.map_err(|_| "dual-track audio HTTP worker panicked".to_string())?;
+    }
 
     if !video_mirrors.is_empty() {
         core.lock()

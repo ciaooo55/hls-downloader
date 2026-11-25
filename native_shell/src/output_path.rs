@@ -300,8 +300,33 @@ pub fn typed_output_path(
                 | "cbz"
         )
     };
+    let is_generic_placeholder_ext = |ext: &str| {
+        matches!(
+            ext,
+            "" | "bin"
+                | "dat"
+                | "tmp"
+                | "part"
+                | "download"
+                | "php"
+                | "asp"
+                | "aspx"
+                | "jsp"
+                | "cgi"
+                | "html"
+                | "htm"
+        )
+    };
+    let is_safe_explicit_zip_container_ext = |ext: &str| {
+        !is_generic_placeholder_ext(ext)
+            && !is_dangerous_executable_extension(ext)
+            && ext.len() <= 24
+            && ext
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    };
     let extension = if zip {
-        if zip_subtype(&current) {
+        if zip_subtype(&current) || is_safe_explicit_zip_container_ext(&current) {
             current.as_str()
         } else if zip_subtype(mime_ext) {
             mime_ext
@@ -800,6 +825,64 @@ mod tests {
         for path in published {
             assert!(path.is_file());
         }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typed_output_path_preserves_safe_zip_container_extensions_and_blocks_dangerous_ones() {
+        let dir = test_dir("zip-containers");
+        fs::create_dir_all(&dir).unwrap();
+        let payload = dir.join("payload.downloading");
+        fs::write(&payload, b"PK\x03\x04\x14\x00\x00\x00\x08\x00test-zip-body").unwrap();
+
+        for safe_name in [
+            "map.kmz",
+            "model.3mf",
+            "extension.crx",
+            "app.ipa",
+            "bundle.aab",
+            "painting.kra",
+        ] {
+            let requested = dir.join(safe_name);
+            let resolved =
+                typed_output_path(&payload, &requested, "application/octet-stream", "").unwrap();
+            assert_eq!(resolved, requested, "must preserve {safe_name}");
+        }
+
+        for generic_name in ["archive", "download.bin", "export.php", "temp.tmp"] {
+            let requested = dir.join(generic_name);
+            let resolved =
+                typed_output_path(&payload, &requested, "application/octet-stream", "").unwrap();
+            assert_eq!(
+                resolved.extension().and_then(|e| e.to_str()),
+                Some("zip"),
+                "generic {generic_name} should resolve to .zip"
+            );
+        }
+
+        let docx_from_mime = typed_output_path(
+            &payload,
+            &dir.join("download.bin"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            docx_from_mime.extension().and_then(|e| e.to_str()),
+            Some("docx")
+        );
+
+        for dangerous_name in ["disguised.exe", "runner.bat", "script.ps1", "setup.msi"] {
+            let requested = dir.join(dangerous_name);
+            let resolved =
+                typed_output_path(&payload, &requested, "application/octet-stream", "").unwrap();
+            assert_eq!(
+                resolved.extension().and_then(|e| e.to_str()),
+                Some("zip"),
+                "dangerous {dangerous_name} must never pass through unchanged"
+            );
+        }
+
         let _ = fs::remove_dir_all(dir);
     }
 }

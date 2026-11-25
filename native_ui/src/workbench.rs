@@ -49,7 +49,7 @@ pub struct Workbench {
     settings_response: RefCell<Option<CorePipeResponse>>,
     show_settings: Cell<bool>,
     settings_save_id: Cell<Option<u64>>,
-    settings_instant_save_id: Cell<Option<u64>>,
+    settings_instant_save_ids: RefCell<HashSet<u64>>,
     queues: RefCell<Option<QueueEditor>>,
     pending_queues: Cell<bool>,
     queue_save: RefCell<Option<QueueSave>>,
@@ -351,7 +351,7 @@ impl Workbench {
             settings_response: RefCell::new(None),
             show_settings: Cell::new(false),
             settings_save_id: Cell::new(None),
-            settings_instant_save_id: Cell::new(None),
+            settings_instant_save_ids: RefCell::new(HashSet::new()),
             exports: RefCell::new(HashMap::new()),
             queues: RefCell::new(None),
             pending_queues: Cell::new(false),
@@ -2038,23 +2038,31 @@ impl Workbench {
                     }
                 }
                 let settings_saved = self.settings_save_id.get() == Some(request_id);
-                let instant_saved = self.settings_instant_save_id.get() == Some(request_id);
-                if let Some(editor) = self.settings.borrow_mut().as_mut() {
-                    editor.receive_settings(&response, settings_saved);
-                }
+                let instant_saved = self
+                    .settings_instant_save_ids
+                    .borrow_mut()
+                    .remove(&request_id);
                 if settings_saved {
+                    self.settings_instant_save_ids.borrow_mut().clear();
                     self.settings_save_id.set(None);
                     if let Some(editor) = self.settings.borrow_mut().as_mut() {
+                        editor.receive_settings(&response, true);
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("success".into());
                         editor.window.set_status("设置已保存".into());
                     }
                 } else if instant_saved {
-                    self.settings_instant_save_id.set(None);
                     if let Some(editor) = self.settings.borrow_mut().as_mut() {
-                        editor.window.set_status_tone("success".into());
-                        editor.window.set_status("开关已即时生效".into());
+                        if !editor.complete_instant_save(request_id, &response) {
+                            editor.receive_settings(&response, false);
+                        }
+                        if !editor.window.get_busy() {
+                            editor.window.set_status_tone("success".into());
+                            editor.window.set_status("开关已即时生效".into());
+                        }
                     }
+                } else if let Some(editor) = self.settings.borrow_mut().as_mut() {
+                    editor.receive_settings(&response, false);
                 }
                 *self.settings_response.borrow_mut() = Some(response.clone());
                 if let Some(editor) = self.editor.borrow().as_ref() {
@@ -2114,10 +2122,11 @@ impl Workbench {
                         settings.window.set_status_tone("error".into());
                         settings.window.set_status(message.into());
                     }
-                } else if request_id.is_some() && request_id == self.settings_instant_save_id.get()
+                } else if let Some(failed_id) =
+                    request_id.filter(|id| self.settings_instant_save_ids.borrow_mut().remove(id))
                 {
-                    self.settings_instant_save_id.set(None);
-                    if let Some(settings) = self.settings.borrow().as_ref() {
+                    if let Some(settings) = self.settings.borrow_mut().as_mut() {
+                        settings.fail_instant_save(failed_id);
                         settings.window.set_status_tone("error".into());
                         settings.window.set_status(message.into());
                     }
@@ -2775,7 +2784,8 @@ impl Workbench {
                         editor.window.set_status_tone("warning".into());
                         editor.window.set_status(error.into());
                     } else if !editor.window.get_busy() {
-                        if let Some(values) = editor.take_instant_bool_change(&key) {
+                        if let Some((submitted, values)) = editor.prepare_instant_bool_change(&key)
+                        {
                             if key.as_str() == "reduce_motion" {
                                 let reduce = value.as_str() == "true";
                                 editor
@@ -2791,10 +2801,13 @@ impl Workbench {
                                 request_id: id,
                                 values,
                             }) {
-                                this.settings_instant_save_id.set(Some(id));
+                                editor.record_instant_save_sent(id, key.to_string(), submitted);
+                                this.settings_instant_save_ids.borrow_mut().insert(id);
                             } else {
                                 editor.window.set_status_tone("error".into());
-                                editor.window.set_status("命令队列已满，请稍后重试".into());
+                                editor
+                                    .window
+                                    .set_status("命令队列已满，可点击“保存设置”重试".into());
                             }
                         } else {
                             editor.window.set_status("".into());

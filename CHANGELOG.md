@@ -27,6 +27,9 @@
 ### 修复 (Fixed)
 - 消除程序启动阶段的幽灵弹窗竞态（startup ghost-popup race），并为 `CompleteWindow` 完成提示窗增加 10 秒鼠标悬停感知自动关闭（悬停时暂停倒计时）。
 - 对齐 DASH 点播批量检查点刷盘策略（32 分片 / 64 MiB / 1 秒），修复 `WafCurlCache` 403 回退恢复与 `Alt` 点击绕过、页面链接批量提取等多项浏览器接管边缘场景。
+- 收紧浏览器辅助刷新链接（`ArmTaskRefresh`）双入口匹配校验（杜绝等待期内误覆盖无关标签页下载）并补齐 `admit_handoff` 路径 `audio_url` 协议与白名单校验。
+- 修复双轨 HTTP 下载单轨报错时误清双轨临时文件与断点状态的问题（仅在用户真实取消时清理，并在重试/续传时直接复用已下完轨道）。
+- 修复 HLS `select_audio_track` 忽略无独立 `URI` 的 `DEFAULT=YES` 内嵌原声 rendition 导致误混流外部评论音轨的问题；保留 `.kmz`、`.3mf` 等合法非危险 ZIP 容器后缀，并修复设置页即时布尔开关在队列满或报错后无法通过「保存设置」重试的问题。
 
 ### 安全 (Security)
 - **Win32 Job Object 子进程隔离**：通过 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 统一托管 FFmpeg、`curl-impersonate` 等子进程，主引擎退出或异常终止不留孤儿进程。

@@ -8967,3 +8967,381 @@ fn refresh_task_url_preserves_halfway_checkpoint_without_redownloading_completed
     drop(coordinator);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn arm_task_refresh_ignores_unrelated_tab_downloads_and_validates_audio_url_on_both_paths() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "allowed_hosts",
+            serde_json::json!("cdn.example.test,media.example.test"),
+        )
+        .unwrap();
+
+    // 1. Single-track file task armed for refresh.
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/releases/app-installer.zip?sig=expired".into(),
+                filename: "app-installer.zip".into(),
+                source_page_url: "https://site-a.example.test/downloads".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = created
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: task_id.clone(),
+        })
+        .unwrap();
+
+    // Unrelated OfferResource from another tab/file must NOT overwrite `task_id` and must keep armed state active.
+    let unrelated_offer_events = coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                url: "https://cdn.example.test/docs/manual.pdf".into(),
+                source_page_url: "https://other-site.org/docs".into(),
+                handoff_id: "handoff-unrelated-1".into(),
+                filename: "manual.pdf".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert!(
+        unrelated_offer_events
+            .iter()
+            .any(|envelope| matches!(envelope.event, CoreEvent::HandoffOffered { .. })),
+        "unrelated OfferResource must fall back to normal handoff: {unrelated_offer_events:?}"
+    );
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().url,
+        "https://cdn.example.test/releases/app-installer.zip?sig=expired"
+    );
+
+    // Unrelated durable `admit_handoff` on the same site but different filename must also fall back to normal handoff.
+    let unrelated_handoff = crate::contract::BrowserHandoff {
+        id: "handoff-unrelated-2".into(),
+        offer: crate::ResourceOffer {
+            url: "https://cdn.example.test/releases/other-tool.zip?sig=1".into(),
+            source_page_url: "https://site-a.example.test/downloads".into(),
+            handoff_id: "handoff-unrelated-2".into(),
+            filename: "other-tool.zip".into(),
+            ..Default::default()
+        },
+        filename: "other-tool.zip".into(),
+        title: "other-tool.zip".into(),
+        mime_type: "application/zip".into(),
+        size: 2048,
+        status: "pending".into(),
+        presentation: "queued".into(),
+        task_id: None,
+        created_at_ms: 1_700_000_000_100,
+        request_id: "req-unrelated-2".into(),
+        suppression: None,
+    };
+    let unrelated_receipt: crate::contract::BrowserHandoff = serde_json::from_str(
+        &coordinator
+            .admit_handoff(&serde_json::to_string(&unrelated_handoff).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(unrelated_receipt.status, "pending");
+    assert!(unrelated_receipt.task_id.is_none());
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().url,
+        "https://cdn.example.test/releases/app-installer.zip?sig=expired"
+    );
+
+    // Armed refresh is STILL active -> a matching refresh offer now updates `task_id`!
+    let matching_handoff = crate::contract::BrowserHandoff {
+        id: "handoff-matching-refresh".into(),
+        offer: crate::ResourceOffer {
+            url: "https://cdn.example.test/releases/app-installer.zip?sig=fresh2".into(),
+            source_page_url: "https://site-a.example.test/downloads".into(),
+            handoff_id: "handoff-matching-refresh".into(),
+            filename: "app-installer.zip".into(),
+            ..Default::default()
+        },
+        filename: "app-installer.zip".into(),
+        title: "app-installer.zip".into(),
+        mime_type: "application/zip".into(),
+        size: 4096,
+        status: "pending".into(),
+        presentation: "queued".into(),
+        task_id: None,
+        created_at_ms: 1_700_000_000_200,
+        request_id: "req-matching-refresh".into(),
+        suppression: None,
+    };
+    let matched_receipt: crate::contract::BrowserHandoff = serde_json::from_str(
+        &coordinator
+            .admit_handoff(&serde_json::to_string(&matching_handoff).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(matched_receipt.status, "accepted");
+    assert_eq!(matched_receipt.task_id.as_deref(), Some(task_id.as_str()));
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&task_id).unwrap().url,
+        "https://cdn.example.test/releases/app-installer.zip?sig=fresh2"
+    );
+    let _ = coordinator.dispatch(CoreCommand::TaskAction {
+        task_id: task_id.clone(),
+        action: "cancel".into(),
+    });
+    let _ = coordinator.wait_for_worker_stop(&task_id);
+
+    // 2. Dual-track task armed for refresh rejects unsafe / non-allowlisted `audio_url` in both paths.
+    let dual_created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://media.example.test/v/1080p.m4s?sig=old".into(),
+                audio_url: "https://media.example.test/a/audio.m4s?sig=old".into(),
+                filename: "episode-01.mp4".into(),
+                source_page_url: "https://video.example.test/watch/ep1".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let dual_task_id = dual_created
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::ArmTaskRefresh {
+            task_id: dual_task_id.clone(),
+        })
+        .unwrap();
+
+    for (idx, bad_audio_url) in [
+        "file:///C:/Windows/win.ini",
+        "https://evil.untrusted.org/audio.m4s",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let offer_err = coordinator
+            .dispatch(CoreCommand::OfferResource {
+                offer: crate::ResourceOffer {
+                    url: "https://media.example.test/v/1080p.m4s?sig=new".into(),
+                    audio_url: bad_audio_url.into(),
+                    source_page_url: "https://video.example.test/watch/ep1".into(),
+                    handoff_id: format!("offer-bad-audio-{idx}"),
+                    filename: "episode-01.mp4".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap_err();
+        assert!(offer_err.contains("音轨下载地址"), "{offer_err}");
+
+        let bad_handoff = crate::contract::BrowserHandoff {
+            id: format!("handoff-bad-audio-{idx}"),
+            offer: crate::ResourceOffer {
+                url: "https://media.example.test/v/1080p.m4s?sig=new".into(),
+                audio_url: bad_audio_url.into(),
+                source_page_url: "https://video.example.test/watch/ep1".into(),
+                handoff_id: format!("handoff-bad-audio-{idx}"),
+                filename: "episode-01.mp4".into(),
+                ..Default::default()
+            },
+            filename: "episode-01.mp4".into(),
+            title: "episode-01.mp4".into(),
+            mime_type: "video/mp4".into(),
+            size: 0,
+            status: "pending".into(),
+            presentation: "queued".into(),
+            task_id: None,
+            created_at_ms: 1_700_000_000_300 + idx as u64,
+            request_id: format!("req-bad-audio-{idx}"),
+            suppression: None,
+        };
+        let err = coordinator
+            .admit_handoff(&serde_json::to_string(&bad_handoff).unwrap())
+            .unwrap_err();
+        assert!(
+            err.contains("音轨下载地址"),
+            "expected audio_url rejection error, got: {err}"
+        );
+        assert_eq!(
+            coordinator
+                .lock()
+                .unwrap()
+                .task_spec(&dual_task_id)
+                .unwrap()
+                .audio_url,
+            "https://media.example.test/a/audio.m4s?sig=old"
+        );
+    }
+}
+
+#[test]
+fn dual_track_single_stream_failure_preserves_completed_track_until_real_user_cancel() {
+    let root = lifecycle_test_root("dual-track-preserve-on-error");
+    let out_dir = root.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+
+    let video_bytes = vec![0x56u8; 32 * 1024];
+    let video_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stall_audio = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (stalled_tx, stalled_rx) = std::sync::mpsc::channel();
+    let stalled_tx = Arc::new(Mutex::new(Some(stalled_tx)));
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let v_hits_srv = Arc::clone(&video_hits);
+    let stall_srv = Arc::clone(&stall_audio);
+    let stalled_tx_srv = Arc::clone(&stalled_tx);
+    let release_rx_srv = Arc::clone(&release_rx);
+    let v_payload = video_bytes.clone();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let v_hits = Arc::clone(&v_hits_srv);
+            let stall = Arc::clone(&stall_srv);
+            let stalled_tx = Arc::clone(&stalled_tx_srv);
+            let release_rx = Arc::clone(&release_rx_srv);
+            let payload = v_payload.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(&mut stream);
+                let mut req_line = String::new();
+                let _ = reader.read_line(&mut req_line);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                if req_line.contains("/video.m4s") {
+                    v_hits.fetch_add(1, Ordering::SeqCst);
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(&payload);
+                } else if req_line.contains("/audio.m4s") && stall.load(Ordering::SeqCst) {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: audio/mp4\r\nContent-Length: 65536\r\n\r\nabcd",
+                    );
+                    if let Some(tx) = stalled_tx.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
+                    if let Some(rx) = release_rx.lock().unwrap().take() {
+                        let _ = rx.recv_timeout(Duration::from_secs(5));
+                    }
+                } else if req_line.contains("/audio.m4s") {
+                    // Delay slightly so video finishes first, then fail with 403 Forbidden.
+                    std::thread::sleep(Duration::from_millis(80));
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                } else {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            });
+        }
+    });
+
+    let coordinator = direct_http_coordinator(&out_dir);
+    let spec = TaskSpec {
+        url: format!("http://{addr}/video.m4s"),
+        audio_url: format!("http://{addr}/audio.m4s"),
+        filename: "dual-preserve.mp4".into(),
+        download_dir: out_dir.to_string_lossy().into_owned(),
+        concurrency: 1,
+        ..Default::default()
+    };
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask { spec: spec.clone() })
+        .unwrap();
+    let task_id = created
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+
+    let failed = wait_for_task_status(&coordinator, "failed");
+    assert_eq!(failed.task_id, task_id);
+
+    let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+    let task_dir = paths.task_dir();
+    let video_tmp = task_dir.join("video.part.m4s");
+    let video_state_dir = task_dir.join("video_state");
+    let audio_state_dir = task_dir.join("audio_state");
+
+    assert!(
+        video_tmp.is_file(),
+        "completed video.part.m4s must be preserved when audio track fails"
+    );
+    assert_eq!(fs::read(&video_tmp).unwrap().len(), video_bytes.len());
+    assert!(
+        video_state_dir.is_dir() && audio_state_dir.is_dir(),
+        "per-track state directories must remain intact on single-track failure"
+    );
+    assert!(
+        !matches!(
+            crate::http_engine::read_control(&paths.control),
+            crate::http_engine::Control::Cancel
+        ),
+        "shared control file must not be polluted with cancel on track error"
+    );
+    assert!(
+        dual_track_part_complete(&video_tmp, &video_state_dir.join("progress.json")),
+        "completed video track must be recognized as reusable for retry/refresh"
+    );
+    let hits_after_first_attempt = video_hits.load(Ordering::SeqCst);
+    assert!(hits_after_first_attempt >= 1);
+
+    // Retry while stalling `/audio.m4s`: completed `video.part.m4s` is reused without re-fetching,
+    // and an active user Cancel wipes the dual-track temp files and state directories.
+    stall_audio.store(true, Ordering::SeqCst);
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: task_id.clone(),
+            action: "retry".into(),
+        })
+        .unwrap();
+    stalled_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        video_hits.load(Ordering::SeqCst),
+        hits_after_first_attempt,
+        "completed video track must not be re-downloaded on retry"
+    );
+
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: task_id.clone(),
+            action: "cancel".into(),
+        })
+        .unwrap();
+    let _ = release_tx.send(());
+    coordinator.wait_for_worker_stop(&task_id).unwrap();
+    assert!(
+        !video_tmp.exists() && !video_state_dir.exists() && !audio_state_dir.exists(),
+        "explicit user Cancel must clean up dual-track temp payloads and state dirs"
+    );
+
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
