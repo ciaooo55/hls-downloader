@@ -1305,11 +1305,30 @@ pub fn control_session(action: &str) -> Result<CastPlaybackStatus, String> {
         chromecast_control(&device.control_url, action)
     } else {
         dlna_control(&device, action)
-    }?;
+    };
     if action == "stop" {
         clear_last_device(generation);
+        return Ok(match result {
+            Ok(mut status) => {
+                status.playing = false;
+                status.paused = false;
+                status.state = "STOPPED".into();
+                status
+            }
+            Err(_) => CastPlaybackStatus {
+                label: device.label.clone(),
+                device_kind: kind.into(),
+                supported_actions: supported_actions(&device),
+                playing: false,
+                paused: false,
+                position_seconds: 0,
+                duration_seconds: 0,
+                position_available: false,
+                state: "STOPPED".into(),
+            },
+        });
     }
-    Ok(result)
+    result
 }
 
 fn clear_last_device(generation: u64) {
@@ -4141,5 +4160,52 @@ mod tests {
         );
         // Launch mode must NOT hijack a 3rd-party app's transportId; it waits for CC1AD845.
         assert_eq!(select_chromecast_transport(&third_party_media, true), None);
+    }
+
+    #[test]
+    fn control_session_stop_clears_session_even_when_dlna_or_chromecast_is_offline() {
+        let closed_port = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        // 1. Offline DLNA receiver: non-stop actions fail and keep session, stop succeeds and clears.
+        remember_last_device(CastDeviceInfo {
+            id: format!("dlna:http://127.0.0.1:{closed_port}/ctrl"),
+            label: "客厅离线电视".into(),
+            location: format!("http://127.0.0.1:{closed_port}/desc.xml"),
+            control_url: format!("http://127.0.0.1:{closed_port}/ctrl"),
+            service_type: "urn:schemas-upnp-org:service:AVTransport:1".into(),
+        });
+        assert!(control_session("pause").is_err());
+        assert_eq!(last_device_label(), "客厅离线电视");
+
+        let stopped_dlna = control_session("stop").unwrap();
+        assert_eq!(stopped_dlna.state, "STOPPED");
+        assert_eq!(stopped_dlna.device_kind, "dlna");
+        assert_eq!(stopped_dlna.label, "客厅离线电视");
+        assert!(!stopped_dlna.playing);
+        assert!(!stopped_dlna.paused);
+        assert!(last_device_label().is_empty());
+        assert_eq!(control_session("status").unwrap().state, "STOPPED");
+
+        // 2. Offline Chromecast receiver: stop also succeeds locally and releases session.
+        remember_last_device(CastDeviceInfo {
+            id: format!("chromecast:127.0.0.1:{closed_port}"),
+            label: "Chromecast · 卧室".into(),
+            location: format!("https://127.0.0.1:{closed_port}"),
+            control_url: format!("127.0.0.1:{closed_port}"),
+            service_type: "chromecast".into(),
+        });
+        assert!(control_session("pause").is_err());
+        assert_eq!(last_device_label(), "Chromecast · 卧室");
+
+        let stopped_cast = control_session("stop").unwrap();
+        assert_eq!(stopped_cast.state, "STOPPED");
+        assert_eq!(stopped_cast.device_kind, "chromecast");
+        assert_eq!(stopped_cast.label, "Chromecast · 卧室");
+        assert!(!stopped_cast.playing);
+        assert!(!stopped_cast.paused);
+        assert!(last_device_label().is_empty());
     }
 }
