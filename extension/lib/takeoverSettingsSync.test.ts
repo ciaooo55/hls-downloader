@@ -238,9 +238,27 @@ describe('offline-safe takeover settings', () => {
       browser_quick_download_enabled: false,
       speed_limit_enabled: false,
       speed_limit_kib: 0,
+      tvbox_configured: true,
     })
     expect(storage.values.quickDownloadEnabled).toBe(false)
     expect(storage.values.speedLimitEnabled).toBe(false)
     expect(storage.values.speedLimitKib).toBe(0)
+    expect(storage.values.tvboxConfigured).toBe(true)
+
+    // Even when a takeover toggle is pending, read-only tvbox_configured updates from ping are persisted.
+    const pendingSync = new TakeoverSettingsSync(storage, () => new Promise(() => undefined), () => 'pending-tv')
+    await pendingSync.queue({ enabled: false })
+    const pingReply = await pendingSync.applyPing({
+      ok: true,
+      takeover_enabled: true,
+      tvbox_configured: false,
+    })
+    expect(pingReply).toMatchObject({
+      ok: true,
+      takeover_enabled: false,
+      tvbox_configured: false,
+      takeover_settings_pending: true,
+    })
+    expect(storage.values.tvboxConfigured).toBe(false)
   })
 })

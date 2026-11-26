@@ -344,4 +344,10 @@ describe('overlay cursor, transitions, and keyed DOM patching guards', () => {
     expect(popupMain).not.toContain('filterChips.replaceChildren(')
     expect(popupMain).not.toContain('browserTransfers.replaceChildren(')
   })
+
+  it('preserves pinned panels, hovered/focused action groups, and active send states when hoveredVideo clears', () => {
+    expect(content).toContain('choicesHaveActiveSendState(choices)')
+    expect(content).toContain('!matchedVideos.length && !pinned && !selectionMode && !harvestMode && !hasActiveOverlaySendState()')
+    expect(content).not.toContain('if (!videos.length && !selectionMode)')
+  })
 })

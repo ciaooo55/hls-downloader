@@ -83,6 +83,52 @@ fn reject_task_url(url: &str) -> Result<(), String> {
     Err("链接协议不受支持".into())
 }
 
+fn is_pre_expansion_container_source(url: &str) -> bool {
+    if crate::looks_like_metalink(url) {
+        return true;
+    }
+    let Some(path) = crate::link_file::local_source_path(url) else {
+        return false;
+    };
+    !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("torrent"))
+}
+
+#[derive(Clone, Default)]
+struct ExplicitTaskSpecOverrides {
+    proxy: String,
+    concurrency: u32,
+    speed_limit_kib: u32,
+    download_dir: String,
+    headers: BTreeMap<String, String>,
+}
+
+impl ExplicitTaskSpecOverrides {
+    fn from_raw(spec: &TaskSpec) -> Self {
+        Self {
+            proxy: spec.proxy.trim().to_string(),
+            concurrency: spec.concurrency,
+            speed_limit_kib: spec.speed_limit_kib,
+            download_dir: spec.download_dir.trim().to_string(),
+            headers: spec.headers.clone(),
+        }
+    }
+
+    fn for_child_headers(&self, from_url: &str, to_url: &str) -> BTreeMap<String, String> {
+        let from_origin = crate::credentials::request_origin(from_url);
+        let to_origin = crate::credentials::request_origin(to_url);
+        let same_origin =
+            !from_origin.is_empty() && !to_origin.is_empty() && from_origin == to_origin;
+        self.headers
+            .iter()
+            .filter(|(key, _)| same_origin || !sensitive_header_name(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+}
+
 pub(crate) use hls_client::request_validation::validate_local_source_path;
 
 fn is_importable_local_path(url: &str) -> bool {
@@ -1744,22 +1790,47 @@ impl CoreCoordinator {
         }
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
+            let explicit = ExplicitTaskSpecOverrides::from_raw(&spec);
             let spec = self.apply_defaults_to_spec(spec)?;
-            return self.create_prepared_task(spec);
+            return self.create_prepared_task_with_explicit(spec, &explicit);
         }
         self.dispatch_inner(command)
     }
 
-    fn create_prepared_task(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
+    fn create_prepared_task_with_explicit(
+        &self,
+        spec: TaskSpec,
+        explicit: &ExplicitTaskSpecOverrides,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let parent_url = spec.url.clone();
         let mut events = Vec::new();
-        for spec in self.expand_create(spec)? {
-            events.extend(self.dispatch_created(spec)?);
+        for item in self.expand_create_with_explicit(spec, explicit, false)? {
+            let child_explicit = if item.url == parent_url {
+                explicit.headers.clone()
+            } else {
+                explicit.for_child_headers(&parent_url, &item.url)
+            };
+            events.extend(self.dispatch_created_for_handoff_with_explicit(
+                item,
+                None,
+                &child_explicit,
+            )?);
         }
         self.start_next_queued(false)?;
         Ok(events)
     }
 
     fn expand_create(&self, spec: TaskSpec) -> Result<Vec<TaskSpec>, String> {
+        let explicit = ExplicitTaskSpecOverrides::default();
+        self.expand_create_with_explicit(spec, &explicit, false)
+    }
+
+    fn expand_create_with_explicit(
+        &self,
+        spec: TaskSpec,
+        explicit: &ExplicitTaskSpecOverrides,
+        trust_download_dir: bool,
+    ) -> Result<Vec<TaskSpec>, String> {
         if spec.local_source_path.is_some() {
             return Ok(vec![spec]);
         }
@@ -1800,30 +1871,69 @@ impl CoreCoordinator {
         }
         let settings = self.settings()?;
         let enable_dht = settings.bt_enable_dht;
+        let parent_url = spec.url.clone();
         self.expand_new_sources(spec, auto, &dirs)?
             .into_iter()
-            .map(|mut spec| {
-                if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
+            .map(|mut child| {
+                if child.url != parent_url {
+                    let preserved_bilibili_referer = child
+                        .headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case("referer"))
+                        .map(|(_, value)| value.clone());
+                    child.proxy = explicit.proxy.clone();
+                    child.concurrency = explicit.concurrency;
+                    child.speed_limit_kib = explicit.speed_limit_kib;
+                    child.headers = explicit.for_child_headers(&parent_url, &child.url);
+                    if let Some(referer) = preserved_bilibili_referer {
+                        if is_bilibili_cdn_host(&parent_url)
+                            && is_bilibili_cdn_host(&child.url)
+                            && !child
+                                .headers
+                                .keys()
+                                .any(|key| key.eq_ignore_ascii_case("referer"))
+                        {
+                            child.headers.insert("Referer".into(), referer);
+                        }
+                    }
+                    if explicit.download_dir.is_empty() && child.crawl_resource_key.is_empty() {
+                        child.download_dir.clear();
+                    }
+                    child = self.apply_defaults_to_spec_inner(child, trust_download_dir)?;
+                    if child.resource_kind != crate::ResourceKind::Torrent
+                        && child.crawl_resource_key.is_empty()
+                    {
+                        child.download_dir = crate::category::resolve_category_dir(
+                            &child.download_dir,
+                            &child.filename,
+                            &child.url,
+                            child.resource_kind,
+                            auto,
+                            &dirs,
+                        );
+                    }
+                }
+                if !crate::net_policy::url_allowed(&child.url, &settings.allowed_hosts) {
                     return Err("地址不在允许的域名白名单中".into());
                 }
-                spec.mirrors.retain(|mirror| {
+                child.mirrors.retain(|mirror| {
                     crate::http_engine::http_fetch_url_allowed(mirror)
                         && crate::net_policy::url_allowed(mirror, &settings.allowed_hosts)
                 });
-                let mut spec = validate_torrent_spec(self, spec, enable_dht)?;
-                if spec.resource_kind == crate::ResourceKind::Torrent
-                    && spec.crawl_resource_key.is_empty()
+                let mut child = validate_torrent_spec(self, child, enable_dht)?;
+                if child.resource_kind == crate::ResourceKind::Torrent
+                    && child.crawl_resource_key.is_empty()
                 {
-                    spec.download_dir = crate::category::resolve_category_dir(
-                        &spec.download_dir,
-                        &spec.filename,
-                        &spec.url,
-                        spec.resource_kind,
+                    child.download_dir = crate::category::resolve_category_dir(
+                        &child.download_dir,
+                        &child.filename,
+                        &child.url,
+                        child.resource_kind,
                         auto,
                         &dirs,
                     );
                 }
-                Ok(spec)
+                Ok(child)
             })
             .collect()
     }
@@ -1852,9 +1962,17 @@ impl CoreCoordinator {
             return Ok(specs);
         }
         if spec.harvest {
+            let fetch_headers = hydrate_replay_headers(&self.core(), spec.clone())
+                .map(|(hydrated, _)| {
+                    hydrated
+                        .headers
+                        .into_iter()
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
             let (_, body) = crate::http_engine::fetch_bytes_limited(
                 &spec.url,
-                &std::collections::HashMap::new(),
+                &fetch_headers,
                 &self.transfer_proxy(&spec.proxy)?,
                 1024 * 1024,
             )
@@ -1878,9 +1996,17 @@ impl CoreCoordinator {
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
+            let fetch_headers = hydrate_replay_headers(&self.core(), spec.clone())
+                .map(|(hydrated, _)| {
+                    hydrated
+                        .headers
+                        .into_iter()
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
             let (_, body) = crate::http_engine::fetch_bytes_limited(
                 &spec.url,
-                &std::collections::HashMap::new(),
+                &fetch_headers,
                 &self.transfer_proxy(&spec.proxy)?,
                 1024 * 1024,
             )
@@ -1896,6 +2022,7 @@ impl CoreCoordinator {
         )])
     }
 
+    #[allow(dead_code)]
     fn dispatch_created(&self, spec: TaskSpec) -> Result<Vec<EventEnvelope>, String> {
         self.dispatch_created_for_handoff(spec, None)
     }
@@ -1905,8 +2032,17 @@ impl CoreCoordinator {
         spec: TaskSpec,
         expected_handoff_id: Option<&str>,
     ) -> Result<Vec<EventEnvelope>, String> {
+        self.dispatch_created_for_handoff_with_explicit(spec, expected_handoff_id, &BTreeMap::new())
+    }
+
+    fn dispatch_created_for_handoff_with_explicit(
+        &self,
+        spec: TaskSpec,
+        expected_handoff_id: Option<&str>,
+        explicit_headers: &BTreeMap<String, String>,
+    ) -> Result<Vec<EventEnvelope>, String> {
         let start_paused = spec.start_paused;
-        let mut spec = seal_spec_secrets(self, spec)?;
+        let mut spec = seal_spec_secrets_with_explicit(self, spec, explicit_headers)?;
         let (task_id, status) = {
             let mut core = self.lock()?;
             if let Some(handoff_id) = expected_handoff_id {
@@ -2686,7 +2822,9 @@ impl CoreCoordinator {
                 &spec.proxy,
             );
             reject_task_url(&spec.url)?;
-            if !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts) {
+            if !is_pre_expansion_container_source(&spec.url)
+                && !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts)
+            {
                 return Err("下载地址不在允许的域名范围内".into());
             }
             if !spec.audio_url.is_empty() {
@@ -2943,7 +3081,15 @@ impl CoreCoordinator {
             ..Default::default()
         };
         let from_editor_override = spec_override.is_some();
+        let mut explicit = ExplicitTaskSpecOverrides {
+            download_dir: raw_spec.download_dir.trim().to_string(),
+            ..Default::default()
+        };
         if let Some(override_spec) = spec_override {
+            explicit = ExplicitTaskSpecOverrides::from_raw(&override_spec);
+            if explicit.download_dir.is_empty() {
+                explicit.download_dir = raw_spec.download_dir.trim().to_string();
+            }
             let override_trimmed = override_spec.url.trim();
             if !override_trimmed.is_empty() {
                 drop_cross_origin_task_secrets(&mut raw_spec, &offer.url, override_trimmed);
@@ -2955,11 +3101,21 @@ impl CoreCoordinator {
             );
         }
         let spec = self.apply_defaults_to_spec_inner(raw_spec, trust_download_dir)?;
-        let expanded = self.expand_create(spec)?;
+        let parent_url = spec.url.clone();
+        let expanded = self.expand_create_with_explicit(spec, &explicit, trust_download_dir)?;
         let mut events = Vec::new();
         for (index, item) in expanded.into_iter().enumerate() {
             let guard_id = (index == 0).then_some(handoff_id.as_str());
-            events.extend(self.dispatch_created_for_handoff(item, guard_id)?);
+            let child_explicit = if item.url == parent_url {
+                explicit.headers.clone()
+            } else {
+                explicit.for_child_headers(&parent_url, &item.url)
+            };
+            events.extend(self.dispatch_created_for_handoff_with_explicit(
+                item,
+                guard_id,
+                &child_explicit,
+            )?);
         }
         self.start_next_queued(false)?;
         let has_committed_task = events.iter().any(|envelope| {
@@ -3042,10 +3198,25 @@ impl CoreCoordinator {
                 .get("presentation_lease_until_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
-            if ok && presentation == "fallback" {
+            let workbench_from = ok
+                .then(|| presenter_id.strip_prefix("workbench:"))
+                .flatten()
+                .map(str::trim);
+            if ok
+                && workbench_from.is_none()
+                && matches!(presentation.as_str(), "fallback" | "workbench")
+            {
                 return Err("接管请求已由主窗口处理".into());
             }
-            if ok && !owner.is_empty() && owner != presenter_id && lease_until > now {
+            if let Some(prev_presenter) = workbench_from {
+                if !owner.is_empty()
+                    && owner != prev_presenter
+                    && owner != "workbench"
+                    && lease_until > now
+                {
+                    return Err("接管请求已由另一个确认窗口处理".into());
+                }
+            } else if ok && !owner.is_empty() && owner != presenter_id && lease_until > now {
                 return Err("接管请求已由另一个确认窗口处理".into());
             }
             if !ok && presenter_id.is_empty() && lease_until > now {
@@ -3055,7 +3226,14 @@ impl CoreCoordinator {
                 return Err("接管请求不属于当前确认窗口".into());
             }
             if let Some(object) = value.as_object_mut() {
-                if ok {
+                if workbench_from.is_some() {
+                    object.insert("presentation".into(), Value::String("workbench".into()));
+                    object.insert(
+                        "presentation_owner".into(),
+                        Value::String("workbench".into()),
+                    );
+                    object.insert("presentation_lease_until_ms".into(), Value::from(0));
+                } else if ok {
                     let next = if owner == presenter_id && presentation == "presenting" {
                         "presented"
                     } else if owner == presenter_id {
@@ -5952,10 +6130,21 @@ fn spec_from_url(
     dirs: &crate::category::CategoryDirs,
 ) -> TaskSpec {
     let mut spec = template.clone();
+    let changed_url = url != template.url;
     spec.url = url.to_string();
     // 已识别的同一资源保留媒体类型；导入/采集出来的新 URL 才重新分类。
-    if url != template.url || spec.resource_kind == crate::ResourceKind::File {
+    if changed_url || spec.resource_kind == crate::ResourceKind::File {
         spec.resource_kind = crate::classify_url(url);
+    }
+    if changed_url {
+        spec.resource_key = crate::http_engine::canonical_url_key(url);
+        spec.etag.clear();
+        spec.last_modified.clear();
+        spec.expected_size = None;
+        spec.checksum = None;
+        spec.mirrors.clear();
+        spec.audio_url.clear();
+        spec.local_source_path = None;
     }
     if !filename.trim().is_empty() {
         spec.filename = filename.to_string();
@@ -6000,9 +6189,14 @@ fn drop_cross_origin_task_secrets(spec: &mut TaskSpec, from: &str, to: &str) {
     spec.request_method = "GET".into();
 }
 
-fn seal_spec_secrets(
+fn seal_spec_secrets(coordinator: &CoreCoordinator, spec: TaskSpec) -> Result<TaskSpec, String> {
+    seal_spec_secrets_with_explicit(coordinator, spec, &BTreeMap::new())
+}
+
+fn seal_spec_secrets_with_explicit(
     coordinator: &CoreCoordinator,
     mut spec: TaskSpec,
+    explicit_headers: &BTreeMap<String, String>,
 ) -> Result<TaskSpec, String> {
     let sensitive_keys: Vec<String> = spec
         .headers
@@ -6010,13 +6204,27 @@ fn seal_spec_secrets(
         .filter(|name| sensitive_header_name(name))
         .cloned()
         .collect();
-    if sensitive_keys.is_empty() {
+    let explicit_non_sensitive: serde_json::Map<String, Value> = explicit_headers
+        .keys()
+        .filter(|name| !sensitive_header_name(name) && !name.eq_ignore_ascii_case("cookie"))
+        .filter_map(|name| {
+            spec.headers
+                .iter()
+                .find(|(current, _)| current.eq_ignore_ascii_case(name))
+                .map(|(current, value)| (current.clone(), Value::String(value.clone())))
+        })
+        .collect();
+    if sensitive_keys.is_empty()
+        && (spec.credential_ref.is_none()
+            || spec.credential_ref.as_deref() == Some(DEFAULT_COOKIE_CREDENTIAL_REF)
+            || explicit_non_sensitive.is_empty())
+    {
         return Ok(spec);
     }
     let mut protected_headers = serde_json::Map::new();
-    for key in sensitive_keys {
-        if let Some(value) = spec.headers.remove(&key) {
-            protected_headers.insert(key, Value::String(value));
+    for key in &sensitive_keys {
+        if let Some(value) = spec.headers.remove(key) {
+            protected_headers.insert(key.clone(), Value::String(value));
         }
     }
     let new_cookie = protected_headers
@@ -6027,16 +6235,46 @@ fn seal_spec_secrets(
     let mut context = if let Some(credential_ref) = spec.credential_ref.as_deref() {
         let is_default_cookie = credential_ref == DEFAULT_COOKIE_CREDENTIAL_REF;
         match coordinator.load_credential(credential_ref)? {
-            None if is_default_cookie => serde_json::Map::new(),
+            None if is_default_cookie || sensitive_keys.is_empty() => {
+                if sensitive_keys.is_empty() {
+                    return Ok(spec);
+                }
+                serde_json::Map::new()
+            }
             None => return Err("请求凭据不存在，请重新获取站点凭据".to_string()),
-            Some(blob) if is_default_cookie && blob.trim().is_empty() => serde_json::Map::new(),
+            Some(blob) if is_default_cookie && blob.trim().is_empty() => {
+                if sensitive_keys.is_empty() {
+                    return Ok(spec);
+                }
+                serde_json::Map::new()
+            }
             Some(blob) => {
                 let plain = CredentialVault
                     .unprotect(&blob)
                     .map_err(|_| "请求凭据无法解密，请重新获取站点凭据".to_string())?;
                 if is_default_cookie && plain.trim().is_empty() {
+                    if sensitive_keys.is_empty() {
+                        return Ok(spec);
+                    }
                     serde_json::Map::new()
                 } else {
+                    if sensitive_keys.is_empty() {
+                        let mut simulated = spec.headers.clone();
+                        let bound = crate::credentials::bind_replay_source_url(&plain, &spec.url);
+                        apply_replay_json_for(&mut simulated, &bound, &spec.url);
+                        let replay_clobbers_explicit =
+                            explicit_non_sensitive.iter().any(|(key, expected)| {
+                                let want = expected.as_str().unwrap_or("");
+                                simulated
+                                    .iter()
+                                    .find(|(sim_key, _)| sim_key.eq_ignore_ascii_case(key))
+                                    .map(|(_, sim_val)| sim_val.as_str())
+                                    != Some(want)
+                            });
+                        if !replay_clobbers_explicit {
+                            return Ok(spec);
+                        }
+                    }
                     serde_json::from_str::<serde_json::Map<String, Value>>(&plain)
                         .map_err(|_| "请求凭据上下文已损坏，请重新获取站点凭据".to_string())?
                 }
@@ -6052,18 +6290,25 @@ fn seal_spec_secrets(
         None => serde_json::Map::new(),
         _ => return Err("请求凭据中的请求头已损坏，请重新获取站点凭据".into()),
     };
-    let non_cookie_protected: serde_json::Map<String, Value> = protected_headers
+    let mut non_cookie_overrides: serde_json::Map<String, Value> = protected_headers
         .iter()
         .filter(|(key, _)| !key.eq_ignore_ascii_case("cookie"))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    crate::credentials::merge_protected_headers(&mut existing_headers, protected_headers);
-    context.insert("request_headers".into(), Value::Object(existing_headers));
-    if !non_cookie_protected.is_empty() {
+    for (key, value) in explicit_non_sensitive {
+        non_cookie_overrides.insert(key, value);
+    }
+    if !protected_headers.is_empty() {
+        crate::credentials::merge_protected_headers(&mut existing_headers, protected_headers);
+    }
+    if !existing_headers.is_empty() || !sensitive_keys.is_empty() {
+        context.insert("request_headers".into(), Value::Object(existing_headers));
+    }
+    if !non_cookie_overrides.is_empty() {
         crate::credentials::overwrite_replay_headers(
             &mut context,
             &spec.url,
-            &non_cookie_protected,
+            &non_cookie_overrides,
         );
     }
     if let Some(cookie) = new_cookie {
@@ -6980,6 +7225,9 @@ fn harvest_page(
         headers.insert("Referer".into(), referer.trim().to_string());
     }
     let settings = coordinator.settings()?;
+    if !crate::net_policy::url_allowed(url, &settings.allowed_hosts) {
+        return Err("下载地址不在允许的域名范围内".into());
+    }
     if !probe_urls.is_empty() {
         if probe_urls.len() > 100 {
             return Err("一次最多读取 100 个链接的大小".into());
@@ -6990,7 +7238,9 @@ fn harvest_page(
             if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
                 continue;
             }
-            if reject_task_url(candidate).is_err() {
+            if reject_task_url(candidate).is_err()
+                || !crate::net_policy::url_allowed(candidate, &settings.allowed_hosts)
+            {
                 continue;
             }
             let job = crate::http_engine::Job {

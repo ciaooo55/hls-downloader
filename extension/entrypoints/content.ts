@@ -619,12 +619,28 @@ export default defineContentScript({
       if (pinButton) pinButton.textContent = value ? '已固定' : '固定'
       if (value) setOpen(true)
     }
+    const isEntryPendingSend = (entry?: { label: string, state?: SendState }) => Boolean(
+      entry && (entry.state === 'sending' || entry.state === 'confirming' || entry.label === '等待选择'),
+    )
+    const hasActiveOverlaySendState = () => [...resourceSendStates.values()].some(isEntryPendingSend)
+    const choicesHaveActiveSendState = (choices: MediaResource[]) => {
+      const candidates = [
+        ...choices,
+        ...overlayQualityOptions(choices, 6).map(option => option.resource),
+      ]
+      return candidates.some(candidate => {
+        const fp = resourceFingerprint(candidate)
+        return isEntryPendingSend(resourceSendStates.get(overlaySendKey(fp, 'download')))
+          || isEntryPendingSend(resourceSendStates.get(overlaySendKey(fp, 'cast')))
+          || isEntryPendingSend(resourceSendStates.get(overlaySendKey(fp, 'tvbox')))
+      })
+    }
     wrap?.addEventListener('mouseenter', () => {
       setOpen(true)
     })
     wrap?.addEventListener('mouseleave', () => {
-      // 选中链接需要逐个桌面确认，离开面板不能使剩余链接消失。
-      if (pinned || dragged || selectionMode || harvestMode) return
+      // 选中链接或进行中的桌面确认不能在鼠标移出面板后消失。
+      if (pinned || dragged || selectionMode || harvestMode || hasActiveOverlaySendState()) return
       collapseTimer = setTimeout(() => setOpen(false), 450)
     })
     pinButton?.addEventListener('click', () => setPinned(!pinned))
@@ -1403,7 +1419,13 @@ export default defineContentScript({
       if (videoControlDragging) return
       const siteExcluded = isCurrentSiteExcluded()
       const buttonBounds = videoButtonBounds()
-      const videos = siteExcluded
+      const existingGroups = new Map<string, HTMLElement>()
+      for (const node of layer.querySelectorAll<HTMLElement>('.video-action-group')) {
+        if (node.getAttribute('data-leaving') === '1') continue
+        const state = videoGroupStates.get(node)
+        if (state) existingGroups.set(mediaOwner(state.video), node)
+      }
+      const matchedVideos = siteExcluded
         ? []
         : currentVideos()
             .flatMap(video => {
@@ -1419,12 +1441,21 @@ export default defineContentScript({
               const matched = choices.length > 0
               return { ...item, choices, matched }
             })
-            .filter(({ video, choices }) => video === hoveredVideo
-              && shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length }))
-            .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
-              || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
+            .filter(({ choices }) => shouldShowMediaOverlay({ hasPlayback: true, hasActiveVideo: true, resourceCount: choices.length }))
+      const videos = matchedVideos
+        .filter(({ video, choices }) => {
+          if (video === hoveredVideo) return true
+          const group = existingGroups.get(mediaOwner(video))
+          if (group && (group.classList.contains('hover-open') || group.matches(':hover') || group.contains(ui.shadow.activeElement))) {
+            return true
+          }
+          return choicesHaveActiveSendState(choices)
+        })
+        .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
+          || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
         innerWidth, innerHeight, buttonBounds, selectionMode, siteExcluded, tvboxConfigured, [...resourceSendStates],
+        matchedVideos.length,
         videos.map(({ video, rect, playback, choices, matched }) => [
           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback.sourceUrls, playback.startedAt,
           resourcePresentationSignature(choices, false), matched, videoButtonPositions.get(video),
@@ -1465,8 +1496,11 @@ export default defineContentScript({
           },
         },
       )
-      if (!videos.length && !selectionMode) {
+      if (siteExcluded && !selectionMode && !harvestMode) {
         if (pinned) setPinned(false)
+        setOpen(false)
+        panelPosition = null
+      } else if (!matchedVideos.length && !pinned && !selectionMode && !harvestMode && !hasActiveOverlaySendState()) {
         setOpen(false)
         panelPosition = null
       }
@@ -2620,7 +2654,9 @@ export default defineContentScript({
           activeVideo = null
           selectionMode = true
           loadPageResources(location.href, 'tab')
-        } else if (!activePlayback) selectionMode = true
+        } else if (!activePlayback || !activeVideo || !visibleMediaRect(activeVideo, { width: innerWidth, height: innerHeight })) {
+          selectionMode = true
+        }
         selectionResourceIds = null
         setPanelTitle('当前视频')
         openFloatingPanel()

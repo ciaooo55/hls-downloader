@@ -33,6 +33,7 @@ import { SessionListStore } from '../lib/sessionListStore'
 import { BlobSourceStore, type BlobSourceRecord } from '../lib/blobSourceStore'
 import { canHarvestPageLinks, CONTEXT_MENU_IDS, contextMenuCapabilities } from '../lib/contextMenuActions'
 import { installSubtitleBackground } from '../lib/subtitleBackground'
+import { resolveSubtitleAudioSource } from '../lib/subtitleSettings'
 import { classifyEngineConnectionState, errorText, type EngineConnectionState } from '../lib/productCopy'
 import { sameSiteVideoIdentity, sitePageVideoId } from '../lib/siteManifest'
 
@@ -935,6 +936,10 @@ async function continuePausedHandoffFollowups(): Promise<void> {
   if (parked) schedulePausedFollowUpAccelerator(parked.deadline - Date.now())
 }
 
+function samePageOrSiteVideo(left: string, right: string): boolean {
+  return pageIdentity(left) === pageIdentity(right) || sameSiteVideoIdentity(left, right)
+}
+
 async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabId = -1, expectedPageUrl?: string) {
   const kind = resource.kind || classifyResource(resource.url, resource.mimeType)
   if (!kind) return
@@ -946,8 +951,9 @@ async function saveResource(resource: Omit<MediaResource, 'id' | 'seenAt'>, tabI
     // becoming the incorrectly advertised source page.
     pageUrl = await topLevelPageUrl(tabId, pageUrl)
   }
-  // Async inspection must not adopt a newly navigated tab's page identity.
-  if (expectedPageUrl !== undefined && pageIdentity(pageUrl) !== pageIdentity(expectedPageUrl)) return false
+  // Async inspection must not adopt a newly navigated tab's page identity,
+  // unless it was a same-video SPA URL rewrite (e.g. history.replaceState).
+  if (expectedPageUrl !== undefined && !samePageOrSiteVideo(pageUrl, expectedPageUrl)) return false
   const key = pageResourceKey(tabId, pageUrl)
   const merged = await resourceSessionStore.update(key, resources => mergeResources(
     resources,
@@ -1278,8 +1284,9 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
     const metadata = normalized.kind === 'hls'
       ? await inspectHlsResource(probeResource)
       : await inspectDashResource(probeResource)
-    // An old response must not be relabelled with the tab's new source page.
-    if (!isCurrentPage() || pageIdentity(await topLevelPageUrl(tabId, sourcePageUrl)) !== pageIdentity(sourcePageUrl) || !isCurrentPage()) return
+    // An old response must not be relabelled with the tab's new source page,
+    // except for same-video SPA query canonicalization (history.replaceState).
+    if (!isCurrentPage() || !samePageOrSiteVideo(await topLevelPageUrl(tabId, sourcePageUrl), sourcePageUrl) || !isCurrentPage()) return
     if (metadata) {
       const enriched = {
         ...normalized,
@@ -1290,8 +1297,9 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
         replayContext: { ...(normalized.replayContext || {}), method: 'GET' },
       }
       if (!isCurrentPage() || !await saveResource(enriched, tabId, sourcePageUrl)) return
-      if (!isCurrentPage() || pageIdentity(await topLevelPageUrl(tabId, sourcePageUrl)) !== pageIdentity(sourcePageUrl) || !isCurrentPage()) return
-      await sendCapturedResource(tabId, enriched)
+      const currentTopPage = await topLevelPageUrl(tabId, sourcePageUrl)
+      if (!isCurrentPage() || !samePageOrSiteVideo(currentTopPage, sourcePageUrl) || !isCurrentPage()) return
+      await sendCapturedResource(tabId, { ...enriched, pageUrl: currentTopPage || enriched.pageUrl })
     } else {
       // A response can be temporarily unauthorized, truncated or not yet a
       // real manifest. Back off to avoid doubling every live poll, but do not
@@ -2570,15 +2578,7 @@ export default defineBackground(() => {
       if (!resource || !['hls', 'dash', 'media'].includes(resource.kind) || resource.isLive === true) {
         throw new Error('尚未确认当前播放器的点播音源，请继续播放以完成识别，或关闭提前翻译')
       }
-      const tracks = resource.audioTracks || []
-      const matches = tracks.filter(track => selection.audioLanguage && track.language === selection.audioLanguage
-        || selection.audioLabel && track.label === selection.audioLabel)
-      const track = matches.length === 1 ? matches[0] : tracks.length === 1 ? tracks[0] : undefined
-      if (tracks.length > 1 && !track || selection.audioIndex > 0 && !track?.url) {
-        throw new Error('无法确认当前备用音轨，请关闭提前翻译以采集播放器实际音轨')
-      }
-      if (track?.url) resource = { ...resource, url: track.url, audioUrl: undefined }
-      else if (!tracks.length && resource.audioUrl) resource = { ...resource, url: resource.audioUrl, audioUrl: undefined }
+      resource = resolveSubtitleAudioSource(resource, selection)
       // 已由实际加载的播放器唯一匹配；独立解码还会验证音频，不需要下载任务的请求完成门禁。
       return resourcePayload(resource, undefined, { allowUnverified: true })
     })

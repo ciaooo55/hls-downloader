@@ -1,5 +1,6 @@
 import { removeRawQueryParameters } from './urlQuery'
 import { isMediaResponseStatus } from './manifestSniff'
+import { sameSiteVideoIdentity } from './siteManifest'
 
 export interface HeaderLike {
   name?: string
@@ -422,7 +423,7 @@ export class RequestChainStore {
       if (!target) return false
       const norm = normalized(candidateUrl)
       if (!norm) return false
-      if (norm === target) return true
+      if (norm === target || sameSiteVideoIdentity(norm, target)) return true
       // Chromium webRequest provides origin-only `initiator` (no path) and
       // `strict-origin-when-cross-origin` sends origin-only `Referer: https://host/`.
       const origin = httpOrigin(candidateUrl)
@@ -480,7 +481,11 @@ export class RequestChainStore {
     return [...this.chains.values()]
       .filter(chain => chain.tabId === tabId)
       .filter(chain => ['main_frame', 'sub_frame', 'xmlhttprequest'].includes(chain.type))
-      .filter(chain => Boolean(page) && normalized(chain.finalUrl) === page)
+      .filter(chain => {
+        if (!page) return false
+        const finalNorm = normalized(chain.finalUrl)
+        return finalNorm === page || sameSiteVideoIdentity(finalNorm, page)
+      })
       .sort((left, right) => right.updatedAt - left.updatedAt)[0]
   }
 

@@ -14,7 +14,7 @@ export async function waitForDownloadConfirmation(
     if (status === 'accepted') return true
     if (status === 'rejected' || status === 'canceled') return false
     if (status !== 'pending') throw new Error(response.handoff?.presentation_error || '下载确认已失效，请重试')
-    if (response.handoff?.presentation === 'fallback' || response.handoff?.presentation === 'failed') {
+    if (response.handoff?.presentation === 'fallback' || response.handoff?.presentation === 'failed' || response.handoff?.presentation_ok === false) {
       throw new Error(response.handoff?.presentation_error || '无法显示下载确认窗口，请打开主程序后重试')
     }
     await new Promise(resolve => setTimeout(resolve, 600))

@@ -270,4 +270,17 @@ describe('DASH browser inspection', () => {
     expect(parseDashManifest(widevineMpd, 'https://cdn.test/wv.mpd')?.drmProtected).toBe(true)
     expect(parseDashManifest(playreadyMpd, 'https://cdn.test/pr.mpd')?.drmProtected).toBe(true)
   })
+
+  it('uses AdaptationSet <Label> text when @label is absent and falls back to 音轨 instead of numeric adaptation id', () => {
+    const labeledMpd = `<MPD type="static" mediaPresentationDuration="PT30S"><Period>
+      <AdaptationSet id="1" contentType="video"><Representation id="v" width="1280" height="720" bandwidth="2000000"/></AdaptationSet>
+      <AdaptationSet id="2" contentType="audio" lang="ja"><Label>日本語</Label><Representation id="a1" bandwidth="192000"><BaseURL>ja.m4s</BaseURL></Representation></AdaptationSet>
+      <AdaptationSet id="30280" contentType="audio"><Representation id="a2" bandwidth="128000"><BaseURL>default.m4s</BaseURL></Representation></AdaptationSet>
+    </Period></MPD>`
+    const parsed = parseDashManifest(labeledMpd, 'https://cdn.test/manifest.mpd')
+    expect(parsed?.audioTracks).toEqual([
+      { label: '日本語', language: 'ja' },
+      { label: '音轨', language: '' },
+    ])
+  })
 })

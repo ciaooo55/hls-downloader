@@ -314,17 +314,48 @@ fn extract_html_urls(text: &str) -> Result<Vec<String>, String> {
 fn collect_absolute_urls(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut seen = BTreeSet::new();
-    let lower = text.to_ascii_lowercase();
-    for prefix in [
-        "https://", "http://", "ftps://", "ftp://", "sftp://", "magnet:?",
-    ] {
-        let mut start = 0;
-        while let Some(rel) = lower[start..].find(prefix) {
-            let abs = start + rel;
-            let slice = &text[abs..];
-            let end = slice
-                .find(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"'))
-                .unwrap_or(slice.len());
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(rel_colon) = text[cursor..].find(':') else {
+            break;
+        };
+        let colon = cursor + rel_colon;
+        let mut scheme_start = colon;
+        while scheme_start > cursor
+            && (bytes[scheme_start - 1].is_ascii_alphanumeric()
+                || matches!(bytes[scheme_start - 1], b'+' | b'-' | b'.'))
+        {
+            scheme_start -= 1;
+        }
+        let valid_left_boundary = scheme_start == 0
+            || !(bytes[scheme_start - 1].is_ascii_alphanumeric()
+                || matches!(bytes[scheme_start - 1], b'+' | b'-' | b'.'));
+        let scheme = &text[scheme_start..colon];
+        let has_valid_scheme =
+            valid_left_boundary && !scheme.is_empty() && bytes[scheme_start].is_ascii_alphabetic();
+        let is_hierarchical = has_valid_scheme && text[colon..].starts_with("://");
+        let is_magnet = has_valid_scheme
+            && scheme.eq_ignore_ascii_case("magnet")
+            && text[colon..].starts_with(":?");
+        if !is_hierarchical && !is_magnet {
+            cursor = colon + 1;
+            continue;
+        }
+        let prefix_len = (colon - scheme_start) + if is_hierarchical { 3 } else { 2 };
+        let slice = &text[scheme_start..];
+        let end = slice
+            .find(|ch: char| {
+                ch.is_whitespace() || ch.is_control() || matches!(ch, '<' | '>' | '"' | '\'')
+            })
+            .unwrap_or(slice.len());
+        let supported = is_magnet
+            || scheme.eq_ignore_ascii_case("https")
+            || scheme.eq_ignore_ascii_case("http")
+            || scheme.eq_ignore_ascii_case("ftps")
+            || scheme.eq_ignore_ascii_case("ftp")
+            || scheme.eq_ignore_ascii_case("sftp");
+        if supported && end > prefix_len {
             let raw = slice[..end].trim_end_matches(['.', ',', ')', ';', ']']);
             if let Ok(url) = normalize_download_url(raw) {
                 if seen.insert(url.clone()) {
@@ -334,8 +365,8 @@ fn collect_absolute_urls(text: &str) -> Vec<String> {
                     }
                 }
             }
-            start = abs + prefix.len();
         }
+        cursor = scheme_start + end.max(prefix_len);
     }
     found
 }
@@ -568,6 +599,27 @@ mod tests {
         assert!(
             took < Duration::from_secs(10),
             "5MB 无链接文本扫描超过 10s（耗时 {took:?}）——线性扫很可能被改成了二次扫"
+        );
+    }
+
+    #[test]
+    fn sftp_and_embedded_query_urls_do_not_spawn_ghost_links() {
+        let text = concat!(
+            "sftp://user:pass@sftp.example/files/a.bin\n",
+            "ftps://user:pass@ftps.example/files/b.bin\n",
+            "https://a.test/dl?next=https://b.test/x&fallback=http://c.test/y\n",
+            "custom+https://evil.example/payload.bin\n",
+            "ws://socket.example/live?origin=https://ignored.example/room\n",
+            "<a href='https://cdn.example/clip.mp4'>clip</a>\n",
+        );
+        assert_eq!(
+            collect_absolute_urls(text),
+            vec![
+                "sftp://user:pass@sftp.example/files/a.bin".to_string(),
+                "ftps://user:pass@ftps.example/files/b.bin".to_string(),
+                "https://a.test/dl?next=https://b.test/x&fallback=http://c.test/y".to_string(),
+                "https://cdn.example/clip.mp4".to_string(),
+            ]
         );
     }
 

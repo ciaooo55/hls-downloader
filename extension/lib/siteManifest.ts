@@ -1,5 +1,5 @@
 import { manifestMimeType } from './manifestSniff'
-import type { MediaAudioTrack, MediaResource, MediaVariant } from './resources'
+import type { MediaResource, MediaVariant } from './resources'
 
 export const SITE_RESPONSE_LIMIT = 2 * 1024 * 1024
 
@@ -419,13 +419,6 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
     const bestAudio = orderedAudios[0]
     const bestAudioUrl = bestAudio?.url || ''
 
-    const audioTracks: MediaAudioTrack[] = orderedAudios.map((track, index) => ({
-      label: track.label,
-      language: '',
-      url: track.url,
-      default: index === 0,
-    }))
-
     if (!parsedVideos.length) return []
     if (bilibiliPayloadConflictsWithPage(videoId, [], playbackUrls)) return []
     parsedVideos.sort((left, right) => right.height - left.height
@@ -472,7 +465,6 @@ export function extractBilibiliPlayinfo(pageUrl: string, body: unknown): SiteMan
         ...(estimatedSize ? { estimatedSize } : {}),
         ...(primary.quality ? { quality: primary.quality } : {}),
         ...(variants.length ? { variants } : {}),
-        ...(audioTracks.length ? { audioTracks } : {}),
         playbackUrls: [...playbackUrls].slice(0, 48),
       },
     }]

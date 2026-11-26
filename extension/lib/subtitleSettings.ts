@@ -56,9 +56,82 @@ export function visibleSubtitle(cues: Iterable<SubtitleCue>, time: number, offse
 
 export function subtitleReadyEnd(ranges: readonly (readonly [number, number])[], position: number): number {
   let end = position
+  let chained = false
   for (const [start, stop] of [...ranges].sort((a, b) => a[0] - b[0])) {
-    if (start > end + .001) break
-    if (stop > end) end = stop
+    if (start > end + (chained ? .02 : .25)) break
+    if (stop > end) {
+      end = stop
+      chained = true
+    } else if (stop >= position - .02) {
+      chained = true
+    }
   }
   return end
+}
+
+export interface SubtitleTrackSelectionLike {
+  audioIndex: number
+  audioLanguage: string
+  audioLabel: string
+}
+
+export interface SubtitleAudioTrackLike {
+  label: string
+  language: string
+  url?: string
+  default?: boolean
+}
+
+export function resolveSubtitleAudioSource<T extends { url: string; audioUrl?: string; audioTracks?: SubtitleAudioTrackLike[] }>(
+  resource: T,
+  selection: SubtitleTrackSelectionLike,
+): T {
+  const tracks = resource.audioTracks || []
+  const pickBest = (candidates: SubtitleAudioTrackLike[]) =>
+    candidates.find(t => t.default && t.url)
+    || candidates.find(t => Boolean(t.url))
+    || candidates.find(t => t.default)
+    || candidates[0]
+
+  const groups = new Map<string, SubtitleAudioTrackLike[]>()
+  for (const track of tracks) {
+    const langKey = (track.language || '').trim().toLowerCase()
+    const labelKey = (track.label || '').trim().toLowerCase()
+    const key = `${langKey}\0${labelKey}`
+    const list = groups.get(key) || []
+    list.push(track)
+    groups.set(key, list)
+  }
+  const logicalGroups = [...groups.values()]
+  const selLang = (selection.audioLanguage || '').trim().toLowerCase()
+  const selLabel = (selection.audioLabel || '').trim().toLowerCase()
+  const matchedGroups = (selLang || selLabel)
+    ? logicalGroups.filter(group => group.some(track =>
+        (selLang && (track.language || '').trim().toLowerCase() === selLang)
+        || (selLabel && (track.label || '').trim().toLowerCase() === selLabel)))
+    : []
+
+  const allLanguageFreeRenditions = tracks.length > 1
+    && tracks.every(track => !(track.language || '').trim())
+    && tracks.filter(track => track.default === true).length === 1
+
+  let chosen: SubtitleAudioTrackLike | undefined
+  if (matchedGroups.length === 1) {
+    chosen = pickBest(matchedGroups[0])
+  } else if (logicalGroups.length === 1 && !selLang && !selLabel) {
+    chosen = pickBest(logicalGroups[0])
+  } else if (allLanguageFreeRenditions && selection.audioIndex <= 0 && !selLang && !selLabel) {
+    chosen = pickBest(tracks)
+  }
+
+  if ((logicalGroups.length > 1 && !chosen) || (selection.audioIndex > 0 && !chosen?.url)) {
+    throw new Error('无法确认当前备用音轨，请关闭提前翻译以采集播放器实际音轨')
+  }
+  if (chosen?.url) {
+    return { ...resource, url: chosen.url, audioUrl: undefined }
+  }
+  if (resource.audioUrl) {
+    return { ...resource, url: resource.audioUrl, audioUrl: undefined }
+  }
+  return resource
 }

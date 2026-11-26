@@ -242,6 +242,14 @@ pub(crate) fn decode(
     )
 }
 
+fn ffmpeg_protocol_whitelist(use_http_proxy: bool) -> &'static str {
+    if use_http_proxy {
+        "http,https,httpproxy,tcp,tls,crypto"
+    } else {
+        "http,https,tcp,tls,crypto"
+    }
+}
+
 pub(crate) fn decode_with_proxy(
     source: &Value,
     position: f64,
@@ -285,7 +293,7 @@ pub(crate) fn decode_with_proxy(
         "error",
         "-nostdin",
         "-protocol_whitelist",
-        "http,https,tcp,tls,crypto",
+        ffmpeg_protocol_whitelist(http_proxy.is_some()),
         "-rw_timeout",
         "10000000",
     ]);
@@ -560,5 +568,14 @@ mod tests {
         )
         .unwrap_err();
         assert!(socks_err.contains("SOCKS/HTTPS"), "{socks_err}");
+
+        assert_eq!(
+            ffmpeg_protocol_whitelist(false),
+            "http,https,tcp,tls,crypto"
+        );
+        assert_eq!(
+            ffmpeg_protocol_whitelist(true),
+            "http,https,httpproxy,tcp,tls,crypto"
+        );
     }
 }

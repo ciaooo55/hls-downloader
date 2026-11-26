@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { waitForDownloadConfirmation } from './downloadConfirmation'
 import { SEND_LABELS, SEND_LOCKED, SEND_TITLES, canForceResend, sendClickAction, sendStateFromHandoff, type SendState } from './downloadSendState'
 
 describe('sendStateFromHandoff', () => {
   it('maps Core handoff and task facts to one visible state', () => {
     expect(sendStateFromHandoff({ status: 'pending' })).toBe('confirming')
+    expect(sendStateFromHandoff({ status: 'pending', presentation: 'workbench' })).toBe('confirming')
+    expect(sendStateFromHandoff({ status: 'pending', presentation: 'fallback' })).toBe('retry')
     expect(sendStateFromHandoff({ status: 'pending', presentation: 'failed' })).toBe('retry')
     expect(sendStateFromHandoff({ status: 'accepted', taskStatus: 'queued' })).toBe('queued')
     expect(sendStateFromHandoff({ status: 'accepted', taskStatus: 'downloading' })).toBe('queued')
@@ -45,5 +48,27 @@ describe('sendStateFromHandoff', () => {
     expect(canForceResend('recoverable')).toBe(true)
     expect(canForceResend('sending')).toBe(false)
     expect(canForceResend('confirming')).toBe(false)
+  })
+
+  it('keeps waiting across Workbench TaskEditorWindow presentation until user confirms or cancels', async () => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.fn()
+        .mockResolvedValueOnce({ ok: true, handoff: { status: 'pending', presentation: 'presenting' } })
+        .mockResolvedValueOnce({ ok: true, handoff: { status: 'pending', presentation: 'workbench' } })
+        .mockResolvedValueOnce({ ok: true, handoff: { status: 'accepted' } })
+      const pending = waitForDownloadConfirmation(send, 'handoff-more-settings')
+      await vi.advanceTimersByTimeAsync(1_300)
+      await expect(pending).resolves.toBe(true)
+      expect(send).toHaveBeenCalledTimes(3)
+
+      const failedSend = vi.fn().mockResolvedValue({
+        ok: true,
+        handoff: { status: 'pending', presentation: 'failed', presentation_error: '确认窗启动失败' },
+      })
+      await expect(waitForDownloadConfirmation(failedSend, 'handoff-failed')).rejects.toThrow('确认窗启动失败')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

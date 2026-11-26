@@ -1796,22 +1796,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             show_next_offer(&window, &offer_state);
                             item.invoke_open_workbench(true, "".into());
                             let current = workbench.borrow().clone();
-                            if let Some(wb) = current.as_ref() {
+                            let opened_in_workbench = if let Some(wb) = current.as_ref() {
                                 wb.open_editor_from_offer(
                                     &offer,
                                     &filename,
                                     &download_dir,
                                     &queue_id,
                                 );
-                            }
+                                true
+                            } else {
+                                false
+                            };
                             if !offer.handoff_id.is_empty() {
                                 let handoff_id = offer.handoff_id;
+                                let presenter = if opened_in_workbench {
+                                    format!("workbench:{}", presenter_id())
+                                } else {
+                                    presenter_id().into()
+                                };
                                 thread::spawn(move || {
                                     let _ = CoreIpcClient::connect().and_then(|mut client| {
                                         client.command(CoreCommand::PresentHandoff {
                                             handoff_id,
-                                            ok: false,
-                                            presenter_id: presenter_id().into(),
+                                            ok: opened_in_workbench,
+                                            presenter_id: presenter,
                                         })
                                     });
                                 });
@@ -2869,7 +2877,7 @@ fn load_handoff_state(
             variants.insert(task_id, VariantSelection::from_offer(&handoff.offer));
         }
         if handoff.status == "pending"
-            && handoff.presentation != "fallback"
+            && !matches!(handoff.presentation.as_str(), "fallback" | "workbench")
             && !pending
                 .iter()
                 .any(|item: &ResourceOffer| item.handoff_id == handoff.offer.handoff_id)

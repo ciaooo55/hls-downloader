@@ -135,6 +135,7 @@ describe('scoped site player metadata', () => {
       },
     })
     expect(hiResWithStandard[0].audioUrl).toBe(audio192)
+    expect(hiResWithStandard[0].inspection?.audioTracks).toBeUndefined()
     expect(hiResWithStandard[0].inspection?.variants?.map(v => v.quality)).toEqual(['1080p60', '1080p'])
 
     const flacOnly = extractBilibiliPlayinfo(cnPage, {

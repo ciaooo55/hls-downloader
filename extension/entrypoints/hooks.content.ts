@@ -38,11 +38,11 @@ export default defineContentScript({
     const initialSsrPageUrl = sourcePageUrl()
     let lastObservedPageUrl = initialSsrPageUrl
     const pendingInspections = new Map<() => void, string>()
-    const cancelObsoleteInspections = (preserveSameVideoFrom?: string) => {
+    const cancelObsoleteInspections = (_preserveSameVideoFrom?: string) => {
       const pageUrl = sourcePageUrl()
       for (const [cancel, owner] of pendingInspections) {
         if (owner === pageUrl) continue
-        if (preserveSameVideoFrom && owner === preserveSameVideoFrom && sameSiteVideoIdentity(owner, pageUrl)) {
+        if (sameSiteVideoIdentity(owner, pageUrl)) {
           pendingInspections.set(cancel, pageUrl)
           continue
         }
@@ -71,7 +71,7 @@ export default defineContentScript({
       return pageUrl === active || (allowSameSiteVideo && sameSiteVideoIdentity(pageUrl, active))
     }
     const report = (url: unknown, mimeType = '', inspection?: Partial<MediaResource>, siteVideoId?: string, pageUrl = sourcePageUrl(), identity?: Record<string, string>, audioUrl?: string) => {
-      if (!matchesActivePage(pageUrl, Boolean(siteVideoId))) return
+      if (!matchesActivePage(pageUrl, true)) return
       const effectivePageUrl = sourcePageUrl()
       if (typeof url !== 'string') return
       if (!siteVideoId && !shouldReportMediaResponse(url, mimeType)) return
@@ -87,7 +87,7 @@ export default defineContentScript({
       }
       const previous = pendingResources.findIndex(item => item.url === url)
       if (previous >= 0) {
-        if (matchesActivePage(pendingResources[previous].sourcePageUrl, Boolean(siteVideoId)) && pendingResources[previous].inspection) {
+        if (matchesActivePage(pendingResources[previous].sourcePageUrl, true) && pendingResources[previous].inspection) {
           detail.inspection ||= pendingResources[previous].inspection
         }
         pendingResources.splice(previous, 1)
@@ -119,7 +119,7 @@ export default defineContentScript({
       }))
     }
     const reportSiteManifests = (url: string, body: unknown, pageUrl: string) => {
-      if (!matchesActivePage(pageUrl)) return
+      if (!matchesActivePage(pageUrl, true)) return
       const activePageUrl = sourcePageUrl()
       for (const candidate of siteManifestCandidates(url, activePageUrl, body)) {
         report(candidate.url, candidate.mimeType, candidate.inspection, candidate.videoId, activePageUrl, undefined, candidate.audioUrl)
@@ -157,7 +157,7 @@ export default defineContentScript({
       }
       pendingInspections.set(cancel, pageUrl)
       try {
-        while (!cancelled && !observation.observed && pageUrl === sourcePageUrl() && total <= SITE_RESPONSE_LIMIT) {
+        while (!cancelled && !observation.observed && matchesActivePage(pageUrl, true) && total <= SITE_RESPONSE_LIMIT) {
           const next = await reader.read()
           if (next.done) { complete = true; break }
           if (!next.value) continue
@@ -166,7 +166,7 @@ export default defineContentScript({
           if (total > SITE_RESPONSE_LIMIT) break
           chunks.push(value)
         }
-        if (cancelled || !total || !complete || observation.observed || pageUrl !== sourcePageUrl()) return
+        if (cancelled || !total || !complete || observation.observed || !matchesActivePage(pageUrl, true)) return
         const prefix = new TextDecoder().decode(
           (() => {
             const bytes = new Uint8Array(total)
@@ -175,7 +175,7 @@ export default defineContentScript({
             return bytes
           })(),
         )
-        await inspectTextBody(response.url, prefix, pageUrl, responseIdentity(name => response.headers.get(name)), observation)
+        await inspectTextBody(response.url, prefix, sourcePageUrl(), responseIdentity(name => response.headers.get(name)), observation)
       } catch {
         return
       } finally {
@@ -183,7 +183,8 @@ export default defineContentScript({
       }
     }
     const reportManifest = async (url: string, kind: 'hls' | 'dash', text: string, pageUrl: string, identity?: Record<string, string>) => {
-      if (pageUrl !== sourcePageUrl()) return
+      if (!matchesActivePage(pageUrl, true)) return
+      const activePageUrl = sourcePageUrl()
       // 使用播放器成功取得的正文。禁止为子清单另发无页面凭据的 fetch。
       const fetcher = async (requested: string) => {
         if (requested !== url) throw new Error('Child manifest not observed yet')
@@ -192,22 +193,23 @@ export default defineContentScript({
       const inspection = kind === 'hls'
         ? await inspectHlsResource({ url }, fetcher)
         : await inspectDashResource({ url }, fetcher)
-      report(url, manifestMimeType(kind), inspection || undefined, undefined, pageUrl, identity)
+      report(url, manifestMimeType(kind), inspection || undefined, undefined, activePageUrl, identity)
     }
     const inspectTextBody = async (url: string, text: string, pageUrl: string, identity: Record<string, string>, observation?: BodyObservation) => {
-      if (observation?.observed || text.length > SITE_RESPONSE_LIMIT || pageUrl !== sourcePageUrl()) return
-      if (shouldInspectSiteResponse(url, pageUrl, identity['content-type'])) {
+      if (observation?.observed || text.length > SITE_RESPONSE_LIMIT || !matchesActivePage(pageUrl, true)) return
+      const activePageUrl = sourcePageUrl()
+      if (shouldInspectSiteResponse(url, activePageUrl, identity['content-type'])) {
         if (observation) observation.observed = true
-        reportSiteManifests(url, text, pageUrl)
+        reportSiteManifests(url, text, activePageUrl)
         return
       }
       const kind = detectManifestKind(text.slice(0, 16 * 1024))
       if (!kind) return
       if (observation) observation.observed = true
-      await reportManifest(url, kind, text, pageUrl, identity)
+      await reportManifest(url, kind, text, activePageUrl, identity)
     }
     const inspectReadBody = async (url: string, body: unknown, pageUrl: string, identity: Record<string, string>, observation?: BodyObservation) => {
-      if (observation?.observed || pageUrl !== sourcePageUrl() || !/^https?:\/\//i.test(url)) return
+      if (observation?.observed || !matchesActivePage(pageUrl, true) || !/^https?:\/\//i.test(url)) return
       let bytes: Uint8Array | undefined
       let blob: Blob | undefined
       if (body instanceof ArrayBuffer) bytes = new Uint8Array(body)
@@ -217,9 +219,9 @@ export default defineContentScript({
       if (!size || size > SITE_RESPONSE_LIMIT) return
       const prefix = bytes ? new TextDecoder().decode(bytes.subarray(0, 16 * 1024)) : await blob!.slice(0, 16 * 1024).text()
       const kind = detectManifestKind(prefix)
-      if (!kind || pageUrl !== sourcePageUrl()) return
+      if (!kind || !matchesActivePage(pageUrl, true)) return
       const text = bytes ? new TextDecoder().decode(bytes) : await blob!.text()
-      await inspectTextBody(url, text, pageUrl, identity, observation)
+      await inspectTextBody(url, text, sourcePageUrl(), identity, observation)
     }
     let blobSliceInstalled = false
     const installBlobSliceHook = () => {
@@ -518,12 +520,13 @@ export default defineContentScript({
         const pageUrl = responsePages.get(this) || sourcePageUrl()
         const value = await responseJson.call(this)
         try {
-          if (isMediaResponseStatus(this.status) && pageUrl === sourcePageUrl()
-            && shouldInspectSiteResponse(this.url, pageUrl, this.headers.get('content-type') || '')) {
+          const activePageUrl = sourcePageUrl()
+          if (isMediaResponseStatus(this.status) && matchesActivePage(pageUrl, true)
+            && shouldInspectSiteResponse(this.url, activePageUrl, this.headers.get('content-type') || '')) {
             const observation = bodyObservationFor(this)
             if (!observation.observed) {
               observation.observed = true
-              reportSiteManifests(this.url, value, pageUrl)
+              reportSiteManifests(this.url, value, activePageUrl)
             }
           }
         } catch {}
@@ -574,9 +577,11 @@ export default defineContentScript({
       const pageUrl = sourcePageUrl()
       const response = await originalFetch.apply(this, args)
       responsePages.set(response, pageUrl)
-      if (pageUrl !== sourcePageUrl() || !isMediaResponseStatus(response.status)) return response
+      if (!matchesActivePage(pageUrl, true) || !isMediaResponseStatus(response.status)) return response
+      const activePageUrl = sourcePageUrl()
+      responsePages.set(response, activePageUrl)
       const mimeType = response.headers.get('content-type') || ''
-      report(response.url, mimeType, undefined, undefined, pageUrl, responseIdentity(name => response.headers.get(name)))
+      report(response.url, mimeType, undefined, undefined, activePageUrl, responseIdentity(name => response.headers.get(name)))
       // Some live CDNs expose an extensionless URL and label the manifest as
       // octet-stream.  A bounded clone lets the isolated world classify it
       // immediately without buffering the real response or touching page
@@ -584,7 +589,7 @@ export default defineContentScript({
       // manifest-like hint.
       if (response.ok && (shouldInspectManifestResponse(response.url, mimeType)
         || shouldInspectSiteResponse(response.url, location.href, mimeType))) {
-        try { void inspectManifestResponse(response.clone(), mimeType, pageUrl, bodyObservationFor(response)).catch(() => undefined) } catch {
+        try { void inspectManifestResponse(response.clone(), mimeType, activePageUrl, bodyObservationFor(response)).catch(() => undefined) } catch {
           // 锁定/不透明响应不能让页面已成功的 fetch 失败。
         }
       }
@@ -637,16 +642,17 @@ export default defineContentScript({
         instrumentedXhrs.add(this)
         this.addEventListener('load', () => {
           const pageUrl = xhrPages.get(this)
-          if (pageUrl !== sourcePageUrl() || !isMediaResponseStatus(this.status)) return
+          if (!pageUrl || !matchesActivePage(pageUrl, true) || !isMediaResponseStatus(this.status)) return
+          const activePageUrl = sourcePageUrl()
           const responseUrl = this.responseURL || xhrRequestedUrls.get(this) || ''
           const mimeType = this.getResponseHeader('content-type') || ''
           const identity = responseIdentity(name => this.getResponseHeader(name))
-          report(responseUrl, mimeType, undefined, undefined, pageUrl, identity)
+          report(responseUrl, mimeType, undefined, undefined, activePageUrl, identity)
           if (this.status >= 200 && this.status < 300
             && shouldInspectSiteResponse(responseUrl, location.href, mimeType)) {
             try {
-              if (this.responseType === 'json') reportSiteManifests(responseUrl, this.response, pageUrl)
-              else if (!this.responseType || this.responseType === 'text') reportSiteManifests(responseUrl, this.responseText, pageUrl)
+              if (this.responseType === 'json') reportSiteManifests(responseUrl, this.response, activePageUrl)
+              else if (!this.responseType || this.responseType === 'text') reportSiteManifests(responseUrl, this.responseText, activePageUrl)
             } catch {}
           }
           if (this.status >= 200 && this.status < 300
@@ -655,7 +661,7 @@ export default defineContentScript({
               const text = String(this.responseText || '')
               const kind = detectManifestKind(text.slice(0, 128 * 1024))
               if (kind && text.length <= 2 * 1024 * 1024) {
-                void reportManifest(responseUrl, kind, text, pageUrl, identity).catch(() => undefined)
+                void reportManifest(responseUrl, kind, text, activePageUrl, identity).catch(() => undefined)
               }
             } catch {
               // Binary XHR responses expose no responseText; fetch/MSE hooks
@@ -666,7 +672,7 @@ export default defineContentScript({
           if (response && typeof response === 'object') {
             rememberBufferSource(response, responseUrl)
             if (this.status >= 200 && this.status < 300) {
-              void inspectReadBody(responseUrl, response, pageUrl, identity).catch(() => undefined)
+              void inspectReadBody(responseUrl, response, activePageUrl, identity).catch(() => undefined)
             }
           }
         })

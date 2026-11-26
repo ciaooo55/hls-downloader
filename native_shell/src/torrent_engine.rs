@@ -945,7 +945,32 @@ fn check_bt_proxy_allowed(proxy: &str) -> Result<(), String> {
 }
 
 fn is_fatal_bt_error(error: &str) -> bool {
-    is_control_stop(error) || error.contains("手动代理模式未配置代理服务器地址")
+    is_control_stop(error)
+        || [
+            "手动代理模式未配置代理服务器地址",
+            "代理地址无效",
+            "原生代理隧道尚不支持",
+            "不支持的代理协议",
+            "代理凭据无效",
+            "HTTP 代理用户名不能包含冒号",
+            "SOCKS5 代理用户名和密码必须各为",
+            "SOCKS4 代理不支持密码认证",
+            "代理主机或端口无效",
+            "代理端口无效",
+            "代理主机无效",
+            "HTTP 代理认证失败（407）",
+            "SOCKS5 代理拒绝认证方式",
+            "SOCKS5 代理认证失败",
+            "无法启动代理连接：",
+            "无法读取种子文件选择配置",
+            "种子文件选择配置无效",
+            "种子文件路径无效",
+            "种子文件重复选择",
+            "种子文件不存在",
+            "至少选择一个种子文件",
+        ]
+        .iter()
+        .any(|needle| error.contains(needle))
 }
 
 fn connect_bt_peer_tcp(
@@ -1188,10 +1213,12 @@ fn download_swarm(
                 }
             }
             if index == peers.len() {
-                if matches!(
-                    crate::http_engine::proxy_route(proxy),
-                    Ok(crate::http_engine::ProxyRoute::Manual(_))
-                ) {
+                if seen.is_empty()
+                    && matches!(
+                        crate::http_engine::proxy_route(proxy),
+                        Ok(crate::http_engine::ProxyRoute::Manual(_))
+                    )
+                {
                     last = "当前代理模式不支持 UDP Tracker/DHT，且未发现可用 HTTP Tracker 或对端"
                         .into();
                 }
@@ -1357,10 +1384,12 @@ fn fetch_metadata_from_swarm(
                 }
             }
             if index == queue.len() {
-                if matches!(
-                    crate::http_engine::proxy_route(proxy),
-                    Ok(crate::http_engine::ProxyRoute::Manual(_))
-                ) {
+                if seen.is_empty()
+                    && matches!(
+                        crate::http_engine::proxy_route(proxy),
+                        Ok(crate::http_engine::ProxyRoute::Manual(_))
+                    )
+                {
                     last = "当前代理模式不支持 UDP Tracker/DHT，且未发现可用 HTTP Tracker 或对端"
                         .into();
                 }
@@ -4830,5 +4859,39 @@ mod tests {
         peer_thread.join().unwrap();
         proxy_thread.join().unwrap();
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fatal_bt_error_short_circuits_selection_and_proxy_config_without_dropping_peer_errors() {
+        for fatal in [
+            "paused",
+            "canceled",
+            "手动代理模式未配置代理服务器地址",
+            "代理地址无效",
+            "原生代理隧道尚不支持 HTTPS 代理协议",
+            "不支持的代理协议",
+            "代理凭据无效",
+            "SOCKS4 代理不支持密码认证",
+            "代理端口无效",
+            "HTTP 代理认证失败（407）",
+            "SOCKS5 代理认证失败",
+            "无法读取种子文件选择配置：permission denied",
+            "种子文件选择配置无效：expected value",
+            "至少选择一个种子文件",
+        ] {
+            assert!(is_fatal_bt_error(fatal), "expected fatal: {fatal}");
+        }
+        for transient in [
+            "代理连接或握手超时",
+            "HTTP 代理拒绝建立 CONNECT 隧道",
+            "SOCKS5 代理隧道请求失败（5）",
+            "SOCKS4 代理不支持该目标 IP",
+            "peer handshake failed",
+        ] {
+            assert!(
+                !is_fatal_bt_error(transient),
+                "expected transient per-peer: {transient}"
+            );
+        }
     }
 }

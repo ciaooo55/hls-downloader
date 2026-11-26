@@ -221,7 +221,8 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
       const adaptation = adaptationBlock.attributes
       const kind = `${adaptation.contenttype || ''} ${adaptation.mimetype || ''}`.toLowerCase()
       if (kind.includes('audio') && audioTracks.length < 24) {
-        const label = adaptation.label || adaptation.lang || adaptation.id || '音轨'
+        const labelTag = blocks(adaptationBlock.body, 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim() || ''
+        const label = adaptation.label || labelTag || adaptation.lang || '音轨'
         const language = adaptation.lang || ''
         const audioKey = `${label}\0${language}`
         if (!seenAudioKeys.has(audioKey)) {
