@@ -9,6 +9,7 @@ import {
   isSameDocumentPlaybackFallback,
   compactResources,
   isGenericMediaName,
+  isPlayableMediaResource,
   isUsefulResource,
   matchesDownloadClick,
   mergeResources,
@@ -61,6 +62,27 @@ describe('resource rules', () => {
     expect(downloadSelectionKey(low)).not.toBe(downloadSelectionKey(high))
     expect(downloadSelectionKey(low)).not.toBe(downloadSelectionKey(dash))
     expect(downloadSelectionKey(selected)).not.toBe(downloadSelectionKey({ ...selected, url: 'https://cdn.test/backup/720.m3u8' }))
+  })
+  it('marks unmerged split audioUrl streams as non-playable while keeping single-URL media/HLS/DASH playable', () => {
+    expect(isPlayableMediaResource(resource({ kind: 'hls', url: 'https://cdn.test/master.m3u8' }))).toBe(true)
+    expect(isPlayableMediaResource(resource({ kind: 'dash', url: 'https://cdn.test/manifest.mpd' }))).toBe(true)
+    expect(isPlayableMediaResource(resource({ kind: 'media', url: 'https://cdn.test/movie.mp4' }))).toBe(true)
+    expect(isPlayableMediaResource(resource({ kind: 'media', url: 'https://cdn.test/movie.mp4', audioUrl: '   ' }))).toBe(true)
+
+    const dualTrack = resource({
+      kind: 'media',
+      url: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000',
+      audioUrl: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000',
+      mimeType: 'video/mp4',
+      variants: [{
+        url: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.m4s?deadline=1900000000',
+        audioUrl: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000',
+        height: 720,
+        bandwidth: 1_500_000,
+      }],
+    })
+    expect(isPlayableMediaResource(dualTrack)).toBe(false)
+    expect(isPlayableMediaResource(selectMediaVariant(dualTrack, dualTrack.variants![0]))).toBe(false)
   })
   it('bounds non-finite recognition confidence', () => {
     expect(boundedConfidence(Number.NaN, 0.58)).toBe(0.58)

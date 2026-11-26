@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { pageDownloadUrls } from './selectionLinks'
 import { mediaElementAtPoint } from './mediaOverlay'
 import { bilibiliPlayinfoCandidates, sitePageVideoId } from './siteManifest'
-import { isDefaultPopupResource, isSiteHostExcluded, playerPlaybackResources, type MediaResource } from './resources'
+import { isDefaultPopupResource, isPlayableMediaResource, isSiteHostExcluded, playerPlaybackResources, selectMediaVariant, type MediaResource } from './resources'
 import { isDirectDownloadLink } from './directLink'
+import { resolveMediaPushResource, SPLIT_AUDIO_PUSH_ERROR } from './mediaPush'
+import { engineStatusCopy } from './productCopy'
+import { SEND_TITLES } from './downloadSendState'
 
 describe('extension content script flows (page links, shadow players, Bilibili MSE)', () => {
   const content = readFileSync(fileURLToPath(new URL('../entrypoints/content.ts', import.meta.url)), 'utf8')
@@ -211,5 +214,77 @@ describe('extension content script flows (page links, shadow players, Bilibili M
       vi.unstubAllGlobals()
       vi.useRealTimers()
     }
+  })
+
+  it('guards dual-track Cast/TVBox audio, preserves master manifestUrl on quality-selected push, and aligns takeover/tray-exit copy', () => {
+    const backgroundSrc = readFileSync(fileURLToPath(new URL('../entrypoints/background.ts', import.meta.url)), 'utf8')
+    const pageUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const video1080 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000'
+    const video720 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.m4s?deadline=1900000000'
+    const audio192 = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000'
+    const [biliCandidate] = bilibiliPlayinfoCandidates(pageUrl, {
+      data: {
+        dash: {
+          duration: 120,
+          video: [
+            { id: 80, baseUrl: video1080, width: 1920, height: 1080, bandwidth: 3_000_000, codecs: 'avc1.640032' },
+            { id: 64, baseUrl: video720, width: 1280, height: 720, bandwidth: 1_500_000, codecs: 'avc1.64001f' },
+          ],
+          audio: [{ id: 30280, baseUrl: audio192, bandwidth: 192_000, codecs: 'mp4a.40.2' }],
+        },
+      },
+    })
+    const dualTrackResource: MediaResource = {
+      id: 'bili-dual',
+      url: biliCandidate.url,
+      audioUrl: biliCandidate.audioUrl,
+      kind: 'media',
+      mimeType: biliCandidate.mimeType,
+      pageUrl,
+      seenAt: Date.now(),
+      ...biliCandidate.inspection,
+    }
+
+    // 1. Dual-track split .m4s streams hide Cast/TVBox in Popup & Content via isPlayableMediaResource -> false.
+    expect(isPlayableMediaResource(dualTrackResource)).toBe(false)
+    expect(isPlayableMediaResource(selectMediaVariant(dualTrackResource, dualTrackResource.variants![1]))).toBe(false)
+    // Normal single-URL media, HLS, and DASH remain playable.
+    expect(isPlayableMediaResource({ url: 'https://cdn.test/video.mp4', kind: 'media' })).toBe(true)
+    expect(isPlayableMediaResource({ url: 'https://cdn.test/master.m3u8', kind: 'hls' })).toBe(true)
+    expect(isPlayableMediaResource({ url: 'https://cdn.test/manifest.mpd', kind: 'dash' })).toBe(true)
+
+    // 2. Quality-selected HLS/DASH stream with independent audio tracks preserves master manifestUrl on push/cast.
+    const hlsMaster: MediaResource = {
+      id: 'hls-sep-audio',
+      kind: 'hls',
+      url: 'https://cdn.test/master.m3u8?token=master',
+      variants: [
+        { url: 'https://cdn.test/video-only/1080p.m3u8?token=v1080', height: 1080, bandwidth: 5_000_000, quality: '1080p' },
+        { url: 'https://cdn.test/video-only/720p.m3u8?token=v720', height: 720, bandwidth: 2_500_000, quality: '720p' },
+      ],
+      audioTracks: [{ label: 'Main Audio', language: 'zh', url: 'https://cdn.test/audio/zh.m3u8?token=a1', default: true }],
+      seenAt: Date.now(),
+    }
+    const selectedVariant = selectMediaVariant(hlsMaster, hlsMaster.variants![0])
+    expect(selectedVariant.url).toBe('https://cdn.test/video-only/1080p.m3u8?token=v1080')
+    expect(selectedVariant.manifestUrl).toBe('https://cdn.test/master.m3u8?token=master')
+    expect(isPlayableMediaResource(selectedVariant)).toBe(true)
+    expect(resolveMediaPushResource(selectedVariant)).toMatchObject({
+      url: 'https://cdn.test/master.m3u8?token=master',
+      manifestUrl: 'https://cdn.test/master.m3u8?token=master',
+      preferredHeight: 1080,
+      preferredBandwidth: 5_000_000,
+    })
+    expect(backgroundSrc).toContain('SPLIT_AUDIO_PUSH_ERROR')
+    expect(backgroundSrc).toContain('const pushResource = resolveMediaPushResource(resource)')
+    expect(SPLIT_AUDIO_PUSH_ERROR).toBe('该视频为音画分离流，请先点击下载合并后再投屏播放')
+
+    // 3. Copy alignment: tray-exit user_shutdown & pending desktop confirmation handoff.
+    const shutdownCopy = engineStatusCopy('user_shutdown')
+    expect(shutdownCopy.helperDetail).toContain('普通浏览器下载将保留在浏览器中不打扰')
+    expect(shutdownCopy.helperDetail).toContain('点击插件下载按钮或右键菜单项会自动唤醒桌面端')
+    expect(content).toContain("showResult('已交由桌面端等待确认，请在弹窗中选择开始或取消')")
+    expect(content).not.toContain('浏览器原下载按交接结果保留')
+    expect(SEND_TITLES.confirming).toBe('已交由桌面端等待确认，请在弹窗中选择开始或取消')
   })
 })

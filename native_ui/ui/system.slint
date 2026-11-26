@@ -18,6 +18,7 @@ export component SystemWindow inherits Window {
     in property <string> notice-tone: "warning";
     in property <bool> can-download;
     in property <bool> can-install;
+    in property <bool> can-open-release;
     in property <bool> busy;
     callback action(string);
     VerticalLayout {
@@ -56,12 +57,12 @@ export component SystemWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px; alignment: start;
                             HotButton { label: "Chrome / Edge 扩展"; icon: "extension"; clicked => { root.action("chromium"); } }
-                            HotButton { label: "Firefox Add-ons"; icon: "extension"; clicked => { root.action("firefox"); } }
+                            HotButton { label: "Firefox 扩展包"; icon: "extension"; clicked => { root.action("firefox"); } }
                             HotButton { label: "刷新接管状态"; icon: "refresh"; clicked => { root.action("handoffs"); } }
                         }
                         Rectangle { height: 1px; background: Tokens.line; }
                         Text {
-                            text: "Chrome / Edge：在扩展管理页加载解压目录，已有扩展选择重新加载。\nFirefox：使用商店签名版。Cookie 仅按具体站点授权读取。\n交接结果未查清时按原请求恢复；桌面接收后取消，本次下载结束。";
+                            text: "Chrome / Edge：点击上方按钮自动解压并打开扩展目录，开启「开发者模式」后选择「加载解压缩的扩展程序」（已有扩展选重新加载）。\nFirefox：随包提供待 Mozilla 签名 ZIP 扩展包，可在 about:debugging 临时载入或在开发者版加载。Cookie 仅按具体站点授权读取。\n交接结果未查清时按原请求恢复；桌面接收后取消，本次下载结束。";
                             color: Tokens.muted; wrap: word-wrap;
                         }
                     }
@@ -89,10 +90,12 @@ export component SystemWindow inherits Window {
         }
         DialogFooter {
             status: root.notice; tone: root.notice-tone;
-            if root.page == "updates": HotButton { label: "检查更新"; icon: "refresh"; enabled: !root.busy; primary: !root.can-download && !root.can-install; clicked => { root.action("check_update"); } }
-            if root.page == "updates": HotButton { label: "下载并校验"; icon: "running"; enabled: root.can-download && !root.busy; primary: root.can-download && !root.can-install; clicked => { root.action("download_update"); } }
-            if root.page == "updates": HotButton { label: "安装更新"; icon: "check"; enabled: root.can-install && !root.busy; primary: root.can-install; clicked => { root.action("install_update"); } }
+            if root.page == "updates": HotButton { label: "检查更新"; icon: "refresh"; enabled: !root.busy; primary: !root.can-download && !root.can-install && !root.can-open-release; clicked => { root.action("check_update"); } }
+            if root.page == "updates" && root.can-open-release: HotButton { label: "打开发布页"; icon: "link"; enabled: !root.busy; primary: !root.can-download && !root.can-install; clicked => { root.action("open_release"); } }
+            if root.page == "updates" && (root.can-download || !root.can-open-release): HotButton { label: "下载并校验"; icon: "running"; enabled: root.can-download && !root.busy; primary: root.can-download && !root.can-install; clicked => { root.action("download_update"); } }
+            if root.page == "updates" && (root.can-install || !root.can-open-release): HotButton { label: "安装更新"; icon: "check"; enabled: root.can-install && !root.busy; primary: root.can-install; clicked => { root.action("install_update"); } }
             if root.page == "notices": HotButton { label: "清空通知"; icon: "delete"; enabled: root.content != ""; clicked => { root.action("clear_notices"); } }
+            if root.page == "about": HotButton { label: "查看协议与隐私"; icon: "security"; clicked => { root.action("legal_docs"); } }
             if root.page == "about": HotButton { label: "打开日志目录"; icon: "folder"; clicked => { root.action("logs"); } }
             HotButton { label: "关闭"; clicked => { root.action("close"); } }
         }

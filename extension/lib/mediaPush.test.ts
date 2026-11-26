@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { mediaPushRequestId, mediaPushTerminalResult } from './mediaPush'
+import { mediaPushRequestId, mediaPushTerminalResult, resolveMediaPushResource, SPLIT_AUDIO_PUSH_ERROR } from './mediaPush'
+
+describe('resolveMediaPushResource', () => {
+  it('restores master manifestUrl when pushing a variant-selected HLS or DASH stream', () => {
+    const selectedHls = {
+      url: 'https://cdn.test/video/1080p.m3u8',
+      manifestUrl: 'https://cdn.test/master.m3u8?token=abc',
+      preferredHeight: 1080,
+      preferredBandwidth: 5_000_000,
+    }
+    expect(resolveMediaPushResource(selectedHls)).toEqual({
+      ...selectedHls,
+      url: 'https://cdn.test/master.m3u8?token=abc',
+    })
+
+    const directMp4 = { url: 'https://cdn.test/movie.mp4' }
+    expect(resolveMediaPushResource(directMp4)).toBe(directMp4)
+    expect(resolveMediaPushResource({ url: 'https://cdn.test/movie.mp4', manifestUrl: '   ' }).url)
+      .toBe('https://cdn.test/movie.mp4')
+    expect(SPLIT_AUDIO_PUSH_ERROR).toBe('该视频为音画分离流，请先点击下载合并后再投屏播放')
+  })
+})
 
 describe('mediaPushRequestId', () => {
   it('preserves the desktop request ID for later status polling', () => {

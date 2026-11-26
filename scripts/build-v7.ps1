@@ -469,6 +469,8 @@ if ($isPackage) {
     $nativeAppImage = Join-Path $artifactRoot '.native-image\HLSDownloader'
     Copy-Item -LiteralPath $launcher -Destination (Join-Path $nativeAppImage 'HLSDownloader.exe')
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $nativeAppImage 'LICENSE')
+    Copy-Item -LiteralPath (Join-Path $repo 'TERMS.md') -Destination (Join-Path $nativeAppImage 'TERMS.md')
+    Copy-Item -LiteralPath (Join-Path $repo 'PRIVACY.md') -Destination (Join-Path $nativeAppImage 'PRIVACY.md')
     Copy-Item -LiteralPath (Join-Path $repo 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $nativeAppImage 'THIRD_PARTY_NOTICES.md')
     $nativeProvenance = Get-Content -LiteralPath $provenanceForBuild -Raw -Encoding UTF8 | ConvertFrom-Json
     $nativeProvenance | Add-Member -NotePropertyName ui_runtime -NotePropertyValue 'native' -Force

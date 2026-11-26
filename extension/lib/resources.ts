@@ -166,8 +166,9 @@ export function looksLikeDownloadFile(value = ''): boolean {
 }
 
 export function isPlayableMediaResource(
-  resource: Pick<MediaResource, 'kind' | 'url' | 'mimeType' | 'filename'>,
+  resource: Pick<MediaResource, 'kind' | 'url' | 'mimeType' | 'filename' | 'audioUrl'>,
 ): boolean {
+  if (Boolean(resource.audioUrl?.trim())) return false
   if (resource.kind === 'hls' || resource.kind === 'dash' || resource.kind === 'media') return true
   if (resource.kind === 'magnet') return false
   const mime = String(resource.mimeType || '').split(';', 1)[0].trim().toLowerCase()

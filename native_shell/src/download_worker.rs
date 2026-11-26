@@ -3823,7 +3823,7 @@ impl CoreCoordinator {
                 let _ = core.lock().map(|mut core| {
                     // 先应用中继中排队的最后一次周期进度，结束状态基于最新字节数。
                     crate::progress_relay::flush_task_locked(&relay_core, &mut core, &task_id);
-                    let mut reported_failure_attempt = None;
+                    let mut reported_failure: Option<(u32, String)> = None;
                     if let Some(current) = core.snapshot(&task_id).cloned() {
                         let terminal_or_ignored = matches!(
                             current.status.as_str(),
@@ -3859,16 +3859,17 @@ impl CoreCoordinator {
                                     attempt,
                                     has_credential_ref,
                                 );
+                                let failure_code = failure.code.clone();
                                 crate::record_runtime_log(
                                     "task_failed",
                                     serde_json::json!({
-                                        "task_id": task_id, "stage": stage, "code": failure.code,
+                                        "task_id": task_id, "stage": stage, "code": failure_code,
                                         "http_status": failure.http_status, "attempt": attempt,
                                         "downloaded_bytes": downloaded, "total_bytes": total,
                                     }),
                                 );
                                 let _ = core.report_failure(&task_id, failure);
-                                reported_failure_attempt = Some(attempt);
+                                reported_failure = Some((attempt, failure_code));
                             } else {
                                 let _ = core.handle(CoreCommand::UpdateProgress {
                                     task_id: task_id.clone(),
@@ -3891,21 +3892,18 @@ impl CoreCoordinator {
                         crate::sleep_inhibit::set_active(!active_set.is_empty());
                         retired = true;
                     }
-                    if let Some(attempt) = reported_failure_attempt {
+                    if let Some((attempt, failure_code)) = reported_failure {
                         let max = core
                             .store()
                             .setting_u64("auto_retry_failed_max", 0)
                             .unwrap_or(0);
-                        // HTTP 引擎已经完成传输级重试。鉴权、失效地址等错误需要用户更新请求，
-                        // 整任务调度不能绕过相同的判定，再用原请求重复下载。
+                        // HTTP 引擎已经完成传输级重试。鉴权、失效地址、磁盘满、缺少 FFmpeg、
+                        // DRM 保护、域名白名单与私网/代理策略等确定性错误不能在队列中自动死循环重排。
                         if u64::from(attempt) <= max
                             && max > 0
                             && !coordinator.update_shutdown.load(Ordering::SeqCst)
                             && !coordinator.is_task_deleting(&task_id).unwrap_or(false)
-                            && !error.starts_with("resource identity changed:")
-                            && !error.starts_with("range response rejected:")
-                            && extract_http_status(&error)
-                                .is_none_or(crate::http_engine::retryable_http_status)
+                            && is_auto_retryable_task_failure(&failure_code, &error)
                         {
                             if let Some(snap) = core.snapshot(&task_id).cloned() {
                                 if !matches!(
@@ -5342,7 +5340,12 @@ fn task_failure_from_error(
             "RESOURCE_CHANGED".into(),
             "服务端文件内容已变化，已保存的片段不会与新内容拼接。请新建任务下载当前文件，原任务缓存已保留".into(),
         )
-    } else if lower.starts_with("ffmpeg ") {
+    } else if is_missing_ffmpeg_error(&lower) {
+        (
+            "MEDIA_MERGE_FAILED".into(),
+            "未找到可用的 FFmpeg 可执行文件，请在设置中配置正确的 FFmpeg 路径后重试".into(),
+        )
+    } else if lower.starts_with("ffmpeg ") || lower.contains("local playlist missing for ffmpeg") {
         (
             "MEDIA_MERGE_FAILED".into(),
             "分片已保留，请查看合流日志；修正问题后重试可复用已下载的分片".into(),
@@ -5391,6 +5394,16 @@ fn task_failure_from_error(
             "INVALID_URL".into(),
             "检查下载地址格式，或回到来源页面重新识别".into(),
         )
+    } else if is_drm_protection_error(&lower, error) {
+        (
+            "DRM_PROTECTED".into(),
+            "该流媒体受 DRM 加密保护，当前不支持直接解密下载".into(),
+        )
+    } else if is_network_policy_error(&lower, error) {
+        (
+            "NETWORK_POLICY".into(),
+            "当前网络策略、域名白名单或代理配置拒绝了该请求，请检查设置后重试".into(),
+        )
     } else {
         (
             "DOWNLOAD_FAILED".into(),
@@ -5408,6 +5421,90 @@ fn task_failure_from_error(
     }
 }
 
+fn is_drm_protection_error(lower: &str, raw: &str) -> bool {
+    lower.contains("drm")
+        || lower.contains("widevine")
+        || lower.contains("playready")
+        || lower.contains("fairplay")
+        || lower.contains("clearkey")
+        || lower.contains("wiseplay")
+        || lower.contains("sample-aes")
+        || lower.contains("keyformat")
+        || raw.contains("加密保护")
+        || raw.contains("不支持的 HLS 加密")
+}
+
+fn is_missing_ffmpeg_error(lower: &str) -> bool {
+    lower.contains("ffmpeg not found")
+        || lower.contains("missing ffmpeg")
+        || lower.contains("ffmpeg 可执行文件")
+}
+
+fn is_network_policy_error(lower: &str, raw: &str) -> bool {
+    raw.contains("允许的域名")
+        || raw.contains("白名单")
+        || raw.contains("未配置代理")
+        || raw.contains("不支持的代理协议")
+        || raw.contains("不支持 HTTPS 系统代理")
+        || raw.contains("不支持的系统代理协议")
+        || raw.contains("尚不支持到 HTTPS 代理")
+        || raw.contains("代理地址无效")
+        || raw.contains("代理主机无效")
+        || raw.contains("代理认证失败")
+        || raw.contains("拒绝认证方式")
+        || raw.contains("系统代理解析失败")
+        || lower.contains("allowed_hosts")
+        || lower.contains("private network")
+        || lower.contains("permitted network")
+        || lower.contains("punycode")
+        || lower.contains("disallowed")
+        || lower.contains("local host")
+        || lower.contains("not configured")
+        || lower.contains("invalid winhttp proxy")
+        || lower.contains("invalid proxy")
+        || lower.contains("unsupported proxy")
+        || lower.contains("url must be http")
+}
+
+fn is_auto_retryable_task_failure(failure_code: &str, error: &str) -> bool {
+    let code_upper = failure_code.trim().to_ascii_uppercase();
+    if matches!(
+        code_upper.as_str(),
+        "DISK_FULL"
+            | "OUTPUT_PERMISSION"
+            | "RANGE_UNSUPPORTED"
+            | "RESOURCE_CHANGED"
+            | "MEDIA_MERGE_FAILED"
+            | "FFMPEG_MISSING"
+            | "AV_THREAT"
+            | "INVALID_URL"
+            | "DRM_PROTECTED"
+            | "NETWORK_POLICY"
+            | "POLICY_BLOCKED"
+    ) {
+        return false;
+    }
+    if let Some(raw_status) = code_upper.strip_prefix("HTTP_") {
+        if let Ok(status) = raw_status.parse::<u16>() {
+            if !crate::http_engine::retryable_http_status(status) {
+                return false;
+            }
+        }
+    }
+    let lower = error.to_ascii_lowercase();
+    if lower.starts_with("resource identity changed:")
+        || lower.starts_with("range response rejected:")
+        || lower.starts_with("ffmpeg ")
+        || lower.contains("local playlist missing for ffmpeg")
+        || is_drm_protection_error(&lower, error)
+        || is_missing_ffmpeg_error(&lower)
+        || is_network_policy_error(&lower, error)
+    {
+        return false;
+    }
+    extract_http_status(error).is_none_or(crate::http_engine::retryable_http_status)
+}
+
 /// Every transport words a size disagreement differently, so the classifier has
 /// to recognise all of them.  Matching only the literal "size mismatch" silently
 /// dropped HTTP body/range, SFTP and web-seed failures into the generic hint,
@@ -5421,7 +5518,10 @@ fn is_size_disagreement(lower: &str) -> bool {
 }
 fn failure_stage(current: &str, error: &str) -> String {
     let lower = error.to_ascii_lowercase();
-    if lower.starts_with("ffmpeg ") {
+    if lower.starts_with("ffmpeg ")
+        || is_missing_ffmpeg_error(&lower)
+        || lower.contains("local playlist missing for ffmpeg")
+    {
         "merging".into()
     } else if lower.contains("checksum") || lower.contains("校验") {
         "checksum".into()

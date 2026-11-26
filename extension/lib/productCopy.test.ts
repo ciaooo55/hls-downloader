@@ -22,7 +22,10 @@ describe('extension product language', () => {
     expect(classifyEngineConnectionState({ ok: false, error: 'Core pipe closed' })).toBe('core_unreachable')
 
     expect(engineStatusCopy('online').label).toBe('引擎已就绪')
-    expect(engineStatusCopy('user_shutdown').label).toBe('桌面端已退出 · 点击下载自动唤醒')
+    expect(engineStatusCopy('user_shutdown').label).toBe('桌面端已退出 · 插件下载可自动唤醒')
+    expect(engineStatusCopy('user_shutdown').helperDetail).toBe(
+      '从托盘退出后，普通浏览器下载将保留在浏览器中不打扰；点击插件下载按钮或右键菜单项会自动唤醒桌面端。',
+    )
     expect(engineStatusCopy('host_missing').label).toBe('未检测到桌面端 · 请先安装或运行桌面程序')
     expect(engineStatusCopy('core_unreachable').label).toBe('连接中断 · 点击重试或打开桌面端')
   })
