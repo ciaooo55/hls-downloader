@@ -121,7 +121,13 @@ fn resolve_torrent_metadata_proxy(settings: &CoreSettings, url: &str, spec_proxy
             trimmed,
         )
     } else {
-        trimmed.to_string()
+        crate::net_policy::effective_proxy(
+            &settings.proxy_mode,
+            &settings.proxy_url,
+            "",
+            url,
+            trimmed,
+        )
     }
 }
 

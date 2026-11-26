@@ -189,12 +189,15 @@ pub fn probe_with_harvest_context(
                 let msg = error.to_string();
                 let lower = msg.to_ascii_lowercase();
                 if msg.contains("允许的域名")
+                    || msg.contains("代理")
+                    || lower.contains("private network")
+                    || lower.contains("permitted network")
+                    || lower.contains("punycode")
                     || lower.contains("disallowed")
                     || lower.contains("redirect")
                     || lower.contains("local host")
                     || lower.contains("not configured")
-                    || lower.contains("system proxy")
-                    || lower.contains("invalid proxy")
+                    || lower.contains("proxy")
                 {
                     return Err(msg);
                 }

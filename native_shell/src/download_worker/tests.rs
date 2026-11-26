@@ -13476,3 +13476,149 @@ fn t2_r1_end_to_end_coordinator_switches_manual_proxy_and_bypass_across_redirect
     drop(coordinator);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn t2_r8_magnet_metadata_proxy_preserves_global_manual_and_system_and_fails_closed_on_empty_manual()
+{
+    let root = lifecycle_test_root("t2-r8-magnet-proxy");
+    fs::create_dir_all(&root).unwrap();
+    let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ubuntu";
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            ("bt_enable_dht".into(), serde_json::json!(false)),
+            ("proxy_bypass".into(), serde_json::json!("127.0.0.1")),
+        ]))
+        .unwrap();
+    coordinator
+        .lock()
+        .unwrap()
+        .store_mut()
+        .set_setting("proxy_mode", "manual")
+        .unwrap();
+    coordinator.invalidate_settings_cache();
+
+    // 1. Empty `manual` proxy MUST fail closed (`INVALID_MANUAL_PROXY`) on `magnet:` admission & file selection!
+    let empty_settings = coordinator.settings().unwrap();
+    assert_eq!(
+        resolve_torrent_metadata_proxy(&empty_settings, magnet, ""),
+        crate::net_policy::INVALID_MANUAL_PROXY
+    );
+    assert!(
+        coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: magnet.into(),
+                    resource_kind: crate::ResourceKind::Torrent,
+                    start_paused: true,
+                    ..Default::default()
+                },
+            })
+            .is_err(),
+        "magnet CreateTask with empty manual proxy must fail closed instead of falling back to direct"
+    );
+
+    // 2. Global `manual` proxy is preserved when `explicit_proxy` is empty:
+    //    `magnet:...&xs=http://torrent.invalid/ubuntu.torrent` MUST fetch `&xs=` via the manual proxy!
+    let payload = b"magnet-xs-via-manual-proxy";
+    let info_body = format!(
+        "d6:lengthi{}e4:name13:via-proxy.bin12:piece lengthi64e6:pieces20:",
+        payload.len()
+    );
+    let mut info_bytes = info_body.into_bytes();
+    info_bytes.extend_from_slice(&crate::crypto_lite::sha1(payload));
+    info_bytes.push(b'e');
+    let info_hash_hex = crate::crypto_lite::sha1(&info_bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let mut torrent_bytes = b"d4:info".to_vec();
+    torrent_bytes.extend_from_slice(&info_bytes);
+    torrent_bytes.push(b'e');
+
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_addr = proxy_listener.local_addr().unwrap();
+    let proxy_hits = Arc::new(AtomicU64::new(0));
+    let proxy_hits_srv = Arc::clone(&proxy_hits);
+    let proxy_srv = thread::spawn(move || {
+        if let Ok((mut stream, _)) = proxy_listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            proxy_hits_srv.fetch_add(1, Ordering::SeqCst);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                torrent_bytes.len()
+            );
+            let _ = stream.write_all(&torrent_bytes);
+            let _ = stream.flush();
+        }
+    });
+
+    coordinator
+        .set_setting(
+            "proxy_url",
+            serde_json::json!(format!("http://{proxy_addr}")),
+        )
+        .unwrap();
+    let http_manual_settings = coordinator.settings().unwrap();
+    assert_eq!(
+        resolve_torrent_metadata_proxy(&http_manual_settings, magnet, ""),
+        format!("http://{proxy_addr}")
+    );
+    let magnet_with_xs =
+        format!("magnet:?xt=urn:btih:{info_hash_hex}&xs=http://torrent.invalid/ubuntu.torrent");
+    let ev = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: magnet_with_xs,
+                resource_kind: crate::ResourceKind::Torrent,
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let tid = created_task_id(&ev);
+    proxy_srv.join().unwrap();
+    assert_eq!(
+        proxy_hits.load(Ordering::SeqCst),
+        1,
+        "magnet &xs= metadata probe must route through global manual proxy"
+    );
+    assert_eq!(
+        coordinator.lock().unwrap().snapshot(&tid).unwrap().filename,
+        "via-proxy.bin"
+    );
+
+    coordinator
+        .set_setting("proxy_url", serde_json::json!("socks5://127.0.0.1:9050"))
+        .unwrap();
+    let socks_settings = coordinator.settings().unwrap();
+    assert_eq!(
+        resolve_torrent_metadata_proxy(&socks_settings, magnet, ""),
+        "socks5://127.0.0.1:9050"
+    );
+
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("system"))
+        .unwrap();
+    let system_settings = coordinator.settings().unwrap();
+    assert_eq!(
+        resolve_torrent_metadata_proxy(&system_settings, magnet, ""),
+        crate::net_policy::SYSTEM_PROXY_SENTINEL
+    );
+
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}

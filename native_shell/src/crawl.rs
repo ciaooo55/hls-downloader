@@ -762,7 +762,8 @@ fn sync_resource(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(
         {
             return finish_sync(coordinator, id, url);
         }
-        let mut spec = coordinator.metadata_spec(url)?;
+        let (mut spec, explicit_proxy) = coordinator.metadata_spec_with_explicit_proxy(url)?;
+        spec.proxy = explicit_proxy;
         spec.queue_id = state.project.spec.queue_id.clone();
         spec.download_dir = Path::new(&state.project.spec.output_dir)
             .join(".updates")
