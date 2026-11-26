@@ -261,7 +261,7 @@ export component ConfirmWindow inherits Window {
                     HotCloseButton {
                         y: (parent.height - self.height) / 2;
                         enabled: !root.busy;
-                        accessible-name: "关闭并保留浏览器下载";
+                        accessible-name: "取消本次下载";
                         clicked => { root.command("reject"); }
                     }
                 }

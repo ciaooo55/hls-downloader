@@ -4,7 +4,11 @@
 )]
 #![cfg_attr(not(test), warn(clippy::undocumented_unsafe_blocks))]
 
-slint::include_modules!();
+#[allow(clippy::unwrap_used)]
+mod slint_generated {
+    slint::include_modules!();
+}
+pub use slint_generated::*;
 mod activation;
 mod cast_tools;
 mod core_feedback;
@@ -90,6 +94,8 @@ struct PersistedHandoff {
     presentation: String,
     #[serde(default)]
     task_id: Option<String>,
+    #[serde(default)]
+    created_at_ms: u64,
     offer: ResourceOffer,
 }
 
@@ -713,6 +719,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = claim_v7_presenter_instance() {
         if is_already_running_error(&error) && !lock_test {
             if args.iter().any(|arg| arg == "--workbench") {
+                hls_client::clear_user_shutdown();
                 activation::forward_workbench(hls_client::workbench_launch_id())?;
             }
             return Ok(());
@@ -728,7 +735,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut initial_client = connect_or_start_core()?;
     let (initial_tasks, initial_sequence, initial_browser_connected) =
         initial_client.snapshot_state_with_browser()?;
-    let (initial_pending, initial_task_variants) = load_handoff_state(&mut initial_client);
+    let (initial_pending, initial_task_variants, initial_recent_quick_tasks) =
+        load_handoff_state_with_recent_quick(&mut initial_client, current_unix_ms());
     let settings = initial_client.load_settings().ok();
     let presenter_settings = Arc::new(Mutex::new(PresenterSettings::from_response(
         settings.as_ref(),
@@ -854,6 +862,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ui_sequence = Rc::new(std::cell::Cell::new(initial_sequence));
     let native_workbench = Rc::new(std::cell::Cell::new(true));
     let core_online = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let core_revive_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let disk_space_probe = ConfirmDiskSpaceProbe::new_for_window(confirm.as_weak());
     let browser_connected = Arc::new(std::sync::atomic::AtomicBool::new(
         initial_browser_connected,
     ));
@@ -864,7 +874,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let ui_sequence = Rc::clone(&ui_sequence);
         let native_workbench = Rc::clone(&native_workbench);
         let core_online = Arc::clone(&core_online);
+        let core_revive_in_flight = Arc::clone(&core_revive_in_flight);
         let browser_connected = Arc::clone(&browser_connected);
+        let confirm_weak = confirm.as_weak();
         move |explicit_native, launch_id: slint::SharedString| {
             let launch_id = (!launch_id.is_empty()).then(|| launch_id.to_string());
             if explicit_native {
@@ -885,7 +897,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     Ok(window) => {
                         window.set_engine_online(
-                            core_online.load(std::sync::atomic::Ordering::Relaxed),
+                            core_online.load(std::sync::atomic::Ordering::Acquire),
                         );
                         let owner = Rc::downgrade(&workbench);
                         window.window.on_request_close(move || {
@@ -915,6 +927,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         return;
                     }
                 }
+            } else if let Some(window) = workbench.borrow().as_ref() {
+                window.set_engine_online(core_online.load(std::sync::atomic::Ordering::Acquire));
             }
             let show_error = workbench
                 .borrow()
@@ -923,7 +937,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(error) = show_error {
                 workbench::report_ui_ready(launch_id, "main_failed");
                 report_startup_error(&error.to_string());
+                return;
             }
+            let revive_launch_id = launch_id;
+            let notice_target = confirm_weak.clone();
+            maybe_revive_offline_core(
+                explicit_native,
+                &core_online,
+                &core_revive_in_flight,
+                hls_client::is_user_shutdown_active,
+                move || {
+                    let mut client = connect_or_start_core()?;
+                    if let Some(launch_id) = revive_launch_id {
+                        let _ = client.command(CoreCommand::UiReady {
+                            launch_id,
+                            surface: "main".into(),
+                        });
+                    }
+                    Ok(())
+                },
+                move |result| {
+                    if let Err(error) = result {
+                        trace(&format!("core auto-revive failed: {error}"));
+                        let _ = notice_target.upgrade_in_event_loop(move |ui| {
+                            ui.invoke_notice(error.into());
+                        });
+                    }
+                },
+            );
         }
     });
     let active_hud = Arc::new(Mutex::new(ActiveTaskHud::default()));
@@ -1060,6 +1101,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let claiming_handoff = Arc::new(Mutex::new(None::<String>));
     let quick_failed = Arc::new(Mutex::new(HashSet::<String>::new()));
     let (offer_worker_tx, offer_worker_rx) = mpsc::channel::<OfferPresentJob>();
+    let is_workbench_launch = args.iter().any(|arg| arg == "--workbench");
     let offer_state = EventLoopState {
         pending: Arc::clone(&pending),
         active_handoff: Arc::clone(&active_handoff),
@@ -1071,7 +1113,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         quick_failed: Arc::clone(&quick_failed),
         confirm_dir_overridden: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         core_online: Arc::clone(&core_online),
+        core_revive_in_flight: Arc::clone(&core_revive_in_flight),
+        disk_space_probe: disk_space_probe.clone(),
         browser_connected: Arc::clone(&browser_connected),
+        allow_cold_quick_hud: !is_workbench_launch,
     };
     spawn_offer_present_worker_with_rx(offer_worker_rx, default_offer_present_executor(), {
         let confirm = confirm.as_weak();
@@ -1625,7 +1670,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             clear_confirm_issue(&item);
                             refresh_confirm_duplicate(&item, &offer_state);
-                            refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                            offer_state.disk_space_probe.request(
+                                &item,
+                                current_pending_size(&pending),
+                                false,
+                            );
                         }
                         Ok(None) => {}
                         Err(error) => set_confirm_issue(&item, &error, [("", ""), ("", "")]),
@@ -1640,7 +1689,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         sync_confirm_save_preview(&item);
                         clear_confirm_issue(&item);
                         refresh_confirm_duplicate(&item, &offer_state);
-                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                        offer_state.disk_space_probe.request(
+                            &item,
+                            current_pending_size(&pending),
+                            false,
+                        );
                     }
                     return;
                 }
@@ -1652,7 +1705,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         sync_confirm_save_preview(&item);
                         clear_confirm_issue(&item);
                         refresh_confirm_duplicate(&item, &offer_state);
-                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                        offer_state.disk_space_probe.request(
+                            &item,
+                            current_pending_size(&pending),
+                            false,
+                        );
                     }
                     return;
                 }
@@ -1688,14 +1745,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                         refresh_confirm_duplicate(&item, &offer_state);
-                        refresh_confirm_disk_space(&item, expected_size);
+                        offer_state
+                            .disk_space_probe
+                            .request(&item, expected_size, false);
                     }
                     return;
                 }
                 "recheck_duplicate" => {
                     if let Some(item) = window.upgrade() {
                         refresh_confirm_duplicate(&item, &offer_state);
-                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                        offer_state.disk_space_probe.request(
+                            &item,
+                            current_pending_size(&pending),
+                            false,
+                        );
                     }
                     return;
                 }
@@ -1753,7 +1816,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     sync_confirm_save_preview(&item);
                     clear_confirm_issue(&item);
                     refresh_confirm_duplicate(&item, &offer_state);
-                    refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                    offer_state.disk_space_probe.request(
+                        &item,
+                        current_pending_size(&pending),
+                        false,
+                    );
                     return;
                 }
                 "open_existing" => {
@@ -1837,7 +1904,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         sync_confirm_save_preview(&item);
                         sync_confirm_selectors(&item, &settings, &dir, None);
                         refresh_confirm_duplicate(&item, &offer_state);
-                        refresh_confirm_disk_space(&item, current_pending_size(&pending));
+                        offer_state.disk_space_probe.request(
+                            &item,
+                            current_pending_size(&pending),
+                            false,
+                        );
                     }
                     return;
                 }
@@ -2241,6 +2312,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             true,
             hls_client::workbench_launch_id().unwrap_or_default().into(),
         );
+    } else if !initial_recent_quick_tasks.is_empty() {
+        let initial_snapshot = known_tasks
+            .lock()
+            .map(|tasks| tasks.clone())
+            .unwrap_or_default();
+        let fallback_dir = presenter_settings
+            .lock()
+            .map(|settings| settings.download_dir.clone())
+            .unwrap_or_default();
+        for completed_quick in recent_quick_completed_tasks_for_cold_hud(
+            &initial_snapshot,
+            &initial_recent_quick_tasks,
+        ) {
+            update_task_windows(
+                completed_quick,
+                *runtime_settings.borrow(),
+                open_folder_on_complete.get(),
+                &fallback_dir,
+                &progress.as_weak(),
+                &complete.as_weak(),
+                &active_hud,
+                &rendered_hud_task,
+                &hud_action_gen,
+                &completed_task,
+                &completed_notified,
+                Some(&complete_shown_at),
+                Some(&progress_user_moved),
+            );
+        }
     }
     slint::run_event_loop_until_quit()?;
     processing_timer.stop();
@@ -2585,6 +2685,50 @@ fn remember_category_directory(
         .and_then(core_feedback::command_result)
 }
 
+fn should_quit_for_user_shutdown(user_shutdown_active: bool, core_revive_in_flight: bool) -> bool {
+    user_shutdown_active && !core_revive_in_flight
+}
+
+fn maybe_revive_offline_core(
+    explicit_native: bool,
+    core_online: &std::sync::atomic::AtomicBool,
+    core_revive_in_flight: &Arc<std::sync::atomic::AtomicBool>,
+    is_user_shutdown: impl FnOnce() -> bool,
+    revive: impl FnOnce() -> Result<(), String> + Send + 'static,
+    on_result: impl FnOnce(Result<(), String>) + Send + 'static,
+) -> bool {
+    if !explicit_native
+        || core_online.load(std::sync::atomic::Ordering::Acquire)
+        || is_user_shutdown()
+    {
+        return false;
+    }
+    if core_revive_in_flight
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    let in_flight = Arc::clone(core_revive_in_flight);
+    thread::spawn(move || {
+        struct ReviveGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for ReviveGuard {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let _guard = ReviveGuard(in_flight);
+        let result = revive();
+        on_result(result);
+    });
+    true
+}
+
 #[derive(Clone)]
 struct EventLoopState {
     pending: Arc<Mutex<VecDeque<ResourceOffer>>>,
@@ -2597,7 +2741,10 @@ struct EventLoopState {
     quick_failed: Arc<Mutex<HashSet<String>>>,
     confirm_dir_overridden: Arc<std::sync::atomic::AtomicBool>,
     core_online: Arc<std::sync::atomic::AtomicBool>,
+    core_revive_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    disk_space_probe: ConfirmDiskSpaceProbe,
     browser_connected: Arc<std::sync::atomic::AtomicBool>,
+    allow_cold_quick_hud: bool,
 }
 
 fn event_loop(
@@ -2606,18 +2753,65 @@ fn event_loop(
     confirm: slint::Weak<ConfirmWindow>,
     state: EventLoopState,
 ) {
+    let shutdown_quit_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let presenter_quitting = Arc::new(std::sync::atomic::AtomicBool::new(false));
     loop {
+        if presenter_quitting.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         let Ok(mut client) = CoreIpcClient::connect() else {
             if state
                 .core_online
-                .swap(false, std::sync::atomic::Ordering::Relaxed)
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
             {
                 let _ = confirm
                     .upgrade_in_event_loop(|item| item.invoke_core_connection_changed(false));
             }
+            if should_quit_for_user_shutdown(
+                hls_client::is_user_shutdown_active(),
+                state
+                    .core_revive_in_flight
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ) {
+                if shutdown_quit_pending
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    let revive_in_flight = Arc::clone(&state.core_revive_in_flight);
+                    let pending_flag = Arc::clone(&shutdown_quit_pending);
+                    let quitting_flag = Arc::clone(&presenter_quitting);
+                    if confirm
+                        .upgrade_in_event_loop(move |_item| {
+                            if should_quit_for_user_shutdown(
+                                hls_client::is_user_shutdown_active(),
+                                revive_in_flight.load(std::sync::atomic::Ordering::Acquire),
+                            ) {
+                                quitting_flag.store(true, std::sync::atomic::Ordering::Release);
+                                trace(
+                                    "core offline with user-shutdown marker active; exiting presenter event loop",
+                                );
+                                let _ = slint::quit_event_loop();
+                            } else {
+                                pending_flag.store(false, std::sync::atomic::Ordering::Release);
+                            }
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             thread::sleep(Duration::from_millis(200));
             continue;
         };
+        shutdown_quit_pending.store(false, std::sync::atomic::Ordering::Release);
         let Ok((tasks, latest_sequence)) = client.snapshot_state() else {
             if state
                 .core_online
@@ -2649,24 +2843,23 @@ fn event_loop(
         {
             return;
         }
-        // 重连后用快照恢复正在传输的任务，不能只等下一次增量事件。
-        let active: Vec<_> = tasks
-            .into_iter()
-            .filter(|task| task_is_active(&task.status))
-            .map(|snapshot| EventEnvelope {
-                sequence: latest_sequence,
-                event: CoreEvent::TaskUpdated { snapshot },
-            })
-            .collect();
-        if !active.is_empty()
-            && (tx.send(active).is_err()
+        let (restored, restored_variants, recent_quick_ids) =
+            load_handoff_state_with_recent_quick(&mut client, current_unix_ms());
+        // 重连后用快照恢复正在传输的任务，以及在冷启动/重连快照窗口内刚完成的静默快速下载任务。
+        let replay = snapshot_replay_envelopes(
+            tasks,
+            latest_sequence,
+            &recent_quick_ids,
+            state.allow_cold_quick_hud,
+        );
+        if !replay.is_empty()
+            && (tx.send(replay).is_err()
                 || confirm
                     .upgrade_in_event_loop(|item| item.invoke_core_events_ready())
                     .is_err())
         {
             return;
         }
-        let (restored, restored_variants) = load_handoff_state(&mut client);
         let resync_state = state.clone();
         if confirm
             .upgrade_in_event_loop(move |item| {
@@ -2864,14 +3057,29 @@ fn route_event_loop_envelope(
     }
 }
 
-fn load_handoff_state(
+const COLD_QUICK_COMPLETE_WINDOW_MS: u64 = 10_000;
+
+fn current_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn load_handoff_state_with_recent_quick(
     client: &mut CoreIpcClient,
-) -> (VecDeque<ResourceOffer>, HashMap<String, VariantSelection>) {
+    now_ms: u64,
+) -> (
+    VecDeque<ResourceOffer>,
+    HashMap<String, VariantSelection>,
+    HashSet<String>,
+) {
     match client.query_handoffs(None, None, false) {
-        Ok(encoded) => decode_handoff_state(encoded),
+        Ok(encoded) => decode_handoff_state_at(encoded, now_ms),
         Err(error) => {
             trace(&format!("恢复浏览器接管请求失败: {error}"));
-            (VecDeque::new(), HashMap::new())
+            (VecDeque::new(), HashMap::new(), HashSet::new())
         }
     }
 }
@@ -2879,8 +3087,21 @@ fn load_handoff_state(
 fn decode_handoff_state(
     encoded: Vec<String>,
 ) -> (VecDeque<ResourceOffer>, HashMap<String, VariantSelection>) {
+    let (pending, variants, _) = decode_handoff_state_at(encoded, 0);
+    (pending, variants)
+}
+
+fn decode_handoff_state_at(
+    encoded: Vec<String>,
+    now_ms: u64,
+) -> (
+    VecDeque<ResourceOffer>,
+    HashMap<String, VariantSelection>,
+    HashSet<String>,
+) {
     let mut pending = VecDeque::new();
     let mut variants = HashMap::new();
+    let mut recent_quick_tasks = HashSet::new();
     for encoded in encoded {
         let handoff = match serde_json::from_str::<PersistedHandoff>(&encoded) {
             Ok(handoff) => handoff,
@@ -2890,6 +3111,13 @@ fn decode_handoff_state(
             }
         };
         if let Some(task_id) = handoff.task_id.filter(|id| !id.is_empty()) {
+            if handoff.presentation == "quick_accepted"
+                && now_ms > 0
+                && handoff.created_at_ms > 0
+                && now_ms.saturating_sub(handoff.created_at_ms) <= COLD_QUICK_COMPLETE_WINDOW_MS
+            {
+                recent_quick_tasks.insert(task_id.clone());
+            }
             variants.insert(task_id, VariantSelection::from_offer(&handoff.offer));
         }
         if handoff.status == "pending"
@@ -2901,7 +3129,45 @@ fn decode_handoff_state(
             pending.push_back(handoff.offer);
         }
     }
-    (pending, variants)
+    (pending, variants, recent_quick_tasks)
+}
+
+fn recent_quick_completed_tasks_for_cold_hud(
+    tasks: &[TaskSnapshot],
+    recent_quick_task_ids: &HashSet<String>,
+) -> Vec<TaskSnapshot> {
+    if recent_quick_task_ids.is_empty() {
+        return Vec::new();
+    }
+    tasks
+        .iter()
+        .filter(|task| {
+            recent_quick_task_ids.contains(&task.task_id)
+                && matches!(task.status.as_str(), "completed" | "done")
+        })
+        .cloned()
+        .collect()
+}
+
+fn snapshot_replay_envelopes(
+    tasks: Vec<TaskSnapshot>,
+    latest_sequence: u64,
+    recent_quick_task_ids: &HashSet<String>,
+    allow_cold_quick_hud: bool,
+) -> Vec<EventEnvelope> {
+    tasks
+        .into_iter()
+        .filter(|task| {
+            task_is_active(&task.status)
+                || (allow_cold_quick_hud
+                    && recent_quick_task_ids.contains(&task.task_id)
+                    && matches!(task.status.as_str(), "completed" | "done"))
+        })
+        .map(|snapshot| EventEnvelope {
+            sequence: latest_sequence,
+            event: CoreEvent::TaskUpdated { snapshot },
+        })
+        .collect()
 }
 
 // 输入为 rcWork 的物理尺寸；紧凑窗口不能超出可用工作区。
@@ -3081,11 +3347,183 @@ fn current_pending_size(pending: &Arc<Mutex<VecDeque<ResourceOffer>>>) -> u64 {
         .unwrap_or(0)
 }
 
-fn refresh_confirm_disk_space(item: &ConfirmWindow, expected_size: u64) {
-    let dir = item.get_download_dir().to_string();
-    match target_check::query_available_space(&dir) {
-        Some(free_bytes) => {
-            let status = target_check::format_disk_space_status(free_bytes, expected_size);
+type ConfirmDiskSpaceJob = (u64, String, u64);
+type ConfirmDiskSpaceSlot = (Mutex<Option<ConfirmDiskSpaceJob>>, std::sync::Condvar);
+
+struct ConfirmDiskSpaceDropGuard {
+    slot: Arc<ConfirmDiskSpaceSlot>,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ConfirmDiskSpaceDropGuard {
+    fn drop(&mut self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let mut guard = match self.slot.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = None;
+        drop(guard);
+        self.slot.1.notify_all();
+    }
+}
+
+#[derive(Clone)]
+struct ConfirmDiskSpaceProbe {
+    slot: Arc<ConfirmDiskSpaceSlot>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
+    last_dir: Arc<Mutex<String>>,
+    _drop_guard: Arc<ConfirmDiskSpaceDropGuard>,
+}
+
+impl ConfirmDiskSpaceProbe {
+    fn new_for_window(confirm: slint::Weak<ConfirmWindow>) -> Self {
+        Self::spawn(
+            target_check::query_available_space,
+            move |generation_ref, gen, status| {
+                let generation_for_ui = Arc::clone(generation_ref);
+                confirm
+                    .upgrade_in_event_loop(move |item| {
+                        if generation_for_ui.load(std::sync::atomic::Ordering::Acquire) == gen {
+                            apply_confirm_disk_space_status(&item, status);
+                        }
+                    })
+                    .is_ok()
+            },
+        )
+    }
+
+    fn spawn(
+        mut query_space: impl FnMut(&str) -> Option<u64> + Send + 'static,
+        mut publish: impl FnMut(
+                &Arc<std::sync::atomic::AtomicU64>,
+                u64,
+                Option<target_check::DiskSpaceStatus>,
+            ) -> bool
+            + Send
+            + 'static,
+    ) -> Self {
+        let slot: Arc<ConfirmDiskSpaceSlot> =
+            Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drop_guard = Arc::new(ConfirmDiskSpaceDropGuard {
+            slot: Arc::clone(&slot),
+            closed: Arc::clone(&closed),
+        });
+        let worker_slot = Arc::clone(&slot);
+        let worker_gen = Arc::clone(&generation);
+        let worker_closed = Arc::clone(&closed);
+        thread::spawn(move || loop {
+            let job = {
+                let mut guard = match worker_slot.0.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                while guard.is_none() && !worker_closed.load(std::sync::atomic::Ordering::Acquire) {
+                    guard = match worker_slot.1.wait(guard) {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                }
+                if worker_closed.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                guard.take()
+            };
+            let Some((gen, dir, expected_size)) = job else {
+                continue;
+            };
+            if worker_gen.load(std::sync::atomic::Ordering::Acquire) != gen {
+                continue;
+            }
+            let status = query_space(&dir).map(|free_bytes| {
+                target_check::format_disk_space_status(free_bytes, expected_size)
+            });
+            if worker_gen.load(std::sync::atomic::Ordering::Acquire) != gen {
+                continue;
+            }
+            if !publish(&worker_gen, gen, status) {
+                return;
+            }
+        });
+        Self {
+            slot,
+            generation,
+            last_dir: Arc::new(Mutex::new(String::new())),
+            _drop_guard: drop_guard,
+        }
+    }
+
+    #[cfg(test)]
+    fn noop() -> Self {
+        let slot: Arc<ConfirmDiskSpaceSlot> =
+            Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let drop_guard = Arc::new(ConfirmDiskSpaceDropGuard {
+            slot: Arc::clone(&slot),
+            closed,
+        });
+        Self {
+            slot,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_dir: Arc::new(Mutex::new(String::new())),
+            _drop_guard: drop_guard,
+        }
+    }
+
+    fn request(&self, item: &ConfirmWindow, expected_size: u64, force_clear: bool) -> u64 {
+        let dir = item.get_download_dir().to_string();
+        let dir_changed = match self.last_dir.lock() {
+            Ok(mut previous) => {
+                let changed = *previous != dir;
+                if changed {
+                    *previous = dir.clone();
+                }
+                changed
+            }
+            Err(poisoned) => {
+                let mut previous = poisoned.into_inner();
+                let changed = *previous != dir;
+                *previous = dir.clone();
+                changed
+            }
+        };
+        if force_clear || dir_changed {
+            apply_confirm_disk_space_status(item, None);
+        }
+        let gen = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        let mut guard = match self.slot.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Some((gen, dir, expected_size));
+        drop(guard);
+        self.slot.1.notify_one();
+        gen
+    }
+
+    fn cancel_in_flight(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let mut guard = match self.slot.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = None;
+    }
+}
+
+fn apply_confirm_disk_space_status(
+    item: &ConfirmWindow,
+    status: Option<target_check::DiskSpaceStatus>,
+) {
+    match status {
+        Some(status) => {
             item.set_free_space_hint(status.hint.into());
             item.set_free_space_low(status.low_space);
         }
@@ -3094,6 +3532,14 @@ fn refresh_confirm_disk_space(item: &ConfirmWindow, expected_size: u64) {
             item.set_free_space_low(false);
         }
     }
+}
+
+#[cfg(test)]
+fn refresh_confirm_disk_space(item: &ConfirmWindow, expected_size: u64) {
+    let dir = item.get_download_dir().to_string();
+    let status = target_check::query_available_space(&dir)
+        .map(|free_bytes| target_check::format_disk_space_status(free_bytes, expected_size));
+    apply_confirm_disk_space_status(item, status);
 }
 
 fn sync_confirm_filename_category(
@@ -3299,6 +3745,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
         if let Ok(mut claiming) = state.claiming_handoff.lock() {
             *claiming = None;
         }
+        state.disk_space_probe.cancel_in_flight();
         let _ = item.hide();
         return;
     };
@@ -3363,6 +3810,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
             if let Ok(mut active) = state.active_handoff.lock() {
                 *active = Some(plan.handoff_id.clone());
             }
+            state.disk_space_probe.cancel_in_flight();
             let _ = item.hide();
             let weak = item.as_weak();
             let offer_state = state.clone();
@@ -3610,7 +4058,7 @@ fn present_claimed_offer(item: &ConfirmWindow, state: &EventLoopState, offer: &R
     item.set_busy(false);
     item.set_busy_action("".into());
     clear_confirm_issue(item);
-    refresh_confirm_disk_space(item, offer.size);
+    state.disk_space_probe.request(item, offer.size, true);
     let remaining = state
         .pending
         .lock()
@@ -7944,7 +8392,10 @@ mod tests {
             quick_failed: Arc::new(Mutex::new(HashSet::new())),
             confirm_dir_overridden: Arc::new(AtomicBool::new(false)),
             core_online: Arc::new(AtomicBool::new(true)),
+            core_revive_in_flight: Arc::new(AtomicBool::new(false)),
+            disk_space_probe: super::ConfirmDiskSpaceProbe::noop(),
             browser_connected: Arc::new(AtomicBool::new(true)),
+            allow_cold_quick_hud: false,
         };
 
         // 1. show_next_offer returns immediately on the UI thread while background Claim is blocked!
@@ -8040,7 +8491,10 @@ mod tests {
             quick_failed: Arc::new(Mutex::new(HashSet::from(["h-ext-cancel".to_owned()]))),
             confirm_dir_overridden: Arc::new(AtomicBool::new(false)),
             core_online: Arc::new(AtomicBool::new(true)),
+            core_revive_in_flight: Arc::new(AtomicBool::new(false)),
+            disk_space_probe: super::ConfirmDiskSpaceProbe::noop(),
             browser_connected: Arc::new(AtomicBool::new(true)),
+            allow_cold_quick_hud: false,
         };
 
         let mut batched = Vec::new();
@@ -8236,5 +8690,344 @@ mod tests {
             "on_core_resynced must not pop ProgressWindow on top of visible Workbench"
         );
         workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn offline_core_auto_revives_once_on_explicit_workbench_and_respects_user_shutdown() {
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc, Arc,
+        };
+        use std::time::Duration;
+
+        // 1. User-shutdown quit predicate exits Presenter only when marker is active AND no revive is running.
+        assert!(super::should_quit_for_user_shutdown(true, false));
+        assert!(!super::should_quit_for_user_shutdown(false, false));
+        assert!(!super::should_quit_for_user_shutdown(true, true));
+        assert!(!super::should_quit_for_user_shutdown(false, true));
+
+        let core_online = AtomicBool::new(false);
+        let revive_in_flight = Arc::new(AtomicBool::new(false));
+        let revive_calls = Arc::new(AtomicUsize::new(0));
+
+        // 2. Non-explicit open or active user-shutdown or online Core does NOT spawn revive.
+        assert!(!super::maybe_revive_offline_core(
+            false,
+            &core_online,
+            &revive_in_flight,
+            || false,
+            || Ok(()),
+            |_| {},
+        ));
+        assert!(!super::maybe_revive_offline_core(
+            true,
+            &core_online,
+            &revive_in_flight,
+            || true,
+            || Ok(()),
+            |_| {},
+        ));
+        core_online.store(true, Ordering::Release);
+        assert!(!super::maybe_revive_offline_core(
+            true,
+            &core_online,
+            &revive_in_flight,
+            || false,
+            || Ok(()),
+            |_| {},
+        ));
+
+        // 3. Offline Core + explicit workbench open spawns background revive and coalesces concurrent clicks.
+        core_online.store(false, Ordering::Release);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let calls_first = Arc::clone(&revive_calls);
+        assert!(super::maybe_revive_offline_core(
+            true,
+            &core_online,
+            &revive_in_flight,
+            || false,
+            move || {
+                calls_first.fetch_add(1, Ordering::SeqCst);
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                Ok(())
+            },
+            move |res| {
+                let _ = done_tx.send(res);
+            },
+        ));
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(revive_in_flight.load(Ordering::Acquire));
+
+        // Concurrent double-click while revive is in flight coalesces cleanly without spawning a second thread.
+        let calls_second = Arc::clone(&revive_calls);
+        assert!(!super::maybe_revive_offline_core(
+            true,
+            &core_online,
+            &revive_in_flight,
+            || false,
+            move || {
+                calls_second.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+            |_| {},
+        ));
+        assert_eq!(revive_calls.load(Ordering::SeqCst), 1);
+
+        // Once the revive finishes, `core_revive_in_flight` clears so a subsequent crash can revive again.
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(())
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while revive_in_flight.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!revive_in_flight.load(Ordering::Acquire));
+
+        let (second_done_tx, second_done_rx) = mpsc::channel();
+        let calls_third = Arc::clone(&revive_calls);
+        assert!(super::maybe_revive_offline_core(
+            true,
+            &core_online,
+            &revive_in_flight,
+            || false,
+            move || {
+                calls_third.fetch_add(1, Ordering::SeqCst);
+                Err("engine missing".into())
+            },
+            move |res| {
+                let _ = second_done_tx.send(res);
+            },
+        ));
+        assert_eq!(
+            second_done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err("engine missing".to_owned())
+        );
+        assert_eq!(revive_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn confirm_disk_space_probe_runs_off_ui_thread_coalesces_latest_and_drops_stale_generations() {
+        use std::sync::{mpsc, Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = super::ConfirmWindow::new().unwrap();
+
+        let (slow_entered_tx, slow_entered_rx) = mpsc::channel();
+        let (slow_release_tx, slow_release_rx) = mpsc::channel();
+        let (published_tx, published_rx) = mpsc::channel();
+        let queried_dirs = Arc::new(Mutex::new(Vec::new()));
+        let queried_log = Arc::clone(&queried_dirs);
+        let gib = 1024_u64 * 1024 * 1024;
+
+        let probe = super::ConfirmDiskSpaceProbe::spawn(
+            move |dir| {
+                queried_log.lock().unwrap().push(dir.to_owned());
+                match dir {
+                    r"\\slow-nas\share" => {
+                        let _ = slow_entered_tx.send(());
+                        let _ = slow_release_rx.recv();
+                        Some(500 * gib)
+                    }
+                    r"D:\FastSSD" => Some(10 * gib),
+                    _ => None,
+                }
+            },
+            move |generation_ref, gen, status| {
+                published_tx
+                    .send((Arc::clone(generation_ref), gen, status))
+                    .is_ok()
+            },
+        );
+
+        // Pre-populate a hint from an earlier local folder, then switch to a slow UNC path:
+        // UI thread clears stale hint immediately and returns without waiting on SMB I/O!
+        confirm.set_free_space_hint("磁盘可用 186.4 GB".into());
+        confirm.set_free_space_low(false);
+        confirm.set_download_dir(r"\\slow-nas\share".into());
+        let started = Instant::now();
+        let gen1 = probe.request(&confirm, 2 * gib, false);
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(gen1, 1);
+        assert_eq!(confirm.get_free_space_hint().as_str(), "");
+        assert!(!confirm.get_free_space_low());
+
+        slow_entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+
+        // While gen=1 (`\\slow-nas\share`) is blocked, user types intermediate UNC fragments
+        // and settles on `D:\FastSSD` with expected_size = 20 GiB (low space!).
+        confirm.set_download_dir(r"\\slow-nas\skipped-1".into());
+        let gen2 = probe.request(&confirm, 2 * gib, false);
+        confirm.set_download_dir(r"\\slow-nas\skipped-2".into());
+        let gen3 = probe.request(&confirm, 2 * gib, false);
+        confirm.set_download_dir(r"D:\FastSSD".into());
+        let gen4 = probe.request(&confirm, 20 * gib, false);
+        assert_eq!((gen2, gen3, gen4), (2, 3, 4));
+
+        // Release gen=1: worker must discard stale gen=1 (without publishing it) and jump straight
+        // to latest slot gen=4 (`D:\FastSSD`), completely skipping `skipped-1` and `skipped-2`!
+        slow_release_tx.send(()).unwrap();
+        let (gen_ref, published_gen, status4) =
+            published_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(published_gen, 4);
+        assert_eq!(
+            *queried_dirs.lock().unwrap(),
+            vec![r"\\slow-nas\share".to_owned(), r"D:\FastSSD".to_owned()]
+        );
+
+        if gen_ref.load(std::sync::atomic::Ordering::Acquire) == published_gen {
+            super::apply_confirm_disk_space_status(&confirm, status4);
+        }
+        assert!(confirm.get_free_space_low());
+        assert!(confirm
+            .get_free_space_hint()
+            .starts_with("磁盘剩余空间不足"));
+
+        // Editing filename in the same directory does NOT blank the current hint while probing,
+        // whereas `force_clear = true` (new offer) clears immediately and bumps generation so
+        // any late UI callback from gen=4 is ignored.
+        let gen5 = probe.request(&confirm, 1024, false);
+        assert_eq!(gen5, 5);
+        assert!(!confirm.get_free_space_hint().is_empty());
+        let (_, published_gen5, status5) =
+            published_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(published_gen5, 5);
+        if gen_ref.load(std::sync::atomic::Ordering::Acquire) == published_gen5 {
+            super::apply_confirm_disk_space_status(&confirm, status5);
+        }
+        assert!(!confirm.get_free_space_low());
+        assert_eq!(confirm.get_free_space_hint().as_str(), "磁盘可用 10.0 GB");
+
+        // Unreachable directory resolves to None and clears hint.
+        confirm.set_download_dir(r"\\offline-host\missing".into());
+        let gen6 = probe.request(&confirm, 1024, false);
+        let (_, published_gen6, status6) =
+            published_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(published_gen6, gen6);
+        assert!(status6.is_none());
+        super::apply_confirm_disk_space_status(&confirm, status6);
+        assert_eq!(confirm.get_free_space_hint().as_str(), "");
+        assert!(!confirm.get_free_space_low());
+    }
+
+    #[test]
+    fn cold_quick_download_hud_wakeup_recovers_recent_instant_completions_and_ignores_stale_history(
+    ) {
+        use hls_client::TaskSnapshot;
+
+        let now_ms = 500_000_u64;
+        let encoded = vec![
+            serde_json::json!({
+                "id": "h-recent-quick",
+                "status": "accepted",
+                "presentation": "quick_accepted",
+                "task_id": "task-recent-quick",
+                "created_at_ms": now_ms - 1_500,
+                "offer": {
+                    "handoff_id": "h-recent-quick",
+                    "url": "https://cdn.test/tiny.zip",
+                    "resource_kind": "file"
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "id": "h-old-quick",
+                "status": "accepted",
+                "presentation": "quick_accepted",
+                "task_id": "task-old-quick",
+                "created_at_ms": now_ms - 60_000,
+                "offer": {
+                    "handoff_id": "h-old-quick",
+                    "url": "https://cdn.test/old.zip",
+                    "resource_kind": "file"
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "id": "h-normal-confirm",
+                "status": "accepted",
+                "presentation": "presented",
+                "task_id": "task-normal",
+                "created_at_ms": now_ms - 500,
+                "offer": {
+                    "handoff_id": "h-normal-confirm",
+                    "url": "https://cdn.test/normal.zip",
+                    "resource_kind": "file"
+                }
+            })
+            .to_string(),
+        ];
+
+        let (pending, _variants, recent_quick_ids) =
+            super::decode_handoff_state_at(encoded, now_ms);
+        assert!(pending.is_empty());
+        assert!(recent_quick_ids.contains("task-recent-quick"));
+        assert!(!recent_quick_ids.contains("task-old-quick"));
+        assert!(!recent_quick_ids.contains("task-normal"));
+
+        let tasks = vec![
+            TaskSnapshot {
+                task_id: "task-active".into(),
+                filename: "active.zip".into(),
+                status: "downloading".into(),
+                downloaded_bytes: 512,
+                ..Default::default()
+            },
+            TaskSnapshot {
+                task_id: "task-recent-quick".into(),
+                filename: "tiny.zip".into(),
+                status: "completed".into(),
+                downloaded_bytes: 2048,
+                ..Default::default()
+            },
+            TaskSnapshot {
+                task_id: "task-old-quick".into(),
+                filename: "old.zip".into(),
+                status: "completed".into(),
+                downloaded_bytes: 2048,
+                ..Default::default()
+            },
+            TaskSnapshot {
+                task_id: "task-normal".into(),
+                filename: "normal.zip".into(),
+                status: "completed".into(),
+                downloaded_bytes: 2048,
+                ..Default::default()
+            },
+        ];
+        let recovered = super::recent_quick_completed_tasks_for_cold_hud(&tasks, &recent_quick_ids);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].task_id, "task-recent-quick");
+
+        // Event-loop snapshot replay (`W2-A1`): recovers both active tasks AND recent quick-completed
+        // tasks that finished between `initial_client` snapshot and `event_loop` connect, while
+        // suppressing cold completion popups on explicit `--workbench` launch.
+        let hud_replay =
+            super::snapshot_replay_envelopes(tasks.clone(), 42, &recent_quick_ids, true);
+        let hud_ids: Vec<_> = hud_replay
+            .iter()
+            .filter_map(|env| match &env.event {
+                hls_client::CoreEvent::TaskUpdated { snapshot } => Some(snapshot.task_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hud_ids, vec!["task-active", "task-recent-quick"]);
+
+        let wb_replay = super::snapshot_replay_envelopes(tasks, 42, &recent_quick_ids, false);
+        let wb_ids: Vec<_> = wb_replay
+            .iter()
+            .filter_map(|env| match &env.event {
+                hls_client::CoreEvent::TaskUpdated { snapshot } => Some(snapshot.task_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wb_ids, vec!["task-active"]);
     }
 }

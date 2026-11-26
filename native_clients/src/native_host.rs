@@ -70,6 +70,8 @@ fn observe_workbench(
 struct NativeHostSession {
     core: HostCore,
     media_push_ui_request_id: Option<String>,
+    #[cfg(test)]
+    presenter_waker: Option<Box<dyn FnMut() -> Result<(), String>>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -368,7 +370,15 @@ impl NativeHostSession {
         Self {
             core,
             media_push_ui_request_id: None,
+            #[cfg(test)]
+            presenter_waker: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_presenter_waker(mut self, waker: impl FnMut() -> Result<(), String> + 'static) -> Self {
+        self.presenter_waker = Some(Box::new(waker));
+        self
     }
 
     fn dispatch(&mut self, message: &Value) -> Result<Value, String> {
@@ -552,11 +562,7 @@ impl NativeHostSession {
                 .filter_map(|encoded| serde_json::from_str::<Handoff>(&encoded).ok())
                 .next_back()
             {
-                if existing.status == "pending" && matches!(&self.core, HostCore::Remote(_)) {
-                    let root =
-                        crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
-                    crate::core_spawn::ensure_presenter(&root)?;
-                }
+                self.ensure_presenter_for_handoff(&existing)?;
                 let task = existing.task_id.as_deref().and_then(|task_id| {
                     self.core
                         .snapshot_tasks()
@@ -634,10 +640,7 @@ impl NativeHostSession {
                 }
             }
         }
-        if admitted.status == "pending" && matches!(&self.core, HostCore::Remote(_)) {
-            let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
-            crate::core_spawn::ensure_presenter(&root)?;
-        }
+        self.ensure_presenter_for_handoff(&admitted)?;
         let task = admitted.task_id.as_deref().and_then(|task_id| {
             self.core
                 .snapshot_tasks()
@@ -1175,6 +1178,81 @@ impl NativeHostSession {
             .next()
             .ok_or_else(|| "接管请求不存在或已过期".into())
     }
+
+    fn ensure_presenter_for_handoff(&mut self, handoff: &Handoff) -> Result<(), String> {
+        let need = handoff_presenter_spawn_need(handoff);
+        if need == PresenterSpawnNeed::None {
+            return Ok(());
+        }
+        #[cfg(test)]
+        let outcome = if let Some(waker) = self.presenter_waker.as_mut() {
+            Some(waker())
+        } else if should_spawn_presenter(&self.core) {
+            Some(spawn_background_presenter())
+        } else {
+            None
+        };
+        #[cfg(not(test))]
+        let outcome = should_spawn_presenter(&self.core).then(spawn_background_presenter);
+
+        let Some(result) = outcome else {
+            return Ok(());
+        };
+        match (need, result) {
+            (_, Ok(())) | (PresenterSpawnNeed::None, _) => Ok(()),
+            (PresenterSpawnNeed::RequiredConfirm, Err(error)) => Err(error),
+            (PresenterSpawnNeed::BestEffortHud, Err(error)) => {
+                crate::record_runtime_log(
+                    "quick_download_presenter_wake_failed",
+                    json!({
+                        "handoff_id": handoff.id,
+                        "task_id": handoff.task_id,
+                        "error": error,
+                    }),
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PresenterSpawnNeed {
+    None,
+    RequiredConfirm,
+    BestEffortHud,
+}
+
+fn handoff_presenter_spawn_need(handoff: &Handoff) -> PresenterSpawnNeed {
+    if handoff.status == "pending" {
+        PresenterSpawnNeed::RequiredConfirm
+    } else if handoff.presentation == "quick_accepted"
+        && handoff
+            .task_id
+            .as_deref()
+            .is_some_and(|task_id| !task_id.trim().is_empty())
+    {
+        PresenterSpawnNeed::BestEffortHud
+    } else {
+        PresenterSpawnNeed::None
+    }
+}
+
+fn should_spawn_presenter(core: &HostCore) -> bool {
+    #[cfg(test)]
+    {
+        let _ = core;
+        false
+    }
+    #[cfg(not(test))]
+    {
+        matches!(core, HostCore::Remote(_))
+    }
+}
+
+fn spawn_background_presenter() -> Result<(), String> {
+    let root = crate::install_root().ok_or_else(|| "找不到主程序安装目录".to_string())?;
+    crate::core_spawn::ensure_presenter(&root)
 }
 
 fn connect_existing_core(timeout: Duration) -> Result<CoreIpcClient, String> {
@@ -3914,5 +3992,136 @@ mod tests {
         assert_eq!(status["ok"], true, "status={status}");
         assert_eq!(status["ready"], true);
         assert_eq!(reconnects, 1);
+    }
+
+    #[test]
+    fn quick_accepted_handoff_best_effort_wakes_background_presenter_while_headless_tests_stay_guarded(
+    ) {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        // 1. Verify classification of handoff presenter wake needs.
+        let base_handoff = Handoff {
+            id: "h-wake-test".into(),
+            offer: crate::ResourceOffer {
+                url: "https://cdn.test/archive.zip".into(),
+                ..Default::default()
+            },
+            filename: "archive.zip".into(),
+            title: String::new(),
+            mime_type: String::new(),
+            size: 1024,
+            status: "pending".into(),
+            presentation: "queued".into(),
+            task_id: None,
+            created_at_ms: 1,
+            request_id: String::new(),
+            suppression: None,
+        };
+        assert_eq!(
+            handoff_presenter_spawn_need(&base_handoff),
+            PresenterSpawnNeed::RequiredConfirm
+        );
+        let mut quick_with_task = base_handoff.clone();
+        quick_with_task.status = "accepted".into();
+        quick_with_task.presentation = "quick_accepted".into();
+        quick_with_task.task_id = Some("task-quick-1".into());
+        assert_eq!(
+            handoff_presenter_spawn_need(&quick_with_task),
+            PresenterSpawnNeed::BestEffortHud
+        );
+        let mut quick_without_task = quick_with_task.clone();
+        quick_without_task.task_id = None;
+        assert_eq!(
+            handoff_presenter_spawn_need(&quick_without_task),
+            PresenterSpawnNeed::None
+        );
+        let mut normal_accepted = quick_with_task;
+        normal_accepted.presentation = "presented".into();
+        assert_eq!(
+            handoff_presenter_spawn_need(&normal_accepted),
+            PresenterSpawnNeed::None
+        );
+
+        // 2. Headless unit test guard: even `HostCore::Remote` returns `false` under `#[cfg(test)]`
+        //    so automated test runs never spawn GUI windows.
+        let server = crate::CoreServer::in_memory().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let remote_session = NativeHostSession::from_backend(HostCore::Remote(client));
+        assert!(!should_spawn_presenter(&remote_session.core));
+        drop(remote_session);
+        let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
+        shutdown_client.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown_client);
+        worker.join().unwrap().unwrap();
+
+        // 3. `quick_download_enabled = true` wakes background Presenter on `offer` and idempotent retry,
+        //    and does NOT fail the already-created task if Presenter wake errors!
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let wakes_spy = Arc::clone(&wakes);
+        let mut session = NativeHostSession::in_memory()
+            .unwrap()
+            .with_presenter_waker(move || {
+                let count = wakes_spy.fetch_add(1, Ordering::SeqCst) + 1;
+                if count == 2 {
+                    Err("simulated missing presenter binary".into())
+                } else {
+                    Ok(())
+                }
+            });
+        session
+            .dispatch(&json!({
+                "op": "set_takeover_settings",
+                "quick_download_enabled": true
+            }))
+            .unwrap();
+
+        let quick_req = json!({
+            "op": "offer",
+            "resource": {
+                "url": "https://cdn.test/hud-wake.mp4",
+                "filename": "hud-wake.mp4",
+                "size": 8192,
+                "client_request_id": "quick-hud-wake-1"
+            }
+        });
+        let admitted = session.dispatch(&quick_req).unwrap();
+        assert_eq!(admitted["ok"], true);
+        assert_eq!(admitted["handoff"]["status"], "accepted");
+        assert_eq!(admitted["handoff"]["presentation"], "quick_accepted");
+        assert!(admitted["handoff"]["task_id"].as_str().is_some());
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            1,
+            "quick_accepted offer must wake background Presenter HUD"
+        );
+
+        // Retrying the same client_request_id (where waker returns Err on call #2) still succeeds best-effort!
+        let retried = session.dispatch(&quick_req).unwrap();
+        assert_eq!(retried["ok"], true);
+        assert_eq!(retried["handoff"]["status"], "accepted");
+        assert_eq!(retried["handoff"]["presentation"], "quick_accepted");
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
+
+        // 4. By contrast, a `pending` offer requiring ConfirmWindow propagates Presenter spawn failure.
+        let mut failing_pending = NativeHostSession::in_memory()
+            .unwrap()
+            .with_presenter_waker(|| Err("找不到下载确认组件".into()));
+        let err = failing_pending
+            .dispatch(&json!({
+                "op": "offer",
+                "resource": {
+                    "url": "https://cdn.test/needs-confirm.mp4",
+                    "filename": "needs-confirm.mp4",
+                    "client_request_id": "pending-confirm-fail-1"
+                }
+            }))
+            .unwrap_err();
+        assert!(err.contains("找不到下载确认组件"), "err={err}");
     }
 }
