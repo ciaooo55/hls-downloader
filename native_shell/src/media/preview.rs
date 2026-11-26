@@ -50,10 +50,47 @@ const READY_FLUSH_BATCH: usize = 64;
 const READY_MAX_ENTRIES: usize = 256;
 
 struct ReadyTaskState {
+    /// Authoritative in-memory segment readiness (`relative_posix -> byte_len`).
+    /// Cold-initialized once from `dash_vod_segments.json`, legacy per-segment marker files,
+    /// and `playback-ready/index.tsv`; kept up to date by `mark_ready` and `reset_ready`.
     segments: HashMap<String, u64>,
+    /// Cold-loaded crash-recovery slots from `vod_segments.json` (which indexes by slot number
+    /// without storing file extensions). Never re-read from disk on hot `is_ready` misses, and
+    /// immediately pruned on `reset_ready` / superseded on `mark_ready`.
+    hls_checkpoint_slots: HashMap<usize, u64>,
+    /// Cold-loaded crash-recovery slots from `audio/vod_segments.json`.
+    audio_checkpoint_slots: HashMap<usize, u64>,
+    marker_dir_created: bool,
     dirty_ops: usize,
     last_flush: Instant,
     checked: Instant,
+    #[cfg(test)]
+    disk_loads: u64,
+}
+
+impl ReadyTaskState {
+    fn expected_size(&self, relative: &str) -> Option<u64> {
+        if let Some(&size) = self.segments.get(relative) {
+            return Some(size);
+        }
+        let (is_audio, slot) = hls_slot_key(relative)?;
+        let slots = if is_audio {
+            &self.audio_checkpoint_slots
+        } else {
+            &self.hls_checkpoint_slots
+        };
+        slots.get(&slot).copied()
+    }
+
+    fn clear_checkpoint_slot(&mut self, relative: &str) {
+        if let Some((is_audio, slot)) = hls_slot_key(relative) {
+            if is_audio {
+                self.audio_checkpoint_slots.remove(&slot);
+            } else {
+                self.hls_checkpoint_slots.remove(&slot);
+            }
+        }
+    }
 }
 
 fn ready_segments() -> &'static Mutex<HashMap<PathBuf, ReadyTaskState>> {
@@ -73,11 +110,27 @@ fn valid_relative_str(relative: &str) -> Option<String> {
     Some(relative.replace('\\', "/"))
 }
 
-fn load_ready_index_from_disk(marker_dir: &Path) -> HashMap<String, u64> {
-    let Ok(text) = fs::read_to_string(marker_dir.join(READY_INDEX_FILE)) else {
-        return HashMap::new();
+fn hls_slot_key(relative: &str) -> Option<(bool, usize)> {
+    let (is_audio, filename) = if let Some(rest) = relative.strip_prefix("segments/") {
+        (false, rest)
+    } else {
+        (true, relative.strip_prefix("audio/segments/")?)
     };
-    let mut segments = HashMap::new();
+    if filename.contains('/') {
+        return None;
+    }
+    let (stem, _ext) = filename.split_once('.')?;
+    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let slot: usize = stem.parse().ok()?;
+    Some((is_audio, slot))
+}
+
+fn load_ready_index_from_disk(marker_dir: &Path, segments: &mut HashMap<String, u64>) {
+    let Ok(text) = fs::read_to_string(marker_dir.join(READY_INDEX_FILE)) else {
+        return;
+    };
     for line in text.lines() {
         let Some((raw_rel, raw_size)) = line.split_once('\t') else {
             continue;
@@ -91,76 +144,161 @@ fn load_ready_index_from_disk(marker_dir: &Path) -> HashMap<String, u64> {
             }
         }
     }
-    segments
 }
 
-fn read_legacy_marker(marker_dir: &Path, relative: &str) -> Option<u64> {
+fn read_legacy_marker_file(path: &Path) -> Option<u64> {
     use std::io::Read;
-    fs::File::open(marker_dir.join(relative))
-        .ok()
-        .and_then(|file| {
-            let mut size = String::new();
-            file.take(21).read_to_string(&mut size).ok()?;
-            let trimmed = size.trim();
-            (trimmed.len() <= 20)
-                .then(|| trimmed.parse::<u64>().ok())
-                .flatten()
-                .filter(|&parsed| parsed > 0)
-        })
+    fs::File::open(path).ok().and_then(|file| {
+        let mut size = String::new();
+        file.take(21).read_to_string(&mut size).ok()?;
+        let trimmed = size.trim();
+        (trimmed.len() <= 20)
+            .then(|| trimmed.parse::<u64>().ok())
+            .flatten()
+            .filter(|&parsed| parsed > 0)
+    })
 }
 
-/// Crash-recovery fallback: if `index.tsv` missed the last dirty batch before an abrupt process
-/// exit, reconstruct segment readiness strictly from durable segment checkpoints (`dash_vod_segments.json`,
-/// `vod_segments.json`, `audio/vod_segments.json`)—never from unverified stray files on disk.
-fn read_checkpoint_ready_size(root: &Path, relative: &str) -> Option<u64> {
-    if let Ok(text) = fs::read_to_string(root.join("dash_vod_segments.json")) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-            if value.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
-                if let Some(record) = value.get("files").and_then(|files| files.get(relative)) {
-                    let has_id = record
-                        .get("identity")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|id| !id.is_empty());
-                    let size = record
-                        .get("size")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0);
-                    if has_id && size > 0 {
-                        return Some(size);
-                    }
-                }
+fn load_legacy_markers_from_dir(
+    marker_root: &Path,
+    dir: &Path,
+    depth: usize,
+    segments: &mut HashMap<String, u64>,
+) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let tmp_prefix = format!(".{READY_INDEX_FILE}");
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            load_legacy_markers_from_dir(marker_root, &path, depth + 1, segments);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if depth == 0 {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == READY_INDEX_FILE || name.starts_with(&tmp_prefix) {
+                continue;
             }
         }
+        let Some(rel) = relative_file(marker_root, &path) else {
+            continue;
+        };
+        if let Some(size) = read_legacy_marker_file(&path) {
+            segments.insert(rel, size);
+        }
     }
+}
 
-    let (checkpoint_path, filename) = if let Some(rest) = relative.strip_prefix("segments/") {
-        (root.join("vod_segments.json"), rest)
-    } else {
-        let rest = relative.strip_prefix("audio/segments/")?;
-        (root.join("audio").join("vod_segments.json"), rest)
+/// Crash-recovery cold loader for `dash_vod_segments.json`: reconstructs verified DASH segment
+/// sizes if `index.tsv` missed a dirty tail batch before an abrupt exit.
+fn load_dash_checkpoint_into(root: &Path, segments: &mut HashMap<String, u64>) {
+    let Ok(text) = fs::read_to_string(root.join("dash_vod_segments.json")) else {
+        return;
     };
-    if filename.contains('/') {
-        return None;
-    }
-    let (stem, _ext) = filename.split_once('.')?;
-    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let slot: usize = stem.parse().ok()?;
-    let text = fs::read_to_string(checkpoint_path).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
     if value.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
-        return None;
+        return;
     }
-    let record = value
-        .get("segments")
-        .and_then(|segments| segments.get(slot.to_string()))?;
-    let has_id = record
-        .get("identity")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|id| !id.is_empty());
-    let size = record.get("size").and_then(serde_json::Value::as_u64)?;
-    (has_id && size > 0).then_some(size)
+    let Some(files) = value.get("files").and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    for (raw_rel, record) in files {
+        let Some(rel) = valid_relative_str(raw_rel) else {
+            continue;
+        };
+        let has_id = record
+            .get("identity")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| !id.is_empty());
+        let size = record
+            .get("size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if has_id && size > 0 {
+            segments.insert(rel, size);
+        }
+    }
+}
+
+/// Crash-recovery cold loader for `vod_segments.json` / `audio/vod_segments.json`.
+fn load_hls_checkpoint_slots(checkpoint_path: &Path) -> HashMap<usize, u64> {
+    let Ok(text) = fs::read_to_string(checkpoint_path) else {
+        return HashMap::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return HashMap::new();
+    };
+    if value.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return HashMap::new();
+    }
+    let Some(map) = value.get("segments").and_then(serde_json::Value::as_object) else {
+        return HashMap::new();
+    };
+    let mut slots = HashMap::new();
+    for (raw_slot, record) in map {
+        if raw_slot.is_empty() || !raw_slot.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(slot) = raw_slot.parse::<usize>() else {
+            continue;
+        };
+        let has_id = record
+            .get("identity")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| !id.is_empty());
+        let size = record
+            .get("size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if has_id && size > 0 {
+            slots.insert(slot, size);
+        }
+    }
+    slots
+}
+
+/// Cold-initializes `ReadyTaskState` completely outside the global mutex so hot `is_ready`
+/// polling performs zero syscalls under lock and never resurrects invalidated segments.
+fn load_ready_state_from_disk(root: &Path) -> ReadyTaskState {
+    let marker_dir = root.join(READY_DIR);
+    let marker_dir_created = marker_dir.is_dir();
+    let mut segments = HashMap::new();
+    load_dash_checkpoint_into(root, &mut segments);
+    if marker_dir_created {
+        load_legacy_markers_from_dir(&marker_dir, &marker_dir, 0, &mut segments);
+        load_ready_index_from_disk(&marker_dir, &mut segments);
+    }
+    let hls_checkpoint_slots = load_hls_checkpoint_slots(&root.join("vod_segments.json"));
+    let audio_checkpoint_slots =
+        load_hls_checkpoint_slots(&root.join("audio").join("vod_segments.json"));
+    let now = Instant::now();
+    ReadyTaskState {
+        segments,
+        hls_checkpoint_slots,
+        audio_checkpoint_slots,
+        marker_dir_created,
+        dirty_ops: 0,
+        last_flush: now,
+        checked: now,
+        #[cfg(test)]
+        disk_loads: 1,
+    }
 }
 
 pub(crate) fn flush_ready(root: &Path) -> Result<(), String> {
@@ -171,17 +309,17 @@ pub(crate) fn flush_ready(root: &Path) -> Result<(), String> {
     let Some(entry) = map.get_mut(root) else {
         return Ok(());
     };
-    if entry.dirty_ops == 0 || !marker_dir.is_dir() {
+    if entry.dirty_ops == 0 || !entry.marker_dir_created || !marker_dir.is_dir() {
         return Ok(());
     }
-    flush_ready_index(&marker_dir, &entry.segments)?;
+    flush_ready_index(&marker_dir, &entry.segments).map_err(|error| error.to_string())?;
     entry.dirty_ops = 0;
     entry.last_flush = Instant::now();
     entry.checked = Instant::now();
     Ok(())
 }
 
-fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> Result<(), String> {
+fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> std::io::Result<()> {
     let mut payload = String::with_capacity(segments.len().saturating_mul(28));
     for (relative, size) in segments {
         if *size > 0 {
@@ -194,9 +332,8 @@ fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> Resu
     let temporary = marker_dir.join(format!(".{READY_INDEX_FILE}.tmp"));
     // Preview markers are ephemeral UI playback hints, never durability checkpoints:
     // coalesce into one un-fsynced index file to avoid per-segment NTFS/AV write storms.
-    fs::write(&temporary, payload.as_bytes()).map_err(|error| error.to_string())?;
+    fs::write(&temporary, payload.as_bytes())?;
     super::hls::replace_file_atomic(&temporary, &marker_dir.join(READY_INDEX_FILE))
-        .map_err(|error| error.to_string())
 }
 
 fn prune_ready_segments(map: &mut HashMap<PathBuf, ReadyTaskState>) {
@@ -213,7 +350,7 @@ fn prune_ready_segments(map: &mut HashMap<PathBuf, ReadyTaskState>) {
         };
         if let Some(evicted) = map.remove(&oldest) {
             let marker_dir = oldest.join(READY_DIR);
-            if evicted.dirty_ops > 0 && marker_dir.is_dir() {
+            if evicted.dirty_ops > 0 && evicted.marker_dir_created && marker_dir.is_dir() {
                 let _ = flush_ready_index(&marker_dir, &evicted.segments);
             }
         }
@@ -227,37 +364,50 @@ pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
         return Err("播放分片为空".into());
     }
     let marker_dir = root.join(READY_DIR);
+    let loaded = {
+        let map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if map.contains_key(root) {
+            None
+        } else {
+            drop(map);
+            Some(load_ready_state_from_disk(root))
+        }
+    };
     let mut map = ready_segments()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let dir_existed = marker_dir.is_dir();
-    if !dir_existed {
-        map.remove(root);
-        fs::create_dir_all(&marker_dir).map_err(|error| error.to_string())?;
-    }
     prune_ready_segments(&mut map);
     let now = Instant::now();
-    let entry = map
-        .entry(root.to_path_buf())
-        .or_insert_with(|| ReadyTaskState {
-            segments: if dir_existed {
-                load_ready_index_from_disk(&marker_dir)
-            } else {
-                HashMap::new()
-            },
-            dirty_ops: 0,
-            last_flush: now,
-            checked: now,
-        });
+    let entry = match map.entry(root.to_path_buf()) {
+        std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+        std::collections::hash_map::Entry::Vacant(vacant) => {
+            vacant.insert(loaded.unwrap_or_else(|| load_ready_state_from_disk(root)))
+        }
+    };
+    let created_now = !entry.marker_dir_created;
+    if created_now {
+        fs::create_dir_all(&marker_dir).map_err(|error| error.to_string())?;
+        entry.marker_dir_created = true;
+    }
+    entry.clear_checkpoint_slot(&relative);
     entry.segments.insert(relative, size);
     entry.dirty_ops = entry.dirty_ops.saturating_add(1);
     entry.checked = now;
-    let should_flush = !dir_existed
+    let should_flush = created_now
         || entry.segments.len() <= 2
         || entry.dirty_ops >= READY_FLUSH_BATCH
         || entry.last_flush.elapsed() >= READY_FLUSH_INTERVAL;
     if should_flush {
-        flush_ready_index(&marker_dir, &entry.segments)?;
+        match flush_ready_index(&marker_dir, &entry.segments) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir_all(&marker_dir).map_err(|err| err.to_string())?;
+                flush_ready_index(&marker_dir, &entry.segments).map_err(|err| err.to_string())?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
         entry.dirty_ops = 0;
         entry.last_flush = Instant::now();
     }
@@ -267,29 +417,50 @@ pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
 pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
     let relative = relative_file(root, file).ok_or("播放分片不属于任务目录")?;
     let marker_dir = root.join(READY_DIR);
+    if !root.is_dir() {
+        ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(root);
+        return Ok(());
+    }
+    let loaded = {
+        let map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if map.contains_key(root) {
+            None
+        } else {
+            drop(map);
+            Some(load_ready_state_from_disk(root))
+        }
+    };
     {
         let mut map = ready_segments()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !marker_dir.is_dir() {
-            map.remove(root);
-            return Ok(());
-        }
         prune_ready_segments(&mut map);
         let now = Instant::now();
-        let entry = map
-            .entry(root.to_path_buf())
-            .or_insert_with(|| ReadyTaskState {
-                segments: load_ready_index_from_disk(&marker_dir),
-                dirty_ops: 0,
-                last_flush: now,
-                checked: now,
-            });
+        let entry = match map.entry(root.to_path_buf()) {
+            std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                vacant.insert(loaded.unwrap_or_else(|| load_ready_state_from_disk(root)))
+            }
+        };
         entry.checked = now;
-        if entry.segments.remove(&relative).is_some() {
-            flush_ready_index(&marker_dir, &entry.segments)?;
-            entry.dirty_ops = 0;
-            entry.last_flush = Instant::now();
+        let removed_segment = entry.segments.remove(&relative).is_some();
+        entry.clear_checkpoint_slot(&relative);
+        if removed_segment && entry.marker_dir_created {
+            match flush_ready_index(&marker_dir, &entry.segments) {
+                Ok(()) => {
+                    entry.dirty_ops = 0;
+                    entry.last_flush = Instant::now();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    entry.marker_dir_created = false;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
         }
     }
     match fs::remove_file(marker_dir.join(relative)) {
@@ -310,39 +481,28 @@ pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
     let Some(relative) = valid_relative_str(relative) else {
         return false;
     };
-    let marker_dir = root.join(READY_DIR);
     let expected = {
         let mut map = ready_segments()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !marker_dir.is_dir()
-            && !root.join("preview.m3u8").is_file()
-            && !root.join("preview-video.m3u8").is_file()
-        {
-            map.remove(root);
-            return false;
+        if let Some(entry) = map.get_mut(root) {
+            entry.checked = Instant::now();
+            entry.expected_size(&relative)
+        } else {
+            drop(map);
+            if !root.is_dir() {
+                return false;
+            }
+            let loaded = load_ready_state_from_disk(root);
+            let mut map = ready_segments()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            prune_ready_segments(&mut map);
+            let now = Instant::now();
+            let entry = map.entry(root.to_path_buf()).or_insert(loaded);
+            entry.checked = now;
+            entry.expected_size(&relative)
         }
-        prune_ready_segments(&mut map);
-        let now = Instant::now();
-        let entry = map
-            .entry(root.to_path_buf())
-            .or_insert_with(|| ReadyTaskState {
-                segments: if marker_dir.is_dir() {
-                    load_ready_index_from_disk(&marker_dir)
-                } else {
-                    HashMap::new()
-                },
-                dirty_ops: 0,
-                last_flush: now,
-                checked: now,
-            });
-        entry.checked = now;
-        entry.segments.get(&relative).copied().or_else(|| {
-            let recovered = read_legacy_marker(&marker_dir, &relative)
-                .or_else(|| read_checkpoint_ready_size(root, &relative))?;
-            entry.segments.insert(relative.clone(), recovered);
-            Some(recovered)
-        })
     };
     expected.is_some_and(|size| {
         size > 0
@@ -479,6 +639,15 @@ pub(crate) fn byte_priority_file_reads(root: &Path) -> u64 {
         .unwrap_or_else(|error| error.into_inner())
         .get(root)
         .map_or(0, |entry| entry.file_reads)
+}
+
+#[cfg(test)]
+fn ready_disk_loads(root: &Path) -> u64 {
+    ready_segments()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(root)
+        .map_or(0, |entry| entry.disk_loads)
 }
 
 fn write_priority(root: &Path, name: &str, value: &str) -> Result<(), String> {
@@ -682,6 +851,42 @@ mod tests {
             !is_ready(&root, "segments/000005.ts"),
             "uncheckpointed file on disk must never be treated as ready"
         );
+        assert_eq!(ready_disk_loads(&root), 1);
+
+        // 3. Hot-polling missing segments (like `playback.rs` 50ms waits) must never re-read
+        // checkpoints or legacy markers from disk.
+        for _ in 0..100 {
+            assert!(!is_ready(&root, "segments/000005.ts"));
+            assert!(!is_ready(&root, "audio/segments/000009.aac"));
+            assert!(!is_ready(&root, "video/seg-99.m4s"));
+        }
+        assert_eq!(ready_disk_loads(&root), 1);
+
+        // 4. `reset_ready` must invalidate checkpoint-recovered segments immediately and never let
+        // a stale on-disk checkpoint resurrect them before `vod.save` runs.
+        reset_ready(&root, &seg4).unwrap();
+        reset_ready(&root, &audio0).unwrap();
+        reset_ready(&root, &dash1).unwrap();
+        assert!(!is_ready(&root, "segments/000004.ts"));
+        assert!(!is_ready(&root, "audio/segments/000000.aac"));
+        assert!(!is_ready(&root, "video/seg-1.m4s"));
+        assert_eq!(ready_disk_loads(&root), 1);
+
+        // 5. Cold `reset_ready` even without a `playback-ready` directory must still suppress
+        // stale on-disk checkpoints before `vod.save` completes, and a subsequent `mark_ready`
+        // for a sibling segment must not undo those invalidations.
+        fs::remove_dir_all(root.join(READY_DIR)).unwrap();
+        forget_byte_priority(&root);
+        reset_ready(&root, &seg4).unwrap();
+        reset_ready(&root, &audio0).unwrap();
+        reset_ready(&root, &dash1).unwrap();
+        let seg0 = seg_dir.join("000000.ts");
+        mark_ready(&root, &seg0).unwrap();
+        assert!(is_ready(&root, "segments/000000.ts"));
+        assert!(!is_ready(&root, "segments/000004.ts"));
+        assert!(!is_ready(&root, "audio/segments/000000.aac"));
+        assert!(!is_ready(&root, "video/seg-1.m4s"));
+        assert_eq!(ready_disk_loads(&root), 1);
 
         forget_byte_priority(&root);
         fs::remove_dir_all(root).unwrap();

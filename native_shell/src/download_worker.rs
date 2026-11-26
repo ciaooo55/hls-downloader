@@ -5340,7 +5340,12 @@ fn task_failure_from_error(
             "RESOURCE_CHANGED".into(),
             "服务端文件内容已变化，已保存的片段不会与新内容拼接。请新建任务下载当前文件，原任务缓存已保留".into(),
         )
-    } else if lower.starts_with("ffmpeg ") {
+    } else if is_missing_ffmpeg_error(&lower) {
+        (
+            "MEDIA_MERGE_FAILED".into(),
+            "未找到可用的 FFmpeg 可执行文件，请在设置中配置正确的 FFmpeg 路径后重试".into(),
+        )
+    } else if lower.starts_with("ffmpeg ") || lower.contains("local playlist missing for ffmpeg") {
         (
             "MEDIA_MERGE_FAILED".into(),
             "分片已保留，请查看合流日志；修正问题后重试可复用已下载的分片".into(),
@@ -5394,11 +5399,6 @@ fn task_failure_from_error(
             "DRM_PROTECTED".into(),
             "该流媒体受 DRM 加密保护，当前不支持直接解密下载".into(),
         )
-    } else if is_missing_ffmpeg_error(&lower, error) {
-        (
-            "MEDIA_MERGE_FAILED".into(),
-            "未找到可用的 FFmpeg 可执行文件，请在设置中配置正确的 FFmpeg 路径后重试".into(),
-        )
     } else if is_network_policy_error(&lower, error) {
         (
             "NETWORK_POLICY".into(),
@@ -5434,11 +5434,10 @@ fn is_drm_protection_error(lower: &str, raw: &str) -> bool {
         || raw.contains("不支持的 HLS 加密")
 }
 
-fn is_missing_ffmpeg_error(lower: &str, raw: &str) -> bool {
+fn is_missing_ffmpeg_error(lower: &str) -> bool {
     lower.contains("ffmpeg not found")
         || lower.contains("missing ffmpeg")
-        || lower.contains("local playlist missing for ffmpeg")
-        || raw.contains("ffmpeg 可执行文件")
+        || lower.contains("ffmpeg 可执行文件")
 }
 
 fn is_network_policy_error(lower: &str, raw: &str) -> bool {
@@ -5496,8 +5495,9 @@ fn is_auto_retryable_task_failure(failure_code: &str, error: &str) -> bool {
     if lower.starts_with("resource identity changed:")
         || lower.starts_with("range response rejected:")
         || lower.starts_with("ffmpeg ")
+        || lower.contains("local playlist missing for ffmpeg")
         || is_drm_protection_error(&lower, error)
-        || is_missing_ffmpeg_error(&lower, error)
+        || is_missing_ffmpeg_error(&lower)
         || is_network_policy_error(&lower, error)
     {
         return false;
@@ -5518,7 +5518,10 @@ fn is_size_disagreement(lower: &str) -> bool {
 }
 fn failure_stage(current: &str, error: &str) -> String {
     let lower = error.to_ascii_lowercase();
-    if lower.starts_with("ffmpeg ") {
+    if lower.starts_with("ffmpeg ")
+        || is_missing_ffmpeg_error(&lower)
+        || lower.contains("local playlist missing for ffmpeg")
+    {
         "merging".into()
     } else if lower.contains("checksum") || lower.contains("校验") {
         "checksum".into()

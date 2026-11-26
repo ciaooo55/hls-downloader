@@ -13630,10 +13630,20 @@ fn auto_retry_governance_skips_permanent_failures_while_retrying_transient_error
         ("write failed: no space left on device", "DISK_FULL"),
         ("磁盘空间不足", "DISK_FULL"),
         ("ffmpeg not found", "MEDIA_MERGE_FAILED"),
+        ("FFmpeg not found in configured path", "MEDIA_MERGE_FAILED"),
         (
             "外部工具路径必须指向 ffmpeg 可执行文件",
             "MEDIA_MERGE_FAILED",
         ),
+        (
+            "外部工具路径必须指向 FFmpeg 可执行文件",
+            "MEDIA_MERGE_FAILED",
+        ),
+        (
+            "local playlist missing for ffmpeg mux",
+            "MEDIA_MERGE_FAILED",
+        ),
+        ("ffmpeg 合流失败: exit code 1", "MEDIA_MERGE_FAILED"),
         (
             "检测到受 DRM 加密保护的流媒体（Widevine/PlayReady），不支持直接解密下载",
             "DRM_PROTECTED",
@@ -13660,6 +13670,40 @@ fn auto_retry_governance_skips_permanent_failures_while_retrying_transient_error
             "permanent error must not auto-retry: {error} ({})",
             failure.code
         );
+    }
+
+    // Missing-FFmpeg errors must surface the FFmpeg path configuration hint rather than being
+    // shadowed by the generic `ffmpeg ` prefix branch, and must match Chinese/ASCII case-insensitively.
+    for missing_ffmpeg in [
+        "ffmpeg not found",
+        "FFmpeg not found in configured path",
+        "missing ffmpeg binary",
+        "外部工具路径必须指向 ffmpeg 可执行文件",
+        "外部工具路径必须指向 FFmpeg 可执行文件",
+    ] {
+        let failure =
+            task_failure_from_error(missing_ffmpeg, "transfer", "https://cdn.test/x", 1, false);
+        assert_eq!(failure.code, "MEDIA_MERGE_FAILED", "error={missing_ffmpeg}");
+        assert!(
+            failure.hint.contains("FFmpeg 路径"),
+            "expected missing-FFmpeg hint for {missing_ffmpeg:?}, got {:?}",
+            failure.hint
+        );
+        assert_eq!(failure_stage("transfer", missing_ffmpeg), "merging");
+    }
+    for merge_failure in [
+        "ffmpeg 合流失败: exit code 1",
+        "local playlist missing for ffmpeg mux",
+    ] {
+        let failure =
+            task_failure_from_error(merge_failure, "transfer", "https://cdn.test/x", 1, false);
+        assert_eq!(failure.code, "MEDIA_MERGE_FAILED", "error={merge_failure}");
+        assert!(
+            failure.hint.contains("合流日志"),
+            "expected merge-log hint for {merge_failure:?}, got {:?}",
+            failure.hint
+        );
+        assert_eq!(failure_stage("transfer", merge_failure), "merging");
     }
 
     for (error, expected_code) in [
