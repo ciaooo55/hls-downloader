@@ -206,11 +206,14 @@ fn is_ephemeral_query_param(
 pub fn canonical_resource_key(url: &str) -> String {
     let trimmed = url.trim().trim_start_matches('\u{feff}').trim();
     let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
-    let (scheme, default_port, rest) = if without_fragment.len() >= 7
-        && without_fragment[..7].eq_ignore_ascii_case("http://")
+    let (scheme, default_port, rest) = if without_fragment
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
     {
         ("http", 80u16, &without_fragment[7..])
-    } else if without_fragment.len() >= 8 && without_fragment[..8].eq_ignore_ascii_case("https://")
+    } else if without_fragment
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
     {
         ("https", 443u16, &without_fragment[8..])
     } else {
@@ -476,6 +479,42 @@ mod tests {
         assert_eq!(
             canonical_resource_key(akam_bili_1),
             canonical_resource_key(akam_bili_2)
+        );
+    }
+
+    #[test]
+    fn canonical_resource_key_never_panics_on_multibyte_utf8_paths_or_non_http_inputs() {
+        for (input, expected) in [
+            ("C:\\下载\\movie.torrent", "C:\\下载\\movie.torrent"),
+            (
+                "  C:\\下载\\合集.torrent#section  ",
+                "C:\\下载\\合集.torrent",
+            ),
+            ("D:\\动漫\\番剧.m3u8", "D:\\动漫\\番剧.m3u8"),
+            ("中文路径\\测试.torrent", "中文路径\\测试.torrent"),
+            ("一二三", "一二三"),
+            ("🚀://test/资源#frag", "🚀://test/资源"),
+            ("a🚀🔥✨", "a🚀🔥✨"),
+            ("ééééé", "ééééé"),
+        ] {
+            assert_eq!(canonical_resource_key(input), expected);
+        }
+
+        for prefix_len in 0..=8 {
+            let ascii_prefix = "a".repeat(prefix_len);
+            for glyph in ["é", "载", "🚀"] {
+                let sample = format!("{ascii_prefix}{glyph}{glyph}{glyph}");
+                assert_eq!(canonical_resource_key(&sample), sample);
+            }
+        }
+
+        assert_eq!(
+            canonical_resource_key("https://例え.jp:443/视频/第01集.mp4?token=exp1&part=上集#章节"),
+            "https://例え.jp/视频/第01集.mp4?part=上集"
+        );
+        assert_eq!(
+            canonical_resource_key("HTTP://localhost:80/下载/测试.zip?sig=abc&id=42#top"),
+            "http://localhost/下载/测试.zip?id=42"
         );
     }
 }
