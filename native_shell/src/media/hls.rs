@@ -11,6 +11,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -632,6 +633,7 @@ impl Default for HlsDownloadOptions {
 #[derive(Debug, Clone)]
 struct TimelineEntry {
     identity: String,
+    uri: String,
     media_sequence: u64,
     part_index: Option<u64>,
     path: PathBuf,
@@ -644,16 +646,59 @@ struct TimelineEntry {
 struct LiveTimeline {
     entries: Vec<TimelineEntry>,
     next_slot: usize,
+    sequence_offset: u64,
+    pending_epoch_discontinuity: bool,
 }
 
 struct PreparedSegment {
     segment: Segment,
     identity: String,
+    timeline_sequence: u64,
     slot: usize,
     path: PathBuf,
     init_map_path: Option<PathBuf>,
     key_bytes: Option<Vec<u8>>,
     needs_download: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LiveControl<'a> {
+    control: &'a Path,
+    parent_control: Option<&'a Path>,
+    finishing: Option<&'a AtomicBool>,
+}
+
+impl<'a> LiveControl<'a> {
+    fn direct(control: &'a Path) -> Self {
+        Self {
+            control,
+            parent_control: None,
+            finishing: None,
+        }
+    }
+
+    fn effective_action(&self) -> String {
+        if let Some(parent) = self.parent_control {
+            match read_control(parent).as_str() {
+                "cancel" => return "cancel".into(),
+                "pause" => return "pause".into(),
+                _ => {}
+            }
+        }
+        let raw = read_control(self.control);
+        if raw == "cancel"
+            && self
+                .finishing
+                .is_some_and(|finishing| finishing.load(Ordering::SeqCst))
+        {
+            return "finish".into();
+        }
+        raw
+    }
+
+    fn merge_control(&self) -> &'a Path {
+        self.parent_control.unwrap_or(self.control)
+    }
 }
 
 struct SegmentWork {
@@ -662,6 +707,7 @@ struct SegmentWork {
     key_bytes: Option<Vec<u8>>,
 }
 
+#[cfg(test)]
 pub fn download_hls(
     url: &str,
     headers: &HashMap<String, String>,
@@ -708,29 +754,79 @@ fn download_hls_scoped(
     control: &Path,
     options: HlsDownloadOptions,
 ) -> Result<PathBuf, String> {
+    download_hls_scoped_with_control(
+        url,
+        headers,
+        proxy,
+        task_dir,
+        LiveControl::direct(control),
+        options,
+    )
+}
+
+fn download_hls_scoped_with_control(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    task_dir: &Path,
+    live_ctl: LiveControl<'_>,
+    options: HlsDownloadOptions,
+) -> Result<PathBuf, String> {
+    let control = live_ctl.control;
     fs::create_dir_all(task_dir).map_err(|error| error.to_string())?;
+    let saved_timeline = LiveTimeline::load(task_dir);
+    let load_initial = |target: &str| -> Result<Option<Playlist>, String> {
+        match load_playlist(target, headers, proxy) {
+            Ok(pl) => Ok(Some(pl)),
+            Err(error) => match live_ctl.effective_action().as_str() {
+                "cancel" => Err("canceled".into()),
+                "pause" => Err("paused".into()),
+                "finish" if options.live || !saved_timeline.entries.is_empty() => Ok(None),
+                _ => Err(error),
+            },
+        }
+    };
     let mut current = url.to_string();
-    let mut playlist = load_playlist(&current, headers, proxy)?;
+    let mut initial_playlist = load_initial(&current)?;
     let mut audio_uri = None;
     let mut subtitle_tracks = Vec::new();
-    if playlist.is_master {
-        let variant = select_variant_for(
-            &playlist,
-            options.preferred_bandwidth,
-            options.preferred_height,
-            &options.preferred_variant_id,
-        )
-        .ok_or_else(|| "HLS master has no variants".to_string())?;
-        audio_uri = select_audio_track(&playlist, variant, &options.preferred_audio)
-            .and_then(|track| track.uri.clone());
-        if options.download_subtitles {
-            subtitle_tracks = select_subtitles(&playlist);
+    if let Some(ref master) = initial_playlist {
+        if master.is_master {
+            let variant = select_variant_for(
+                master,
+                options.preferred_bandwidth,
+                options.preferred_height,
+                &options.preferred_variant_id,
+            )
+            .ok_or_else(|| "HLS master has no variants".to_string())?;
+            audio_uri = select_audio_track(master, variant, &options.preferred_audio)
+                .and_then(|track| track.uri.clone());
+            if options.download_subtitles {
+                subtitle_tracks = select_subtitles(master);
+            }
+            current = variant.uri.clone();
+            initial_playlist = load_initial(&current)?;
         }
-        current = variant.uri.clone();
-        playlist = load_playlist(&current, headers, proxy)?;
     }
+    let finish_before_playlist = initial_playlist.is_none();
+    let mut playlist = initial_playlist.unwrap_or(Playlist {
+        document_url: current.clone(),
+        unfiltered_tail: None,
+        is_master: false,
+        end_list: false,
+        media_sequence: 0,
+        target_duration: 6.0,
+        part_target: 0.0,
+        map_uri: None,
+        map_byterange: None,
+        key: None,
+        can_block_reload: false,
+        skipped_segments: 0,
+        variants: Vec::new(),
+        segments: Vec::new(),
+        renditions: Vec::new(),
+    });
     // 主清单和 URL 都不能证明直播类型；以最终媒体清单及已有录制状态为准。
-    let saved_timeline = LiveTimeline::load(task_dir);
     let live = options.live || !playlist.end_list || !saved_timeline.entries.is_empty();
     apply_ad_policy(&mut playlist, options.skip_ads);
     let has_external_audio = audio_uri.is_some();
@@ -757,6 +853,7 @@ fn download_hls_scoped(
                 &audio_dir,
                 control,
                 false,
+                0,
                 &audio_vod,
                 &mut 0,
                 &mut HashMap::new(),
@@ -789,10 +886,10 @@ fn download_hls_scoped(
     } else {
         None
     };
-    let mut live_audio = if live {
+    let mut live_audio = if live && !finish_before_playlist {
         audio_uri
             .as_ref()
-            .map(|uri| LiveAudioRecorder::start(uri, headers, proxy, task_dir))
+            .map(|uri| LiveAudioRecorder::start_with_parent(uri, headers, proxy, task_dir, control))
     } else {
         None
     };
@@ -802,7 +899,10 @@ fn download_hls_scoped(
         LiveSubSession::default()
     };
     loop {
-        match read_control(control).as_str() {
+        if finish_before_playlist {
+            break;
+        }
+        match live_ctl.effective_action().as_str() {
             "cancel" => return Err("canceled".into()),
             "pause" => {
                 if live {
@@ -822,7 +922,14 @@ fn download_hls_scoped(
         if live && options.download_subtitles {
             live_subs.capture(headers, proxy, task_dir, control);
         }
-        let mut pending = pending_segments(&playlist, &timeline.entries);
+        if live {
+            timeline.observe_playlist(&playlist);
+        }
+        let mut pending = if live {
+            pending_live_segments(&playlist, &timeline)
+        } else {
+            pending_segments(&playlist, &timeline.entries)
+        };
         if let Some(limit) = live_limit {
             let mut remaining = (limit - recorded_duration).max(0.0);
             pending.retain(|segment| {
@@ -840,15 +947,18 @@ fn download_hls_scoped(
             task_dir,
             control,
             live,
+            timeline.sequence_offset,
             &vod,
             &mut timeline.next_slot,
             &mut key_cache,
             &mut map_cache,
         ) {
             Ok(prepared) => prepared,
-            Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
-            Err(stop) if live && stop == "finish" => break,
-            Err(stop) if live && stop == "paused" => {
+            Err(_) if live_ctl.effective_action() == "cancel" => return Err("canceled".into()),
+            Err(stop) if live && (stop == "finish" || live_ctl.effective_action() == "finish") => {
+                break
+            }
+            Err(stop) if live && (stop == "paused" || live_ctl.effective_action() == "pause") => {
                 timeline.save(&state_path)?;
                 write_timeline_playlist(
                     task_dir,
@@ -881,7 +991,8 @@ fn download_hls_scoped(
                 .iter()
                 .map(|item| TimelineEntry {
                     identity: item.identity.clone(),
-                    media_sequence: item.segment.media_sequence,
+                    uri: stable_media_url(&item.segment.uri),
+                    media_sequence: item.timeline_sequence,
                     part_index: item.segment.part_index,
                     path: item.path.clone(),
                     duration: item.segment.duration.max(0.0),
@@ -1039,13 +1150,16 @@ fn download_hls_scoped(
                     .iter()
                     .filter(|item| completed.contains(&item.path))
                 {
+                    let discontinuity = item.segment.discontinuity
+                        || std::mem::take(&mut timeline.pending_epoch_discontinuity);
                     timeline.insert(TimelineEntry {
                         identity: item.identity.clone(),
-                        media_sequence: item.segment.media_sequence,
+                        uri: stable_media_url(&item.segment.uri),
+                        media_sequence: item.timeline_sequence,
                         part_index: item.segment.part_index,
                         path: item.path.clone(),
                         duration: item.segment.duration.max(0.0),
-                        discontinuity: item.segment.discontinuity,
+                        discontinuity,
                         init_map_path: item.init_map_path.clone(),
                     });
                 }
@@ -1056,10 +1170,14 @@ fn download_hls_scoped(
                     &timeline.entries,
                     false,
                 )?;
-                if read_control(control) == "cancel" {
+                let action = live_ctl.effective_action();
+                if action == "cancel" {
                     return Err("canceled".into());
                 }
-                if error == "finish" {
+                if action == "pause" || error == "paused" {
+                    return Err("paused".into());
+                }
+                if error == "finish" || action == "finish" {
                     break;
                 }
             } else {
@@ -1079,7 +1197,7 @@ fn download_hls_scoped(
                     }
                     let _ = audio_vod.save(&audio_dir);
                 }
-                if read_control(control) == "cancel" {
+                if live_ctl.effective_action() == "cancel" {
                     return Err("canceled".into());
                 }
             }
@@ -1090,13 +1208,16 @@ fn download_hls_scoped(
                 vod.remember(prepared.slot, &prepared.identity, file_len(&prepared.path));
             }
             let duration = prepared.segment.duration.max(0.0);
+            let discontinuity = prepared.segment.discontinuity
+                || std::mem::take(&mut timeline.pending_epoch_discontinuity);
             timeline.insert(TimelineEntry {
                 identity: prepared.identity,
-                media_sequence: prepared.segment.media_sequence,
+                uri: stable_media_url(&prepared.segment.uri),
+                media_sequence: prepared.timeline_sequence,
                 part_index: prepared.segment.part_index,
                 path: prepared.path,
                 duration,
-                discontinuity: prepared.segment.discontinuity,
+                discontinuity,
                 init_map_path: prepared.init_map_path,
             });
             recorded_duration = timeline.entries.iter().map(|entry| entry.duration).sum();
@@ -1152,9 +1273,9 @@ fn download_hls_scoped(
         };
         playlist = match reloaded {
             Ok(next) => next,
-            Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
-            Err(stop) if stop == "finish" => break,
-            Err(stop) if stop == "paused" || read_control(control) == "pause" => {
+            Err(_) if live_ctl.effective_action() == "cancel" => return Err("canceled".into()),
+            Err(stop) if stop == "finish" || live_ctl.effective_action() == "finish" => break,
+            Err(stop) if stop == "paused" || live_ctl.effective_action() == "pause" => {
                 timeline.save(&state_path)?;
                 write_timeline_playlist(
                     task_dir,
@@ -1167,7 +1288,7 @@ fn download_hls_scoped(
             Err(error) => return Err(error),
         };
         apply_ad_policy(&mut playlist, options.skip_ads);
-        match read_control(control).as_str() {
+        match live_ctl.effective_action().as_str() {
             "cancel" => return Err("canceled".into()),
             "pause" => {
                 timeline.save(&state_path)?;
@@ -1185,8 +1306,9 @@ fn download_hls_scoped(
         if playlist.end_list {
             continue;
         }
+        timeline.observe_playlist(&playlist);
         if playlist.can_block_reload
-            && pending_segments(&playlist, &timeline.entries).is_empty()
+            && pending_live_segments(&playlist, &timeline).is_empty()
             && tail_position(playlist_tail(&playlist)) <= tail_position(previous_tail)
         {
             let poll = if playlist.target_duration.is_finite() {
@@ -1196,9 +1318,9 @@ fn download_hls_scoped(
             };
             match wait_with_control(control, poll) {
                 Ok(()) => {}
-                Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
-                Err(stop) if stop == "finish" => break,
-                Err(stop) if stop == "paused" || read_control(control) == "pause" => {
+                Err(_) if live_ctl.effective_action() == "cancel" => return Err("canceled".into()),
+                Err(stop) if stop == "finish" || live_ctl.effective_action() == "finish" => break,
+                Err(stop) if stop == "paused" || live_ctl.effective_action() == "pause" => {
                     timeline.save(&state_path)?;
                     write_timeline_playlist(
                         task_dir,
@@ -1212,6 +1334,30 @@ fn download_hls_scoped(
             }
         }
     }
+    match live_ctl.effective_action().as_str() {
+        "cancel" => return Err("canceled".into()),
+        "pause" => {
+            if live {
+                timeline.save(&state_path)?;
+                write_timeline_playlist(
+                    task_dir,
+                    playlist.target_duration,
+                    &timeline.entries,
+                    false,
+                )?;
+            }
+            return Err("paused".into());
+        }
+        _ => {}
+    }
+    if live_ctl
+        .finishing
+        .is_some_and(|finishing| finishing.load(Ordering::SeqCst))
+    {
+        let _ = crate::task_control::set(control, "run")
+            .or_else(|_| fs::write(control, "run").map_err(|error| error.to_string()));
+    }
+    let merge_control = live_ctl.merge_control();
     if let Some(recorder) = live_audio.as_mut() {
         audio_merged = recorder.finish()?;
     }
@@ -1224,12 +1370,7 @@ fn download_hls_scoped(
     if playlist.end_list || !live {
         vod.save(task_dir)?;
     }
-    write_timeline_playlist(
-        task_dir,
-        playlist.target_duration,
-        &timeline.entries,
-        playlist.end_list || !live,
-    )?;
+    write_timeline_playlist(task_dir, playlist.target_duration, &timeline.entries, true)?;
     if has_external_audio && !live {
         for item in &audio_prepared {
             audio_vod.remember(item.slot, &item.identity, file_len(&item.path));
@@ -1241,7 +1382,7 @@ fn download_hls_scoped(
             crate::http_engine::write_media_merging(progress);
         }
         let output = audio_dir.join("merged.mp4");
-        super::merge::merge_with_ffmpeg_opts(&audio_dir, &output, control, false)?;
+        super::merge::merge_with_ffmpeg_opts(&audio_dir, &output, merge_control, false)?;
         audio_merged = Some(output);
     }
     let mut subtitles = Vec::new();
@@ -1261,7 +1402,7 @@ fn download_hls_scoped(
                     suffix += 1;
                 }
                 let path = sub_dir.join(format!("{label}.vtt"));
-                match download_vod_subtitle(uri, headers, proxy, &path, control) {
+                match download_vod_subtitle(uri, headers, proxy, &path, merge_control) {
                     Ok(()) => subtitles.push(path),
                     Err(error) if error == "paused" || error == "canceled" => return Err(error),
                     Err(error) => eprintln!("HLS subtitle download failed: {error}"),
@@ -1293,7 +1434,7 @@ fn download_hls_scoped(
             audio_merged.as_deref(),
             &subtitles,
             &muxed,
-            control,
+            merge_control,
         );
         let _ = fs::remove_file(&staged);
         mux_result?;
@@ -1306,7 +1447,8 @@ fn download_hls_scoped(
         // 可选：先拼接到 merged.ts，再无损重封装为 MP4；FFmpeg 失败时回落为原拼接结果。
         let staged = task_dir.join(REMUX_STAGING_TS);
         concat_files(&files, &staged)?;
-        match super::merge::remux_ts_to_mp4_opts(&staged, &output, control, !needs_final_mux) {
+        match super::merge::remux_ts_to_mp4_opts(&staged, &output, merge_control, !needs_final_mux)
+        {
             Ok(()) => {
                 let _ = fs::remove_file(&staged);
             }
@@ -1325,7 +1467,7 @@ fn download_hls_scoped(
     } else if can_concat {
         concat_files(&files, &output)?;
     } else {
-        super::merge::merge_with_ffmpeg_opts(task_dir, &output, control, !needs_final_mux)?;
+        super::merge::merge_with_ffmpeg_opts(task_dir, &output, merge_control, !needs_final_mux)?;
     }
     if needs_final_mux {
         let muxed = task_dir.join("muxed.mp4");
@@ -1334,7 +1476,7 @@ fn download_hls_scoped(
             audio_merged.as_deref(),
             &subtitles,
             &muxed,
-            control,
+            merge_control,
         );
         let _ = fs::remove_file(&output);
         mux_result?;
@@ -1358,6 +1500,14 @@ impl LiveTimeline {
         if value.get("version").and_then(|item| item.as_u64()) != Some(2) {
             return Self::default();
         }
+        let sequence_offset = value
+            .get("sequence_offset")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0);
+        let pending_epoch_discontinuity = value
+            .get("pending_epoch_discontinuity")
+            .and_then(|item| item.as_bool())
+            .unwrap_or(false);
         let mut entries = Vec::new();
         let Some(items) = value.get("segments").and_then(|item| item.as_array()) else {
             return Self::default();
@@ -1365,6 +1515,11 @@ impl LiveTimeline {
         for item in items {
             let identity = item
                 .get("identity")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string();
+            let uri = item
+                .get("uri")
                 .and_then(|value| value.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -1389,6 +1544,7 @@ impl LiveTimeline {
                 .filter(|path| file_len(path) > 0);
             entries.push(TimelineEntry {
                 identity,
+                uri,
                 media_sequence,
                 part_index: item.get("part_index").and_then(|value| value.as_u64()),
                 path,
@@ -1417,15 +1573,74 @@ impl LiveTimeline {
             .max()
             .map(|slot| slot.saturating_add(1))
             .unwrap_or(0);
-        Self { entries, next_slot }
+        Self {
+            entries,
+            next_slot,
+            sequence_offset,
+            pending_epoch_discontinuity,
+        }
     }
 
-    fn insert(&mut self, entry: TimelineEntry) {
-        if self
+    fn effective_sequence(&self, raw_sequence: u64) -> u64 {
+        self.sequence_offset.saturating_add(raw_sequence)
+    }
+
+    fn observe_playlist(&mut self, playlist: &Playlist) {
+        let non_gap: Vec<&Segment> = playlist
+            .segments
+            .iter()
+            .filter(|segment| !segment.gap)
+            .collect();
+        if self.entries.is_empty() || non_gap.is_empty() {
+            return;
+        }
+        let offset = self.sequence_offset;
+        let any_matches = non_gap.iter().any(|segment| {
+            let cand_seq = self.effective_sequence(segment.media_sequence);
+            let stable = stable_media_url(&segment.uri);
+            let cand_id = live_segment_identity(segment, offset);
+            self.entries.iter().any(|entry| {
+                entry.media_sequence == cand_seq
+                    && entry.part_index == segment.part_index
+                    && (entry.identity == cand_id || (!entry.uri.is_empty() && entry.uri == stable))
+            })
+        });
+        if any_matches {
+            return;
+        }
+        let max_timeline_seq = self
             .entries
             .iter()
-            .any(|existing| existing.identity == entry.identity)
+            .map(|entry| entry.media_sequence)
+            .max()
+            .unwrap_or(0);
+        let min_cand = non_gap
+            .iter()
+            .map(|segment| self.effective_sequence(segment.media_sequence))
+            .min()
+            .unwrap_or(0);
+        let conflicting_slot = non_gap.iter().any(|segment| {
+            let cand_seq = self.effective_sequence(segment.media_sequence);
+            self.entries.iter().any(|entry| {
+                entry.media_sequence == cand_seq && entry.part_index == segment.part_index
+            })
+        });
+        if min_cand < max_timeline_seq || conflicting_slot {
+            self.sequence_offset = max_timeline_seq.saturating_add(1);
+            self.pending_epoch_discontinuity = true;
+        }
+    }
+
+    fn insert(&mut self, mut entry: TimelineEntry) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.identity == entry.identity)
         {
+            existing.discontinuity |= entry.discontinuity;
+            if existing.uri.is_empty() && !entry.uri.is_empty() {
+                existing.uri = entry.uri;
+            }
             return;
         }
         let mut removed = Vec::new();
@@ -1437,7 +1652,10 @@ impl LiveTimeline {
                     && existing.part_index == entry.part_index
             };
             if replace {
-                removed.push(existing.path.clone());
+                entry.discontinuity |= existing.discontinuity;
+                if existing.path != entry.path {
+                    removed.push(existing.path.clone());
+                }
             }
             !replace
         });
@@ -1455,6 +1673,7 @@ impl LiveTimeline {
             .map(|entry| {
                 serde_json::json!({
                     "identity": entry.identity,
+                    "uri": entry.uri,
                     "media_sequence": entry.media_sequence,
                     "part_index": entry.part_index,
                     "path": playlist_leaf(&entry.path),
@@ -1466,7 +1685,13 @@ impl LiveTimeline {
             .collect();
         write_json_atomic(
             path,
-            &serde_json::json!({ "version": 2, "segments": segments }).to_string(),
+            &serde_json::json!({
+                "version": 2,
+                "sequence_offset": self.sequence_offset,
+                "pending_epoch_discontinuity": self.pending_epoch_discontinuity,
+                "segments": segments,
+            })
+            .to_string(),
         )
     }
 }
@@ -1507,21 +1732,27 @@ fn buffered_entries(
         !contiguous_only || !item.needs_download || completed.contains(&item.path)
     }) {
         // 点播的 previous 为空；prepared 已去重，不再逐片扫描刚追加的前缀。
+        let mut discontinuity = item.segment.discontinuity;
         if !previous.is_empty() {
             entries.retain(|entry| {
-                entry.identity != item.identity
-                    && !(entry.media_sequence == item.segment.media_sequence
+                let replace = entry.identity == item.identity
+                    || (entry.media_sequence == item.timeline_sequence
                         && (item.segment.part_index.is_none()
-                            || entry.part_index == item.segment.part_index))
+                            || entry.part_index == item.segment.part_index));
+                if replace {
+                    discontinuity |= entry.discontinuity;
+                }
+                !replace
             });
         }
         entries.push(TimelineEntry {
             identity: item.identity.clone(),
-            media_sequence: item.segment.media_sequence,
+            uri: stable_media_url(&item.segment.uri),
+            media_sequence: item.timeline_sequence,
             part_index: item.segment.part_index,
             path: item.path.clone(),
             duration: item.segment.duration.max(0.0),
-            discontinuity: item.segment.discontinuity,
+            discontinuity,
             init_map_path: item.init_map_path.clone(),
         });
     }
@@ -1743,11 +1974,23 @@ fn state_file(task_dir: &Path, leaf: &str) -> Option<PathBuf> {
 }
 
 fn pending_segments(playlist: &Playlist, timeline: &[TimelineEntry]) -> Vec<Segment> {
+    pending_segments_at(playlist, timeline, 0)
+}
+
+fn pending_live_segments(playlist: &Playlist, timeline: &LiveTimeline) -> Vec<Segment> {
+    pending_segments_at(playlist, &timeline.entries, timeline.sequence_offset)
+}
+
+fn pending_segments_at(
+    playlist: &Playlist,
+    timeline: &[TimelineEntry],
+    sequence_offset: u64,
+) -> Vec<Segment> {
     let full_in_playlist: BTreeSet<u64> = playlist
         .segments
         .iter()
         .filter(|segment| segment.part_index.is_none())
-        .map(|segment| segment.media_sequence)
+        .map(|segment| sequence_offset.saturating_add(segment.media_sequence))
         .collect();
     let full_downloaded: BTreeSet<u64> = timeline
         .iter()
@@ -1764,12 +2007,19 @@ fn pending_segments(playlist: &Playlist, timeline: &[TimelineEntry]) -> Vec<Segm
         .iter()
         .filter(|segment| !segment.gap)
         .filter(|segment| {
+            let eff_seq = sequence_offset.saturating_add(segment.media_sequence);
             !segment.is_part
-                || !full_in_playlist.contains(&segment.media_sequence)
-                    && !full_downloaded.contains(&segment.media_sequence)
+                || !full_in_playlist.contains(&eff_seq) && !full_downloaded.contains(&eff_seq)
         })
-        .filter(|segment| !identities.contains(segment_identity(segment).as_str()))
-        .filter(|segment| positions.insert((segment.media_sequence, segment.part_index)))
+        .filter(|segment| {
+            !identities.contains(live_segment_identity(segment, sequence_offset).as_str())
+        })
+        .filter(|segment| {
+            positions.insert((
+                sequence_offset.saturating_add(segment.media_sequence),
+                segment.part_index,
+            ))
+        })
         .cloned()
         .collect()
 }
@@ -1782,6 +2032,7 @@ fn prepare_segments(
     task_dir: &Path,
     control: &Path,
     live: bool,
+    sequence_offset: u64,
     vod: &VodCheckpoint,
     next_slot: &mut usize,
     key_cache: &mut HashMap<String, Vec<u8>>,
@@ -1798,7 +2049,16 @@ fn prepare_segments(
         }
         let slot = *next_slot;
         *next_slot = next_slot.saturating_add(1);
-        let identity = segment_identity(&segment);
+        let timeline_sequence = if live {
+            sequence_offset.saturating_add(segment.media_sequence)
+        } else {
+            segment.media_sequence
+        };
+        let identity = if live {
+            live_segment_identity(&segment, sequence_offset)
+        } else {
+            segment_identity(&segment)
+        };
         let name = format!("{:06}.{}", slot, extension(&segment.uri));
         let output = seg_dir.join(name);
         let (path, needs_download) = if live {
@@ -1837,6 +2097,7 @@ fn prepare_segments(
         prepared.push(PreparedSegment {
             segment,
             identity,
+            timeline_sequence,
             slot,
             path,
             init_map_path,
@@ -2371,45 +2632,147 @@ fn segment_identity(segment: &Segment) -> String {
     )
 }
 
+fn live_segment_identity(segment: &Segment, sequence_offset: u64) -> String {
+    let base = segment_identity(segment);
+    if sequence_offset == 0 {
+        return base;
+    }
+    crate::crypto_lite::sha256_hex(
+        serde_json::json!({ "epoch_offset": sequence_offset, "segment": base })
+            .to_string()
+            .as_bytes(),
+    )
+}
+
 struct LiveAudioRecorder {
     control: PathBuf,
+    parent_control: PathBuf,
+    finishing: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<Result<PathBuf, String>>>,
 }
 
 impl LiveAudioRecorder {
+    #[cfg(test)]
     fn start(uri: &str, headers: &HashMap<String, String>, proxy: &str, task_dir: &Path) -> Self {
+        let parent_control = crate::net_policy::current_throttle_context()
+            .map(|ctx| ctx.control)
+            .unwrap_or_default();
+        Self::start_with_parent(uri, headers, proxy, task_dir, &parent_control)
+    }
+
+    fn start_with_parent(
+        uri: &str,
+        headers: &HashMap<String, String>,
+        proxy: &str,
+        task_dir: &Path,
+        parent_control: &Path,
+    ) -> Self {
         let control = task_dir.join("audio.control");
-        let _ = fs::write(&control, "run");
+        let _ = crate::task_control::set(&control, "run")
+            .or_else(|_| fs::write(&control, "run").map_err(|error| error.to_string()));
+        let finishing = Arc::new(AtomicBool::new(false));
         let uri = uri.to_string();
         let headers = headers.clone();
         let proxy = proxy.to_string();
         let audio_dir = task_dir.join("audio");
         let thread_control = control.clone();
+        let thread_parent = parent_control.to_path_buf();
+        let thread_finishing = Arc::clone(&finishing);
         let network_scope = media_network_scope();
         let replay = crate::credentials::scoped_replay_json();
         let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
         // 保留主任务的限速/配额，但子请求须读取音轨自己的取消信号，否则 Drop 会等到网络超时。
         throttle.control = thread_control.clone();
         let handle = std::thread::spawn(move || {
+            let _reg = crate::task_control::register(&thread_control);
             let _network = set_media_network_scope(network_scope);
             crate::net_policy::with_throttle_context(Some(throttle), || {
                 crate::with_replay_json(&replay, || {
-                    download_hls(&uri, &headers, &proxy, &audio_dir, &thread_control, true)
+                    let _ = set_media_network_scope(Some(entry_network_scope(&uri, &proxy)));
+                    super::with_media_headers(&uri, &headers, || {
+                        download_hls_scoped_with_control(
+                            &uri,
+                            &headers,
+                            &proxy,
+                            &audio_dir,
+                            LiveControl {
+                                control: &thread_control,
+                                parent_control: (!thread_parent.as_os_str().is_empty())
+                                    .then_some(thread_parent.as_path()),
+                                finishing: Some(&thread_finishing),
+                            },
+                            HlsDownloadOptions {
+                                live: true,
+                                download_subtitles: false,
+                                ..HlsDownloadOptions::default()
+                            },
+                        )
+                    })
                 })
             })
         });
         Self {
             control,
+            parent_control: parent_control.to_path_buf(),
+            finishing,
             handle: Some(handle),
         }
     }
 
+    fn check_parent_abort(&self) -> Option<(&'static str, &'static str)> {
+        if self.parent_control.as_os_str().is_empty() {
+            return None;
+        }
+        match read_control(&self.parent_control).as_str() {
+            "cancel" => Some(("cancel", "canceled")),
+            "pause" => Some(("pause", "paused")),
+            _ => None,
+        }
+    }
+
+    fn propagate_parent_abort(
+        &self,
+        handle: std::thread::JoinHandle<Result<PathBuf, String>>,
+        control_word: &str,
+    ) {
+        self.finishing.store(false, Ordering::SeqCst);
+        let _ = crate::task_control::set(&self.control, control_word)
+            .or_else(|_| fs::write(&self.control, control_word).map_err(|error| error.to_string()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        while !handle.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
+    }
+
     fn finish(&mut self) -> Result<Option<PathBuf>, String> {
-        let _ = crate::task_control::set(&self.control, "finish")
-            .or_else(|_| fs::write(&self.control, "finish").map_err(|error| error.to_string()));
         let Some(handle) = self.handle.take() else {
             return Ok(None);
         };
+        if let Some((control_word, err_word)) = self.check_parent_abort() {
+            self.propagate_parent_abort(handle, control_word);
+            return Err(err_word.into());
+        }
+        self.finishing.store(true, Ordering::SeqCst);
+        let _ = crate::task_control::set(&self.control, "cancel")
+            .or_else(|_| fs::write(&self.control, "cancel").map_err(|error| error.to_string()));
+        while !handle.is_finished() {
+            if let Some((control_word, err_word)) = self.check_parent_abort() {
+                self.propagate_parent_abort(handle, control_word);
+                return Err(err_word.into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        if let Some((control_word, err_word)) = self.check_parent_abort() {
+            self.finishing.store(false, Ordering::SeqCst);
+            let _ = crate::task_control::set(&self.control, control_word).or_else(|_| {
+                fs::write(&self.control, control_word).map_err(|error| error.to_string())
+            });
+            let _ = handle.join();
+            return Err(err_word.into());
+        }
         match handle
             .join()
             .map_err(|_| "HLS live audio worker panicked".to_string())?
@@ -2428,8 +2791,17 @@ impl LiveAudioRecorder {
 impl Drop for LiveAudioRecorder {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let _ = crate::task_control::set(&self.control, "cancel")
-                .or_else(|_| fs::write(&self.control, "cancel").map_err(|error| error.to_string()));
+            self.finishing.store(false, Ordering::SeqCst);
+            let stop_word = if !self.parent_control.as_os_str().is_empty()
+                && read_control(&self.parent_control) == "pause"
+            {
+                "pause"
+            } else {
+                "cancel"
+            };
+            let _ = crate::task_control::set(&self.control, stop_word).or_else(|_| {
+                fs::write(&self.control, stop_word).map_err(|error| error.to_string())
+            });
             let _ = handle.join();
         }
     }
@@ -3193,14 +3565,22 @@ fn apply_ad_policy(playlist: &mut Playlist, enabled: bool) {
     }
     let mut kept = Vec::new();
     let mut pending_gap = false;
+    let mut pending_part_gap = false;
     for mut segment in playlist.segments.drain(..) {
         if segment.is_ad {
             pending_gap = true;
+            pending_part_gap = true;
             continue;
         }
-        if pending_gap {
+        if segment.is_part {
+            if pending_part_gap {
+                segment.discontinuity = true;
+                pending_part_gap = false;
+            }
+        } else if pending_gap {
             segment.discontinuity = true;
             pending_gap = false;
+            pending_part_gap = false;
         }
         kept.push(segment);
     }
@@ -3467,7 +3847,7 @@ mod tests {
     use super::*;
     use crate::http_engine::fetch_hls_bytes;
     use std::io::{BufRead, BufReader};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Condvar;
     use std::time::{Duration, Instant};
 
@@ -4138,9 +4518,11 @@ mod tests {
             .map(|(slot, segment)| {
                 let path = root.join(format!("segments/{slot:06}.ts"));
                 fs::write(&path, b"complete fragment").unwrap();
+                let timeline_sequence = segment.media_sequence;
                 PreparedSegment {
                     segment,
                     identity: slot.to_string(),
+                    timeline_sequence,
                     slot,
                     path,
                     init_map_path: None,
@@ -4299,6 +4681,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut recorder = LiveAudioRecorder {
             control: dir.join("audio.control"),
+            parent_control: PathBuf::new(),
+            finishing: Arc::new(AtomicBool::new(false)),
             handle: Some(std::thread::spawn(|| -> Result<PathBuf, String> {
                 panic!("intentional live audio worker panic")
             })),
@@ -5382,6 +5766,7 @@ mod tests {
         let timeline = LiveTimeline {
             entries: vec![TimelineEntry {
                 identity: "identity".into(),
+                uri: String::new(),
                 media_sequence: 9,
                 part_index: Some(0),
                 path: segment_path,
@@ -5390,6 +5775,7 @@ mod tests {
                 init_map_path: None,
             }],
             next_slot: 1,
+            ..Default::default()
         };
         timeline.save(&state_path).unwrap();
         let value: serde_json::Value =
@@ -5895,6 +6281,7 @@ mod tests {
         };
         let prepared = vec![PreparedSegment {
             identity: segment_identity(&seg),
+            timeline_sequence: 0,
             segment: seg,
             slot: 0,
             path: root.join("segments/000000.ts"),
@@ -6013,6 +6400,7 @@ mod tests {
             &root,
             &control,
             false,
+            0,
             &vod,
             &mut 0,
             &mut HashMap::new(),
@@ -6111,6 +6499,389 @@ mod tests {
         .unwrap_err();
         seg_server.join().unwrap();
         assert_eq!(seg_err, "finish");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stopped_live_hls_writes_endlist_to_final_playlist_while_keeping_pause_open() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-g3-1-endlist-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let ctrl = control.clone();
+        let mode = Arc::new(AtomicUsize::new(0));
+        let server_mode = Arc::clone(&mode);
+        let origin = super::super::harness::serve_dynamic(Arc::new(move |path, _| match path {
+            "/live.m3u8" => {
+                let step = server_mode.fetch_add(1, Ordering::SeqCst);
+                if step == 1 {
+                    let _ = fs::write(&ctrl, "pause");
+                } else if step >= 3 {
+                    let _ = fs::write(&ctrl, "finish");
+                }
+                Some(
+                    b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1.0,\ns0.ts\n"
+                        .to_vec(),
+                )
+            }
+            "/s0.ts" => Some(b"LIVE-SEG-0".to_vec()),
+            _ => None,
+        }));
+
+        let paused = download_hls_with(
+            &format!("{}/live.m3u8", origin.base),
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            HlsDownloadOptions {
+                live: true,
+                download_subtitles: false,
+                remux_ts_to_mp4: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(paused, "paused");
+        let paused_playlist = fs::read_to_string(root.join("local.m3u8")).unwrap();
+        assert!(paused_playlist.contains("#EXT-X-PLAYLIST-TYPE:EVENT"));
+        assert!(!paused_playlist.contains("#EXT-X-ENDLIST"));
+
+        fs::write(&control, "run").unwrap();
+        let out = download_hls_with(
+            &format!("{}/live.m3u8", origin.base),
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            HlsDownloadOptions {
+                live: true,
+                download_subtitles: false,
+                remux_ts_to_mp4: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read(&out).unwrap(), b"LIVE-SEG-0");
+        let final_playlist = fs::read_to_string(root.join("local.m3u8")).unwrap();
+        assert!(final_playlist.contains("#EXT-X-PLAYLIST-TYPE:VOD"));
+        assert!(final_playlist.contains("#EXT-X-ENDLIST"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_audio_recorder_finish_aborts_blocking_ll_hls_reload_and_honors_parent_control() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        // 1. Graceful finish wakes an in-flight 30s LL-HLS blocking reload immediately and finalizes recorded audio.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut reader = BufReader::new(&mut stream);
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let target = req_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/")
+                    .to_string();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                drop(reader);
+                if target.contains("_HLS_msn=") {
+                    let _ = blocked_tx.send(());
+                    // Hold LL-HLS blocking reload open until test finishes!
+                    let _ = release_rx.recv_timeout(Duration::from_secs(30));
+                    break;
+                } else if target.starts_with("/audio.m3u8") {
+                    let body = b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\na0.ts\n";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(body);
+                } else if target == "/a0.ts" {
+                    let body = b"AUDIO-SEG-0";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(body);
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-g3-2-audio-finish-{}-{}",
+            std::process::id(),
+            addr.port()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let parent_control = root.join("control");
+        fs::write(&parent_control, "run").unwrap();
+        let mut recorder = LiveAudioRecorder::start_with_parent(
+            &format!("http://{addr}/audio.m3u8"),
+            &HashMap::new(),
+            "hls-downloader://direct-proxy",
+            &root,
+            &parent_control,
+        );
+        blocked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("audio worker must enter LL-HLS blocking reload");
+        let started = Instant::now();
+        let merged = recorder
+            .finish()
+            .unwrap()
+            .expect("recorded audio must publish");
+        let elapsed = started.elapsed();
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "LiveAudioRecorder::finish stalled on LL-HLS blocking reload: {elapsed:?}"
+        );
+        assert!(merged.is_file());
+        let audio_playlist = fs::read_to_string(root.join("audio/local.m3u8")).unwrap();
+        assert!(audio_playlist.contains("#EXT-X-ENDLIST"));
+
+        // 2. While finish() waits on a slow worker, parent "pause" and "cancel" return promptly and clear finishing.
+        for (parent_word, expected_err) in [("pause", "paused"), ("cancel", "canceled")] {
+            let sub = root.join(parent_word);
+            fs::create_dir_all(&sub).unwrap();
+            let p_ctrl = sub.join("control");
+            fs::write(&p_ctrl, "run").unwrap();
+            let (stop_worker_tx, stop_worker_rx) = mpsc::channel();
+            let finishing = Arc::new(AtomicBool::new(false));
+            let mut slow_recorder = LiveAudioRecorder {
+                control: sub.join("audio.control"),
+                parent_control: p_ctrl.clone(),
+                finishing: Arc::clone(&finishing),
+                handle: Some(std::thread::spawn(move || {
+                    let _ = stop_worker_rx.recv_timeout(Duration::from_secs(10));
+                    Err("canceled".into())
+                })),
+            };
+            let trigger_ctrl = p_ctrl.clone();
+            let signaler = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(60));
+                fs::write(&trigger_ctrl, parent_word).unwrap();
+            });
+            let wait_started = Instant::now();
+            let err = slow_recorder.finish().unwrap_err();
+            let wait_elapsed = wait_started.elapsed();
+            let _ = stop_worker_tx.send(());
+            signaler.join().unwrap();
+            assert_eq!(err, expected_err);
+            assert!(!finishing.load(Ordering::SeqCst));
+            assert!(
+                wait_elapsed < Duration::from_secs(2),
+                "finish() ignored parent {parent_word}: {wait_elapsed:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ll_hls_ad_policy_and_timeline_insert_preserve_discontinuity_across_parts() {
+        // 1. apply_ad_policy preserves pending_gap for parent full segment when EXT-X-PART entries precede it.
+        let text = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MEDIA-SEQUENCE:10\n",
+            "#EXT-X-PART-INF:PART-TARGET=0.5\n",
+            "#EXTINF:1.0,\n",
+            "main10.m4s\n",
+            "#EXT-X-CUE-OUT:2\n",
+            "#EXTINF:1.0,\n",
+            "ad11.m4s\n",
+            "#EXT-X-CUE-IN\n",
+            "#EXT-X-PART:DURATION=0.5,URI=\"main12.0.m4s\"\n",
+            "#EXT-X-PART:DURATION=0.5,URI=\"main12.1.m4s\"\n",
+            "#EXTINF:1.0,\n",
+            "main12.m4s\n",
+            "#EXTINF:1.0,\n",
+            "main13.m4s\n",
+        );
+        let mut playlist = parse_playlist(text, "https://cdn.test/live.m3u8").unwrap();
+        apply_ad_policy(&mut playlist, true);
+        assert_eq!(playlist.segments.len(), 5);
+        assert!(playlist.segments[1].is_part && playlist.segments[1].discontinuity);
+        assert!(playlist.segments[2].is_part && !playlist.segments[2].discontinuity);
+        assert!(
+            !playlist.segments[3].is_part && playlist.segments[3].discontinuity,
+            "parent full segment after ad-filtered parts must retain discontinuity"
+        );
+        assert!(!playlist.segments[4].discontinuity);
+
+        let pending = pending_segments(&playlist, &[]);
+        assert_eq!(pending.len(), 3);
+        assert!(
+            pending[1].discontinuity,
+            "selected full segment main12.m4s must carry discontinuity"
+        );
+
+        // 2. LiveTimeline::insert preserves existing.discontinuity when full segment replaces parts.
+        let root = std::env::temp_dir().join(format!(
+            "hls-g3-3-discont-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let part0 = root.join("segments/000000.ts");
+        let part1 = root.join("segments/000001.ts");
+        let full = root.join("segments/000002.ts");
+        fs::write(&part0, b"P0").unwrap();
+        fs::write(&part1, b"P1").unwrap();
+        fs::write(&full, b"FULL").unwrap();
+        let mut timeline = LiveTimeline::default();
+        timeline.insert(TimelineEntry {
+            identity: "id-p0".into(),
+            uri: "https://cdn.test/12.0.ts".into(),
+            media_sequence: 12,
+            part_index: Some(0),
+            path: part0.clone(),
+            duration: 0.5,
+            discontinuity: true,
+            init_map_path: None,
+        });
+        timeline.insert(TimelineEntry {
+            identity: "id-p1".into(),
+            uri: "https://cdn.test/12.1.ts".into(),
+            media_sequence: 12,
+            part_index: Some(1),
+            path: part1.clone(),
+            duration: 0.5,
+            discontinuity: false,
+            init_map_path: None,
+        });
+        timeline.insert(TimelineEntry {
+            identity: "id-full".into(),
+            uri: "https://cdn.test/12.ts".into(),
+            media_sequence: 12,
+            part_index: None,
+            path: full,
+            duration: 1.0,
+            discontinuity: false,
+            init_map_path: None,
+        });
+        assert_eq!(timeline.entries.len(), 1);
+        assert!(
+            timeline.entries[0].discontinuity,
+            "full segment replacing discontinuous part must inherit discontinuity"
+        );
+        assert!(!part0.exists() && !part1.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_hls_sequence_reset_appends_monotonically_without_overwriting_and_persists_epoch() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-g3-4-seq-reset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let p_before = parse_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:100\n#EXTINF:2.0,\nepoch1/s100.ts\n#EXTINF:2.0,\nepoch1/s101.ts\n",
+            "https://cdn.test/live.m3u8",
+        )
+        .unwrap();
+        let mut timeline = LiveTimeline::default();
+        timeline.observe_playlist(&p_before);
+        assert_eq!(timeline.sequence_offset, 0);
+        for (slot, seg) in p_before.segments.iter().enumerate() {
+            let path = root.join(format!("segments/{slot:06}.ts"));
+            fs::write(&path, format!("E1-{slot}")).unwrap();
+            timeline.insert(TimelineEntry {
+                identity: live_segment_identity(seg, timeline.sequence_offset),
+                uri: stable_media_url(&seg.uri),
+                media_sequence: timeline.effective_sequence(seg.media_sequence),
+                part_index: seg.part_index,
+                path,
+                duration: seg.duration,
+                discontinuity: seg.discontinuity,
+                init_map_path: None,
+            });
+        }
+        timeline.next_slot = 2;
+
+        // Encoder reconnects and resets #EXT-X-MEDIA-SEQUENCE back to 0 with new segment URIs.
+        let p_reset = parse_playlist(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\nepoch2/s0.ts\n#EXTINF:2.0,\nepoch2/s1.ts\n",
+            "https://cdn.test/live.m3u8",
+        )
+        .unwrap();
+        timeline.observe_playlist(&p_reset);
+        assert_eq!(timeline.sequence_offset, 102);
+        assert!(timeline.pending_epoch_discontinuity);
+
+        let pending = pending_live_segments(&p_reset, &timeline);
+        assert_eq!(pending.len(), 2);
+        for (idx, seg) in pending.iter().enumerate() {
+            let slot = timeline.next_slot;
+            timeline.next_slot += 1;
+            let path = root.join(format!("segments/{slot:06}.ts"));
+            fs::write(&path, format!("E2-{idx}")).unwrap();
+            let discont =
+                seg.discontinuity || std::mem::take(&mut timeline.pending_epoch_discontinuity);
+            timeline.insert(TimelineEntry {
+                identity: live_segment_identity(seg, timeline.sequence_offset),
+                uri: stable_media_url(&seg.uri),
+                media_sequence: timeline.effective_sequence(seg.media_sequence),
+                part_index: seg.part_index,
+                path,
+                duration: seg.duration,
+                discontinuity: discont,
+                init_map_path: None,
+            });
+        }
+
+        // Persist and reload live_state.json to verify resume keeps epoch offset and order.
+        let state_path = root.join("live_state.json");
+        timeline.save(&state_path).unwrap();
+        let reloaded = LiveTimeline::load(&root);
+        assert_eq!(reloaded.sequence_offset, 102);
+        assert_eq!(reloaded.entries.len(), 4);
+        let seqs: Vec<u64> = reloaded.entries.iter().map(|e| e.media_sequence).collect();
+        assert_eq!(seqs, vec![100, 101, 102, 103]);
+        assert!(reloaded.entries[2].discontinuity);
+        assert!(!reloaded.entries[3].discontinuity);
+        let payloads: Vec<String> = reloaded
+            .entries
+            .iter()
+            .map(|e| fs::read_to_string(&e.path).unwrap())
+            .collect();
+        assert_eq!(payloads, vec!["E1-0", "E1-1", "E2-0", "E2-1"]);
         let _ = fs::remove_dir_all(root);
     }
 }
