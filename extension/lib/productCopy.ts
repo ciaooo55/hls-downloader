@@ -57,9 +57,9 @@ export function engineStatusCopy(state: EngineConnectionState): EngineStatusCopy
       return {
         state,
         tone: 'standby',
-        label: '桌面端已退出 · 点击下载自动唤醒',
-        helperTitle: '桌面端已退出 · 点击下载自动唤醒',
-        helperDetail: '点击任意视频或文件下载将自动唤醒下载引擎，无需手动重启。',
+        label: '桌面端已退出 · 插件下载可自动唤醒',
+        helperTitle: '桌面端已退出 · 插件下载可自动唤醒',
+        helperDetail: '从托盘退出后，普通浏览器下载将保留在浏览器中不打扰；点击插件下载按钮或右键菜单项会自动唤醒桌面端。',
       }
     case 'host_missing':
       return {

@@ -1,7 +1,7 @@
 import { findEarlyBrowserTakeoverByUrl, validDownloadIdentity, type EarlyBrowserTakeover } from '../lib/takeover'
 import { browser } from 'wxt/browser'
 import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
-import { mediaPushRequestId } from '../lib/mediaPush'
+import { mediaPushRequestId, resolveMediaPushResource, SPLIT_AUDIO_PUSH_ERROR } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
 import { NativeBridge, NativeHostError, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageIdentity, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
@@ -2006,23 +2006,33 @@ async function requestDownload(
   return request
 }
 
-async function pushToTv(resource: MediaResource): Promise<{ ok: true; id: string }> {
+type MediaPushResult = { ok: true; id: string } | { ok: false; error: string }
+
+async function pushToTv(resource: MediaResource): Promise<MediaPushResult> {
+  if (Boolean(resource.audioUrl?.trim())) {
+    return { ok: false, error: SPLIT_AUDIO_PUSH_ERROR }
+  }
+  const pushResource = resolveMediaPushResource(resource)
   const response = await native({
     op: 'media_push',
     kind: 'tvbox',
     request_id: `media-push-${crypto.randomUUID()}`,
-    resource: await resourcePayload(resource, undefined, { allowUnverified: true }),
+    resource: await resourcePayload(pushResource, undefined, { allowUnverified: true }),
   })
   const id = mediaPushRequestId(response, 'TVBox 推送')
   return { ok: true, id }
 }
 
-async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: string }> {
+async function castToDevice(resource: MediaResource): Promise<MediaPushResult> {
+  if (Boolean(resource.audioUrl?.trim())) {
+    return { ok: false, error: SPLIT_AUDIO_PUSH_ERROR }
+  }
+  const pushResource = resolveMediaPushResource(resource)
   const response = await native({
     op: 'media_push',
     kind: 'cast',
     request_id: `media-push-${crypto.randomUUID()}`,
-    resource: await resourcePayload(resource, undefined, { allowUnverified: true }),
+    resource: await resourcePayload(pushResource, undefined, { allowUnverified: true }),
   })
   const id = mediaPushRequestId(response, '投屏')
   return { ok: true, id }
@@ -3245,11 +3255,15 @@ export default defineBackground(() => {
       replayContext: { method: 'GET', page_url: String(tab?.url || '') },
     }
     if (info.menuItemId === 'hls-cast-link') {
-      void castToDevice(resource).catch(error => console.warn('HLS Downloader context cast failed', error))
+      void castToDevice(resource)
+        .then(response => { if (!response.ok) return reportDownloadError(tab?.id, response.error) })
+        .catch(error => console.warn('HLS Downloader context cast failed', error))
       return
     }
     if (info.menuItemId === 'hls-push-tvbox-link') {
-      void pushToTv(resource).catch(error => console.warn('HLS Downloader context TVBox push failed', error))
+      void pushToTv(resource)
+        .then(response => { if (!response.ok) return reportDownloadError(tab?.id, response.error) })
+        .catch(error => console.warn('HLS Downloader context TVBox push failed', error))
       return
     }
     // Choosing the extension's context-menu command is already an explicit

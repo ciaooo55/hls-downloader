@@ -35,6 +35,11 @@ describe('resource filename bounds', () => {
     expect(isPlayableMediaResource({ kind: 'hls', url: 'https://cdn.test/master.m3u8' })).toBe(true)
     expect(isPlayableMediaResource({ kind: 'dash', url: 'https://cdn.test/manifest.mpd' })).toBe(true)
     expect(isPlayableMediaResource({ kind: 'media', url: 'https://cdn.test/video.mp4' })).toBe(true)
+    expect(isPlayableMediaResource({
+      kind: 'media',
+      url: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s',
+      audioUrl: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s',
+    })).toBe(false)
     expect(isPlayableMediaResource({ kind: 'file', url: 'https://cdn.test/movie.mkv' })).toBe(true)
     expect(isPlayableMediaResource({ kind: 'file', url: 'https://cdn.test/archive.zip' })).toBe(false)
     expect(isPlayableMediaResource({ kind: 'file', url: 'https://cdn.test/installer.iso' })).toBe(false)

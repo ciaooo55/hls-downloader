@@ -304,6 +304,17 @@ export default defineContentScript({
     // outside the DOM so a network event cannot replace an in-flight button.
     const resourceSendStates = new Map<string, { label: string, disabled: boolean, error?: string, state?: SendState, url?: string, updatedAt?: number }>()
     const preferredVariants = new Map<string, { variantId?: string, height: number, bandwidth: number }>()
+    const resolvePreferredVariant = (resource: MediaResource): MediaResource => {
+      const pref = preferredVariants.get(resourceFingerprint(resource))
+      if (!pref || !resource.variants?.length) return resource
+      const byId = pref.variantId
+        ? resource.variants.findIndex(variant => variant.variantId === pref.variantId)
+        : -1
+      const idx = byId >= 0
+        ? byId
+        : resource.variants.findIndex(variant => (variant.height || 0) === pref.height && (variant.bandwidth || 0) === pref.bandwidth)
+      return idx >= 0 ? selectMediaVariant(resource, resource.variants[idx]) : resource
+    }
     let renderedListSignature = ''
     let renderedVideoSignature = ''
     let activePlayback: PlaybackContext | null = null
@@ -667,6 +678,7 @@ export default defineContentScript({
     const choicesHaveActiveSendState = (choices: MediaResource[]) => {
       const candidates = [
         ...choices,
+        ...choices.map(resolvePreferredVariant),
         ...overlayQualityOptions(choices, 6).map(option => option.resource),
       ]
       return candidates.some(candidate => {
@@ -852,7 +864,7 @@ export default defineContentScript({
           return
         }
         show('confirming')
-        showResult('请在桌面下载窗口确认文件名和保存位置')
+        showResult('已交由桌面端等待确认，请在弹窗中选择开始或取消')
         let accepted: boolean
         try {
           accepted = await waitForDownloadConfirmation(runtimeMessage, String(handoff.id || ''))
@@ -867,7 +879,7 @@ export default defineContentScript({
         if (!sendResetTracker.isCurrent(key, generation)) return
         if (!accepted) {
           show('canceled')
-          showResult('已在桌面端取消，浏览器原下载按交接结果保留')
+          showResult('已在桌面端取消本次下载')
           sendResetTracker.scheduleReset(key, generation, 2_500, () => setSendState(resource, button, '', false))
           return
         }
@@ -1256,12 +1268,12 @@ export default defineContentScript({
       hoverCast.addEventListener('click', event => {
         event.preventDefault()
         event.stopPropagation()
-        if (state.choices[0]) castResource(state.choices[0], hoverCast)
+        if (state.choices[0]) castResource(resolvePreferredVariant(state.choices[0]), hoverCast)
       })
       hoverTvbox.addEventListener('click', event => {
         event.preventDefault()
         event.stopPropagation()
-        if (state.choices[0]) pushToTv(state.choices[0], hoverTvbox)
+        if (state.choices[0]) pushToTv(resolvePreferredVariant(state.choices[0]), hoverTvbox)
       })
       hoverPanelBtn.addEventListener('click', event => {
         event.preventDefault()
@@ -1422,22 +1434,25 @@ export default defineContentScript({
         updateQualityPill,
       )
 
-      const playableChoice = Boolean(primaryChoice && isPlayableMediaResource(primaryChoice) && !primaryChoice.drmProtected)
+      const selectedPrimaryChoice = primaryChoice ? resolvePreferredVariant(primaryChoice) : undefined
+      const playableChoice = Boolean(selectedPrimaryChoice && isPlayableMediaResource(selectedPrimaryChoice) && !selectedPrimaryChoice.drmProtected)
       state.hoverDownload.hidden = !oneClickChoice || hasInlineQualities || Boolean(primaryChoice?.drmProtected)
       state.hoverCast.hidden = !matched || !playableChoice
       state.hoverTvbox.hidden = !matched || !playableChoice || tvboxConfigured === false
       state.hoverPanelBtn.className = !oneClickChoice && !hasInlineQualities ? 'hover-action primary' : 'hover-action'
       setTextIfChanged(state.hoverPanelBtn, !oneClickChoice && !hasInlineQualities ? '查看并选择' : '更多')
-      if (primaryChoice) {
+      if (primaryChoice && selectedPrimaryChoice) {
         if (!state.hoverDownload.hidden) applySendState(primaryChoice, state.hoverDownload, '下载')
-        if (!state.hoverCast.hidden) applySendState(primaryChoice, state.hoverCast, '投屏', 'cast')
-        if (!state.hoverTvbox.hidden) applySendState(primaryChoice, state.hoverTvbox, 'TVBox', 'tvbox')
+        if (!state.hoverCast.hidden) applySendState(selectedPrimaryChoice, state.hoverCast, '投屏', 'cast')
+        if (!state.hoverTvbox.hidden) applySendState(selectedPrimaryChoice, state.hoverTvbox, 'TVBox', 'tvbox')
       }
 
       const errorKeys = [
-        resourceFingerprint(primaryChoice),
-        overlaySendKey(resourceFingerprint(primaryChoice), 'cast'),
-        overlaySendKey(resourceFingerprint(primaryChoice), 'tvbox'),
+        ...(primaryChoice ? [resourceFingerprint(primaryChoice)] : []),
+        ...(selectedPrimaryChoice ? [
+          overlaySendKey(resourceFingerprint(selectedPrimaryChoice), 'cast'),
+          overlaySendKey(resourceFingerprint(selectedPrimaryChoice), 'tvbox'),
+        ] : []),
         ...qualityOptions.map(option => resourceFingerprint(option.resource)),
       ]
       const error = errorKeys.map(key => resourceSendStates.get(key)?.error || '').find(Boolean) || ''
@@ -1515,7 +1530,7 @@ export default defineContentScript({
         .sort((left, right) => Number(right.video === activeVideo) - Number(left.video === activeVideo)
           || right.rect.width * right.rect.height - left.rect.width * left.rect.height)
       const signature = JSON.stringify([
-        innerWidth, innerHeight, buttonBounds, selectionMode, siteExcluded, tvboxConfigured, [...resourceSendStates],
+        innerWidth, innerHeight, buttonBounds, selectionMode, siteExcluded, tvboxConfigured, [...resourceSendStates], [...preferredVariants],
         matchedVideos.length,
         videos.map(({ video, rect, playback, choices, matched }) => [
           mediaOwner(video), rect.x, rect.y, rect.width, rect.height, playback.sourceUrls, playback.startedAt,
@@ -1599,14 +1614,7 @@ export default defineContentScript({
       if (harvestBatchBusy) return
       const selectedItems = currentAllHarvestEntries
         .filter(item => harvestCheckedIds.has(resourceFingerprint(item)))
-        .map(item => {
-          const pref = preferredVariants.get(resourceFingerprint(item))
-          if (!pref || !item.variants?.length) return item
-          const idx = pref.variantId
-            ? item.variants.findIndex(v => v.variantId === pref.variantId)
-            : item.variants.findIndex(v => (v.height || 0) === pref.height && (v.bandwidth || 0) === pref.bandwidth)
-          return idx >= 0 ? selectMediaVariant(item, item.variants[idx]) : item
-        })
+        .map(resolvePreferredVariant)
       if (!selectedItems.length) return
       harvestBatchBusy = true
       const result = ui.shadow.querySelector<HTMLElement>('.result')

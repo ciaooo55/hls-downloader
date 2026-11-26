@@ -2798,5 +2798,63 @@ describe('browser download ownership through registered event listeners', () => 
     const mediaPushCall = mocks.native.mock.calls.find(([m]) => m.op === 'media_push')!
     expect(mediaPushCall[0].request_id).toMatch(/^media-push-/)
     expect(mediaPushCall[2]).toBe(1)
+
+    // Quality-selected HLS/DASH push preserves master manifestUrl (so #EXT-X-MEDIA:TYPE=AUDIO tracks stay intact)
+    // while keeping preferred_height, preferred_bandwidth, and preferred_variant_id.
+    mocks.native.mockClear()
+    const hlsVariantSelected = {
+      id: 'hls-master-1',
+      kind: 'hls' as const,
+      url: 'https://cdn.test/video/1080p.m3u8',
+      manifestUrl: 'https://cdn.test/master.m3u8',
+      preferredBandwidth: 5_200_000,
+      preferredHeight: 1080,
+      preferredVariantId: 'https://cdn.test/video/1080p.m3u8',
+      audioTracks: [{ label: 'English', language: 'en', url: 'https://cdn.test/audio/en.m3u8', default: true }],
+      seenAt: Date.now(),
+    }
+    for (const type of ['cast-to-device', 'push-to-tv'] as const) {
+      const reply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+        { type, resource: hlsVariantSelected },
+        { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+        resolve,
+      ))
+      expect(reply.ok).toBe(true)
+    }
+    const pushPayloads = mocks.native.mock.calls
+      .filter(([m]) => m.op === 'media_push')
+      .map(([m]) => m)
+    expect(pushPayloads).toHaveLength(2)
+    expect(pushPayloads.map(m => m.kind)).toEqual(['cast', 'tvbox'])
+    for (const call of pushPayloads) {
+      expect(call.resource).toMatchObject({
+        url: 'https://cdn.test/master.m3u8',
+        preferred_height: 1080,
+        preferred_bandwidth: 5_200_000,
+        preferred_variant_id: 'https://cdn.test/video/1080p.m3u8',
+      })
+    }
+
+    // Dual-track split audioUrl streams (e.g. Bilibili / MSE .m4s + audioUrl) are rejected cleanly before media_push.
+    mocks.native.mockClear()
+    const splitResource = {
+      id: 'bili-split-1',
+      kind: 'media' as const,
+      url: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.m4s?deadline=1900000000',
+      audioUrl: 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4s?deadline=1900000000',
+      seenAt: Date.now(),
+    }
+    for (const type of ['cast-to-device', 'push-to-tv'] as const) {
+      const reply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+        { type, resource: splitResource },
+        { url: 'https://www.bilibili.com/video/BV1xx411c7mD', tab: { id: 7 }, frameId: 0 },
+        resolve,
+      ))
+      expect(reply).toEqual({
+        ok: false,
+        error: '该视频为音画分离流，请先点击下载合并后再投屏播放',
+      })
+    }
+    expect(mocks.native.mock.calls.some(([m]) => m.op === 'media_push')).toBe(false)
   })
 })
