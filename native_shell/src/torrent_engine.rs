@@ -5446,6 +5446,8 @@ mod tests {
                     .chain(std::iter::once(0))
                     .collect();
                 let mut high = 0u32;
+                // SAFETY: `wide` is a valid NUL-terminated UTF-16 path without interior NULs,
+                // and `high` is a valid writable `u32` out-parameter for `GetCompressedFileSizeW`.
                 let low = unsafe { GetCompressedFileSizeW(wide.as_ptr(), &mut high) };
                 let allocated = ((high as u64) << 32) | (low as u64);
                 assert!(

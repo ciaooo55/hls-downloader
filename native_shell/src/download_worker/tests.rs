@@ -11567,7 +11567,18 @@ fn g1_1_spawn_reverts_early_exits_and_start_waits_for_retiring_worker_and_auto_r
         clean_spec.scheduled_start_at.clear();
         core.replace_spec(&task_id, clean_spec).unwrap();
     }
-    // Simulate retiring worker still registered in `active` when `"start"` is dispatched.
+    // Simulate retiring worker (control != "run") still registered in `active` when `"start"` is dispatched.
+    {
+        let spec = run_coord
+            .lock()
+            .unwrap()
+            .task_spec(&task_id)
+            .unwrap()
+            .clone();
+        let paths = TaskPaths::for_task(&task_id, &spec).unwrap();
+        paths.prepare().unwrap();
+        paths.set_control("pause").unwrap();
+    }
     run_coord.active.lock().unwrap().insert(task_id.clone());
     let (wait_tx, wait_rx) = mpsc::channel();
     *run_coord.worker_wait_started.lock().unwrap() = Some(wait_tx);
@@ -11614,6 +11625,17 @@ fn g1_1_spawn_reverts_early_exits_and_start_waits_for_retiring_worker_and_auto_r
         })
         .unwrap();
     let task2_id = "task-2".to_string();
+    {
+        let spec2 = run_coord
+            .lock()
+            .unwrap()
+            .task_spec(&task2_id)
+            .unwrap()
+            .clone();
+        let paths2 = TaskPaths::for_task(&task2_id, &spec2).unwrap();
+        paths2.prepare().unwrap();
+        paths2.set_control("pause").unwrap();
+    }
     run_coord.active.lock().unwrap().insert(task2_id.clone());
     // Re-enable queue (task2 is skipped by start_next_queued while still in `active`),
     // then dispatch `"start"` while releaser removes retiring `active` entry!

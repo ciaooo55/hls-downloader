@@ -963,6 +963,7 @@ mod tests {
         editor.edit("category_dir_media", "F:\\MyMedia").unwrap();
         editor.render("计划");
         assert!(editor.edit("schedule_start", "25:99").is_err());
+        editor.render("计划");
         assert!(editor.has_unsaved_changes());
         assert!(editor.has_validation_errors());
 

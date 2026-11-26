@@ -2431,13 +2431,26 @@ impl CoreCoordinator {
             }
             _ => (None, None),
         };
-        if let (Some(task_id), Some(action @ ("resume" | "retry"))) =
-            (task_id.as_deref(), start_action.as_deref())
-        {
-            let should_wait = self
-                .lock()?
-                .snapshot(task_id)
-                .is_some_and(|task| task.available_actions.iter().any(|item| item == action));
+        if let (Some(task_id), Some(action)) = (task_id.as_deref(), start_action.as_deref()) {
+            let should_wait = {
+                let core = self.lock()?;
+                core.snapshot(task_id)
+                    .filter(|task| task.available_actions.iter().any(|item| item == action))
+                    .is_some_and(|_| {
+                        if matches!(action, "resume" | "retry") {
+                            true
+                        } else {
+                            core.task_spec(task_id)
+                                .and_then(|spec| TaskPaths::for_task(task_id, spec).ok())
+                                .is_some_and(|paths| {
+                                    !matches!(
+                                        crate::http_engine::read_control(&paths.control),
+                                        crate::http_engine::Control::Run
+                                    )
+                                })
+                        }
+                    })
+            };
             if should_wait {
                 self.wait_for_worker_stop(task_id)?;
             }
@@ -4240,8 +4253,8 @@ fn run_task_with_throttle(
                                             && parsed.announce.is_empty()
                                             && parsed.hint_peers.is_empty()
                                             && parsed.web_seeds.iter().all(|seed| {
-                                                crate::net_policy::host_bypassed(
-                                                    &crate::net_policy::url_host(seed),
+                                                crate::net_policy::url_bypassed(
+                                                    seed,
                                                     &torrent_bypass,
                                                 )
                                             });
