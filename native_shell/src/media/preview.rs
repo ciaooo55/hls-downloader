@@ -109,6 +109,78 @@ fn read_legacy_marker(marker_dir: &Path, relative: &str) -> Option<u64> {
         })
 }
 
+/// Crash-recovery fallback: if `index.tsv` missed the last dirty batch before an abrupt process
+/// exit, reconstruct segment readiness strictly from durable segment checkpoints (`dash_vod_segments.json`,
+/// `vod_segments.json`, `audio/vod_segments.json`)—never from unverified stray files on disk.
+fn read_checkpoint_ready_size(root: &Path, relative: &str) -> Option<u64> {
+    if let Ok(text) = fs::read_to_string(root.join("dash_vod_segments.json")) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if value.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+                if let Some(record) = value.get("files").and_then(|files| files.get(relative)) {
+                    let has_id = record
+                        .get("identity")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| !id.is_empty());
+                    let size = record
+                        .get("size")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    if has_id && size > 0 {
+                        return Some(size);
+                    }
+                }
+            }
+        }
+    }
+
+    let (checkpoint_path, filename) = if let Some(rest) = relative.strip_prefix("segments/") {
+        (root.join("vod_segments.json"), rest)
+    } else {
+        let rest = relative.strip_prefix("audio/segments/")?;
+        (root.join("audio").join("vod_segments.json"), rest)
+    };
+    if filename.contains('/') {
+        return None;
+    }
+    let (stem, _ext) = filename.split_once('.')?;
+    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let slot: usize = stem.parse().ok()?;
+    let text = fs::read_to_string(checkpoint_path).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    if value.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return None;
+    }
+    let record = value
+        .get("segments")
+        .and_then(|segments| segments.get(slot.to_string()))?;
+    let has_id = record
+        .get("identity")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| !id.is_empty());
+    let size = record.get("size").and_then(serde_json::Value::as_u64)?;
+    (has_id && size > 0).then_some(size)
+}
+
+pub(crate) fn flush_ready(root: &Path) -> Result<(), String> {
+    let marker_dir = root.join(READY_DIR);
+    let mut map = ready_segments()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(entry) = map.get_mut(root) else {
+        return Ok(());
+    };
+    if entry.dirty_ops == 0 || !marker_dir.is_dir() {
+        return Ok(());
+    }
+    flush_ready_index(&marker_dir, &entry.segments)?;
+    entry.dirty_ops = 0;
+    entry.last_flush = Instant::now();
+    entry.checked = Instant::now();
+    Ok(())
+}
+
 fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> Result<(), String> {
     let mut payload = String::with_capacity(segments.len().saturating_mul(28));
     for (relative, size) in segments {
@@ -243,7 +315,10 @@ pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
         let mut map = ready_segments()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !marker_dir.is_dir() {
+        if !marker_dir.is_dir()
+            && !root.join("preview.m3u8").is_file()
+            && !root.join("preview-video.m3u8").is_file()
+        {
             map.remove(root);
             return false;
         }
@@ -252,16 +327,21 @@ pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
         let entry = map
             .entry(root.to_path_buf())
             .or_insert_with(|| ReadyTaskState {
-                segments: load_ready_index_from_disk(&marker_dir),
+                segments: if marker_dir.is_dir() {
+                    load_ready_index_from_disk(&marker_dir)
+                } else {
+                    HashMap::new()
+                },
                 dirty_ops: 0,
                 last_flush: now,
                 checked: now,
             });
         entry.checked = now;
         entry.segments.get(&relative).copied().or_else(|| {
-            let legacy = read_legacy_marker(&marker_dir, &relative)?;
-            entry.segments.insert(relative.clone(), legacy);
-            Some(legacy)
+            let recovered = read_legacy_marker(&marker_dir, &relative)
+                .or_else(|| read_checkpoint_ready_size(root, &relative))?;
+            entry.segments.insert(relative.clone(), recovered);
+            Some(recovered)
         })
     };
     expected.is_some_and(|size| {
@@ -518,6 +598,90 @@ mod tests {
         assert!(is_ready(&root, "segments/000000.ts"));
         assert!(!is_ready(&root, "segments/000010.ts"));
         assert!(is_ready(&root, "legacy/old.ts"));
+
+        forget_byte_priority(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tail_batch_flushes_on_pause_and_crash_recovery_reconstructs_only_checkpointed_segments() {
+        let root = temp_root("tail-flush-and-checkpoint-recovery");
+        let seg_dir = root.join("segments");
+        let audio_seg_dir = root.join("audio/segments");
+        let dash_dir = root.join("video");
+        fs::create_dir_all(&seg_dir).unwrap();
+        fs::create_dir_all(&audio_seg_dir).unwrap();
+        fs::create_dir_all(&dash_dir).unwrap();
+
+        // 1. Complete 4 segments rapidly (< 500ms, < 64 ops): segments 2 & 3 are dirty in RAM
+        // until `flush_ready` is called on pause/stop.
+        for idx in 0..4 {
+            let seg = seg_dir.join(format!("{idx:06}.ts"));
+            fs::write(&seg, format!("payload-{idx}").as_bytes()).unwrap();
+            mark_ready(&root, &seg).unwrap();
+        }
+        flush_ready(&root).unwrap();
+        forget_byte_priority(&root);
+        for idx in 0..4 {
+            assert!(
+                is_ready(&root, &format!("segments/{idx:06}.ts")),
+                "segment {idx} must survive restart after flush_ready"
+            );
+        }
+
+        // 2. Simulate abrupt crash BEFORE `flush_ready`: segments 4 & 5 and DASH/audio segments
+        // are NOT in `index.tsv`, while segment 6 is an uncheckpointed stray file on disk!
+        let seg4 = seg_dir.join("000004.ts");
+        let seg5_stray = seg_dir.join("000005.ts");
+        let audio0 = audio_seg_dir.join("000000.aac");
+        let dash1 = dash_dir.join("seg-1.m4s");
+        fs::write(&seg4, b"durable-hls-4").unwrap();
+        fs::write(&seg5_stray, b"stray-uncheckpointed").unwrap();
+        fs::write(&audio0, b"durable-audio-0").unwrap();
+        fs::write(&dash1, b"durable-dash-1").unwrap();
+
+        fs::write(
+            root.join("vod_segments.json"),
+            serde_json::json!({
+                "version": 1,
+                "segments": {
+                    "4": { "identity": "id-4", "size": 13 }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("audio/vod_segments.json"),
+            serde_json::json!({
+                "version": 1,
+                "segments": {
+                    "0": { "identity": "aud-0", "size": 15 }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("dash_vod_segments.json"),
+            serde_json::json!({
+                "version": 1,
+                "files": {
+                    "video/seg-1.m4s": { "identity": "dash-1", "size": 14 }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        forget_byte_priority(&root);
+        assert!(is_ready(&root, "segments/000004.ts"));
+        assert!(is_ready(&root, "audio/segments/000000.aac"));
+        assert!(is_ready(&root, "video/seg-1.m4s"));
+        assert!(
+            !is_ready(&root, "segments/000005.ts"),
+            "uncheckpointed file on disk must never be treated as ready"
+        );
 
         forget_byte_priority(&root);
         fs::remove_dir_all(root).unwrap();

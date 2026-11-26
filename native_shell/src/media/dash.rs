@@ -2514,6 +2514,7 @@ fn refresh_live_manifest(
                         let message = error.to_string();
                         if !super::hls::is_retryable_live_manifest_error(&message)
                             || transport_retries >= 2
+                            || attempt == 3
                         {
                             return Err(message);
                         }
@@ -2803,6 +2804,7 @@ fn download_dash_primary(
     if invalidated {
         vod.save(task_dir)?;
     }
+    let _ = super::preview::flush_ready(task_dir);
     let all: Vec<_> = files.iter().chain(planned.iter()).cloned().collect();
     let mut preview = write_dash_preview_track(
         &task_dir.join("preview-video.m3u8"),
@@ -3045,6 +3047,7 @@ fn download_dash_primary(
             let writer_result = writer
                 .join()
                 .map_err(|_| "DASH segment checkpoint worker panicked".to_owned())?;
+            let _ = super::preview::flush_ready(task_dir);
             if read_control(control) == "cancel" {
                 return Err("canceled".into());
             }
@@ -9466,6 +9469,42 @@ mod tests {
         );
         assert_eq!(oss_seg_1, oss_seg_1_rot);
         assert_ne!(oss_seg_1, oss_seg_2);
+
+        // 6. W3-A3: HTTP 503 on attempts 0..=2 followed by a transport reset on final `attempt == 3`
+        // returns the real transport error immediately without extra backoff sleep or generic message.
+        fs::write(&control, "run").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mixed_hits = Arc::new(AtomicUsize::new(0));
+        let srv_hits = Arc::clone(&mixed_hits);
+        let server = std::thread::spawn(move || {
+            for idx in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 512];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                srv_hits.fetch_add(1, Ordering::SeqCst);
+                if idx < 3 {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                } else {
+                    drop(stream);
+                }
+            }
+        });
+        let mixed_err = refresh_live_manifest(
+            &format!("http://{addr}/live.mpd"),
+            &HashMap::new(),
+            "",
+            &control,
+        )
+        .unwrap_err();
+        server.join().unwrap();
+        assert_eq!(mixed_hits.load(Ordering::SeqCst), 4);
+        assert!(
+            mixed_err != "DASH live manifest retries exhausted",
+            "must preserve real final transport error, got: {mixed_err}"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

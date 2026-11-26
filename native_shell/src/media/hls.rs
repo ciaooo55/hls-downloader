@@ -987,6 +987,7 @@ fn download_hls_scoped_with_control(
                     super::preview::mark_ready(marker_root, map)?;
                 }
             }
+            let _ = super::preview::flush_ready(marker_root);
             let entries: Vec<_> = prepared
                 .iter()
                 .map(|item| TimelineEntry {
@@ -1834,21 +1835,29 @@ pub(super) fn is_retryable_live_manifest_error(error: &str) -> bool {
     if error.contains("允许的域名")
         || error.contains("白名单")
         || error.contains("未配置代理")
+        || error.contains("不支持的代理协议")
+        || error.contains("不支持 HTTPS 系统代理")
+        || error.contains("不支持的系统代理协议")
+        || error.contains("尚不支持到 HTTPS 代理")
         || error.contains("代理地址无效")
         || error.contains("代理主机无效")
         || error.contains("代理认证失败")
+        || error.contains("拒绝认证方式")
         || error.contains("系统代理解析失败")
         || error.contains("超过长度上限")
         || error.contains("不是 UTF-8")
         || error.contains("不是有效的 M3U8")
         || error.contains("不支持")
+        || lower.contains("allowed_hosts")
         || lower.contains("private network")
         || lower.contains("permitted network")
         || lower.contains("punycode")
         || lower.contains("disallowed")
         || lower.contains("local host")
         || lower.contains("not configured")
-        || lower.contains("proxy")
+        || lower.contains("invalid winhttp proxy")
+        || lower.contains("invalid proxy")
+        || lower.contains("unsupported proxy")
         || lower.contains("url must be http")
         || lower.contains("exceeds")
         || lower.contains("drm")
@@ -1938,7 +1947,11 @@ fn reload_playlist(
                         Err(error) => error,
                     }
                 }
-                Err(error) if target != url && extract_http_status(&error) == Some(400) => {
+                Err(error) if matches!(error.as_str(), "paused" | "canceled" | "finish") => error,
+                Err(_) if target != url => {
+                    // Signed CDNs (OSS/COS/S3/Akamai) or WAFs reject appended `_HLS_msn`/`_HLS_part`
+                    // parameters with 401/403/404/405 or connection drops. Fall back immediately to
+                    // the original signed `url` without sleeping before applying retry/backoff logic.
                     check_live_control(control)?;
                     match load_playlist(url, headers, proxy) {
                         Ok(fallback) => {
@@ -2549,6 +2562,9 @@ fn download_prepared_segments(
                 errors.push(error);
             }
         }
+    }
+    if let Some(root) = control.parent() {
+        let _ = super::preview::flush_ready(root);
     }
     let completed = completed
         .lock()
@@ -7306,18 +7322,19 @@ mod tests {
         )
         .unwrap();
 
-        // 1. Two transient connection resets (dropped socket before response) succeed on 2nd retry.
+        // 1. Blocking URL reset immediately falls back to base `url`; two resets on base `url`
+        // then succeed on 2nd retry with 250ms + 500ms backoff (~750ms).
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let hits = Arc::new(AtomicUsize::new(0));
         let srv_hits = Arc::clone(&hits);
         let server = std::thread::spawn(move || {
-            for idx in 0..3 {
+            for idx in 0..4 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut req = [0u8; 512];
                 let _ = std::io::Read::read(&mut stream, &mut req);
                 srv_hits.fetch_add(1, Ordering::SeqCst);
-                if idx < 2 {
+                if idx < 3 {
                     drop(stream);
                 } else {
                     let body = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:2\n#EXTINF:2.0,\ns2.ts\n#EXT-X-ENDLIST\n";
@@ -7340,29 +7357,80 @@ mod tests {
         )
         .unwrap();
         server.join().unwrap();
-        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
         assert!(reloaded.end_list);
         assert!(
             started.elapsed() >= Duration::from_millis(650),
-            "expected ~750ms backoff across 2 retries, got {:?}",
+            "expected ~750ms backoff across 2 retries on base url, got {:?}",
             started.elapsed()
         );
 
-        // 2. Non-retryable HTTP 401/403/404 and fatal policy errors abort immediately without retry.
+        // 1b. W3-A1: Signed CDN / WAF rejecting `_HLS_msn` with 403/401/404/405 immediately falls
+        // back to the original signed `url` without sleeping and succeeds!
+        for waf_status in [401u16, 403, 404, 405] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let waf_hits = Arc::new(AtomicUsize::new(0));
+            let srv_hits = Arc::clone(&waf_hits);
+            let server = std::thread::spawn(move || {
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut req = [0u8; 512];
+                    let n = std::io::Read::read(&mut stream, &mut req).unwrap_or(0);
+                    let req_line = String::from_utf8_lossy(&req[..n]);
+                    srv_hits.fetch_add(1, Ordering::SeqCst);
+                    if req_line.contains("_HLS_msn=") {
+                        let resp = format!(
+                            "HTTP/1.1 {waf_status} SignatureMismatch\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                    } else {
+                        let body = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:2\n#EXTINF:2.0,\ns2.ts\n#EXT-X-ENDLIST\n";
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        stream.write_all(header.as_bytes()).unwrap();
+                        stream.write_all(body).unwrap();
+                    }
+                }
+            });
+            let t_waf = Instant::now();
+            let ok_playlist = reload_playlist(
+                &format!("http://{addr}/live.m3u8?Signature=valid"),
+                &HashMap::new(),
+                "",
+                &previous,
+                &control,
+            )
+            .unwrap();
+            server.join().unwrap();
+            assert_eq!(waf_hits.load(Ordering::SeqCst), 2);
+            assert!(ok_playlist.end_list);
+            assert!(
+                t_waf.elapsed() < Duration::from_millis(220),
+                "signed URL fallback on {waf_status} must not sleep: {:?}",
+                t_waf.elapsed()
+            );
+        }
+
+        // 2. Non-retryable HTTP 401/403/404 on BOTH blocking_url and base `url` abort immediately without retry sleep.
         for status in [401u16, 403, 404] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let status_hits = Arc::new(AtomicUsize::new(0));
             let srv_hits = Arc::clone(&status_hits);
             let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut req = [0u8; 512];
-                let _ = std::io::Read::read(&mut stream, &mut req);
-                srv_hits.fetch_add(1, Ordering::SeqCst);
-                let resp = format!(
-                    "HTTP/1.1 {status} Denied\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                );
-                let _ = stream.write_all(resp.as_bytes());
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut req = [0u8; 512];
+                    let _ = std::io::Read::read(&mut stream, &mut req);
+                    srv_hits.fetch_add(1, Ordering::SeqCst);
+                    let resp = format!(
+                        "HTTP/1.1 {status} Denied\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                }
             });
             let t0 = Instant::now();
             let err = reload_playlist(
@@ -7376,8 +7444,8 @@ mod tests {
             server.join().unwrap();
             assert_eq!(
                 status_hits.load(Ordering::SeqCst),
-                1,
-                "HTTP {status} must not retry"
+                2,
+                "HTTP {status} tries blocking_url then immediate base url fallback with zero retries"
             );
             assert!(err.contains(&format!("HTTP {status}")), "{err}");
             assert!(
@@ -7392,12 +7460,26 @@ mod tests {
             "public URL cannot target a private network",
             "proxy not configured",
             "invalid WinHTTP proxy",
+            "unsupported proxy scheme",
+            "手动代理模式未配置代理服务器地址",
             "HLS playlist HTTP 403",
         ] {
             assert!(!is_retryable_live_manifest_error(fatal), "{fatal}");
         }
-        assert!(is_retryable_live_manifest_error("connection reset by peer"));
-        assert!(is_retryable_live_manifest_error("HLS playlist HTTP 503"));
+        // W3-A2: Transient proxy transport errors MUST remain retryable!
+        for transient_proxy in [
+            "connection reset by peer",
+            "HLS playlist HTTP 503",
+            "Proxy CONNECT aborted",
+            "Received HTTP code 502 from proxy after CONNECT",
+            "Received HTTP code 503 from proxy after CONNECT",
+            "代理连接或握手超时",
+        ] {
+            assert!(
+                is_retryable_live_manifest_error(transient_proxy),
+                "transient proxy/network error must retry: {transient_proxy}"
+            );
+        }
 
         // 3. Control word ("finish" / "pause" / "cancel") wakes retry sleep immediately.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
