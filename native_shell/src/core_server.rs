@@ -1321,10 +1321,55 @@ fn spawn_clipboard_watch(
     });
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct QueueSchedulerLatch {
+    last_start: Option<(u32, String)>,
+    last_stop: Option<(u32, String)>,
+}
+
+impl QueueSchedulerLatch {
+    /// Evaluates edge-triggered global auto-stop / auto-start transitions for `(day_stamp, hhmm)`.
+    /// Returns `(stop_due, start_due)`.
+    fn step(
+        &mut self,
+        (day_stamp, hhmm): (u32, &str),
+        weekday_ok: bool,
+        auto_start_enabled: bool,
+        auto_start_time: &str,
+        auto_stop_enabled: bool,
+        auto_stop_time: &str,
+    ) -> (bool, bool) {
+        if !auto_stop_enabled || auto_stop_time.is_empty() {
+            self.last_stop = None;
+        }
+        if !auto_start_enabled || auto_start_time.is_empty() {
+            self.last_start = None;
+        }
+        if !weekday_ok || hhmm.is_empty() {
+            return (false, false);
+        }
+        let key = (day_stamp, hhmm.to_string());
+        let stop_due = auto_stop_enabled
+            && !auto_stop_time.is_empty()
+            && hhmm == auto_stop_time
+            && self.last_stop.as_ref() != Some(&key);
+        if stop_due {
+            self.last_stop = Some(key.clone());
+        }
+        let start_due = auto_start_enabled
+            && !auto_start_time.is_empty()
+            && hhmm == auto_start_time
+            && self.last_start.as_ref() != Some(&key);
+        if start_due {
+            self.last_start = Some(key);
+        }
+        (stop_due, start_due)
+    }
+}
+
 fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
     thread::spawn(move || {
-        let mut last_start = String::new();
-        let mut last_stop = String::new();
+        let mut latch = QueueSchedulerLatch::default();
         while !stop.load(Ordering::SeqCst) {
             if let Ok(settings) = coordinator.settings() {
                 let any_queue_schedule = settings
@@ -1333,6 +1378,12 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                     .any(|profile| profile.schedule_enabled);
                 let any_global_schedule =
                     settings.queue_auto_start_enabled || settings.queue_auto_stop_enabled;
+                if !settings.queue_auto_stop_enabled {
+                    latch.last_stop = None;
+                }
+                if !settings.queue_auto_start_enabled {
+                    latch.last_start = None;
+                }
                 let (has_active, has_queued) =
                     coordinator.scheduler_task_flags().unwrap_or((false, false));
                 if has_active || has_queued || any_global_schedule || any_queue_schedule {
@@ -1341,29 +1392,28 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
                         let _ = coordinator.pause_tasks_outside_schedule();
                     }
                     if any_global_schedule || has_queued {
-                        let stamp = if any_global_schedule {
-                            crate::net_policy::local_hhmm()
+                        let (global_stop_due, global_start_due) = if any_global_schedule {
+                            let (day_stamp, hhmm) = crate::net_policy::local_day_stamp_and_hhmm();
+                            let weekday_ok =
+                                crate::net_policy::weekday_allowed(&settings.queue_active_days);
+                            latch.step(
+                                (day_stamp, &hhmm),
+                                weekday_ok,
+                                settings.queue_auto_start_enabled,
+                                &settings.queue_auto_start_time,
+                                settings.queue_auto_stop_enabled,
+                                &settings.queue_auto_stop_time,
+                            )
                         } else {
-                            String::new()
+                            (false, false)
                         };
-                        if settings.queue_auto_stop_enabled
-                            && !settings.queue_auto_stop_time.is_empty()
-                            && stamp == settings.queue_auto_stop_time
-                            && last_stop != stamp
-                        {
-                            last_stop = stamp.clone();
-                            if has_active || has_queued {
-                                let _ = coordinator.pause_active_tasks();
-                            }
+                        if global_stop_due && (has_active || has_queued) {
+                            let _ = coordinator.pause_active_tasks();
                         }
-                        let global_start_due = settings.queue_auto_start_enabled
-                            && !settings.queue_auto_start_time.is_empty()
-                            && stamp == settings.queue_auto_start_time
-                            && last_start != stamp;
                         if global_start_due {
-                            last_start = stamp;
+                            let _ = coordinator.resume_paused_tasks();
                         }
-                        if has_queued {
+                        if has_queued || global_start_due {
                             let queue_start_due = global_start_due || any_queue_schedule;
                             // 独立任务的开始时间不依赖队列定时开关；仅释放已设开始时间的任务。
                             let _ = coordinator.start_next_queued(!queue_start_due);
@@ -2536,5 +2586,60 @@ mod tests {
             drop(reopened);
             let _ = std::fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn queue_scheduler_latch_fires_across_calendar_days_and_honors_weekday_and_toggle_reset() {
+        let mut latch = QueueSchedulerLatch::default();
+
+        // Day 1 at 01:00 fires start once, then suppresses duplicate ticks in the same minute.
+        assert_eq!(
+            latch.step((20261126, "01:00"), true, true, "01:00", true, "07:30"),
+            (false, true)
+        );
+        assert_eq!(
+            latch.step((20261126, "01:00"), true, true, "01:00", true, "07:30"),
+            (false, false)
+        );
+
+        // Day 1 at 07:30 fires stop once.
+        assert_eq!(
+            latch.step((20261126, "07:30"), true, true, "01:00", true, "07:30"),
+            (true, false)
+        );
+        assert_eq!(
+            latch.step((20261126, "07:30"), true, true, "01:00", true, "07:30"),
+            (false, false)
+        );
+
+        // Day 2 at the exact same HH:mm MUST fire again (no multi-day permanent lock-up).
+        assert_eq!(
+            latch.step((20261127, "01:00"), true, true, "01:00", true, "07:30"),
+            (false, true)
+        );
+        assert_eq!(
+            latch.step((20261127, "07:30"), true, true, "01:00", true, "07:30"),
+            (true, false)
+        );
+
+        // Disallowed weekday suppresses both edges without poisoning a later allowed day.
+        assert_eq!(
+            latch.step((20261128, "01:00"), false, true, "01:00", true, "07:30"),
+            (false, false)
+        );
+        assert_eq!(
+            latch.step((20261128, "01:00"), true, true, "01:00", true, "07:30"),
+            (false, true)
+        );
+
+        // Toggling off and back on within the same minute clears the latch so re-enable works.
+        assert_eq!(
+            latch.step((20261128, "01:00"), true, false, "01:00", true, "07:30"),
+            (false, false)
+        );
+        assert_eq!(
+            latch.step((20261128, "01:00"), true, true, "01:00", true, "07:30"),
+            (false, true)
+        );
     }
 }

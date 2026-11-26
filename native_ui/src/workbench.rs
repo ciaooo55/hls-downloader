@@ -2179,7 +2179,7 @@ impl Workbench {
                     if let Some(settings) = self.settings.borrow().as_ref() {
                         settings.window.set_busy(false);
                         settings.window.set_status_tone("error".into());
-                        settings.window.set_status(message.into());
+                        settings.window.set_status(message.clone().into());
                     }
                 }
                 if self
@@ -2193,6 +2193,12 @@ impl Workbench {
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("error".into());
                         editor.window.set_status(self.window.get_notice());
+                    }
+                }
+                if let Some((_, window)) = self.details.borrow().as_ref() {
+                    if window.window().is_visible() {
+                        window.set_footer_tone("error".into());
+                        window.set_footer_status(message.into());
                     }
                 }
             }
@@ -2578,8 +2584,8 @@ impl Workbench {
                         folder: true,
                     }),
                     "profile" => {
-                        window.set_footer_tone("success".into());
-                        window.set_footer_status("已保存当前站点下载规则".into());
+                        window.set_footer_tone("info".into());
+                        window.set_footer_status("正在保存站点下载规则…".into());
                         this.send(CoreCommand::SaveSiteProfile {
                             task_id: id.clone(),
                         });
@@ -3620,17 +3626,19 @@ fn checksum_algorithm_label(raw: &str) -> String {
 fn summarize_task_telemetry(task: &TaskSnapshot) -> TaskTelemetrySummary {
     let mut summary = TaskTelemetrySummary::default();
 
+    let active_transfer = matches!(task.status.as_str(), "downloading" | "recording");
     let has_bt = task.resource_kind == ResourceKind::Torrent
-        || task.peer_count > 0
-        || task.seed_count > 0
-        || task.upload_speed_bytes_per_sec > 0
+        || (active_transfer
+            && (task.peer_count > 0 || task.seed_count > 0 || task.upload_speed_bytes_per_sec > 0))
         || task.uploaded_bytes > 0;
     if has_bt {
-        let mut parts = vec![format!(
-            "连接 {} 节点 ({} 做种)",
-            task.peer_count, task.seed_count
-        )];
-        if task.upload_speed_bytes_per_sec > 0 {
+        let mut parts = Vec::new();
+        if active_transfer || task.resource_kind == ResourceKind::Torrent {
+            let peers = if active_transfer { task.peer_count } else { 0 };
+            let seeds = if active_transfer { task.seed_count } else { 0 };
+            parts.push(format!("连接 {peers} 节点 ({seeds} 做种)"));
+        }
+        if active_transfer && task.upload_speed_bytes_per_sec > 0 {
             parts.push(format!(
                 "上传 {}/s",
                 crate::format_bytes(task.upload_speed_bytes_per_sec)
@@ -4070,11 +4078,14 @@ fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
             "—".into()
         }
         .into(),
-        eta: task
-            .eta_seconds
-            .map(|value| format!("{}:{:02}", value / 60, value % 60))
-            .unwrap_or_default()
-            .into(),
+        eta: if crate::task_is_active(&task.status) {
+            task.eta_seconds
+                .map(|value| format!("{}:{:02}", value / 60, value % 60))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        }
+        .into(),
         progress: crate::task_progress(task),
         selected,
         kind: kind.into(),

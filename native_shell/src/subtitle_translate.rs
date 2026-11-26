@@ -262,6 +262,7 @@ impl SubtitleService {
                 }
                 core.validate_subtitle_player(generation)?;
             }
+            let (ws_proxy, _) = core.resolved_url_proxy(&endpoint)?;
             let manual = audio_source.is_some() || player_generation.is_some();
             let state = Arc::new(Mutex::new(State {
                 status: "connecting",
@@ -296,6 +297,7 @@ impl SubtitleService {
                         runtime.block_on(run(
                             &endpoint,
                             &key,
+                            &ws_proxy,
                             &source,
                             &target,
                             receiver,
@@ -373,7 +375,16 @@ impl SubtitleService {
                 if let Some(generation) = player_generation {
                     core.player_subtitle_audio(generation, position, seconds, cancelled)
                 } else if let Some(source) = source.as_ref() {
-                    crate::subtitle_audio_source::decode(source, position, seconds, cancelled)
+                    let target_url = source["url"].as_str().unwrap_or("");
+                    let (audio_proxy, proxy_bypass) = core.resolved_url_proxy(target_url)?;
+                    crate::subtitle_audio_source::decode_with_proxy(
+                        source,
+                        position,
+                        seconds,
+                        &audio_proxy,
+                        &proxy_bypass,
+                        cancelled,
+                    )
                 } else {
                     Err("当前会话使用播放器实时采集".into())
                 }
@@ -757,10 +768,74 @@ impl Decoder {
     }
 }
 
+async fn connect_subtitle_websocket(
+    endpoint: &str,
+    key: &str,
+    proxy: &str,
+    state: &Arc<Mutex<State>>,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
+    let mut request = endpoint
+        .into_client_request()
+        .map_err(|_| "字幕服务地址无效".to_string())?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {key}")
+            .parse()
+            .map_err(|_| "API Key 格式无效".to_string())?,
+    );
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(128 * 1024))
+        .max_frame_size(Some(128 * 1024));
+    let check_cancelled = || {
+        let locked = state.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(locked.status, "stopped" | "stopping") {
+            Err("字幕会话已停止".into())
+        } else {
+            Ok(())
+        }
+    };
+    let tunnel = crate::proxy_tunnel::Proxy::resolve(proxy, endpoint, check_cancelled)?;
+    if let Some(proxy_cfg) = tunnel {
+        let uri = request.uri();
+        let raw_host = uri.host().ok_or("字幕服务地址缺少主机名")?;
+        let host = raw_host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(raw_host)
+            .to_string();
+        let port = uri.port_u16().unwrap_or_else(|| {
+            if uri
+                .scheme_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case("wss"))
+            {
+                443
+            } else {
+                80
+            }
+        });
+        let tcp = proxy_cfg.connect(&host, port, check_cancelled).await?;
+        let (socket, _) =
+            tokio_tungstenite::client_async_tls_with_config(request, tcp, Some(config), None)
+                .await
+                .map_err(|_| "字幕服务连接失败，请检查服务配置、API Key 和网络".to_string())?;
+        Ok(socket)
+    } else {
+        let (socket, _) =
+            tokio_tungstenite::connect_async_with_config(request, Some(config), false)
+                .await
+                .map_err(|_| "字幕服务连接失败，请检查服务配置、API Key 和网络".to_string())?;
+        Ok(socket)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run(
     endpoint: &str,
     key: &str,
+    proxy: &str,
     source: &str,
     target: &str,
     mut input: mpsc::Receiver<Input>,
@@ -777,26 +852,12 @@ async fn run(
             }
             state.status = "connecting";
         }
-        let mut request = endpoint
-            .into_client_request()
-            .map_err(|_| "字幕服务地址无效")?;
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Bearer {key}")
-                .parse()
-                .map_err(|_| "API Key 格式无效")?,
-        );
-        let config = WebSocketConfig::default()
-            .max_message_size(Some(128 * 1024))
-            .max_frame_size(Some(128 * 1024));
-        let connect = tokio_tungstenite::connect_async_with_config(request, Some(config), false);
+        let connect = connect_subtitle_websocket(endpoint, key, proxy, &state);
         let connected = tokio::select! {
             result = tokio::time::timeout(Duration::from_secs(15), connect) => result,
             _ = stop.notified() => return Ok(()),
         };
-        let (mut socket, _) = connected
-            .map_err(|_| "字幕连接超时，请检查网络")?
-            .map_err(|_| "字幕服务连接失败，请检查服务配置、API Key 和网络")?;
+        let mut socket = connected.map_err(|_| "字幕连接超时，请检查网络")??;
         let mut configuration = setup(source, target);
         if manual {
             configuration["session"]["turn_detection"] = Value::Null;
@@ -1073,6 +1134,7 @@ mod tests {
                         run(
                             &endpoint,
                             "test",
+                            "",
                             "en",
                             "zh",
                             rx,
@@ -1517,6 +1579,7 @@ mod tests {
                     assert!(run(
                         &endpoint,
                         "test",
+                        "",
                         "auto",
                         "zh",
                         rx,
@@ -1663,7 +1726,7 @@ mod tests {
                 let worker_state = state.clone();
                 let stop = Arc::new(Notify::new());
                 let worker_stop = stop.clone();
-                let worker = tokio::spawn(async move { run(&endpoint,"test-secret","auto","zh",rx,worker_stop,worker_state,false).await });
+                let worker = tokio::spawn(async move { run(&endpoint,"test-secret","","auto","zh",rx,worker_stop,worker_state,false).await });
                 for epoch in 0..2 {
                     if epoch > 0 {
                         {
@@ -1825,5 +1888,87 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stopped["status"], "stopping");
+    }
+
+    #[test]
+    fn subtitle_websocket_connects_through_http_connect_proxy_and_fails_closed_on_invalid_manual() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let state = Arc::new(Mutex::new(State {
+                status: "connecting",
+                error: String::new(),
+                epoch: 0,
+                sequence: 0,
+                events: VecDeque::new(),
+                last_seen: Instant::now(),
+            }));
+            let invalid = connect_subtitle_websocket(
+                "ws://127.0.0.1:9/realtime",
+                "k",
+                crate::net_policy::INVALID_MANUAL_PROXY,
+                &state,
+            )
+            .await;
+            assert_eq!(
+                invalid.err().as_deref(),
+                Some("手动代理模式未配置代理服务器地址")
+            );
+
+            let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let ws_addr = ws_listener.local_addr().unwrap();
+            let ws_server = tokio::spawn(async move {
+                let (tcp, _) = ws_listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                socket
+                    .send(Message::Text(
+                        json!({"type":"session.updated"}).to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+            });
+
+            let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy_addr = proxy_listener.local_addr().unwrap();
+            let used_proxy = Arc::new(AtomicBool::new(false));
+            let used_flag = used_proxy.clone();
+            let proxy_server = tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let (mut client, _) = proxy_listener.accept().await.unwrap();
+                let mut buf = Vec::new();
+                let mut b = [0u8; 1];
+                while !buf.ends_with(b"\r\n\r\n") {
+                    client.read_exact(&mut b).await.unwrap();
+                    buf.push(b[0]);
+                }
+                let req = String::from_utf8_lossy(&buf);
+                assert!(req.starts_with(&format!("CONNECT {ws_addr} HTTP/1.1")));
+                used_flag.store(true, Ordering::SeqCst);
+                let mut upstream = tokio::net::TcpStream::connect(ws_addr).await.unwrap();
+                client
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            });
+
+            let mut ws = connect_subtitle_websocket(
+                &format!("ws://{ws_addr}/realtime"),
+                "secret-key",
+                &format!("http://{proxy_addr}"),
+                &state,
+            )
+            .await
+            .unwrap();
+            let frame = ws.next().await.unwrap().unwrap();
+            assert!(matches!(frame, Message::Text(_)));
+            assert!(used_proxy.load(Ordering::SeqCst));
+            let _ = ws.close(None).await;
+            drop(ws);
+            ws_server.await.unwrap();
+            proxy_server.await.unwrap();
+        });
     }
 }

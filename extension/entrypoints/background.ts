@@ -2577,7 +2577,8 @@ export default defineBackground(() => {
       if (tracks.length > 1 && !track || selection.audioIndex > 0 && !track?.url) {
         throw new Error('无法确认当前备用音轨，请关闭提前翻译以采集播放器实际音轨')
       }
-      if (track?.url) resource = { ...resource, url: track.url }
+      if (track?.url) resource = { ...resource, url: track.url, audioUrl: undefined }
+      else if (!tracks.length && resource.audioUrl) resource = { ...resource, url: resource.audioUrl, audioUrl: undefined }
       // 已由实际加载的播放器唯一匹配；独立解码还会验证音频，不需要下载任务的请求完成门禁。
       return resourcePayload(resource, undefined, { allowUnverified: true })
     })

@@ -255,7 +255,28 @@ impl SettingsEditor {
         if &value == original {
             self.dirty.remove(key);
         } else {
-            self.dirty.insert(key.to_owned(), value);
+            self.dirty.insert(key.to_owned(), value.clone());
+        }
+        let options = choice_options(key);
+        if !options.is_empty() {
+            use slint::Model;
+            let current_code = value.as_str().unwrap_or_default();
+            let choice_index = options
+                .iter()
+                .position(|(code, label)| *code == current_code || *label == current_code)
+                .unwrap_or(0) as i32;
+            let display_label = choice_label(key, current_code);
+            let fields = self.window.get_fields();
+            for row_idx in 0..fields.row_count() {
+                if let Some(mut field) = fields.row_data(row_idx) {
+                    if field.key.as_str() == key {
+                        field.value = display_label.into();
+                        field.choice_index = choice_index;
+                        fields.set_row_data(row_idx, field);
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -268,6 +289,15 @@ impl SettingsEditor {
                 let value = self.dirty.get(*key).or_else(|| self.values.get(*key))?;
                 let options = choice_options(key);
                 let choices: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
+                let choice_index = if options.is_empty() {
+                    -1
+                } else {
+                    let current = value.as_str().unwrap_or_default();
+                    options
+                        .iter()
+                        .position(|(code, opt_label)| *code == current || *opt_label == current)
+                        .unwrap_or(0) as i32
+                };
                 let kind = if value.is_boolean() {
                     "bool"
                 } else if value.is_number() {
@@ -304,6 +334,7 @@ impl SettingsEditor {
                             .map(|choice| (*choice).into())
                             .collect::<Vec<_>>(),
                     )),
+                    choice_index,
                 })
             })
             .collect::<Vec<_>>();
@@ -714,5 +745,62 @@ mod tests {
         editor.receive_settings(&saved_ack, true);
         assert!(!editor.has_unsaved_changes());
         assert!(!editor.has_validation_errors());
+    }
+
+    #[test]
+    fn choice_fields_populate_and_sync_choice_index_across_category_switches() {
+        use slint::Model;
+        crate::offscreen::OffscreenPlatform::init_test();
+        let parent = crate::WorkbenchWindow::new().unwrap();
+        let initial: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "quick_download_enabled": false,
+            "clipboard_watch": true,
+            "hls_remux_ts_to_mp4": true,
+            "av_scan_enabled": false,
+            "schedule_enabled": false,
+            "schedule_start": "00:00",
+            "default_concurrency": 8,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 0,
+            "download_dir": "D:\\Downloads",
+            "existing_file_policy": "skip",
+            "proxy_mode": "manual",
+            "theme_mode": "dark"
+        }))
+        .unwrap();
+        let mut editor = SettingsEditor::new(&initial, &parent).unwrap();
+
+        let find_choice = |ed: &SettingsEditor, key: &str| {
+            let fields = ed.window.get_fields();
+            (0..fields.row_count())
+                .filter_map(|i| fields.row_data(i))
+                .find(|f| f.key.as_str() == key)
+                .unwrap()
+        };
+
+        editor.render("下载");
+        let policy = find_choice(&editor, "existing_file_policy");
+        assert_eq!(policy.choice_index, 2);
+        assert_eq!(policy.value.as_str(), "跳过下载");
+
+        editor.render("网络");
+        let proxy = find_choice(&editor, "proxy_mode");
+        assert_eq!(proxy.choice_index, 2);
+        assert_eq!(proxy.value.as_str(), "手动代理");
+
+        editor.edit("proxy_mode", "直连").unwrap();
+        let updated_proxy = find_choice(&editor, "proxy_mode");
+        assert_eq!(updated_proxy.choice_index, 0);
+        assert_eq!(updated_proxy.value.as_str(), "直连");
+
+        editor.render("外观");
+        let theme = find_choice(&editor, "theme_mode");
+        assert_eq!(theme.choice_index, 2);
+        assert_eq!(theme.value.as_str(), "深色");
     }
 }

@@ -2479,7 +2479,65 @@ fn check_cast_certificate(
     }
 }
 
-#[cfg(windows)]
+fn select_chromecast_transport(value: &serde_json::Value, launch: bool) -> Option<String> {
+    let apps = value.pointer("/status/applications")?.as_array()?;
+    let app_supports_media_ns = |app: &serde_json::Value| {
+        app.get("namespaces")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|list| {
+                list.iter().any(|item| {
+                    item.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .or_else(|| item.as_str())
+                        .is_some_and(|ns| ns == CAST_NS_MEDIA)
+                })
+            })
+    };
+    let app_is_default_receiver = |app: &serde_json::Value| {
+        app.get("appId")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id.eq_ignore_ascii_case(CAST_APP_DEFAULT_MEDIA))
+    };
+    let app_transport = |app: &serde_json::Value| {
+        if app.get("isIdleScreen").and_then(serde_json::Value::as_bool) == Some(true) {
+            return None;
+        }
+        app.get("transportId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    };
+    if launch {
+        for app in apps {
+            if app_is_default_receiver(app)
+                && (app_supports_media_ns(app) || app.get("namespaces").is_none())
+            {
+                if let Some(id) = app_transport(app) {
+                    return Some(id);
+                }
+            }
+        }
+        return None;
+    }
+    for app in apps {
+        if app_is_default_receiver(app) {
+            if let Some(id) = app_transport(app) {
+                return Some(id);
+            }
+        }
+    }
+    for app in apps {
+        if app_supports_media_ns(app) {
+            if let Some(id) = app_transport(app) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
 fn chromecast_transport<W: Read + Write>(stream: &mut W, launch: bool) -> Result<String, String> {
     write_cast(
         stream,
@@ -2511,16 +2569,20 @@ fn chromecast_transport<W: Read + Write>(stream: &mut W, launch: bool) -> Result
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
             continue;
         };
-        if value.get("type").and_then(|item| item.as_str()) != Some("RECEIVER_STATUS") {
+        let msg_type = value.get("type").and_then(|item| item.as_str());
+        if msg_type == Some("LAUNCH_ERROR") {
+            return Err("Chromecast 拒绝启动默认媒体接收器".into());
+        }
+        if msg_type != Some("RECEIVER_STATUS") {
             continue;
         }
-        if let Some(transport) = value
-            .pointer("/status/applications/0/transportId")
-            .and_then(|item| item.as_str())
-        {
-            return Ok(transport.to_string());
+        if let Some(transport) = select_chromecast_transport(&value, launch) {
+            return Ok(transport);
         }
-        if launch && !launched {
+        if !launch {
+            return Err("Chromecast 当前没有活动的媒体会话".into());
+        }
+        if !launched {
             launched = true;
             let body = serde_json::json!({
                 "type": "LAUNCH",
@@ -3966,5 +4028,118 @@ mod tests {
             "u64 backing buffer must satisfy IP_ADAPTER_ADDRESSES_LH alignment"
         );
         let _ = lan_ipv4_networks();
+    }
+
+    #[test]
+    fn chromecast_transport_skips_idle_backdrop_and_waits_for_default_media_receiver() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            let (ns1, p1) = read_cast(&mut peer).unwrap().unwrap();
+            assert_eq!(ns1, CAST_NS_CONNECTION);
+            assert!(p1.contains("CONNECT"));
+            let (ns2, p2) = read_cast(&mut peer).unwrap().unwrap();
+            assert_eq!(ns2, CAST_NS_RECEIVER);
+            assert!(p2.contains("GET_STATUS"));
+
+            // Emit Backdrop idle screen first (has transportId, but isIdleScreen=true and no media namespace).
+            let backdrop = serde_json::json!({
+                "type": "RECEIVER_STATUS",
+                "status": {
+                    "applications": [{
+                        "appId": "E8C28D3C",
+                        "displayName": "Backdrop",
+                        "isIdleScreen": true,
+                        "transportId": "backdrop-transport-1",
+                        "namespaces": [{"name": "urn:x-cast:com.google.cast.sse"}]
+                    }]
+                }
+            })
+            .to_string();
+            peer.write_all(&encode_cast_message(
+                CAST_NS_RECEIVER,
+                "sender-0",
+                &backdrop,
+            ))
+            .unwrap();
+
+            // Client must send LAUNCH for CC1AD845 instead of hijacking backdrop-transport-1.
+            let (ns3, p3) = read_cast(&mut peer).unwrap().unwrap();
+            assert_eq!(ns3, CAST_NS_RECEIVER);
+            assert!(p3.contains("LAUNCH") && p3.contains(CAST_APP_DEFAULT_MEDIA));
+
+            // Intermediate status while CC1AD845 is still starting must also be ignored.
+            peer.write_all(&encode_cast_message(
+                CAST_NS_RECEIVER,
+                "sender-0",
+                &backdrop,
+            ))
+            .unwrap();
+
+            // Ready CC1AD845 status with media namespace.
+            let media_ready = serde_json::json!({
+                "type": "RECEIVER_STATUS",
+                "status": {
+                    "applications": [
+                        {
+                            "appId": "E8C28D3C",
+                            "isIdleScreen": true,
+                            "transportId": "backdrop-transport-1"
+                        },
+                        {
+                            "appId": CAST_APP_DEFAULT_MEDIA,
+                            "isIdleScreen": false,
+                            "transportId": "media-session-42",
+                            "namespaces": [{"name": CAST_NS_MEDIA}]
+                        }
+                    ]
+                }
+            })
+            .to_string();
+            peer.write_all(&encode_cast_message(
+                CAST_NS_RECEIVER,
+                "sender-0",
+                &media_ready,
+            ))
+            .unwrap();
+        });
+
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let transport = chromecast_transport(&mut client, true).unwrap();
+        assert_eq!(transport, "media-session-42");
+        server.join().unwrap();
+
+        // Non-launch control mode rejects idle screen immediately and picks active media session at index > 0.
+        let idle_only = serde_json::json!({
+            "type": "RECEIVER_STATUS",
+            "status": {
+                "applications": [{
+                    "appId": "E8C28D3C",
+                    "isIdleScreen": true,
+                    "transportId": "backdrop-transport-1",
+                    "namespaces": [{"name": CAST_NS_MEDIA}]
+                }]
+            }
+        });
+        assert_eq!(select_chromecast_transport(&idle_only, false), None);
+        let third_party_media = serde_json::json!({
+            "type": "RECEIVER_STATUS",
+            "status": {
+                "applications": [
+                    {"appId": "OTHER001", "transportId": "non-media-0", "namespaces": [{"name": "urn:x-cast:other"}]},
+                    {"appId": "233637DE", "transportId": "yt-media-1", "namespaces": [{"name": CAST_NS_MEDIA}]}
+                ]
+            }
+        });
+        assert_eq!(
+            select_chromecast_transport(&third_party_media, false).as_deref(),
+            Some("yt-media-1")
+        );
+        // Launch mode must NOT hijack a 3rd-party app's transportId; it waits for CC1AD845.
+        assert_eq!(select_chromecast_transport(&third_party_media, true), None);
     }
 }

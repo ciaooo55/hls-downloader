@@ -1203,9 +1203,32 @@ fn parse_hhmm(value: &str) -> Option<u32> {
     Some(hour * 60 + minute)
 }
 
-pub fn local_hhmm() -> String {
-    let minutes = chrono_minutes_now();
-    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+#[cfg(test)]
+fn local_hhmm() -> String {
+    local_day_stamp_and_hhmm().1
+}
+
+pub fn local_day_stamp_and_hhmm() -> (u32, String) {
+    #[cfg(windows)]
+    {
+        let mut now = crate::local_time::LocalTimeFields::default();
+        // SAFETY: `now` is a valid initialized `#[repr(C)]` `SYSTEMTIME`-compatible stack slot.
+        unsafe { sys_time::GetLocalTime(&mut now) };
+        let minutes = now.minutes_since_midnight();
+        (
+            now.day_stamp(),
+            format!("{:02}:{:02}", minutes / 60, minutes % 60),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let secs = crate::local_time::unix_now_seconds();
+        let minutes = ((secs / 60) % (24 * 60)) as u32;
+        (
+            (secs / 86_400) as u32,
+            format!("{:02}:{:02}", minutes / 60, minutes % 60),
+        )
+    }
 }
 
 fn chrono_minutes_now() -> u32 {

@@ -10937,3 +10937,190 @@ fn accept_handoff_override_and_probe_preserve_explicit_headers_custom_dir_and_du
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn save_site_profile_maps_proxy_sentinels_isolates_credentials_and_rejects_non_http_hosts() {
+    let root = lifecycle_test_root("save-site-profile");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    coordinator.set_default_cookie("global_sid=keep").unwrap();
+
+    // 1. Task using SYSTEM_PROXY_SENTINEL + DEFAULT_COOKIE_CREDENTIAL_REF + opaque "null" Origin:
+    //    must save proxy_mode="system", proxy="", origin="", and NOT alias settings:default-cookie!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://media.example.test/video.mp4".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                proxy: crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
+                headers: BTreeMap::from([
+                    ("Origin".into(), "null".into()),
+                    ("Referer".into(), "https://media.example.test/watch".into()),
+                ]),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::SaveSiteProfile {
+            task_id: "task-1".into(),
+        })
+        .unwrap();
+    let rules = crate::parse_site_rules(&coordinator.settings().unwrap().site_rules);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].host, "media.example.test");
+    assert_eq!(rules[0].proxy_mode, "system");
+    assert!(rules[0].proxy.is_empty());
+    assert!(rules[0].origin.is_empty());
+    assert!(
+        rules[0].credential_ref.is_empty(),
+        "global default cookie ref must never be aliased into site rule"
+    );
+
+    // 2. Task with private Cookie credential: save_site_profile copies into dedicated site-rule ref,
+    //    so clearing the site rule later never deletes the original task's credential or default cookie!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://auth.example.test/private.mp4".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                proxy: crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                headers: BTreeMap::from([
+                    ("Cookie".into(), "task_sid=secret".into()),
+                    ("Origin".into(), "HTTPS://auth.example.test".into()),
+                ]),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task2_cred = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .unwrap()
+        .credential_ref
+        .clone()
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::SaveSiteProfile {
+            task_id: "task-2".into(),
+        })
+        .unwrap();
+    let rules = crate::parse_site_rules(&coordinator.settings().unwrap().site_rules);
+    let auth_rule = rules
+        .iter()
+        .find(|r| r.host == "auth.example.test")
+        .unwrap();
+    assert_eq!(auth_rule.proxy_mode, "direct");
+    assert!(auth_rule.proxy.is_empty());
+    assert_eq!(auth_rule.origin, "https://auth.example.test");
+    assert!(auth_rule.credential_ref.starts_with("settings:site-rule:"));
+    assert_ne!(auth_rule.credential_ref, task2_cred);
+
+    coordinator
+        .set_site_rule_credential("*.AUTH.example.test.", "", &BTreeMap::new(), true)
+        .unwrap();
+    assert!(
+        coordinator.load_credential(&task2_cred).unwrap().is_some(),
+        "clearing site rule credential must preserve original task credential"
+    );
+    assert!(coordinator.default_cookie_configured().unwrap());
+
+    // 3. Magnet task without HTTP host rejects SaveSiteProfile cleanly.
+    let magnet_id = lifecycle_task(&coordinator, &root, "paused");
+    coordinator
+        .lock()
+        .unwrap()
+        .replace_spec(
+            &magnet_id,
+            TaskSpec {
+                url: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".into(),
+                resource_kind: crate::ResourceKind::Torrent,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(coordinator
+        .dispatch(CoreCommand::SaveSiteProfile { task_id: magnet_id })
+        .is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn single_ended_global_auto_start_does_not_fabricate_stop_window_and_stop_start_resumes_paused() {
+    let root = lifecycle_test_root("global-auto-start-stop");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting("queue_auto_start_enabled", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting("queue_auto_stop_enabled", serde_json::json!(false))
+        .unwrap();
+    let profiles = coordinator.settings().unwrap().queue_profiles;
+    assert!(
+        !profiles[0].schedule_enabled,
+        "enabling only queue_auto_start_enabled must not synthesize a continuous stop window"
+    );
+
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://media.example.test/deferred.bin".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = "task-1".to_string();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&task_id)
+            .unwrap()
+            .status,
+        "queued"
+    );
+    coordinator.pause_active_tasks().unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&task_id)
+            .unwrap()
+            .status,
+        "paused"
+    );
+
+    coordinator.resume_paused_tasks().unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&task_id)
+            .unwrap()
+            .status,
+        "queued"
+    );
+    let _ = fs::remove_dir_all(root);
+}

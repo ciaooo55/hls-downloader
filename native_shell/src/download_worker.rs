@@ -561,12 +561,16 @@ impl CoreCoordinator {
         // database, so the user has to retype it.  Holding the guard also closes
         // the read-modify-write window in which two concurrent callers could
         // overwrite each other's rules.
+        let target_match = crate::site_rules::site_rule_match_host(&normalized_host);
+        if target_match.is_empty() {
+            return Err("站点规则域名无效".into());
+        }
         let mut core = self.lock()?;
         let raw = core.store().setting_string("site_rules", "")?;
         let mut rules = crate::parse_site_rules(&raw);
-        let rule = rules
-            .iter_mut()
-            .find(|rule| rule.host.trim().eq_ignore_ascii_case(&normalized_host))
+        let rule_index = rules
+            .iter()
+            .position(|rule| crate::site_rules::site_rule_match_host(&rule.host) == target_match)
             .ok_or_else(|| "保存凭据前请先保存站点规则".to_string())?;
         // Everything the transaction needs to name is owned by this function, so
         // the borrows handed to `apply_credential_with_settings` cannot outlive
@@ -576,7 +580,7 @@ impl CoreCoordinator {
             // rule may point at a value `credential_ref_for_host` would never
             // rebuild, so deleting by the derived name would orphan it.
             (
-                std::mem::take(&mut rule.credential_ref),
+                std::mem::take(&mut rules[rule_index].credential_ref),
                 String::new(),
                 String::new(),
             )
@@ -591,14 +595,28 @@ impl CoreCoordinator {
             } else {
                 replay
             };
-            let credential_ref = crate::site_rules::credential_ref_for_host(&normalized_host);
-            rule.credential_ref = credential_ref.clone();
+            let credential_ref = crate::site_rules::credential_ref_for_host(&target_match);
+            rules[rule_index].credential_ref = credential_ref.clone();
             (String::new(), credential_ref, protected)
         };
         let write = if clear {
-            (!stored_ref.trim().is_empty()).then_some(crate::store::CredentialWrite::Delete {
-                credential_ref: stored_ref.trim(),
-            })
+            let trimmed_ref = stored_ref.trim();
+            let shared_with_other_rule = rules
+                .iter()
+                .any(|other| other.credential_ref.trim() == trimmed_ref);
+            let shared_with_task_private_ref = !trimmed_ref.starts_with("settings:site-rule:")
+                && core.tasks().iter().any(|task| {
+                    core.task_spec(&task.task_id)
+                        .and_then(|spec| spec.credential_ref.as_deref())
+                        .is_some_and(|r| r.trim() == trimmed_ref)
+                });
+            (!trimmed_ref.is_empty()
+                && trimmed_ref != DEFAULT_COOKIE_CREDENTIAL_REF
+                && !shared_with_other_rule
+                && !shared_with_task_private_ref)
+                .then_some(crate::store::CredentialWrite::Delete {
+                    credential_ref: trimmed_ref,
+                })
         } else {
             Some(crate::store::CredentialWrite::Store {
                 credential_ref: &new_ref,
@@ -1337,46 +1355,90 @@ impl CoreCoordinator {
             .task_spec(task_id)
             .cloned()
             .ok_or_else(|| format!("unknown task {task_id}"))?;
+        let host = crate::site_rules::host_of(&spec.url);
+        if host.is_empty() || !crate::site_rules::valid_site_rule_host(&host) {
+            return Err("当前任务链接不支持保存站点规则".into());
+        }
+        let (proxy_mode, proxy) = match spec.proxy.trim() {
+            crate::net_policy::DIRECT_PROXY_SENTINEL => ("direct".to_string(), String::new()),
+            crate::net_policy::SYSTEM_PROXY_SENTINEL => ("system".to_string(), String::new()),
+            "" | crate::net_policy::INVALID_MANUAL_PROXY => (String::new(), String::new()),
+            other if proxy_url_allowed(other) => ("manual".to_string(), other.to_string()),
+            _ => (String::new(), String::new()),
+        };
+        let origin = spec
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("origin"))
+            .and_then(|(_, value)| {
+                let trimmed = value.trim();
+                let lower = trimmed.to_ascii_lowercase();
+                if lower.starts_with("http://") {
+                    Some(format!("http://{}", &trimmed[7..]))
+                } else if lower.starts_with("https://") {
+                    Some(format!("https://{}", &trimmed[8..]))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let match_host = crate::site_rules::site_rule_match_host(&host);
+        let mut minted_credential: Option<(String, String)> = None;
+        let credential_ref = match spec.credential_ref.as_deref().map(str::trim) {
+            None | Some("") | Some(DEFAULT_COOKIE_CREDENTIAL_REF) => String::new(),
+            Some(existing_ref) => {
+                if let Some(blob) = self.load_credential(existing_ref)? {
+                    let site_ref = crate::site_rules::credential_ref_for_host(&match_host);
+                    minted_credential = Some((site_ref.clone(), blob));
+                    site_ref
+                } else {
+                    String::new()
+                }
+            }
+        };
         let raw = self.lock()?.store().setting_string("site_rules", "")?;
         let mut rules = crate::parse_site_rules(&raw);
         crate::upsert_site_rule(
             &mut rules,
             crate::SiteRule {
-                host: crate::site_rules::host_of(&spec.url),
+                host: host.clone(),
                 speed_limit_kib: spec.speed_limit_kib,
                 concurrency: spec.concurrency,
-                proxy: spec.proxy.clone(),
+                proxy,
+                proxy_mode,
                 referer: spec
                     .headers
                     .iter()
                     .find(|(name, _)| name.eq_ignore_ascii_case("referer"))
                     .map(|(_, value)| value.clone())
                     .unwrap_or_default(),
-                origin: spec
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("origin"))
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_default(),
+                origin,
                 user_agent: spec
                     .headers
                     .iter()
                     .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
                     .map(|(_, value)| value.clone())
                     .unwrap_or_default(),
-                credential_ref: spec.credential_ref.clone().unwrap_or_default(),
+                credential_ref,
                 ..Default::default()
             },
         );
         let encoded = crate::format_site_rules(&rules);
+        crate::site_rules::validate_site_rules(&encoded)?;
+        if let Some((site_ref, blob)) = minted_credential {
+            self.store_credential(&site_ref, &blob, "site_rule")?;
+        }
         self.set_setting("site_rules", serde_json::json!(encoded))?;
         self.lock()?.emit(CoreEvent::Toast {
             level: "site_profile".into(),
-            message: format!(
-                "已保存 {} 的站点规则",
-                crate::site_rules::host_of(&spec.url)
-            ),
+            message: format!("已保存 {host} 的站点规则"),
         })
+    }
+
+    pub(crate) fn resolved_url_proxy(&self, target_url: &str) -> Result<(String, String), String> {
+        let settings = self.settings()?;
+        let proxy = self.transfer_proxy(&settings_proxy(&settings, target_url))?;
+        Ok((proxy, settings.proxy_bypass))
     }
 
     pub fn player_embed(&self, embed: crate::PlayerEmbed) -> Result<Vec<EventEnvelope>, String> {
@@ -3412,10 +3474,11 @@ fn load_queue_profiles(store: &crate::CoreStore) -> Result<Vec<QueueProfile>, St
                 .map_err(|error| format!("读取队列配置失败: {error}"));
         }
     }
+    let auto_start = store.setting_bool("queue_auto_start_enabled", false)?;
+    let auto_stop = store.setting_bool("queue_auto_stop_enabled", false)?;
     Ok(vec![QueueProfile {
         max_active: store.setting_u64("queue_max_active", 3)?.clamp(1, 64) as u32,
-        schedule_enabled: store.setting_bool("queue_auto_start_enabled", false)?
-            || store.setting_bool("queue_auto_stop_enabled", false)?,
+        schedule_enabled: auto_start && auto_stop,
         start_time: store.setting_string("queue_auto_start_time", "00:00")?,
         stop_time: store.setting_string("queue_auto_stop_time", "07:30")?,
         active_days: store.setting_string("queue_active_days", "1,2,3,4,5,6,7")?,
@@ -3730,67 +3793,94 @@ fn run_task_with_throttle(
                     selection_path: paths.torrent_selection.clone(),
                 }
             };
-            let telemetry_core = Arc::clone(&core);
-            let telemetry_task_id = task_id.to_string();
-            let mut telemetry_reporter =
-                move |telemetry: crate::torrent_engine::TorrentTelemetry| {
-                    let Ok(mut guard) = telemetry_core.lock() else {
-                        return;
+            let (meta, latest_spec) = {
+                let mut attempt = 0u8;
+                loop {
+                    let active_selection = {
+                        let guard = core
+                            .lock()
+                            .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+                        guard
+                            .task_spec(task_id)
+                            .map(|item| item.torrent_selection.clone())
+                            .unwrap_or_else(|| spec.torrent_selection.clone())
                     };
-                    let _ = guard.set_torrent_telemetry(
-                        &telemetry_task_id,
-                        telemetry.peer_count,
-                        telemetry.seed_count,
-                        telemetry.uploaded_bytes,
-                        telemetry.upload_speed_bytes_per_sec,
-                    );
-                };
-            let torrent_url = spec.url.clone();
-            let torrent_output = paths.output.clone();
-            let torrent_control = paths.control.clone();
-            let torrent_headers = headers.clone();
-            let torrent_proxy = spec.proxy.clone();
-            let torrent_progress = crate::torrent_engine::progress_path(&torrent_output);
-            let meta = poll_media_progress(&core, task_id, &torrent_progress, false, move || {
-                crate::torrent_engine::torrent_session().download_for_publication(
-                    &torrent_url,
-                    &torrent_output,
-                    &torrent_control,
-                    &torrent_headers,
-                    &torrent_proxy,
-                    torrent_options,
-                    &mut telemetry_reporter,
-                )
-            })?;
-            let filename = resolved_torrent_filename(&spec, &meta.name);
-            paths.final_output = paths.final_output.with_file_name(&filename);
-            core.lock()
-                .map_err(|_| "v7 Core mutex poisoned".to_string())?
-                .set_task_filename(task_id, filename)?;
-            let (downloaded, total) = current_progress(&core, task_id);
-            mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
-            let latest_spec = {
-                let guard = core
-                    .lock()
-                    .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-                guard
-                    .task_spec(task_id)
-                    .cloned()
-                    .unwrap_or_else(|| spec.clone())
+                    let telemetry_core = Arc::clone(&core);
+                    let telemetry_task_id = task_id.to_string();
+                    let mut telemetry_reporter =
+                        move |telemetry: crate::torrent_engine::TorrentTelemetry| {
+                            let Ok(mut guard) = telemetry_core.lock() else {
+                                return;
+                            };
+                            let _ = guard.set_torrent_telemetry(
+                                &telemetry_task_id,
+                                telemetry.peer_count,
+                                telemetry.seed_count,
+                                telemetry.uploaded_bytes,
+                                telemetry.upload_speed_bytes_per_sec,
+                            );
+                        };
+                    let torrent_url = spec.url.clone();
+                    let torrent_output = paths.output.clone();
+                    let torrent_control = paths.control.clone();
+                    let torrent_headers = headers.clone();
+                    let torrent_proxy = spec.proxy.clone();
+                    let torrent_progress = crate::torrent_engine::progress_path(&torrent_output);
+                    let options = torrent_options.clone();
+                    let meta =
+                        poll_media_progress(&core, task_id, &torrent_progress, false, move || {
+                            crate::torrent_engine::torrent_session().download_for_publication(
+                                &torrent_url,
+                                &torrent_output,
+                                &torrent_control,
+                                &torrent_headers,
+                                &torrent_proxy,
+                                options,
+                                &mut telemetry_reporter,
+                            )
+                        })?;
+                    let filename = resolved_torrent_filename(&spec, &meta.name);
+                    paths.final_output = paths.final_output.with_file_name(&filename);
+                    core.lock()
+                        .map_err(|_| "v7 Core mutex poisoned".to_string())?
+                        .set_task_filename(task_id, filename)?;
+                    let (downloaded, total) = current_progress(&core, task_id);
+                    mark_progress(&core, task_id, downloaded, total, "checking", "checking")?;
+                    let latest_spec = {
+                        let guard = core
+                            .lock()
+                            .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+                        guard
+                            .task_spec(task_id)
+                            .cloned()
+                            .unwrap_or_else(|| spec.clone())
+                    };
+                    ensure_publish_allowed(&paths.control)?;
+                    if !meta.pieces.is_empty() {
+                        match crate::torrent_engine::verify_selected_pieces(
+                            &paths.output,
+                            &meta,
+                            &latest_spec.torrent_selection,
+                            &paths.control,
+                        ) {
+                            Ok(()) => {}
+                            Err(error)
+                                if !matches!(error.as_str(), "paused" | "canceled")
+                                    && attempt < 3
+                                    && latest_spec.torrent_selection != active_selection =>
+                            {
+                                attempt += 1;
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    break (meta, latest_spec);
+                }
             };
             if meta.multi_file {
                 let destination = paths.final_output.clone();
                 ensure_publish_allowed(&paths.control)?;
-                // Validate the final selection against the metadata actually used by BT.
-                // A late selection update must not publish a hole in the sparse payload.
-                if !latest_spec.torrent_selection.is_empty() {
-                    crate::torrent_engine::verify_selected_pieces(
-                        &paths.output,
-                        &meta,
-                        &latest_spec.torrent_selection,
-                        &paths.control,
-                    )?;
-                }
                 let (published, bytes) = crate::torrent_engine::publish_torrent_directory(
                     &paths.output,
                     &destination,
@@ -5751,6 +5841,7 @@ fn apply_site_rules_to_spec(
                 "direct" => spec.proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
                 "system" => spec.proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
                 "manual" if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
+                "manual" => spec.proxy = crate::net_policy::INVALID_MANUAL_PROXY.into(),
                 _ if !rule.proxy.trim().is_empty() => spec.proxy = rule.proxy.clone(),
                 _ => {}
             }
@@ -6686,11 +6777,7 @@ fn probe_torrent_command(
     source: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
-    let proxy = if source.starts_with("http://") || source.starts_with("https://") {
-        coordinator.transfer_proxy(&settings_proxy(&settings, source))?
-    } else {
-        String::new()
-    };
+    let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, source))?;
     let meta = crate::torrent_engine::probe_torrent_source(
         source,
         &std::collections::HashMap::new(),
@@ -6712,11 +6799,7 @@ fn select_torrent_files_command(
     selections: &[crate::TorrentFileSelection],
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
-    let proxy = if source.starts_with("http://") || source.starts_with("https://") {
-        coordinator.transfer_proxy(&settings_proxy(&settings, source))?
-    } else {
-        String::new()
-    };
+    let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, source))?;
     let meta = crate::torrent_engine::probe_torrent_source(
         source,
         &std::collections::HashMap::new(),

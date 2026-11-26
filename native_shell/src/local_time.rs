@@ -50,6 +50,11 @@ impl LocalTimeFields {
     pub(crate) fn minutes_since_midnight(&self) -> u32 {
         u32::from(self.hour) * 60 + u32::from(self.minute)
     }
+
+    /// 本地日历日标识（`YYYYMMDD`），用于跨天计划任务去重锁存。
+    pub(crate) fn day_stamp(&self) -> u32 {
+        u32::from(self.year) * 10_000 + u32::from(self.month) * 100 + u32::from(self.day)
+    }
 }
 /// **只服务非 Windows 支路**：`net_policy::local_weekday_iso` 的 `#[cfg(not(windows))]`
 /// 分支。Windows 上走 `GetLocalTime` + [LocalTimeFields::iso_weekday]，不需要它，

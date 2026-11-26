@@ -355,6 +355,7 @@ pub fn probe_torrent_source(
     proxy: &str,
     enable_dht: bool,
 ) -> Result<TorrentMeta, String> {
+    check_bt_proxy_allowed(proxy)?;
     let source = source.trim();
     if source.starts_with("magnet:") {
         let (mut magnet, exact_sources) = parse_magnet_sources(source)?;
@@ -367,6 +368,7 @@ pub fn probe_torrent_source(
             None,
         ) {
             Ok(meta) => Ok(meta),
+            Err(error) if is_fatal_bt_error(&error) => Err(error),
             Err(error) if magnet.info_hash.is_empty() && magnet.web_seeds.is_empty() => Err(error),
             Err(_) => Ok(magnet),
         };
@@ -746,6 +748,7 @@ fn transfer_torrent(
     reporter: &mut dyn FnMut(TorrentTelemetry),
 ) -> Result<(u64, TorrentMeta), String> {
     check_optional_control(Some(control))?;
+    check_bt_proxy_allowed(proxy)?;
     let meta = if spec_url.starts_with("magnet:") {
         let (mut magnet, exact_sources) = parse_magnet_sources(spec_url)?;
         match fetch_magnet_metadata(
@@ -757,7 +760,7 @@ fn transfer_torrent(
             Some(control),
         ) {
             Ok(meta) => meta,
-            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             Err(error) if !magnet.info_hash.is_empty() || magnet.web_seeds.is_empty() => {
                 return Err(error)
             }
@@ -934,6 +937,54 @@ fn is_control_stop(error: &str) -> bool {
     matches!(error, "paused" | "canceled")
 }
 
+fn check_bt_proxy_allowed(proxy: &str) -> Result<(), String> {
+    if proxy.trim() == crate::net_policy::INVALID_MANUAL_PROXY {
+        return Err("手动代理模式未配置代理服务器地址".into());
+    }
+    Ok(())
+}
+
+fn is_fatal_bt_error(error: &str) -> bool {
+    is_control_stop(error) || error.contains("手动代理模式未配置代理服务器地址")
+}
+
+fn connect_bt_peer_tcp(
+    addr: std::net::SocketAddr,
+    proxy: &str,
+    control: Option<&Path>,
+) -> Result<std::net::TcpStream, String> {
+    check_bt_proxy_allowed(proxy)?;
+    let target_url = format!("http://{addr}/");
+    if let Some(tunnel) =
+        crate::proxy_tunnel::Proxy::resolve(proxy, &target_url, || check_optional_control(control))?
+    {
+        tunnel.connect_blocking(&addr.ip().to_string(), addr.port(), || {
+            check_optional_control(control)
+        })
+    } else {
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(8))
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn udp_allowed_under_proxy(
+    proxy: &str,
+    target_authority: &str,
+    control: Option<&Path>,
+) -> Result<bool, String> {
+    check_bt_proxy_allowed(proxy)?;
+    match crate::http_engine::proxy_route(proxy).map_err(|e| e.to_string())? {
+        crate::http_engine::ProxyRoute::Direct => Ok(true),
+        crate::http_engine::ProxyRoute::Manual(_) => Ok(false),
+        crate::http_engine::ProxyRoute::System => Ok(crate::proxy_tunnel::Proxy::resolve(
+            proxy,
+            &format!("http://{target_authority}/"),
+            || check_optional_control(control),
+        )?
+        .is_none()),
+    }
+}
+
 fn fetch_torrent_http_bytes(
     url: &str,
     headers: &std::collections::HashMap<String, String>,
@@ -983,7 +1034,7 @@ fn fetch_exact_source_metadata(
             true,
         ) {
             Ok(response) => response,
-            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             Err(_) => continue,
         };
         if status != 200 {
@@ -1053,7 +1104,7 @@ fn fetch_magnet_metadata(
     })?;
     match fetch_metadata_from_swarm(magnet, headers, proxy, enable_dht, control) {
         Ok(meta) => Ok(meta),
-        Err(error) if is_control_stop(&error) => Err(error),
+        Err(error) if is_fatal_bt_error(&error) => Err(error),
         Err(swarm_error) => Err(format!("未能取得种子元数据：{swarm_error}")),
     }
 }
@@ -1137,6 +1188,13 @@ fn download_swarm(
                 }
             }
             if index == peers.len() {
+                if matches!(
+                    crate::http_engine::proxy_route(proxy),
+                    Ok(crate::http_engine::ProxyRoute::Manual(_))
+                ) {
+                    last = "当前代理模式不支持 UDP Tracker/DHT，且未发现可用 HTTP Tracker 或对端"
+                        .into();
+                }
                 break;
             }
         }
@@ -1146,18 +1204,19 @@ fn download_swarm(
             continue;
         }
         let mut extra = Vec::new();
-        match download_from_peer_ex_with_telemetry(
+        match download_from_peer_ex_with_proxy(
             peer,
             meta,
             output,
             control,
+            proxy,
             &mut extra,
             &mut telemetry,
             reporter,
             &options.selection_path,
         ) {
             Ok(len) => return Ok(len),
-            Err(error) if matches!(error.as_str(), "paused" | "canceled") => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             Err(error) => last = error,
         }
         for addr in extra {
@@ -1178,6 +1237,7 @@ fn announce_peers(
     control: Option<&Path>,
 ) -> Result<Vec<std::net::SocketAddr>, String> {
     check_optional_control(control)?;
+    check_bt_proxy_allowed(proxy)?;
     let info_hash = decode_info_hash(&meta.info_hash)?;
     let mut peers = resolve_hint_peers(&meta.hint_peers);
     let announces: Vec<String> = if meta.announce.is_empty() {
@@ -1194,9 +1254,15 @@ fn announce_peers(
             break;
         }
         if announce.starts_with("udp://") {
+            let Some((host, port)) = parse_udp_tracker(announce) else {
+                continue;
+            };
+            if !udp_allowed_under_proxy(proxy, &format!("{host}:{port}"), control)? {
+                continue;
+            }
             match announce_udp(announce, &info_hash, meta.length, control) {
                 Ok(found) => peers.extend(found.into_iter().take(1000 - peers.len())),
-                Err(error) if is_control_stop(&error) => return Err(error),
+                Err(error) if is_fatal_bt_error(&error) => return Err(error),
                 Err(_) => {}
             }
             continue;
@@ -1220,15 +1286,18 @@ fn announce_peers(
                         .take(1000 - peers.len()),
                 );
             }
-            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             _ => {}
         }
     }
-    if enable_dht && peers.len() < 1000 {
+    if enable_dht
+        && peers.len() < 1000
+        && udp_allowed_under_proxy(proxy, "router.bittorrent.com:6881", control)?
+    {
         check_optional_control(control)?;
         match dht_get_peers(&info_hash, control) {
             Ok(found) => peers.extend(found.into_iter().take(1000 - peers.len())),
-            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             Err(_) => {}
         }
     }
@@ -1269,6 +1338,7 @@ fn fetch_metadata_from_swarm(
     control: Option<&Path>,
 ) -> Result<TorrentMeta, String> {
     check_optional_control(control)?;
+    check_bt_proxy_allowed(proxy)?;
     let mut last = "没有节点提供种子元数据".to_string();
     let mut queue = resolve_hint_peers(&magnet.hint_peers);
     let mut discovered = false;
@@ -1287,6 +1357,13 @@ fn fetch_metadata_from_swarm(
                 }
             }
             if index == queue.len() {
+                if matches!(
+                    crate::http_engine::proxy_route(proxy),
+                    Ok(crate::http_engine::ProxyRoute::Manual(_))
+                ) {
+                    last = "当前代理模式不支持 UDP Tracker/DHT，且未发现可用 HTTP Tracker 或对端"
+                        .into();
+                }
                 break;
             }
         }
@@ -1296,9 +1373,9 @@ fn fetch_metadata_from_swarm(
             continue;
         }
         let mut extra = Vec::new();
-        match fetch_ut_metadata_from_peer(peer, magnet, &mut extra, control) {
+        match fetch_ut_metadata_from_peer_with_proxy(peer, magnet, proxy, &mut extra, control) {
             Ok(meta) => return Ok(meta),
-            Err(error) if is_control_stop(&error) => return Err(error),
+            Err(error) if is_fatal_bt_error(&error) => return Err(error),
             Err(error) => last = error,
         }
         for addr in extra {
@@ -1556,17 +1633,27 @@ fn dht_get_peers(
     Ok(peers)
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn fetch_ut_metadata_from_peer(
     addr: std::net::SocketAddr,
     magnet: &TorrentMeta,
     extra_peers: &mut Vec<std::net::SocketAddr>,
     control: Option<&Path>,
 ) -> Result<TorrentMeta, String> {
+    fetch_ut_metadata_from_peer_with_proxy(addr, magnet, "", extra_peers, control)
+}
+
+fn fetch_ut_metadata_from_peer_with_proxy(
+    addr: std::net::SocketAddr,
+    magnet: &TorrentMeta,
+    proxy: &str,
+    extra_peers: &mut Vec<std::net::SocketAddr>,
+    control: Option<&Path>,
+) -> Result<TorrentMeta, String> {
     use std::io::Write;
-    use std::net::TcpStream;
     check_optional_control(control)?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
-        .map_err(|error| error.to_string())?;
+    let mut stream = connect_bt_peer_tcp(addr, proxy, control)?;
     stream
         .set_write_timeout(Some(Duration::from_secs(12)))
         .map_err(|error| error.to_string())?;
@@ -1788,6 +1875,7 @@ fn percent_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("%{byte:02X}")).collect()
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn download_from_peer_ex_with_telemetry(
     addr: std::net::SocketAddr,
@@ -1799,8 +1887,56 @@ fn download_from_peer_ex_with_telemetry(
     reporter: &mut dyn FnMut(TorrentTelemetry),
     selection_path: &Path,
 ) -> Result<u64, String> {
+    download_from_peer_ex_with_proxy(
+        addr,
+        meta,
+        output,
+        control,
+        "",
+        extra_peers,
+        telemetry,
+        reporter,
+        selection_path,
+    )
+}
+
+fn compute_selected_progress(
+    meta: &TorrentMeta,
+    file: &mut fs::File,
+    selection_cache: &PieceSelectionCache<'_>,
+) -> (Vec<usize>, u64, u64) {
+    let mut pending = Vec::new();
+    let mut downloaded = 0u64;
+    let mut selected_total = 0u64;
+    for (index, hash) in meta.pieces.iter().enumerate() {
+        if !selection_cache.selected_now(index) {
+            continue;
+        }
+        let start = index as u64 * meta.piece_length;
+        let piece_bytes = (meta.length - start).min(meta.piece_length);
+        selected_total = selected_total.saturating_add(piece_bytes);
+        if piece_is_complete(file, start, piece_bytes as usize, hash) {
+            downloaded = downloaded.saturating_add(piece_bytes);
+        } else {
+            pending.push(index);
+        }
+    }
+    (pending, downloaded, selected_total)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn download_from_peer_ex_with_proxy(
+    addr: std::net::SocketAddr,
+    meta: &TorrentMeta,
+    output: &Path,
+    control: &Path,
+    proxy: &str,
+    extra_peers: &mut Vec<std::net::SocketAddr>,
+    telemetry: &mut TorrentTelemetry,
+    reporter: &mut dyn FnMut(TorrentTelemetry),
+    selection_path: &Path,
+) -> Result<u64, String> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    use std::net::TcpStream;
     use std::time::Duration;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1814,30 +1950,15 @@ fn download_from_peer_ex_with_telemetry(
         .map_err(|error| error.to_string())?;
     file.set_len(meta.length)
         .map_err(|error| error.to_string())?;
-    let initial_pending: Vec<usize> = meta
-        .pieces
-        .iter()
-        .enumerate()
-        .filter(|(index, hash)| {
-            let start = *index as u64 * meta.piece_length;
-            let len = ((meta.length - start).min(meta.piece_length)) as usize;
-            !piece_is_complete(&mut file, start, len, hash)
-        })
-        .map(|(index, _)| index)
-        .collect();
+    let mut selection_cache = PieceSelectionCache::new(meta, selection_path)?;
+    let (initial_pending, mut downloaded, mut selected_total) =
+        compute_selected_progress(meta, &mut file, &selection_cache);
     let progress = progress_path(output);
-    let mut downloaded = meta.length.saturating_sub(
-        initial_pending
-            .iter()
-            .map(|index| (meta.length - *index as u64 * meta.piece_length).min(meta.piece_length))
-            .sum(),
-    );
-    crate::http_engine::write_progress(&progress, downloaded, meta.length, 0.0, "downloading");
+    crate::http_engine::write_progress(&progress, downloaded, selected_total, 0.0, "downloading");
     if initial_pending.is_empty() {
-        return Ok(meta.length);
+        return Ok(selected_total);
     }
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(8))
-        .map_err(|error| error.to_string())?;
+    let mut stream = connect_bt_peer_tcp(addr, proxy, Some(control))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(15)))
         .map_err(|error| error.to_string())?;
@@ -1878,21 +1999,19 @@ fn download_from_peer_ex_with_telemetry(
     // A complete bitfield lets us avoid requests the peer must ignore. HAVE
     // messages only add availability and therefore do not establish absence.
     let mut peer_availability_known = false;
-    let mut selection_cache = PieceSelectionCache::new(meta, selection_path);
     loop {
-        selection_cache.maybe_refresh(meta);
-        let pending: Vec<usize> = meta
-            .pieces
-            .iter()
-            .enumerate()
-            .filter(|(index, hash)| {
-                let start = *index as u64 * meta.piece_length;
-                let len = ((meta.length - start).min(meta.piece_length)) as usize;
-                !piece_is_complete(&mut file, start, len, hash)
-                    && selection_cache.is_selected(meta, *index)
-            })
-            .map(|(index, _)| index)
-            .collect();
+        selection_cache.maybe_refresh(meta)?;
+        let (pending, refreshed_downloaded, refreshed_total) =
+            compute_selected_progress(meta, &mut file, &selection_cache);
+        downloaded = refreshed_downloaded;
+        selected_total = refreshed_total;
+        crate::http_engine::write_progress(
+            &progress,
+            downloaded,
+            selected_total,
+            0.0,
+            "downloading",
+        );
         if pending.is_empty() {
             break;
         }
@@ -1912,7 +2031,7 @@ fn download_from_peer_ex_with_telemetry(
             if !unchoked {
                 while !unchoked {
                     check_torrent_control(control)?;
-                    if !selection_cache.is_selected(meta, index) {
+                    if !selection_cache.is_selected(meta, index)? {
                         continue 'pieces;
                     }
                     if Instant::now() >= progress_deadline {
@@ -1944,7 +2063,7 @@ fn download_from_peer_ex_with_telemetry(
             while filled < len {
                 while !unchoked {
                     check_torrent_control(control)?;
-                    if !selection_cache.is_selected(meta, index) {
+                    if !selection_cache.is_selected(meta, index)? {
                         continue 'pieces;
                     }
                     if Instant::now() >= progress_deadline {
@@ -1963,7 +2082,7 @@ fn download_from_peer_ex_with_telemetry(
                         }
                     }
                 }
-                if !selection_cache.is_selected(meta, index) {
+                if !selection_cache.is_selected(meta, index)? {
                     continue 'pieces;
                 }
                 let block = (len - filled).min(16 * 1024);
@@ -1977,7 +2096,7 @@ fn download_from_peer_ex_with_telemetry(
                         let _ = send_message(&mut stream, 8, &payload);
                         return Err(error);
                     }
-                    if !selection_cache.is_selected(meta, index) {
+                    if !selection_cache.is_selected(meta, index)? {
                         let _ = send_message(&mut stream, 8, &payload);
                         continue 'pieces;
                     }
@@ -2029,11 +2148,11 @@ fn download_from_peer_ex_with_telemetry(
             file.write_all(&piece).map_err(|error| error.to_string())?;
             downloaded = downloaded
                 .saturating_add(piece.len() as u64)
-                .min(meta.length);
+                .min(selected_total);
             crate::http_engine::write_progress(
                 &progress,
                 downloaded,
-                meta.length,
+                selected_total,
                 0.0,
                 "downloading",
             );
@@ -2042,7 +2161,7 @@ fn download_from_peer_ex_with_telemetry(
     telemetry.seed_count =
         u32::from(!peer_pieces.is_empty() && peer_pieces.iter().all(|available| *available));
     reporter(*telemetry);
-    Ok(meta.length)
+    Ok(selected_total)
 }
 
 struct PieceSelectionCache<'a> {
@@ -2055,72 +2174,109 @@ struct PieceSelectionCache<'a> {
 impl<'a> PieceSelectionCache<'a> {
     const REFRESH_INTERVAL: Duration = Duration::from_millis(50);
 
-    fn new(meta: &TorrentMeta, path: &'a Path) -> Self {
+    fn new(meta: &TorrentMeta, path: &'a Path) -> Result<Self, String> {
         let mut cache = Self {
             path,
             selected: vec![true; meta.pieces.len()],
             raw_bytes: None,
             last_checked: Instant::now(),
         };
-        cache.reload(meta);
-        cache
+        cache.reload(meta)?;
+        Ok(cache)
     }
 
-    fn maybe_refresh(&mut self, meta: &TorrentMeta) {
+    fn maybe_refresh(&mut self, meta: &TorrentMeta) -> Result<bool, String> {
         if !self.path.as_os_str().is_empty()
             && self.last_checked.elapsed() >= Self::REFRESH_INTERVAL
         {
-            self.reload(meta);
+            self.reload(meta)
+        } else {
+            Ok(false)
         }
     }
 
-    fn is_selected(&mut self, meta: &TorrentMeta, piece_index: usize) -> bool {
+    fn selected_now(&self, piece_index: usize) -> bool {
         if self.path.as_os_str().is_empty() {
             return true;
         }
-        self.maybe_refresh(meta);
         self.selected.get(piece_index).copied().unwrap_or(false)
     }
 
-    fn reload(&mut self, meta: &TorrentMeta) {
-        self.last_checked = Instant::now();
-        if self.path.as_os_str().is_empty() || !self.path.is_file() {
-            if self.raw_bytes.take().is_some() || !self.selected.iter().all(|&item| item) {
-                self.selected.fill(true);
-            }
-            return;
+    fn is_selected(&mut self, meta: &TorrentMeta, piece_index: usize) -> Result<bool, String> {
+        if self.path.as_os_str().is_empty() {
+            return Ok(true);
         }
-        let Ok(encoded) = fs::read(self.path) else {
-            self.raw_bytes = None;
-            self.selected.fill(false);
-            return;
+        let _ = self.maybe_refresh(meta)?;
+        Ok(self.selected.get(piece_index).copied().unwrap_or(false))
+    }
+
+    fn reload(&mut self, meta: &TorrentMeta) -> Result<bool, String> {
+        self.last_checked = Instant::now();
+        if self.path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+        let mut last_io_err = None;
+        let mut encoded = None;
+        for attempt in 0..3 {
+            match fs::read(self.path) {
+                Ok(bytes) => {
+                    encoded = Some(bytes);
+                    break;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    let changed =
+                        self.raw_bytes.take().is_some() || !self.selected.iter().all(|&item| item);
+                    if changed {
+                        self.selected.fill(true);
+                    }
+                    return Ok(changed);
+                }
+                Err(err) => {
+                    last_io_err = Some(err);
+                    if attempt < 2 {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+            }
+        }
+        let Some(encoded) = encoded else {
+            let err = last_io_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "未知 I/O 错误".into());
+            return Err(format!("无法读取种子文件选择配置：{err}"));
         };
         if self.raw_bytes.as_deref() == Some(encoded.as_slice()) {
-            return;
+            return Ok(false);
         }
-        self.selected = compute_selected_pieces_from_bytes(meta, &encoded);
+        let next = compute_selected_pieces_from_bytes(meta, &encoded)?;
+        let changed = self.selected != next;
+        self.selected = next;
         self.raw_bytes = Some(encoded);
+        Ok(changed)
     }
 }
 
-fn compute_selected_pieces_from_bytes(meta: &TorrentMeta, encoded: &[u8]) -> Vec<bool> {
-    let Ok(selections) = serde_json::from_slice::<Vec<TorrentFileSelection>>(encoded) else {
-        return vec![false; meta.pieces.len()];
-    };
+fn compute_selected_pieces_from_bytes(
+    meta: &TorrentMeta,
+    encoded: &[u8],
+) -> Result<Vec<bool>, String> {
+    let selections = serde_json::from_slice::<Vec<TorrentFileSelection>>(encoded)
+        .map_err(|err| format!("种子文件选择配置无效：{err}"))?;
     if selections.is_empty() {
-        return vec![true; meta.pieces.len()];
+        return Ok(vec![true; meta.pieces.len()]);
     }
+    let validated = validate_torrent_selection(meta, &selections)?;
     let selected_ranges: Vec<(u64, u64)> = meta
         .files
         .iter()
         .filter(|file| {
-            selections
+            validated
                 .iter()
                 .any(|selection| selection.index == file.index && selection.selected)
         })
         .map(|file| (file.offset, file.offset.saturating_add(file.size)))
         .collect();
-    (0..meta.pieces.len())
+    Ok((0..meta.pieces.len())
         .map(|piece_index| {
             let piece_start = piece_index as u64 * meta.piece_length;
             let piece_end = (piece_start + meta.piece_length).min(meta.length);
@@ -2128,13 +2284,13 @@ fn compute_selected_pieces_from_bytes(meta: &TorrentMeta, encoded: &[u8]) -> Vec
                 .iter()
                 .any(|&(file_start, file_end)| piece_start < file_end && file_start < piece_end)
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
 fn piece_is_selected(meta: &TorrentMeta, piece_index: usize, selection_path: &Path) -> bool {
-    let mut cache = PieceSelectionCache::new(meta, selection_path);
-    cache.is_selected(meta, piece_index)
+    let mut cache = PieceSelectionCache::new(meta, selection_path).unwrap();
+    cache.is_selected(meta, piece_index).unwrap()
 }
 
 fn note_peer_availability(id: u8, body: &[u8], pieces: &mut [bool]) -> bool {
@@ -4410,6 +4566,269 @@ mod tests {
 
         assert_eq!(bytes, payload.len() as u64);
         assert_eq!(fs::read(&output).unwrap(), payload);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corrupt_selection_sidecar_fails_closed_instead_of_publishing_zero_bytes() {
+        let payload = b"abcdefgh".to_vec();
+        let meta = TorrentMeta {
+            name: "corrupt-sidecar".into(),
+            magnet: false,
+            multi_file: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 4,
+            pieces: payload.chunks(4).map(crate::crypto_lite::sha1).collect(),
+            length: payload.len() as u64,
+            files: vec![TorrentFileEntry {
+                index: 0,
+                path: "corrupt-sidecar".into(),
+                size: 8,
+                offset: 0,
+            }],
+        };
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-corrupt-selection-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.bin");
+        let control = root.join("control");
+        let bad_selection = root.join("selection.json");
+        fs::write(&control, "run").unwrap();
+        fs::write(&bad_selection, b"{not-valid-json").unwrap();
+
+        let mut telemetry = TorrentTelemetry::default();
+        let err = download_from_peer_ex_with_telemetry(
+            "127.0.0.1:1".parse().unwrap(),
+            &meta,
+            &output,
+            &control,
+            &mut Vec::new(),
+            &mut telemetry,
+            &mut |_| {},
+            &bad_selection,
+        )
+        .unwrap_err();
+        assert!(err.contains("种子文件选择配置无效"), "{err}");
+
+        // Preallocated all-zero file must ALSO be rejected by verify_selected_pieces even when selection is empty.
+        let verify_err = verify_selected_pieces(&output, &meta, &[], &control).unwrap_err();
+        assert!(verify_err.contains("Piece 0 需要重新下载"), "{verify_err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn partial_selection_completes_without_peer_connect_when_selected_pieces_already_verified() {
+        let payload = b"11112222".to_vec();
+        let meta = TorrentMeta {
+            name: "partial-ready".into(),
+            magnet: false,
+            multi_file: true,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: Vec::new(),
+            piece_length: 4,
+            pieces: payload.chunks(4).map(crate::crypto_lite::sha1).collect(),
+            length: 8,
+            files: vec![
+                TorrentFileEntry {
+                    index: 0,
+                    path: "a.bin".into(),
+                    size: 4,
+                    offset: 0,
+                },
+                TorrentFileEntry {
+                    index: 1,
+                    path: "b.bin".into(),
+                    size: 4,
+                    offset: 4,
+                },
+            ],
+        };
+        let root =
+            std::env::temp_dir().join(format!("hls-v7-partial-ready-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("payload.bin");
+        let control = root.join("control");
+        let selection = root.join("selection.json");
+        fs::write(&control, "run").unwrap();
+        // Only piece 1 (bytes 4..8 = "2222") is present on disk; piece 0 is zeros.
+        fs::write(&output, b"\x00\x00\x00\x002222").unwrap();
+        fs::write(
+            &selection,
+            serde_json::to_vec(&vec![
+                TorrentFileSelection {
+                    index: 0,
+                    path: "a.bin".into(),
+                    selected: false,
+                },
+                TorrentFileSelection {
+                    index: 1,
+                    path: "b.bin".into(),
+                    selected: true,
+                },
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Unreachable peer address: must return Ok(4) immediately without attempting TCP connect!
+        let mut telemetry = TorrentTelemetry::default();
+        let selected_bytes = download_from_peer_ex_with_telemetry(
+            "127.0.0.1:1".parse().unwrap(),
+            &meta,
+            &output,
+            &control,
+            &mut Vec::new(),
+            &mut telemetry,
+            &mut |_| {},
+            &selection,
+        )
+        .unwrap();
+        assert_eq!(selected_bytes, 4);
+        let progress_raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(progress_path(&output)).unwrap()).unwrap();
+        assert_eq!(progress_raw["downloaded"], 4);
+        assert_eq!(progress_raw["total"], 4);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bt_proxy_fails_closed_on_invalid_manual_and_routes_peer_tcp_via_http_connect() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        // Invalid manual proxy sentinel must fail closed on magnet probe and UDP gate.
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=demo";
+        let err = probe_torrent_source(
+            magnet,
+            &std::collections::HashMap::new(),
+            crate::net_policy::INVALID_MANUAL_PROXY,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err, "手动代理模式未配置代理服务器地址");
+        assert!(!udp_allowed_under_proxy("http://127.0.0.1:8080", "1.2.3.4:1337", None).unwrap());
+
+        // Peer TCP download tunnels through HTTP CONNECT proxy instead of direct socket.
+        let payload = b"proxied!".to_vec();
+        let piece_hash = crate::crypto_lite::sha1(&payload);
+        let peer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let peer_addr = peer_listener.local_addr().unwrap();
+        let peer_payload = payload.clone();
+        let peer_thread = std::thread::spawn(move || {
+            let (mut stream, _) = peer_listener.accept().unwrap();
+            let mut hs = [0u8; 68];
+            stream.read_exact(&mut hs).unwrap();
+            stream.write_all(&hs).unwrap();
+            stream.write_all(&1u32.to_be_bytes()).unwrap();
+            stream.write_all(&[1u8]).unwrap(); // unchoke
+            loop {
+                let mut hdr = [0u8; 4];
+                if stream.read_exact(&mut hdr).is_err() {
+                    break;
+                }
+                let len = u32::from_be_bytes(hdr) as usize;
+                let mut msg = vec![0u8; len];
+                stream.read_exact(&mut msg).unwrap();
+                if msg.first() == Some(&6) {
+                    let idx = be32(&msg[1..5]);
+                    let begin = be32(&msg[5..9]);
+                    let block = be32(&msg[9..13]) as usize;
+                    let mut reply = vec![7u8];
+                    reply.extend_from_slice(&idx.to_be_bytes());
+                    reply.extend_from_slice(&begin.to_be_bytes());
+                    reply.extend_from_slice(&peer_payload[..block]);
+                    stream
+                        .write_all(&(reply.len() as u32).to_be_bytes())
+                        .unwrap();
+                    stream.write_all(&reply).unwrap();
+                    break;
+                }
+            }
+        });
+
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let tunneled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tunneled_flag = tunneled.clone();
+        let proxy_thread = std::thread::spawn(move || {
+            let (mut client, _) = proxy_listener.accept().unwrap();
+            let mut req = Vec::new();
+            let mut byte = [0u8; 1];
+            while !req.ends_with(b"\r\n\r\n") {
+                client.read_exact(&mut byte).unwrap();
+                req.push(byte[0]);
+            }
+            let req_str = String::from_utf8_lossy(&req);
+            assert!(
+                req_str.starts_with(&format!("CONNECT {peer_addr} HTTP/1.1")),
+                "unexpected CONNECT request: {req_str}"
+            );
+            tunneled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut upstream = std::net::TcpStream::connect(peer_addr).unwrap();
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .unwrap();
+            let mut c2 = client.try_clone().unwrap();
+            let mut u2 = upstream.try_clone().unwrap();
+            let t1 = std::thread::spawn(move || {
+                let _ = std::io::copy(&mut client, &mut upstream);
+                let _ = upstream.shutdown(std::net::Shutdown::Write);
+            });
+            let _ = std::io::copy(&mut u2, &mut c2);
+            let _ = c2.shutdown(std::net::Shutdown::Write);
+            let _ = t1.join();
+        });
+
+        let meta = TorrentMeta {
+            name: "proxied.bin".into(),
+            magnet: false,
+            multi_file: false,
+            web_seeds: Vec::new(),
+            info_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+            announce: Vec::new(),
+            hint_peers: vec![peer_addr.to_string()],
+            piece_length: payload.len() as u64,
+            pieces: vec![piece_hash],
+            length: payload.len() as u64,
+            files: vec![TorrentFileEntry {
+                index: 0,
+                path: "proxied.bin".into(),
+                size: payload.len() as u64,
+                offset: 0,
+            }],
+        };
+        let root = std::env::temp_dir().join(format!("hls-v7-bt-proxy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("proxied.bin");
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let bytes = download_swarm(
+            &meta,
+            &output,
+            &control,
+            &std::collections::HashMap::new(),
+            &format!("http://{proxy_addr}"),
+            TorrentOptions {
+                enable_dht: false,
+                ..Default::default()
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(bytes, payload.len() as u64);
+        assert!(tunneled.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(fs::read(&output).unwrap(), payload);
+        peer_thread.join().unwrap();
+        proxy_thread.join().unwrap();
         let _ = fs::remove_dir_all(&root);
     }
 }

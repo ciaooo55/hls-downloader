@@ -58,6 +58,7 @@ impl CoreRuntime {
                     .collect();
             }
             snapshot.available_actions = legal_actions(&snapshot);
+            clear_inactive_telemetry(&mut snapshot);
             runtime
                 .tasks
                 .insert(snapshot.task_id.clone(), Arc::new(snapshot));
@@ -686,6 +687,7 @@ impl CoreRuntime {
             );
             append_snapshot_log(snapshot, line);
             snapshot.available_actions = legal_actions(snapshot);
+            clear_inactive_telemetry(snapshot);
             snapshot.clone()
         };
         self.publish(CoreEvent::TaskUpdated { snapshot: updated });
@@ -757,12 +759,14 @@ impl CoreRuntime {
                     snapshot.status = "paused".into();
                     snapshot.stage = "waiting".into();
                     snapshot.available_actions = legal_actions(snapshot);
+                    clear_inactive_telemetry(snapshot);
                     Some(snapshot.clone())
                 }
                 "cancel" => {
                     snapshot.status = "canceled".into();
                     snapshot.stage = "finished".into();
                     snapshot.available_actions = legal_actions(snapshot);
+                    clear_inactive_telemetry(snapshot);
                     Some(snapshot.clone())
                 }
                 _ => None,
@@ -1055,6 +1059,7 @@ impl CoreRuntime {
                 }
                 _ => None,
             };
+            clear_inactive_telemetry(&mut snapshot);
             snapshot
         };
         CoreEvent::TaskProgress { snapshot: updated }
@@ -1096,6 +1101,7 @@ impl CoreRuntime {
         snapshot.error_attempt = failure.attempt;
         append_snapshot_log(snapshot, failure_line);
         snapshot.available_actions = vec!["retry".into(), "delete".into()];
+        clear_inactive_telemetry(snapshot);
         let updated = snapshot.clone();
         self.publish(CoreEvent::TaskUpdated { snapshot: updated });
     }
@@ -1209,10 +1215,23 @@ impl CoreRuntime {
         upload_speed_bytes_per_sec: u64,
     ) {
         if let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) {
+            let transferring = matches!(snapshot.status.as_str(), "downloading" | "recording");
+            let next_upload_speed = if transferring {
+                upload_speed_bytes_per_sec
+            } else {
+                0
+            };
+            if snapshot.peer_count == peer_count
+                && snapshot.seed_count == seed_count
+                && snapshot.uploaded_bytes == uploaded_bytes
+                && snapshot.upload_speed_bytes_per_sec == next_upload_speed
+            {
+                return;
+            }
             snapshot.peer_count = peer_count;
             snapshot.seed_count = seed_count;
             snapshot.uploaded_bytes = uploaded_bytes;
-            snapshot.upload_speed_bytes_per_sec = upload_speed_bytes_per_sec;
+            snapshot.upload_speed_bytes_per_sec = next_upload_speed;
             let updated = snapshot.clone();
             self.publish(CoreEvent::TaskUpdated { snapshot: updated });
         }
@@ -1413,6 +1432,66 @@ pub(crate) fn merge_handoff_spec_override(
     }
     if !override_spec.scheduled_stop_at.trim().is_empty() {
         spec.scheduled_stop_at = override_spec.scheduled_stop_at;
+    }
+}
+
+fn clear_inactive_telemetry(snapshot: &mut TaskSnapshot) {
+    if matches!(snapshot.status.as_str(), "downloading" | "recording") {
+        return;
+    }
+    snapshot.speed_bytes_per_sec = 0;
+    snapshot.eta_seconds = None;
+    snapshot.active_workers = 0;
+    snapshot.upload_speed_bytes_per_sec = 0;
+    let completed = matches!(snapshot.status.as_str(), "completed" | "done");
+    if completed {
+        snapshot.completed_ranges = snapshot.total_ranges;
+        if !snapshot.connection_parts.is_empty()
+            && snapshot
+                .total_bytes
+                .is_some_and(|total| total > 0 && snapshot.downloaded_bytes >= total)
+        {
+            let (parts, _) = paint_from_ranges(
+                vec![(0, snapshot.downloaded_bytes)],
+                Vec::new(),
+                snapshot.downloaded_bytes,
+                snapshot.downloaded_bytes,
+                false,
+            );
+            if !parts.is_empty() {
+                let (_, done, total, hint) = summarize(&parts);
+                snapshot.completed_ranges = done;
+                snapshot.total_ranges = total.max(1);
+                snapshot.connection_hint = hint;
+                snapshot.connection_parts = parts;
+                return;
+            }
+        }
+    }
+    if !snapshot.connection_parts.is_empty() {
+        for part in &mut snapshot.connection_parts {
+            if completed {
+                part.state = "done".into();
+            } else if part.state != "done" {
+                let span = part.end.saturating_sub(part.start).saturating_add(1);
+                part.state = if part.done >= span {
+                    "done".into()
+                } else {
+                    "queued".into()
+                };
+            }
+        }
+        let (_, done, total, hint) = summarize(&snapshot.connection_parts);
+        snapshot.completed_ranges = done;
+        snapshot.total_ranges = total.max(1);
+        snapshot.connection_hint = hint;
+    } else if snapshot.total_ranges > 0 {
+        snapshot.connection_hint = format!(
+            "0 连接 · {}/{} 分段",
+            snapshot.completed_ranges, snapshot.total_ranges
+        );
+    } else {
+        snapshot.connection_hint.clear();
     }
 }
 
@@ -2183,5 +2262,110 @@ mod tests {
         assert!(base.preferred_variant_id.is_empty());
         assert_eq!(base.preferred_height, 480);
         assert_eq!(base.preferred_bandwidth, 1_200_000);
+    }
+
+    #[test]
+    fn inactive_transitions_clear_stale_speed_eta_workers_active_parts_and_bt_rates() {
+        let seed_snapshot = TaskSnapshot {
+            task_id: "task-1".into(),
+            title: "archive.bin".into(),
+            filename: "archive.bin".into(),
+            url: "https://cdn.example.test/archive.bin".into(),
+            resource_kind: ResourceKind::Torrent,
+            status: "downloading".into(),
+            stage: "transfer".into(),
+            downloaded_bytes: 256,
+            total_bytes: Some(1024),
+            speed_bytes_per_sec: 128,
+            eta_seconds: Some(6),
+            active_workers: 2,
+            completed_ranges: 1,
+            total_ranges: 2,
+            connection_hint: "0B-256B 已完成 · 256B-512B 传输中".into(),
+            connection_parts: vec![
+                hls_protocol::ConnectionPart {
+                    start: 0,
+                    end: 255,
+                    done: 256,
+                    state: "done".into(),
+                },
+                hls_protocol::ConnectionPart {
+                    start: 256,
+                    end: 1023,
+                    done: 0,
+                    state: "active".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let seed_spec = TaskSpec {
+            url: "https://cdn.example.test/archive.bin".into(),
+            resource_kind: ResourceKind::Torrent,
+            ..Default::default()
+        };
+        let mut runtime =
+            CoreRuntime::from_state([seed_snapshot], [("task-1".into(), seed_spec)], 1);
+        let task_id = "task-1";
+        runtime.set_torrent_telemetry(task_id, 6, 2, 4096, 512);
+        let active = runtime.snapshot(task_id).unwrap();
+        assert_eq!(active.speed_bytes_per_sec, 128);
+        assert_eq!(active.eta_seconds, Some(6));
+        assert!(active.active_workers > 0);
+        assert!(active.connection_parts.iter().any(|p| p.state == "active"));
+        assert!(active.connection_hint.contains("传输中"));
+        assert_eq!(active.peer_count, 6);
+        assert_eq!(active.seed_count, 2);
+        assert_eq!(active.upload_speed_bytes_per_sec, 512);
+
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: task_id.into(),
+            action: "pause".into(),
+        });
+        let paused = runtime.snapshot(task_id).unwrap();
+        assert_eq!(paused.status, "paused");
+        assert_eq!(paused.speed_bytes_per_sec, 0);
+        assert_eq!(paused.eta_seconds, None);
+        assert_eq!(paused.active_workers, 0);
+        assert!(paused.connection_parts.iter().all(|p| p.state != "active"));
+        assert!(!paused.connection_hint.contains("传输中"));
+        assert_eq!(paused.upload_speed_bytes_per_sec, 0);
+        assert_eq!(paused.uploaded_bytes, 4096);
+
+        // Late worker telemetry after pause must not resurrect active upload rate.
+        runtime.set_torrent_telemetry(task_id, 9, 4, 8192, 1024);
+        let after_late = runtime.snapshot(task_id).unwrap();
+        assert_eq!(after_late.upload_speed_bytes_per_sec, 0);
+        assert_eq!(after_late.uploaded_bytes, 8192);
+
+        // Resume then fail: report_failure must also clear ETA, workers, active parts, and BT upload rate.
+        runtime.handle(CoreCommand::TaskAction {
+            task_id: task_id.into(),
+            action: "resume".into(),
+        });
+        let resumed_ev =
+            runtime.progress_event(task_id, 512, Some(1024), 64, "transfer", "downloading");
+        runtime.commit_progress(resumed_ev);
+        runtime.set_torrent_telemetry(task_id, 4, 1, 8192, 256);
+        runtime.report_failure(
+            task_id,
+            TaskFailure {
+                code: "network_error".into(),
+                message: "connection reset".into(),
+                stage: "transfer".into(),
+                url: "https://cdn.example.test/archive.bin".into(),
+                hint: String::new(),
+                http_status: None,
+                attempt: 1,
+            },
+        );
+        let failed = runtime.snapshot(task_id).unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.speed_bytes_per_sec, 0);
+        assert_eq!(failed.eta_seconds, None);
+        assert_eq!(failed.active_workers, 0);
+        assert!(failed.connection_parts.iter().all(|p| p.state != "active"));
+        assert!(!failed.connection_hint.contains("传输中"));
+        assert_eq!(failed.upload_speed_bytes_per_sec, 0);
+        assert_eq!(failed.uploaded_bytes, 8192);
     }
 }
