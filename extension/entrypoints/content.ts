@@ -42,6 +42,47 @@ function bridgeDetail(event: Event): Record<string, any> {
   } catch { return {} }
 }
 
+export interface SendResetScheduler {
+  setTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> | number
+  clearTimeout?(handle: any): void
+}
+
+export function createSendResetTracker(scheduler: SendResetScheduler = globalThis) {
+  const generations = new Map<string, number>()
+  const timers = new Map<string, ReturnType<typeof setTimeout> | number>()
+  const clearTimer = (key: string) => {
+    const existing = timers.get(key)
+    if (existing !== undefined) {
+      ;(scheduler.clearTimeout ?? clearTimeout)(existing as ReturnType<typeof setTimeout>)
+      timers.delete(key)
+    }
+  }
+  return {
+    nextGeneration(key: string): number {
+      clearTimer(key)
+      const next = (generations.get(key) || 0) + 1
+      generations.set(key, next)
+      return next
+    },
+    isCurrent(key: string, generation: number): boolean {
+      return generations.get(key) === generation
+    },
+    scheduleReset(key: string, generation: number, delayMs: number, reset: () => void): void {
+      if (generations.get(key) !== generation) return
+      clearTimer(key)
+      const handle = scheduler.setTimeout(() => {
+        if (timers.get(key) === handle) timers.delete(key)
+        if (generations.get(key) !== generation) return
+        reset()
+      }, delayMs)
+      timers.set(key, handle)
+    },
+    clear(key: string): void {
+      clearTimer(key)
+    },
+  }
+}
+
 export default defineContentScript({
   matches: ['<all_urls>'],
   allFrames: true,
@@ -750,6 +791,11 @@ export default defineContentScript({
       scheduleRender()
     }
 
+    const sendResetTracker = createSendResetTracker({
+      setTimeout: (callback, delayMs) => ctx.setTimeout(callback, delayMs),
+      clearTimeout: handle => clearTimeout(handle),
+    })
+
     const sendResource = (resource: MediaResource, button: HTMLButtonElement, forceResend = false) => {
       const key = overlaySendKey(resourceFingerprint(resource), 'download')
       const current = resourceSendStates.get(key)
@@ -778,11 +824,13 @@ export default defineContentScript({
       } else if (current?.state === 'sending' || current?.state === 'confirming') {
         return
       }
+      const generation = sendResetTracker.nextGeneration(key)
       show('sending')
       let delivered = false
       // 重试或核对都发同一条 download-now：后台按资源摘要找回原请求编号，只回查，不重复创建；刷新重发时显式轮换请求编号。
       void withDeadline(runtimeMessage({ type: 'download-now', resource, ...(forceResend || urlChanged ? { forceResend: true } : {}) }), 10_000, '下载器响应超时，正在按原请求核对').then(async response => {
         delivered = true
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (!response?.ok && response?.ownership_uncertain) {
           show('checking', response.error || SEND_TITLES.checking)
           showResult(response.error || SEND_TITLES.checking, true)
@@ -798,7 +846,9 @@ export default defineContentScript({
         })
         if (state !== 'confirming') {
           show(state)
-          if (state === 'queued' || state === 'done') ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
+          if (state === 'queued' || state === 'done') {
+            sendResetTracker.scheduleReset(key, generation, 2_500, () => setSendState(resource, button, '', false))
+          }
           return
         }
         show('confirming')
@@ -807,22 +857,25 @@ export default defineContentScript({
         try {
           accepted = await waitForDownloadConfirmation(runtimeMessage, String(handoff.id || ''))
         } catch (reason) {
+          if (!sendResetTracker.isCurrent(key, generation)) return
           // Core 已持久化交接：读不到结果只能“核对中”，再点按原编号回查。
           const error = reason instanceof Error ? reason.message : SEND_TITLES.checking
           show('checking', error)
           showResult(error, true)
           return
         }
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (!accepted) {
           show('canceled')
           showResult('已在桌面端取消，浏览器原下载按交接结果保留')
-          ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
+          sendResetTracker.scheduleReset(key, generation, 2_500, () => setSendState(resource, button, '', false))
           return
         }
         show('queued')
         showResult(`已加入下载队列：${resource.filename || resource.title || resource.kind.toUpperCase()}`)
-        ctx.setTimeout(() => setSendState(resource, button, '', false), 2_500)
+        sendResetTracker.scheduleReset(key, generation, 2_500, () => setSendState(resource, button, '', false))
       }).catch(reason => {
+        if (!sendResetTracker.isCurrent(key, generation)) return
         const error = reason?.message || String(reason) || '发送失败'
         show(delivered ? 'retry' : 'checking', error)
         showResult(error, true)
@@ -833,6 +886,7 @@ export default defineContentScript({
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       const key = overlaySendKey(resourceFingerprint(resource), 'tvbox')
       if (resourceSendStates.get(key)?.disabled) return
+      const generation = sendResetTracker.nextGeneration(key)
       setSendState(resource, button, '等待选择', true, overlayActionFallback('tvbox'), 'tvbox')
       const waitForResult = async (requestId: string) => {
         const deadline = Date.now() + 130_000
@@ -844,14 +898,17 @@ export default defineContentScript({
         return { status: 'pending', message: '桌面端尚未完成设备选择' }
       }
       void runtimeMessage({ type: 'push-to-tv', resource }).then(async response => {
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (!response?.ok) throw new Error(response?.error || '电视推送失败')
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择 TVBox 设备' }
         const status = await waitForResult(String(response.id || ''))
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (status.status !== 'done') throw new Error(status.message || '电视推送未完成')
         setSendState(resource, button, '已发送', true, overlayActionFallback('tvbox'), 'tvbox')
         if (result) result.textContent = status.message || 'TVBox 推送成功'
-        ctx.setTimeout(() => setSendState(resource, button, '', false, overlayActionFallback('tvbox'), 'tvbox'), 2_000)
+        sendResetTracker.scheduleReset(key, generation, 2_000, () => setSendState(resource, button, '', false, overlayActionFallback('tvbox'), 'tvbox'))
       }).catch(reason => {
+        if (!sendResetTracker.isCurrent(key, generation)) return
         setSendState(resource, button, '重试', false, overlayActionFallback('tvbox'), 'tvbox', reason?.message || String(reason) || '推送失败')
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '推送失败' }
       })
@@ -861,8 +918,10 @@ export default defineContentScript({
       const result = ui.shadow.querySelector<HTMLElement>('.result')
       const key = overlaySendKey(resourceFingerprint(resource), 'cast')
       if (resourceSendStates.get(key)?.disabled) return
+      const generation = sendResetTracker.nextGeneration(key)
       setSendState(resource, button, '等待选择', true, overlayActionFallback('cast'), 'cast')
       void runtimeMessage({ type: 'cast-to-device', resource }).then(async response => {
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (!response?.ok) throw new Error(response?.error || '投屏请求失败')
         if (result) { result.hidden = false; result.classList.remove('error'); result.textContent = '请在桌面下载器选择投屏设备' }
         const deadline = Date.now() + 130_000
@@ -872,11 +931,13 @@ export default defineContentScript({
           status = await runtimeMessage({ type: 'media-push-status', requestId: String(response.id || '') }).catch(() => null)
           status = mediaPushTerminalResult(status); if (status) break
         }
+        if (!sendResetTracker.isCurrent(key, generation)) return
         if (status?.status !== 'done') throw new Error(status?.message || '投屏未完成')
         setSendState(resource, button, '已发送', true, overlayActionFallback('cast'), 'cast')
         if (result) result.textContent = status.message || '投屏成功'
-        ctx.setTimeout(() => setSendState(resource, button, '', false, overlayActionFallback('cast'), 'cast'), 2_000)
+        sendResetTracker.scheduleReset(key, generation, 2_000, () => setSendState(resource, button, '', false, overlayActionFallback('cast'), 'cast'))
       }).catch(reason => {
+        if (!sendResetTracker.isCurrent(key, generation)) return
         setSendState(resource, button, '重试', false, overlayActionFallback('cast'), 'cast', reason?.message || String(reason) || '投屏请求失败')
         if (result) { result.hidden = false; result.classList.add('error'); result.textContent = reason?.message || String(reason) || '投屏请求失败' }
       })

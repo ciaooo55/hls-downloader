@@ -283,4 +283,27 @@ describe('DASH browser inspection', () => {
       { label: '音轨', language: '' },
     ])
   })
+
+  it('classifies audio AdaptationSets from child Representation mimeType/codecs when AdaptationSet omits contentType and mimeType (G8-6)', () => {
+    const repAudioMpd = `<MPD type="static" mediaPresentationDuration="PT20S"><Period>
+      <AdaptationSet id="1">
+        <Representation id="v1080" mimeType="video/mp4" codecs="avc1.640028,mp4a.40.2" width="1920" height="1080" bandwidth="4000000"/>
+      </AdaptationSet>
+      <AdaptationSet id="2" lang="en" label="English Stereo">
+        <Representation id="a128" mimeType="audio/mp4" codecs="mp4a.40.2" bandwidth="128000"/>
+        <Representation id="a256" mimeType="audio/mp4" codecs="mp4a.40.2" bandwidth="256000"/>
+      </AdaptationSet>
+      <AdaptationSet id="3" lang="es">
+        <Label>Español</Label>
+        <Representation id="a-es" codecs="ec-3" audioSamplingRate="48000" bandwidth="384000"/>
+      </AdaptationSet>
+    </Period></MPD>`
+    const parsed = parseDashManifest(repAudioMpd, 'https://cdn.test/rep-audio.mpd')
+    expect(parsed?.audioTracks).toEqual([
+      { label: 'English Stereo', language: 'en' },
+      { label: 'Español', language: 'es' },
+    ])
+    // Combined bandwidth = 4_000_000 (best video) + 384_000 (max audio) = 4_384_000 bps * 20s / 8 = 10_960_000 bytes
+    expect(parsed?.estimatedSize).toBe(10_960_000)
+  })
 })

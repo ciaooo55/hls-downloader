@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { pageDownloadUrls } from './selectionLinks'
 import { mediaElementAtPoint } from './mediaOverlay'
 import { bilibiliPlayinfoCandidates, sitePageVideoId } from './siteManifest'
@@ -155,5 +155,61 @@ describe('extension content script flows (page links, shadow players, Bilibili M
     expect(isDefaultPopupResource({ id: '1', url: 'https://cdn.test/master.m3u8', kind: 'hls', inspected: true, seenAt: 1 })).toBe(true)
     expect(isDefaultPopupResource({ id: '2', url: 'https://cdn.test/song.mp3', kind: 'media', mimeType: 'audio/mpeg', seenAt: 1 })).toBe(true)
     expect(isDefaultPopupResource({ id: '3', url: 'https://cdn.test/paused.mp4', kind: 'media', evidence: ['current_src'], seenAt: 1 })).toBe(true)
+  })
+
+  it('guards content overlay 2.5s auto-reset timers by generation and prioritizes active download-states in popup (G8-7, G8-1)', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('defineContentScript', (definition: unknown) => definition)
+    try {
+      const { createSendResetTracker } = await import('../entrypoints/content')
+      const tracker = createSendResetTracker()
+      let currentState = 'idle'
+
+      // Attempt 1 ends in 'canceled' and schedules a 2.5s clear timer.
+      const gen1 = tracker.nextGeneration('hls:https://cdn.test/master.m3u8:download')
+      currentState = 'canceled'
+      tracker.scheduleReset('hls:https://cdn.test/master.m3u8:download', gen1, 2_500, () => {
+        currentState = 'idle'
+      })
+
+      // 1.0s later, user clicks retry -> gen2 starts ('sending' -> 'confirming').
+      await vi.advanceTimersByTimeAsync(1_000)
+      const gen2 = tracker.nextGeneration('hls:https://cdn.test/master.m3u8:download')
+      expect(tracker.isCurrent('hls:https://cdn.test/master.m3u8:download', gen1)).toBe(false)
+      expect(tracker.isCurrent('hls:https://cdn.test/master.m3u8:download', gen2)).toBe(true)
+      currentState = 'confirming'
+
+      // At t = 2.5s (1.5s later), gen1's old timer MUST NOT wipe 'confirming'!
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(currentState).toBe('confirming')
+
+      // Even a late scheduleReset with stale gen1 is ignored.
+      tracker.scheduleReset('hls:https://cdn.test/master.m3u8:download', gen1, 2_500, () => {
+        currentState = 'idle'
+      })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(currentState).toBe('confirming')
+
+      // When gen2 settles into 'queued', its own 2.5s timer clears cleanly.
+      currentState = 'queued'
+      tracker.scheduleReset('hls:https://cdn.test/master.m3u8:download', gen2, 2_500, () => {
+        currentState = 'idle'
+      })
+      await vi.advanceTimersByTimeAsync(2_499)
+      expect(currentState).toBe('queued')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(currentState).toBe('idle')
+
+      // Verify content.ts wires sendResetTracker across sendResource, pushToTv, and castResource,
+      // and popup/main.ts resolves best/newest handoff state per key instead of locking onto stale 'canceled'.
+      expect(content).toContain('const generation = sendResetTracker.nextGeneration(key)')
+      expect(content).toContain('sendResetTracker.scheduleReset(key, generation, 2_500,')
+      const popupMain = readFileSync(fileURLToPath(new URL('../entrypoints/popup/main.ts', import.meta.url)), 'utf8')
+      expect(popupMain).toContain('const resolvedByKey = new Map<')
+      expect(popupMain).toContain('nextPriority > prevPriority')
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
   })
 })

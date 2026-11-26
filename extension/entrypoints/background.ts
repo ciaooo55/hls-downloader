@@ -57,8 +57,10 @@ const determinedDownloads = new Map<number, Browser.downloads.DownloadItem>()
 const determinationWaiters = new Map<number, (item: Browser.downloads.DownloadItem) => void>()
 const LOCAL_DOWNLOADS_KEY = 'local-browser-download-handoffs'
 const LOCAL_HANDOFF_RETRY_MS = 5_000
+const LOCAL_HANDOFF_MAX_AGE_MS = 15 * 60_000
 const MAX_LOCAL_INCOMPLETE_POLLS = 12
 const MAX_LOCAL_WAIT_POLLS = 24
+const MAX_LOCAL_FAILURE_ATTEMPTS = 5
 interface LocalDownloadHandoff {
   tabId?: number
   downloadId: number
@@ -69,9 +71,14 @@ interface LocalDownloadHandoff {
   handoffId?: string
   intent?: DownloadClickIntent
   explicitUserAction?: boolean
+  createdAt?: number
+  updatedAt?: number
+  completedAt?: number
+  lastBytesReceived?: number
   retryAt?: number
   pollAttempts?: number
   waitPolls?: number
+  failureAttempts?: number
   cleanupAttempts?: number
   sourceStartedAt?: string
   sourceFilename?: string
@@ -82,19 +89,47 @@ let localDownloadsPass = false
 let localDownloadsTimer: ReturnType<typeof setTimeout> | undefined
 let localDownloadsWrite: Promise<unknown> = Promise.resolve()
 
+function isPermanentLocalHandoffFailure(value: unknown, explicitUserAction = false): boolean {
+  if (value instanceof NativeHostError) {
+    return value.code === 'host_missing' || value.code === 'host_forbidden'
+  }
+  const state = classifyEngineConnectionState(
+    value && typeof value === 'object' ? value : { error: errorText(value) },
+  )
+  if (state === 'host_missing') return true
+  if (state === 'user_shutdown') return !explicitUserAction
+  return false
+}
+
+function isLocalDownloadHandoffExpired(record: LocalDownloadHandoff, now = Date.now()): boolean {
+  if ((record.failureAttempts ?? 0) >= MAX_LOCAL_FAILURE_ATTEMPTS) return true
+  const anchor = record.completedAt ?? record.updatedAt ?? record.createdAt
+  return typeof anchor === 'number' && anchor > 0 && now - anchor >= LOCAL_HANDOFF_MAX_AGE_MS
+}
+
 async function hydrateLocalDownloads(): Promise<void> {
-  localDownloadsHydration ??= browser.storage.local.get(LOCAL_DOWNLOADS_KEY).then(data => {
+  localDownloadsHydration ??= browser.storage.local.get(LOCAL_DOWNLOADS_KEY).then(async data => {
     const stored = data[LOCAL_DOWNLOADS_KEY]
+    const now = Date.now()
+    let pruned = false
     for (const record of Array.isArray(stored) ? stored as LocalDownloadHandoff[] : []) {
       if (Number.isInteger(record.downloadId) && typeof record.requestId === 'string') {
+        if (!Number.isFinite(record.createdAt) || Number(record.createdAt) <= 0) {
+          record.createdAt = now
+        }
+        if (isLocalDownloadHandoffExpired(record, now)) {
+          pruned = true
+          continue
+        }
         if (!record.handoffId) {
           delete record.retryAt
         } else if (record.retryAt) {
-          record.retryAt = Math.min(record.retryAt, Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS)
+          record.retryAt = Math.min(record.retryAt, now + PAUSED_FOLLOW_UP_RECHECK_MS)
         }
         localDownloadHandoffs.set(record.requestId, record)
       }
     }
+    if (pruned) await persistLocalDownloads().catch(() => undefined)
   }).catch(error => {
     localDownloadsHydration = undefined
     throw error
@@ -111,11 +146,14 @@ async function persistLocalDownloads(): Promise<void> {
 
 async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<void> {
   await hydrateLocalDownloads()
+  const now = Date.now()
   record.explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
+  record.createdAt ??= now
   const [item] = await browser.downloads.search({ id: record.downloadId })
   record.sourceStartedAt = item?.startTime
   // 浏览器可在接收响应时按 MIME 调整文件名；完成后才固定导入路径。
   record.sourceFilename = item?.state === 'complete' ? item.filename : undefined
+  if (item?.state === 'complete') record.completedAt ??= now
   const existing = [...localDownloadHandoffs.values()].find(candidate => candidate.downloadId === record.downloadId
       && (!candidate.sourceStartedAt || !record.sourceStartedAt || candidate.sourceStartedAt === record.sourceStartedAt)
     || candidate.sourceStartedAt && candidate.sourceStartedAt === record.sourceStartedAt
@@ -309,7 +347,8 @@ async function preserveBrowserDownload(
   if (accelerated.leaveInBrowser) {
     return { preserved: true }
   }
-  if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') {
+  const readiness = await desktopHandoffReadiness()
+  if (readiness === 'host_missing' || (!intent?.ctrlForce && readiness === 'user_shutdown')) {
     return { preserved: true }
   }
   // 仅对不可重放响应（POST/multipart、no-store 一次性流、已完成本地项或未授权 Cookie 的 GET）让浏览器完成后导入。
@@ -330,6 +369,12 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
   try {
     await hydrateLocalDownloads()
     for (const record of localDownloadHandoffs.values()) {
+      const explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
+      if (isLocalDownloadHandoffExpired(record)) {
+        localDownloadHandoffs.delete(record.requestId)
+        await persistLocalDownloads()
+        continue
+      }
       if (immediateDownloadId !== undefined && record.downloadId === immediateDownloadId) {
         delete record.retryAt
       }
@@ -340,11 +385,22 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           // 浏览器重启可能不恢复下载历史；已持久交接仍可按原身份查询，不能重发导入。
           const response = await native({ op: 'handoff_status', ...(record.handoffId
             ? { handoff_id: record.handoffId } : { client_request_id: record.requestId }) }, 2_500)
+          if (isPermanentLocalHandoffFailure(response, explicitUserAction)) {
+            localDownloadHandoffs.delete(record.requestId)
+            await persistLocalDownloads()
+            continue
+          }
           if (!response?.ok) throw new Error('无法确认原文件交接状态')
+          record.failureAttempts = 0
           if (response.handoff?.id) {
             record.handoffId = String(response.handoff.id)
             if (localFileTaskReadiness(response.handoff) === 'waiting') {
-              record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+              record.waitPolls = (record.waitPolls || 0) + 1
+              if (isLocalDownloadHandoffExpired(record)) {
+                localDownloadHandoffs.delete(record.requestId)
+              } else {
+                record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+              }
               await persistLocalDownloads()
               continue
             }
@@ -360,7 +416,16 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           continue
         }
         if (item.state !== 'complete' || !item.filename) {
+          if (item.state === 'in_progress' && !item.paused && item.bytesReceived > (record.lastBytesReceived ?? 0)) {
+            record.lastBytesReceived = item.bytesReceived
+            record.updatedAt = Date.now()
+          }
           record.pollAttempts = (record.pollAttempts || 0) + 1
+          if (isLocalDownloadHandoffExpired(record)) {
+            localDownloadHandoffs.delete(record.requestId)
+            await persistLocalDownloads()
+            continue
+          }
           record.retryAt = Date.now() + (
             record.pollAttempts <= MAX_LOCAL_INCOMPLETE_POLLS
               ? LOCAL_HANDOFF_RETRY_MS
@@ -370,6 +435,7 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           continue
         }
         record.pollAttempts = 0
+        record.completedAt ??= Date.now()
         if (!record.handoffId) {
           const config = await settings()
           const size = Math.max(0, item.fileSize >= 0 ? item.fileSize : item.bytesReceived)
@@ -386,7 +452,6 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           // 先固定完成文件的路径，丢回执后也不能把同 ID 的另一条路径当作原件删除。
           record.sourceFilename = item.filename
           await persistLocalDownloads()
-          const explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
           const response = await native({
             op: 'offer_local_file',
             ...(explicitUserAction ? { explicit_user_action: true } : {}),
@@ -396,19 +461,28 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
               client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
             },
           })
-          // A transport failure or empty success envelope is not a rejection:
+          // Permanent host absence / permission denial / tray shutdown must never queue infinite retries.
+          if (isPermanentLocalHandoffFailure(response, explicitUserAction)) {
+            localDownloadHandoffs.delete(record.requestId)
+            await persistLocalDownloads()
+            continue
+          }
+          // A transient transport failure or empty success envelope is not a rejection:
           // Core may already own the import. Retain the original request ID
-          // and source file, and retry at the recovery cadence rather than
-          // repeatedly submitting the same import every second.
-          const isUserShutdown = classifyEngineConnectionState(response) === 'user_shutdown'
-          const isTransientTransportFailure = !isUserShutdown && Boolean(
+          // and source file within a bounded retry budget and TTL.
+          const isTransientTransportFailure = Boolean(
             response?.transport_error
             || response?.code === 'core_unreachable'
             || response?.error_code === 'core_unreachable'
             || /^Core (?:pipe|IPC|stream|TCP) /i.test(String(response?.error ?? '')),
           )
-          if (isTransientTransportFailure || (!isUserShutdown && response?.ok === true && !response.handoff?.id)) {
-            record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+          if (isTransientTransportFailure || (response?.ok === true && !response.handoff?.id)) {
+            record.failureAttempts = (record.failureAttempts || 0) + 1
+            if (isLocalDownloadHandoffExpired(record)) {
+              localDownloadHandoffs.delete(record.requestId)
+            } else {
+              record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+            }
             await persistLocalDownloads()
             continue
           }
@@ -418,27 +492,43 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
             continue
           }
           record.handoffId = String(response.handoff.id)
+          record.failureAttempts = 0
           delete record.retryAt
           await persistLocalDownloads()
           await trackHandoff(record.handoffId)
         }
         const response = await native({ op: 'handoff_status', handoff_id: record.handoffId }, 2_500)
-        if (!response?.ok || !response.handoff?.id) {
-          record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+        if (isPermanentLocalHandoffFailure(response, false)) {
+          localDownloadHandoffs.delete(record.requestId)
           await persistLocalDownloads()
           continue
         }
+        if (!response?.ok || !response.handoff?.id) {
+          record.failureAttempts = (record.failureAttempts || 0) + 1
+          if (isLocalDownloadHandoffExpired(record)) {
+            localDownloadHandoffs.delete(record.requestId)
+          } else {
+            record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+          }
+          await persistLocalDownloads()
+          continue
+        }
+        record.failureAttempts = 0
         const handoff = response.handoff as BrowserHandoffPayload
         const readiness = localFileTaskReadiness(handoff)
         if (readiness === 'waiting') {
           record.waitPolls = (record.waitPolls || 0) + 1
-          record.retryAt = Date.now() + (
-            record.waitPolls <= 1
-              ? 1_000
-              : record.waitPolls <= MAX_LOCAL_WAIT_POLLS
-                ? LOCAL_HANDOFF_RETRY_MS
-                : PAUSED_FOLLOW_UP_RECHECK_MS
-          )
+          if (isLocalDownloadHandoffExpired(record)) {
+            localDownloadHandoffs.delete(record.requestId)
+          } else {
+            record.retryAt = Date.now() + (
+              record.waitPolls <= 1
+                ? 1_000
+                : record.waitPolls <= MAX_LOCAL_WAIT_POLLS
+                  ? LOCAL_HANDOFF_RETRY_MS
+                  : PAUSED_FOLLOW_UP_RECHECK_MS
+            )
+          }
           await persistLocalDownloads()
           continue
         }
@@ -454,8 +544,18 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
         localDownloadHandoffs.delete(record.requestId)
         await persistLocalDownloads()
       } catch (error) {
-        // 状态不明时保留源文件，并以持久 request ID 恢复查询，不能重复创建任务或删源。
-        record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+        if (isPermanentLocalHandoffFailure(error, explicitUserAction)) {
+          localDownloadHandoffs.delete(record.requestId)
+          await persistLocalDownloads().catch(() => undefined)
+          continue
+        }
+        // 状态不明时保留源文件，并在有限重试与存活窗口内以持久 request ID 恢复查询。
+        record.failureAttempts = (record.failureAttempts || 0) + 1
+        if (isLocalDownloadHandoffExpired(record)) {
+          localDownloadHandoffs.delete(record.requestId)
+        } else {
+          record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
+        }
         await persistLocalDownloads().catch(() => undefined)
         console.warn('HLS Downloader local file handoff awaits desktop', error)
       }
@@ -721,6 +821,70 @@ function scheduleHandoffPoll(delay = 120): void {
   }, delay)
 }
 
+function sameTrackedHandoffTarget(
+  tracked: TrackedHandoff,
+  target: { tabId?: number; resourceId?: string; selectionKey?: string; url?: string; kind?: MediaResource['kind'] },
+): boolean {
+  if (tracked.tabId !== target.tabId) return false
+  if (target.selectionKey && tracked.selectionKey) {
+    return tracked.selectionKey === target.selectionKey
+  }
+  if (target.resourceId && tracked.resourceId && tracked.resourceId === target.resourceId) {
+    return !target.selectionKey || !tracked.selectionKey || tracked.selectionKey === target.selectionKey
+  }
+  if (target.url && tracked.url) {
+    if (tracked.url === target.url) return true
+    const kind = target.kind || classifyResource(target.url) || classifyResource(tracked.url) || 'file'
+    return resourceFingerprint({ url: tracked.url, kind }) === resourceFingerprint({ url: target.url, kind })
+  }
+  return false
+}
+
+function isSupersededTerminalHandoff(tracked: TrackedHandoff, forceResend = false): boolean {
+  if (forceResend) return tracked.status !== 'pending'
+  if (['canceled', 'rejected', 'expired', 'failed'].includes(tracked.status)) return true
+  if (tracked.presentation === 'failed' || tracked.presentation === 'fallback') return true
+  if (tracked.status === 'accepted') {
+    const taskStatus = String(tracked.taskStatus || '').toLowerCase()
+    const errorCode = String(tracked.taskErrorCode || '').toLowerCase()
+    return ['canceled', 'cancelled', 'failed', 'error', 'unsupported', 'paused', 'stopped', 'refresh_armed', 'arm_task_refresh', 'waiting_refresh'].includes(taskStatus)
+      || ['refresh_armed', 'arm_task_refresh', 'waiting_refresh'].includes(errorCode)
+  }
+  return false
+}
+
+function trackedHandoffPriority(tracked: TrackedHandoff): number {
+  if (['canceled', 'rejected', 'expired', 'failed'].includes(tracked.status)) return 0
+  if (tracked.presentation === 'failed' || tracked.presentation === 'fallback') return 0
+  if (tracked.status === 'accepted') {
+    const taskStatus = String(tracked.taskStatus || '').toLowerCase()
+    const errorCode = String(tracked.taskErrorCode || '').toLowerCase()
+    if (taskStatus === 'canceled' || taskStatus === 'cancelled') return 0
+    if (['refresh_armed', 'arm_task_refresh', 'waiting_refresh'].includes(taskStatus)
+      || ['refresh_armed', 'arm_task_refresh', 'waiting_refresh'].includes(errorCode)) return 0
+    if (['failed', 'error', 'paused', 'stopped', 'unsupported'].includes(taskStatus)) return 1
+    return 2
+  }
+  return 3
+}
+
+function evictSupersededTrackedHandoffs(
+  target: { tabId?: number; resourceId?: string; selectionKey?: string; url?: string; kind?: MediaResource['kind'] },
+  forceResend = false,
+  keepId = '',
+): boolean {
+  let evicted = false
+  for (const [existingId, existing] of trackedHandoffs) {
+    if (existingId === keepId) continue
+    if (!sameTrackedHandoffTarget(existing, target)) continue
+    if (isSupersededTerminalHandoff(existing, forceResend)) {
+      trackedHandoffs.delete(existingId)
+      evicted = true
+    }
+  }
+  return evicted
+}
+
 async function trackHandoff(handoffId: string, resourceId = '', tabId?: number, selectionKey?: string, url?: string): Promise<TrackedHandoff> {
   await hydrateHandoffTracker()
   const id = String(handoffId || '')
@@ -730,8 +894,19 @@ async function trackHandoff(handoffId: string, resourceId = '', tabId?: number, 
     if (selectionKey) current.selectionKey = selectionKey
     if (url) current.url = url
     if (validDownloadIdentity(tabId)) current.tabId = tabId
+    if (current.resourceId || current.selectionKey || current.url) {
+      evictSupersededTrackedHandoffs({
+        tabId: current.tabId,
+        resourceId: current.resourceId,
+        selectionKey: current.selectionKey,
+        url: current.url,
+      }, false, id)
+    }
     scheduleHandoffPoll()
     return current
+  }
+  if (resourceId || selectionKey || url) {
+    evictSupersededTrackedHandoffs({ tabId, resourceId, selectionKey, url }, true, id)
   }
   const tracked: TrackedHandoff = {
     id,
@@ -869,6 +1044,14 @@ async function retryPausedFollowUp(record: PausedHandoffFollowUp): Promise<void>
  * stays until the desktop proves success (remove the browser copy) or failure
  * (resume it) — uncertainty keeps the item visibly paused for the user.
  */
+export function isParkedBrowserDownload(
+  item: Pick<Browser.downloads.DownloadItem, 'paused' | 'state' | 'canResume' | 'error'>,
+): boolean {
+  return item.paused === true
+    || item.state === 'complete'
+    || (item.state === 'interrupted' && item.canResume === true && item.error !== 'USER_CANCELED')
+}
+
 async function continuePausedHandoffFollowups(): Promise<void> {
   if (pausedFollowUpPass) return
   pausedFollowUpPass = true
@@ -897,7 +1080,7 @@ async function continuePausedHandoffFollowups(): Promise<void> {
           continue
         }
         const [browserItem] = browserItems
-        if (!browserItem || (browserItem.paused !== true && browserItem.state !== 'complete')) {
+        if (!browserItem || !isParkedBrowserDownload(browserItem)) {
           await pausedFollowUpStore.drop(followUpKey)
           continue
         }
@@ -1181,7 +1364,7 @@ async function native(message: Record<string, unknown>, timeoutMs?: number): Pro
   // Passive background pings must not retry-spam when Core is stopped/offline.
   const retryCount = (operation === 'ping' && message.interactive === true)
     || new Set([
-      'offer', 'recover_offer', 'offer_local_file', 'handoff_status', 'media_push_status',
+      'offer', 'recover_offer', 'offer_local_file', 'handoff_status', 'media_push', 'media_push_status',
     ]).has(operation)
     ? 1 : 0
   const payload = {
@@ -1230,8 +1413,8 @@ async function inspectAdaptive(resource: Omit<MediaResource, 'id' | 'seenAt'>, t
     if (resource.kind !== 'hls' || resource.manifestType === 'media' || resource.isLive !== undefined) {
       activeAdaptiveInspections.get(inspectionKey)?.abort()
       inspectedAdaptive.claim(inspectionKey)
+      return
     }
-    return
   }
   if (!inspectedAdaptive.claim(inspectionKey)) return
   if (activeAdaptiveInspections.size >= 8) {
@@ -1700,6 +1883,13 @@ async function requestDownload(
     await persistHandoffTracker()
     if (pending.status === 'pending') return previous
   }
+  const trackedTarget = {
+    tabId: resource.tabId,
+    resourceId: resource.id,
+    selectionKey,
+    url: resource.url,
+    kind: resource.kind,
+  }
   const key = `${resource.tabId ?? -1}:${options.browserRequestId ? `request:${options.browserRequestId}` : resourceFingerprint(resource)}`
   if (options.forceResend) {
     activeDownloadOffers.delete(key)
@@ -1708,14 +1898,9 @@ async function requestDownload(
       DIRECT_OFFERS_STORAGE_KEY,
       current => current.filter(item => item.key !== digest),
     ).catch(() => undefined)
-    for (const [id, tracked] of trackedHandoffs) {
-      if (tracked.tabId === resource.tabId && tracked.resourceId === resource.id
-        && (!tracked.selectionKey || tracked.selectionKey === selectionKey)
-        && tracked.status !== 'pending') {
-        trackedHandoffs.delete(id)
-      }
+    if (evictSupersededTrackedHandoffs(trackedTarget, true)) {
+      await persistHandoffTracker()
     }
-    await persistHandoffTracker()
   }
   const active = activeDownloadOffers.get(key)
   if (active) {
@@ -1754,6 +1939,9 @@ async function requestDownload(
       if (!skipReadinessPing && !await desktopReadyForNewHandoff()) {
         return { ok: false, client_request_id: requestId, error: '主程序未连接，保留浏览器下载' }
       }
+      if (evictSupersededTrackedHandoffs(trackedTarget, false)) {
+        await persistHandoffTracker()
+      }
       try {
         response = await offer(resource, chain, options, requestId)
       } catch (error) {
@@ -1777,6 +1965,9 @@ async function requestDownload(
         ])
         if (!skipReadinessPing && !await desktopReadyForNewHandoff()) {
           return { ok: false, client_request_id: requestId, error: '主程序未连接，保留浏览器下载' }
+        }
+        if (evictSupersededTrackedHandoffs(trackedTarget, true)) {
+          await persistHandoffTracker()
         }
         try {
           response = await offer(resource, chain, options, requestId)
@@ -1816,13 +2007,23 @@ async function requestDownload(
 }
 
 async function pushToTv(resource: MediaResource): Promise<{ ok: true; id: string }> {
-  const response = await native({ op: 'media_push', kind: 'tvbox', resource: await resourcePayload(resource, undefined, { allowUnverified: true }) })
+  const response = await native({
+    op: 'media_push',
+    kind: 'tvbox',
+    request_id: `media-push-${crypto.randomUUID()}`,
+    resource: await resourcePayload(resource, undefined, { allowUnverified: true }),
+  })
   const id = mediaPushRequestId(response, 'TVBox 推送')
   return { ok: true, id }
 }
 
 async function castToDevice(resource: MediaResource): Promise<{ ok: true; id: string }> {
-  const response = await native({ op: 'media_push', kind: 'cast', resource: await resourcePayload(resource, undefined, { allowUnverified: true }) })
+  const response = await native({
+    op: 'media_push',
+    kind: 'cast',
+    request_id: `media-push-${crypto.randomUUID()}`,
+    resource: await resourcePayload(resource, undefined, { allowUnverified: true }),
+  })
   const id = mediaPushRequestId(response, '投屏')
   return { ok: true, id }
 }
@@ -1841,7 +2042,10 @@ async function desktopHandoffReadiness(): Promise<EngineConnectionState> {
   desktopReadinessCheck ??= native({ op: 'ping', interactive: true }, 1_500)
     .then(
       response => classifyEngineConnectionState(response),
-      error => classifyEngineConnectionState({ error: errorText(error) }),
+      error => classifyEngineConnectionState({
+        ...(error instanceof NativeHostError ? { code: error.code } : {}),
+        error: errorText(error),
+      }),
     )
     .finally(() => { desktopReadinessCheck = undefined })
   return desktopReadinessCheck
@@ -1943,10 +2147,12 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyI
   if (!current) return true
   // Receipt lookup can outlive a browser-side resume/cancel. Recheck at the
   // cleanup boundary so an old paused snapshot cannot override that choice.
-  if (onlyIfStillParked && current.paused !== true && current.state !== 'complete') return true
+  if (onlyIfStillParked && !isParkedBrowserDownload(current)) return true
   try {
     if (browserCleanupAction(current.state) === 'remove-file') {
       await browser.downloads.removeFile(item.id)
+    } else if (current.state === 'interrupted') {
+      await browser.downloads.cancel(item.id).catch(() => undefined)
     } else {
       await browser.downloads.cancel(item.id)
       // 快速文件可能在 search 和 cancel 之间完成，不能先 erase 丢掉可清理的项目。
@@ -2694,7 +2900,8 @@ export default defineBackground(() => {
       const pageUrl = await topLevelPageUrl(intent?.tabId ?? blobSource?.tabId ?? downloadIdentity(item).tabId ?? -1,
         intent?.pageUrl || blobSource?.pageUrl || item.referrer || (blobOrigin !== 'null' ? blobOrigin : ''))
       if (!pageUrl && config.excludedHosts.length && !intent?.ctrlForce) return
-      if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') return
+      const localReadiness = await desktopHandoffReadiness()
+      if (localReadiness === 'host_missing' || (!intent?.ctrlForce && localReadiness === 'user_shutdown')) return
       await queueLocalBrowserDownload({ downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`, sourceKey, pageUrl, intent })
       return
     }
@@ -2935,7 +3142,8 @@ export default defineBackground(() => {
         requestHeaders: resource.requestHeaders ?? resolvedChain.requestHeaders,
       }
       if (chain.method.toUpperCase() === 'POST') {
-        if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') return
+        const postReadiness = await desktopHandoffReadiness()
+        if (postReadiness === 'host_missing' || (!intent?.ctrlForce && postReadiness === 'user_shutdown')) return
         // 复用本地导入，复制成功前保留浏览器源文件。
         await queueLocalBrowserDownload({
           downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
@@ -3089,7 +3297,8 @@ export default defineBackground(() => {
         if (!cookiePermissionAllows(href, topPageUrl, config.authorizedCookieHosts)
           && await tabHasCookiesForUrl(href, '', tabId, sender.frameId ?? 0)) {
           void recordCookieDowngradedHost(href, topPageUrl)
-          if (!ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') {
+          const cookieReadiness = await desktopHandoffReadiness()
+          if (cookieReadiness === 'host_missing' || (!ctrlForce && cookieReadiness === 'user_shutdown')) {
             return { ok: false, browserFallback: true }
           }
           return { ok: false, browserFallback: true, preserveLocal: true }
@@ -3281,11 +3490,18 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'download-states') {
-      // 弹窗重开时按交接 ID 恢复每个资源的真实状态（含已入队、已取消、核对中）。
+      // 弹窗重开时按交接 ID 恢复每个资源的真实状态（优先返回活跃/最新交接，避免旧取消/失败覆盖重试）。
       if (sender.tab) return false
       const tabId = Number(message.tabId ?? -1)
       void hydrateHandoffTracker().then(() => {
-        sendResponse([...trackedHandoffs.values()].filter(item => item.tabId === tabId).map(item => ({ ...item })))
+        const ordered = [...trackedHandoffs.values()]
+          .filter(item => item.tabId === tabId)
+          .map((item, order) => ({ item, order }))
+          .sort((left, right) =>
+            trackedHandoffPriority(right.item) - trackedHandoffPriority(left.item)
+            || right.order - left.order)
+          .map(({ item }) => ({ ...item }))
+        sendResponse(ordered)
       }).catch(() => sendResponse([]))
       return true
     }
@@ -3302,6 +3518,15 @@ export default defineBackground(() => {
       const tabId = Number(message.tabId ?? -1)
       void (async () => {
         await hydrateLocalDownloads()
+        const now = Date.now()
+        let expiredAny = false
+        for (const [id, record] of localDownloadHandoffs) {
+          if (isLocalDownloadHandoffExpired(record, now)) {
+            localDownloadHandoffs.delete(id)
+            expiredAny = true
+          }
+        }
+        if (expiredAny) await persistLocalDownloads().catch(() => undefined)
         const tab = tabId >= 0 ? await browser.tabs.get(tabId).catch(() => undefined) : undefined
         const records = [...localDownloadHandoffs.values()].filter(record => record.tabId === tabId
           || (record.tabId == null || record.tabId < 0) && record.pageUrl && record.pageUrl === tab?.url)
