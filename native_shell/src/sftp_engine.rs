@@ -26,10 +26,12 @@ pub struct SftpTarget {
 impl SftpTarget {
     pub fn resource_key(&self) -> String {
         // SSH accounts may expose different files at the same host and path.
-        format!(
-            "sftp://{}@{}:{}{}",
-            self.user, self.host, self.port, self.path
-        )
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("sftp://{}@{}:{}{}", self.user, host, self.port, self.path)
     }
 }
 
@@ -90,9 +92,16 @@ pub(crate) fn map_sftp_io(error: impl std::fmt::Display) -> String {
 }
 
 pub fn parse_sftp_url(url: &str) -> Result<SftpTarget, String> {
-    let rest = url
-        .strip_prefix("sftp://")
-        .ok_or_else(|| "链接必须是 sftp:// 地址".to_string())?;
+    if url.chars().any(char::is_control) {
+        return Err("SFTP 地址不能包含控制字符".into());
+    }
+    let trimmed = url.trim().trim_start_matches('\u{feff}').trim();
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return Err("链接必须是 sftp:// 地址".into());
+    };
+    if !scheme.eq_ignore_ascii_case("sftp") {
+        return Err("链接必须是 sftp:// 地址".into());
+    }
     let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (userinfo, hostport) = if let Some((userinfo, hostport)) = auth.rsplit_once('@') {
         (userinfo, hostport)
@@ -104,19 +113,63 @@ pub fn parse_sftp_url(url: &str) -> Result<SftpTarget, String> {
         None if !userinfo.is_empty() => (percent_decode(userinfo), String::new()),
         None => (String::new(), String::new()),
     };
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((host, port)) => {
-            let port = port
+    // Preserve trailing ASCII space normalization on bare hostnames required by
+    // `url_credentials` vault key canonicalization while rejecting leading,
+    // interior, port-adjacent, bracketed, or non-ASCII whitespace.
+    let hostport = if !hostport.starts_with('[') && !hostport.contains(':') {
+        hostport.trim_end_matches(' ')
+    } else {
+        hostport
+    };
+    if hostport.is_empty() || hostport.chars().any(char::is_whitespace) {
+        return Err("SFTP 地址缺少有效主机名".into());
+    }
+    let (host, port) = if let Some(after_bracket) = hostport.strip_prefix('[') {
+        let (ipv6_raw, tail) = after_bracket
+            .split_once(']')
+            .ok_or_else(|| "SFTP 地址缺少有效主机名".to_string())?;
+        let ip = ipv6_raw
+            .parse::<std::net::Ipv6Addr>()
+            .map_err(|_| "SFTP 地址缺少有效主机名".to_string())?;
+        let port = if tail.is_empty() {
+            22
+        } else {
+            let port_str = tail
+                .strip_prefix(':')
+                .ok_or_else(|| "SFTP 端口无效".to_string())?;
+            if port_str.is_empty() || !port_str.bytes().all(|b| b.is_ascii_digit()) {
+                return Err("SFTP 端口无效".into());
+            }
+            let port = port_str
                 .parse::<u16>()
                 .map_err(|_| "SFTP 端口无效".to_string())?;
             if port == 0 {
                 return Err("SFTP 端口无效".into());
             }
-            (host, port)
-        }
-        None => (hostport, 22),
+            port
+        };
+        (ip.to_string(), port)
+    } else {
+        let (raw_host, port) = match hostport.rsplit_once(':') {
+            Some((host, port_str)) => {
+                if host.contains(':') {
+                    return Err("SFTP 地址缺少有效主机名".into());
+                }
+                if port_str.is_empty() || !port_str.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("SFTP 端口无效".into());
+                }
+                let port = port_str
+                    .parse::<u16>()
+                    .map_err(|_| "SFTP 端口无效".to_string())?;
+                if port == 0 {
+                    return Err("SFTP 端口无效".into());
+                }
+                (host, port)
+            }
+            None => (hostport, 22),
+        };
+        (raw_host.trim_end_matches('.').to_ascii_lowercase(), port)
     };
-    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if !ssh_host_ok(&host) {
         return Err("SFTP 地址缺少有效主机名".into());
     }
@@ -147,11 +200,15 @@ pub fn parse_sftp_url(url: &str) -> Result<SftpTarget, String> {
 }
 
 fn ssh_host_ok(host: &str) -> bool {
-    !host.is_empty()
-        && !host.starts_with('-')
-        && host
-            .chars()
+    if host.is_empty() || host.starts_with('-') {
+        return false;
+    }
+    if host.contains(':') {
+        host.parse::<std::net::Ipv6Addr>().is_ok()
+    } else {
+        host.chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'))
+    }
 }
 
 fn ssh_user_ok(user: &str) -> bool {
@@ -235,9 +292,17 @@ pub fn tofu_record(host: &str, port: u16, fingerprint: &str) -> Result<(), Strin
     record_host_key(&known_hosts_path(), host, port, fingerprint)
 }
 
+fn tofu_host_key(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 fn record_host_key(path: &Path, host: &str, port: u16, fingerprint: &str) -> Result<(), String> {
     let (mut file, existing) = locked_host_file(path)?;
-    let key = format!("{host}:{port}");
+    let key = tofu_host_key(host, port);
     for line in existing.lines() {
         let (stored_host, stored_fp) = line.split_once(' ').ok_or("SFTP 主机密钥记录损坏")?;
         if stored_host == key {
@@ -262,7 +327,7 @@ pub fn fingerprint_bytes(bytes: &[u8]) -> String {
 }
 
 fn stored_tofu_fingerprint(host: &str, port: u16) -> Option<String> {
-    let key = format!("{host}:{port}");
+    let key = tofu_host_key(host, port);
     let (_lock, existing) = locked_host_file(&known_hosts_path()).ok()?;
     existing.lines().find_map(|line| {
         let (stored_host, stored_fp) = line.split_once(' ')?;
@@ -740,8 +805,17 @@ pub(crate) fn download_sftp_routed(
     route: &str,
 ) -> Result<u64, String> {
     check_sftp_control(control)?;
+    if crate::net_policy::parse_url_authority(url).is_none() {
+        return Err("SFTP 地址缺少有效主机名".into());
+    }
+    let allowed = crate::net_policy::active_allowed_hosts();
+    if !allowed.trim().is_empty() && !crate::net_policy::url_allowed(url, &allowed) {
+        return Err("下载地址不在允许的域名范围内".into());
+    }
     let target = parse_sftp_url(url)?;
-    let proxy = crate::proxy_tunnel::Proxy::resolve(route, url, || check_sftp_control(control))?;
+    let effective_route = crate::net_policy::resolve_context_proxy(url, route);
+    let proxy =
+        crate::proxy_tunnel::Proxy::resolve(&effective_route, url, || check_sftp_control(control))?;
     #[cfg(test)]
     if let Some(root) = std::env::var("HLS_V7_SFTP_FIXTURE")
         .ok()
@@ -777,6 +851,14 @@ pub(crate) fn check_sftp_control(control: &Path) -> Result<(), String> {
     }
 }
 
+fn openssh_destination(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
+}
+
 fn openssh_get(
     target: &SftpTarget,
     output: &Path,
@@ -806,6 +888,7 @@ fn openssh_get(
             _ => {}
         }
     }
+    let destination = openssh_destination(&target.host);
     let mut command = Command::new(sftp);
     command
         .args([
@@ -837,7 +920,7 @@ fn openssh_get(
             "-b",
             "-",
             "--",
-            &target.host,
+            &destination,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1653,6 +1736,75 @@ mod tests {
         assert_eq!(done, total_len as u64);
         assert_eq!(fs::read(&output).unwrap(), *payload);
         assert!(!state_file.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_sftp_url_supports_case_insensitive_scheme_ipv6_and_strict_host_whitespace() {
+        let v6_default = parse_sftp_url(" \u{feff}SFTP://alice@[::1]/pub/video.mp4 ").unwrap();
+        assert_eq!(v6_default.host, "::1");
+        assert_eq!(v6_default.port, 22);
+        assert_eq!(v6_default.user, "alice");
+        assert_eq!(v6_default.path, "/pub/video.mp4");
+        assert_eq!(
+            v6_default.resource_key(),
+            "sftp://alice@[::1]:22/pub/video.mp4"
+        );
+        assert_eq!(openssh_destination(&v6_default.host), "[::1]");
+        assert_eq!(tofu_host_key(&v6_default.host, v6_default.port), "[::1]:22");
+
+        let v6_port =
+            parse_sftp_url("Sftp://bob:s3cr%3At@[2001:0DB8:0:0::1]:2222/archive.tar").unwrap();
+        assert_eq!(v6_port.host, "2001:db8::1");
+        assert_eq!(v6_port.port, 2222);
+        assert_eq!(v6_port.user, "bob");
+        assert_eq!(v6_port.password, "s3cr:t");
+        assert_eq!(
+            v6_port.resource_key(),
+            "sftp://bob@[2001:db8::1]:2222/archive.tar"
+        );
+        assert_eq!(
+            tofu_host_key(&v6_port.host, v6_port.port),
+            "[2001:db8::1]:2222"
+        );
+
+        for invalid in [
+            "sftp://alice@::1/pub/a.bin",
+            "sftp://alice@2001:db8::1:22/pub/a.bin",
+            "sftp://alice@[::gggg]/pub/a.bin",
+            "sftp://alice@[::1/pub/a.bin",
+            "sftp://alice@[::1]:0/pub/a.bin",
+            "sftp://alice@[::1]:99999/pub/a.bin",
+            "sftp://alice@[::1] /pub/a.bin",
+            "sftp://alice@ host/pub/a.bin",
+            "sftp://alice@ho st/pub/a.bin",
+            "sftp://alice@host :22/pub/a.bin",
+            "sftp://alice@host\u{00a0}/pub/a.bin",
+            "sftp://alice@host\t/pub/a.bin",
+        ] {
+            assert!(parse_sftp_url(invalid).is_err(), "must reject {invalid:?}");
+        }
+
+        // Downloads reject authority whitespace so it can never bypass `net_policy`.
+        let root = std::env::temp_dir().join(format!(
+            "hls-sftp-ws-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let err = download_sftp_routed(
+            "sftp://alice:secret@host /file.bin",
+            &root.join("out.bin"),
+            &control,
+            "",
+        )
+        .unwrap_err();
+        assert!(err.contains("主机名"), "{err}");
         let _ = fs::remove_dir_all(root);
     }
 }
