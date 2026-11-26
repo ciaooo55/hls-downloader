@@ -43,36 +43,227 @@ pub(crate) fn relative_file(root: &Path, file: &Path) -> Option<String> {
     Some(relative.to_string_lossy().replace('\\', "/"))
 }
 
+const READY_DIR: &str = "playback-ready";
+const READY_INDEX_FILE: &str = "index.tsv";
+const READY_FLUSH_INTERVAL: Duration = Duration::from_millis(500);
+const READY_FLUSH_BATCH: usize = 64;
+const READY_MAX_ENTRIES: usize = 256;
+
+struct ReadyTaskState {
+    segments: HashMap<String, u64>,
+    dirty_ops: usize,
+    last_flush: Instant,
+    checked: Instant,
+}
+
+fn ready_segments() -> &'static Mutex<HashMap<PathBuf, ReadyTaskState>> {
+    static MAP: OnceLock<Mutex<HashMap<PathBuf, ReadyTaskState>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn valid_relative_str(relative: &str) -> Option<String> {
+    let path = Path::new(relative);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(relative.replace('\\', "/"))
+}
+
+fn load_ready_index_from_disk(marker_dir: &Path) -> HashMap<String, u64> {
+    let Ok(text) = fs::read_to_string(marker_dir.join(READY_INDEX_FILE)) else {
+        return HashMap::new();
+    };
+    let mut segments = HashMap::new();
+    for line in text.lines() {
+        let Some((raw_rel, raw_size)) = line.split_once('\t') else {
+            continue;
+        };
+        let Some(rel) = valid_relative_str(raw_rel.trim()) else {
+            continue;
+        };
+        if let Ok(size) = raw_size.trim().parse::<u64>() {
+            if size > 0 {
+                segments.insert(rel, size);
+            }
+        }
+    }
+    segments
+}
+
+fn read_legacy_marker(marker_dir: &Path, relative: &str) -> Option<u64> {
+    use std::io::Read;
+    fs::File::open(marker_dir.join(relative))
+        .ok()
+        .and_then(|file| {
+            let mut size = String::new();
+            file.take(21).read_to_string(&mut size).ok()?;
+            let trimmed = size.trim();
+            (trimmed.len() <= 20)
+                .then(|| trimmed.parse::<u64>().ok())
+                .flatten()
+                .filter(|&parsed| parsed > 0)
+        })
+}
+
+fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> Result<(), String> {
+    let mut payload = String::with_capacity(segments.len().saturating_mul(28));
+    for (relative, size) in segments {
+        if *size > 0 {
+            payload.push_str(relative);
+            payload.push('\t');
+            payload.push_str(&size.to_string());
+            payload.push('\n');
+        }
+    }
+    let temporary = marker_dir.join(format!(".{READY_INDEX_FILE}.tmp"));
+    // Preview markers are ephemeral UI playback hints, never durability checkpoints:
+    // coalesce into one un-fsynced index file to avoid per-segment NTFS/AV write storms.
+    fs::write(&temporary, payload.as_bytes()).map_err(|error| error.to_string())?;
+    super::hls::replace_file_atomic(&temporary, &marker_dir.join(READY_INDEX_FILE))
+        .map_err(|error| error.to_string())
+}
+
+fn prune_ready_segments(map: &mut HashMap<PathBuf, ReadyTaskState>) {
+    if map.len() < READY_MAX_ENTRIES {
+        return;
+    }
+    while map.len() >= READY_MAX_ENTRIES {
+        let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, entry)| entry.checked)
+            .map(|(path, _)| path.clone())
+        else {
+            break;
+        };
+        if let Some(evicted) = map.remove(&oldest) {
+            let marker_dir = oldest.join(READY_DIR);
+            if evicted.dirty_ops > 0 && marker_dir.is_dir() {
+                let _ = flush_ready_index(&marker_dir, &evicted.segments);
+            }
+        }
+    }
+}
+
 pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
     let relative = relative_file(root, file).ok_or("播放分片不属于任务目录")?;
     let size = fs::metadata(file).map_err(|error| error.to_string())?.len();
     if size == 0 {
         return Err("播放分片为空".into());
     }
-    let marker = root.join("playback-ready").join(relative);
-    super::hls::write_text_atomic(&marker, &size.to_string())
+    let marker_dir = root.join(READY_DIR);
+    let mut map = ready_segments()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let dir_existed = marker_dir.is_dir();
+    if !dir_existed {
+        map.remove(root);
+        fs::create_dir_all(&marker_dir).map_err(|error| error.to_string())?;
+    }
+    prune_ready_segments(&mut map);
+    let now = Instant::now();
+    let entry = map
+        .entry(root.to_path_buf())
+        .or_insert_with(|| ReadyTaskState {
+            segments: if dir_existed {
+                load_ready_index_from_disk(&marker_dir)
+            } else {
+                HashMap::new()
+            },
+            dirty_ops: 0,
+            last_flush: now,
+            checked: now,
+        });
+    entry.segments.insert(relative, size);
+    entry.dirty_ops = entry.dirty_ops.saturating_add(1);
+    entry.checked = now;
+    let should_flush = !dir_existed
+        || entry.segments.len() <= 2
+        || entry.dirty_ops >= READY_FLUSH_BATCH
+        || entry.last_flush.elapsed() >= READY_FLUSH_INTERVAL;
+    if should_flush {
+        flush_ready_index(&marker_dir, &entry.segments)?;
+        entry.dirty_ops = 0;
+        entry.last_flush = Instant::now();
+    }
+    Ok(())
 }
 
 pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
     let relative = relative_file(root, file).ok_or("播放分片不属于任务目录")?;
-    match fs::remove_file(root.join("playback-ready").join(relative)) {
+    let marker_dir = root.join(READY_DIR);
+    {
+        let mut map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !marker_dir.is_dir() {
+            map.remove(root);
+            return Ok(());
+        }
+        prune_ready_segments(&mut map);
+        let now = Instant::now();
+        let entry = map
+            .entry(root.to_path_buf())
+            .or_insert_with(|| ReadyTaskState {
+                segments: load_ready_index_from_disk(&marker_dir),
+                dirty_ops: 0,
+                last_flush: now,
+                checked: now,
+            });
+        entry.checked = now;
+        if entry.segments.remove(&relative).is_some() {
+            flush_ready_index(&marker_dir, &entry.segments)?;
+            entry.dirty_ops = 0;
+            entry.last_flush = Instant::now();
+        }
+    }
+    match fs::remove_file(marker_dir.join(relative)) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(())
+        }
         Err(error) => Err(error.to_string()),
     }
 }
 
 pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
-    use std::io::Read;
-    let expected = fs::File::open(root.join("playback-ready").join(relative))
-        .ok()
-        .and_then(|file| {
-            let mut size = String::new();
-            file.take(21).read_to_string(&mut size).ok()?;
-            (size.len() <= 20)
-                .then(|| size.parse::<u64>().ok())
-                .flatten()
-        });
+    let Some(relative) = valid_relative_str(relative) else {
+        return false;
+    };
+    let marker_dir = root.join(READY_DIR);
+    let expected = {
+        let mut map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !marker_dir.is_dir() {
+            map.remove(root);
+            return false;
+        }
+        prune_ready_segments(&mut map);
+        let now = Instant::now();
+        let entry = map
+            .entry(root.to_path_buf())
+            .or_insert_with(|| ReadyTaskState {
+                segments: load_ready_index_from_disk(&marker_dir),
+                dirty_ops: 0,
+                last_flush: now,
+                checked: now,
+            });
+        entry.checked = now;
+        entry.segments.get(&relative).copied().or_else(|| {
+            let legacy = read_legacy_marker(&marker_dir, &relative)?;
+            entry.segments.insert(relative.clone(), legacy);
+            Some(legacy)
+        })
+    };
     expected.is_some_and(|size| {
         size > 0
             && fs::metadata(root.join(relative))
@@ -195,6 +386,10 @@ pub(crate) fn forget_byte_priority(root: &Path) {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .remove(root);
+    ready_segments()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(root);
 }
 
 #[cfg(test)]
@@ -272,5 +467,59 @@ mod tests {
         assert_eq!(byte_priority_file_reads(&root), 0);
         assert_eq!(byte_priority(&root), None);
         forget_byte_priority(&root);
+    }
+
+    #[test]
+    fn ready_markers_coalesce_into_single_index_without_per_segment_files() {
+        let root = temp_root("coalesced-ready");
+        let seg_dir = root.join("segments");
+        fs::create_dir_all(&seg_dir).unwrap();
+
+        let empty_seg = seg_dir.join("empty.ts");
+        fs::write(&empty_seg, b"").unwrap();
+        assert!(mark_ready(&root, &empty_seg).is_err());
+        assert!(!is_ready(&root, "segments/empty.ts"));
+
+        for idx in 0..200 {
+            let seg = seg_dir.join(format!("{idx:06}.ts"));
+            fs::write(&seg, format!("segment-payload-{idx:06}").as_bytes()).unwrap();
+            mark_ready(&root, &seg).unwrap();
+        }
+
+        // All 200 segments are immediately ready in memory without creating 200 marker files.
+        for idx in 0..200 {
+            assert!(is_ready(&root, &format!("segments/{idx:06}.ts")));
+        }
+        assert!(!is_ready(&root, "../outside.ts"));
+        assert!(!root.join("playback-ready/segments").exists());
+        assert!(root.join("playback-ready/index.tsv").is_file());
+        let marker_entries: Vec<_> = fs::read_dir(root.join("playback-ready"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(marker_entries, vec!["index.tsv".to_string()]);
+
+        // Mutating segment length invalidates readiness until `mark_ready` is called again,
+        // and `reset_ready` drops readiness immediately both in memory and after reload.
+        let seg10 = seg_dir.join("000010.ts");
+        fs::write(&seg10, b"short").unwrap();
+        assert!(!is_ready(&root, "segments/000010.ts"));
+        mark_ready(&root, &seg10).unwrap();
+        assert!(is_ready(&root, "segments/000010.ts"));
+        reset_ready(&root, &seg10).unwrap();
+        assert!(!is_ready(&root, "segments/000010.ts"));
+
+        // Simulated process restart reloads flushed index entries and legacy per-segment files.
+        fs::create_dir_all(root.join("playback-ready/legacy")).unwrap();
+        fs::create_dir_all(root.join("legacy")).unwrap();
+        fs::write(root.join("legacy/old.ts"), b"ABCD").unwrap();
+        fs::write(root.join("playback-ready/legacy/old.ts"), b"4").unwrap();
+        forget_byte_priority(&root);
+        assert!(is_ready(&root, "segments/000000.ts"));
+        assert!(!is_ready(&root, "segments/000010.ts"));
+        assert!(is_ready(&root, "legacy/old.ts"));
+
+        forget_byte_priority(&root);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1269,7 +1269,7 @@ fn download_hls_scoped_with_control(
                 (playlist.target_duration / 2.0).max(0.2)
             };
             wait_with_control(control, wait.min(6.0))
-                .and_then(|()| load_playlist(&current, headers, proxy))
+                .and_then(|()| load_live_playlist_with_retry(&current, headers, proxy, control))
         };
         playlist = match reloaded {
             Ok(next) => next,
@@ -1824,6 +1824,88 @@ fn check_live_control(control: &Path) -> Result<(), String> {
     }
 }
 
+const LIVE_MANIFEST_RETRY_DELAYS_MS: [u64; 2] = [250, 500];
+
+pub(super) fn is_retryable_live_manifest_error(error: &str) -> bool {
+    if matches!(error, "paused" | "canceled" | "finish") {
+        return false;
+    }
+    let lower = error.to_ascii_lowercase();
+    if error.contains("允许的域名")
+        || error.contains("白名单")
+        || error.contains("未配置代理")
+        || error.contains("代理地址无效")
+        || error.contains("代理主机无效")
+        || error.contains("代理认证失败")
+        || error.contains("系统代理解析失败")
+        || error.contains("超过长度上限")
+        || error.contains("不是 UTF-8")
+        || error.contains("不是有效的 M3U8")
+        || error.contains("不支持")
+        || lower.contains("private network")
+        || lower.contains("permitted network")
+        || lower.contains("punycode")
+        || lower.contains("disallowed")
+        || lower.contains("local host")
+        || lower.contains("not configured")
+        || lower.contains("proxy")
+        || lower.contains("url must be http")
+        || lower.contains("exceeds")
+        || lower.contains("drm")
+        || lower.contains("sample-aes")
+        || lower.contains("keyformat")
+    {
+        return false;
+    }
+    if let Some(status) = extract_http_status(error) {
+        return retryable_http_status(status) || (500..=599).contains(&status);
+    }
+    true
+}
+
+fn load_live_playlist_with_retry(
+    url: &str,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    control: &Path,
+) -> Result<Playlist, String> {
+    let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
+    if throttle.control.as_os_str().is_empty() && !control.as_os_str().is_empty() {
+        throttle.control = control.to_path_buf();
+    }
+    crate::net_policy::with_throttle_context(Some(throttle), || {
+        let mut attempt = 0usize;
+        loop {
+            check_live_control(control)?;
+            match load_playlist(url, headers, proxy) {
+                Ok(playlist) => {
+                    check_live_control(control)?;
+                    return Ok(playlist);
+                }
+                Err(error) => {
+                    if matches!(error.as_str(), "paused" | "canceled" | "finish") {
+                        if read_control(control) == "cancel" {
+                            return Err("canceled".into());
+                        }
+                        return Err(error);
+                    }
+                    check_live_control(control)?;
+                    if !is_retryable_live_manifest_error(&error)
+                        || attempt >= LIVE_MANIFEST_RETRY_DELAYS_MS.len()
+                    {
+                        return Err(error);
+                    }
+                    wait_with_control(
+                        control,
+                        LIVE_MANIFEST_RETRY_DELAYS_MS[attempt] as f64 / 1000.0,
+                    )?;
+                    attempt += 1;
+                }
+            }
+        }
+    })
+}
+
 fn reload_playlist(
     url: &str,
     headers: &HashMap<String, String>,
@@ -1838,27 +1920,54 @@ fn reload_playlist(
         throttle.control = control.to_path_buf();
     }
     crate::net_policy::with_throttle_context(Some(throttle), || {
-        match load_playlist(&blocking_url, headers, proxy) {
-            Ok(playlist) => {
-                check_live_control(control)?;
-                if !playlist.segments.is_empty() || playlist.end_list {
-                    return Ok(playlist);
+        let mut attempt = 0usize;
+        loop {
+            check_live_control(control)?;
+            let target = if attempt == 0 { &blocking_url } else { url };
+            let error = match load_playlist(target, headers, proxy) {
+                Ok(playlist) => {
+                    check_live_control(control)?;
+                    if !playlist.segments.is_empty() || playlist.end_list || target == url {
+                        return Ok(playlist);
+                    }
+                    match load_playlist(url, headers, proxy) {
+                        Ok(fallback) => {
+                            check_live_control(control)?;
+                            return Ok(fallback);
+                        }
+                        Err(error) => error,
+                    }
                 }
-            }
-            Err(error) if error == "paused" || error == "canceled" => {
+                Err(error) if target != url && extract_http_status(&error) == Some(400) => {
+                    check_live_control(control)?;
+                    match load_playlist(url, headers, proxy) {
+                        Ok(fallback) => {
+                            check_live_control(control)?;
+                            return Ok(fallback);
+                        }
+                        Err(fallback_error) => fallback_error,
+                    }
+                }
+                Err(error) => error,
+            };
+            if matches!(error.as_str(), "paused" | "canceled" | "finish") {
                 if read_control(control) == "cancel" {
                     return Err("canceled".into());
                 }
                 return Err(error);
             }
-            Err(_) => {
-                check_live_control(control)?;
+            check_live_control(control)?;
+            if !is_retryable_live_manifest_error(&error)
+                || attempt >= LIVE_MANIFEST_RETRY_DELAYS_MS.len()
+            {
+                return Err(error);
             }
+            wait_with_control(
+                control,
+                LIVE_MANIFEST_RETRY_DELAYS_MS[attempt] as f64 / 1000.0,
+            )?;
+            attempt += 1;
         }
-        check_live_control(control)?;
-        let playlist = load_playlist(url, headers, proxy)?;
-        check_live_control(control)?;
-        Ok(playlist)
     })
 }
 
@@ -1930,7 +2039,7 @@ fn wait_with_control(control: &Path, seconds: f64) -> Result<(), String> {
     while std::time::Instant::now() < deadline {
         check_live_control(control)?;
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(50)));
     }
     check_live_control(control)
 }
@@ -3363,11 +3472,18 @@ pub(crate) fn stable_media_url(uri: &str) -> String {
             continue;
         }
         let (name, value) = part.split_once('=').unwrap_or((part, ""));
-        names.push(name.to_ascii_lowercase());
+        names.push(name.trim().to_ascii_lowercase());
         pairs.push((name.to_string(), value.to_string()));
     }
     let short_sig = names.iter().any(|name| name == "s") && names.iter().any(|name| name == "e");
-    pairs.retain(|(name, _)| !volatile_query_name(name, short_sig));
+    let azure_sas = names.iter().any(|name| name == "sv") && names.iter().any(|name| name == "sig");
+    let ws_or_tx_sig = names
+        .iter()
+        .any(|name| matches!(name.as_str(), "wssecret" | "wstime" | "txsecret" | "txtime"));
+    let bili_sig = is_bilibili_media_context(&origin, path, &names);
+    pairs.retain(|(name, _)| {
+        !volatile_query_name(name, short_sig, azure_sas, bili_sig, ws_or_tx_sig)
+    });
     pairs.sort_by(|left, right| {
         left.0
             .to_ascii_lowercase()
@@ -3387,29 +3503,147 @@ pub(crate) fn stable_media_url(uri: &str) -> String {
     }
 }
 
-fn volatile_query_name(name: &str, short_sig: bool) -> bool {
-    let name = name.to_ascii_lowercase();
-    if name.starts_with("x-amz-") {
+fn is_bilibili_media_context(origin: &str, path: &str, names: &[String]) -> bool {
+    let authority = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+    let host = if authority.starts_with('[') {
+        authority
+            .find(']')
+            .map_or(authority, |close| &authority[..=close])
+    } else {
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host)
+    }
+    .trim()
+    .trim_matches('.')
+    .to_ascii_lowercase();
+    let is_bili_host = ["bilivideo.com", "bilivideo.cn", "hdslb.com", "bilibili.com"]
+        .into_iter()
+        .any(|domain| {
+            host == domain
+                || host
+                    .strip_suffix(domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+        || host.contains("upos-");
+    if is_bili_host {
+        return true;
+    }
+    let path_lower = path.to_ascii_lowercase();
+    if path_lower.contains("/upgcxcode/")
+        || path_lower.starts_with("upgcxcode/")
+        || path_lower.contains("upos-")
+    {
+        return true;
+    }
+    names
+        .iter()
+        .any(|name| matches!(name.as_str(), "upsig" | "uparams"))
+}
+
+fn volatile_query_name(
+    name: &str,
+    short_sig: bool,
+    azure_sas: bool,
+    bili_sig: bool,
+    ws_or_tx_sig: bool,
+) -> bool {
+    // Keep live DASH / HLS segment-identifying query parameters (`t`, `ts`,
+    // `timestamp`, `time`, standalone `e`, `seq`, `msn`, `part`, `num`,
+    // `number`, `segment`, `seg`) intact so `$Time$` / `$Number$` query segments
+    // never collide in `live_dash_url_key` or `vod_segment_identity`.
+    let name = name.trim().to_ascii_lowercase();
+    if name.starts_with("x-amz-")
+        || name.starts_with("x-oss-")
+        || name.starts_with("x-cos-")
+        || name.starts_with("x-goog-")
+        || name.starts_with("q-sign-")
+    {
         return true;
     }
     if short_sig && matches!(name.as_str(), "s" | "e" | "_t") {
+        return true;
+    }
+    if azure_sas
+        && matches!(
+            name.as_str(),
+            "sv" | "se"
+                | "sp"
+                | "sr"
+                | "st"
+                | "spr"
+                | "sdd"
+                | "skt"
+                | "ske"
+                | "skoid"
+                | "sktid"
+                | "skv"
+        )
+    {
+        return true;
+    }
+    if bili_sig
+        && matches!(
+            name.as_str(),
+            "e" | "trid"
+                | "mid"
+                | "gen"
+                | "os"
+                | "og"
+                | "platform"
+                | "orderid"
+                | "logo"
+                | "uipk"
+                | "nbs"
+                | "oi"
+                | "mcdnid"
+                | "buvid"
+                | "key"
+        )
+    {
+        return true;
+    }
+    if ws_or_tx_sig && name == "key" {
         return true;
     }
     matches!(
         name.as_str(),
         "token"
             | "auth"
+            | "auth_key"
             | "authorization"
             | "signature"
             | "sig"
+            | "sign"
+            | "upsig"
+            | "uparams"
             | "expires"
             | "expire"
             | "expiry"
+            | "deadline"
+            | "exp"
+            | "validfrom"
+            | "validto"
             | "policy"
             | "key-pair-id"
             | "hdnea"
+            | "hdnts"
+            | "wssecret"
+            | "wstime"
+            | "txsecret"
+            | "txtime"
+            | "ossaccesskeyid"
+            | "awsaccesskeyid"
+            | "googleaccessid"
+            | "security-token"
+            | "q-ak"
+            | "q-key-time"
+            | "q-header-list"
+            | "q-url-param-list"
+            | "q-signature"
             | "hmac"
             | "jwt"
+            | "nonce"
             | "session"
             | "sessionid"
             | "access_key"
@@ -6965,6 +7199,233 @@ mod tests {
             started.elapsed()
         );
         assert!(audio_dir.join("teardown.done").is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stable_media_url_strips_cloud_cdn_signatures_while_preserving_live_segment_params() {
+        // 1. Alibaba Cloud OSS V1 & V4 (including `x-oss-security-token` and `x-oss- credential`).
+        let oss_v1 = "https://media-bucket.oss-cn-shanghai.aliyuncs.com/vod/seg-001.ts?OSSAccessKeyId=LTAI111&Expires=1730000100&Signature=sigA&x-oss-security-token=stsA";
+        let oss_v4 = "https://MEDIA-BUCKET.oss-cn-shanghai.aliyuncs.com:443/vod/seg-001.ts?x-oss-signature-version=OSS4-HMAC-SHA256&x-oss-credential=credB&x-oss-%20credential=credB&x-oss-date=20261126T000000Z&x-oss-expires=3600&x-oss-signature=sigB";
+        let oss_spaced = "https://media-bucket.oss-cn-shanghai.aliyuncs.com/vod/seg-001.ts?x-oss- credential=credC&x-oss-date=20261126T010000Z&x-oss-expires=900&x-oss-signature=sigC";
+        assert_eq!(
+            stable_media_url(oss_v1),
+            "https://media-bucket.oss-cn-shanghai.aliyuncs.com/vod/seg-001.ts"
+        );
+        assert_eq!(stable_media_url(oss_v1), stable_media_url(oss_v4));
+        assert_eq!(stable_media_url(oss_v1), stable_media_url(oss_spaced));
+
+        // 2. Tencent COS signed URLs.
+        let cos_1 = "https://vod-1250000000.cos.ap-guangzhou.myqcloud.com/hls/0001.ts?q-sign-algorithm=sha1&q-ak=AKID111&q-sign-time=1730000000;1730003600&q-key-time=1730000000;1730003600&q-header-list=host&q-url-param-list=&q-signature=aaaa1111&x-cos-security-token=tok1";
+        let cos_2 = "https://vod-1250000000.cos.ap-guangzhou.myqcloud.com/hls/0001.ts?q-signature=bbbb2222&q-url-param-list=&q-header-list=host&q-key-time=1730010000;1730013600&q-sign-time=1730010000;1730013600&q-ak=AKID222&q-sign-algorithm=sha1&x-cos-security-token=tok2";
+        assert_eq!(
+            stable_media_url(cos_1),
+            "https://vod-1250000000.cos.ap-guangzhou.myqcloud.com/hls/0001.ts"
+        );
+        assert_eq!(stable_media_url(cos_1), stable_media_url(cos_2));
+
+        // 3. AWS S3 V4 & V2 signed URLs.
+        let s3_1 = "https://bucket.s3.amazonaws.com/stream/seg0.m4s?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA1&X-Amz-Date=20261126T000000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=111";
+        let s3_2 = "https://bucket.s3.amazonaws.com/stream/seg0.m4s?AWSAccessKeyId=AKIA2&Expires=1790000000&Signature=222&security-token=sts2";
+        assert_eq!(
+            stable_media_url(s3_1),
+            "https://bucket.s3.amazonaws.com/stream/seg0.m4s"
+        );
+        assert_eq!(stable_media_url(s3_1), stable_media_url(s3_2));
+
+        // 4. Bilibili CDN & MCDN signed segment URLs.
+        let bili_1 = "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/567890-1-30080.m4s?e=ig8euxZM&uipk=5&nbs=1&deadline=1730000000&gen=playurlv2&os=cosbv&oi=11111&trid=aaaa1111&mid=12345&platform=pc&og=cos&upsig=deadbeef1111&uparams=e,uipk,nbs,deadline,gen,os,oi,trid,mid,platform,og&orderid=0,3&logo=80000000";
+        let bili_2 = "https://upos-sz-mirrorcos.bilivideo.com:443/upgcxcode/12/34/567890-1-30080.m4s?e=rotated99&uipk=5&nbs=1&deadline=1730099999&gen=playurlv2&os=bcache&oi=22222&trid=bbbb2222&mid=99999&platform=html5&og=hw&upsig=cafebabe2222&uparams=e,deadline,trid&orderid=1,3&logo=00000000";
+        assert_eq!(
+            stable_media_url(bili_1),
+            "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/567890-1-30080.m4s"
+        );
+        assert_eq!(stable_media_url(bili_1), stable_media_url(bili_2));
+
+        // 5. Tencent CDN / Wangsu / Aliyun CDN / Akamai / CloudFront tokens.
+        let tx_ws_1 = "https://live.cdn.test/vod/chunk.ts?txSecret=aaa&txTime=65000001&wsSecret=bbb&wsTime=65000001&auth_key=1730000000-0-0-abc&hdnts=exp=1~hmac=111&hdnea=st=1~exp=2~hmac=222&Policy=p1&Key-Pair-Id=K1&sign=s1";
+        let tx_ws_2 = "https://live.cdn.test/vod/chunk.ts?txSecret=zzz&txTime=65009999&wsSecret=yyy&wsTime=65009999&auth_key=1730099999-0-0-def&hdnts=exp=9~hmac=999&hdnea=st=5~exp=9~hmac=888&Policy=p2&Key-Pair-Id=K2&sign=s2";
+        assert_eq!(
+            stable_media_url(tx_ws_1),
+            "https://live.cdn.test/vod/chunk.ts"
+        );
+        assert_eq!(stable_media_url(tx_ws_1), stable_media_url(tx_ws_2));
+
+        // 6. CRITICAL INVARIANT (G4-1): segment-identifying query params (`t`, `ts`, `timestamp`,
+        // `time`, standalone `e`, `seq`, `msn`, `part`, `num`, `number`, `segment`, `seg`) NEVER collide!
+        for param in [
+            "t",
+            "ts",
+            "timestamp",
+            "time",
+            "e",
+            "seq",
+            "msn",
+            "part",
+            "num",
+            "number",
+            "segment",
+            "seg",
+        ] {
+            let seg_a = stable_media_url(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=1001&x-oss-expires=900&x-oss-signature=sig1&q-signature=q1&txSecret=tx1&txTime=111"
+            ));
+            let seg_b = stable_media_url(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=1002&x-oss-expires=900&x-oss-signature=sig1&q-signature=q1&txSecret=tx1&txTime=111"
+            ));
+            let seg_a_rotated = stable_media_url(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=1001&x-oss-expires=3600&x-oss-signature=sig9&q-signature=q9&txSecret=tx9&txTime=999"
+            ));
+            assert_ne!(seg_a, seg_b, "segment query ?{param}= must stay distinct");
+            assert_eq!(
+                seg_a, seg_a_rotated,
+                "rotated CDN signature with same ?{param}= must match"
+            );
+        }
+    }
+
+    #[test]
+    fn live_hls_reload_retries_transient_resets_and_aborts_fast_on_fatal_errors_or_control() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-reload-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let previous = parse_playlist(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\ns1.ts\n",
+            "http://127.0.0.1/live.m3u8",
+        )
+        .unwrap();
+
+        // 1. Two transient connection resets (dropped socket before response) succeed on 2nd retry.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let srv_hits = Arc::clone(&hits);
+        let server = std::thread::spawn(move || {
+            for idx in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut req = [0u8; 512];
+                let _ = std::io::Read::read(&mut stream, &mut req);
+                srv_hits.fetch_add(1, Ordering::SeqCst);
+                if idx < 2 {
+                    drop(stream);
+                } else {
+                    let body = b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:2\n#EXTINF:2.0,\ns2.ts\n#EXT-X-ENDLIST\n";
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    stream.write_all(header.as_bytes()).unwrap();
+                    stream.write_all(body).unwrap();
+                }
+            }
+        });
+        let started = Instant::now();
+        let reloaded = reload_playlist(
+            &format!("http://{addr}/live.m3u8"),
+            &HashMap::new(),
+            "",
+            &previous,
+            &control,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        assert!(reloaded.end_list);
+        assert!(
+            started.elapsed() >= Duration::from_millis(650),
+            "expected ~750ms backoff across 2 retries, got {:?}",
+            started.elapsed()
+        );
+
+        // 2. Non-retryable HTTP 401/403/404 and fatal policy errors abort immediately without retry.
+        for status in [401u16, 403, 404] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let status_hits = Arc::new(AtomicUsize::new(0));
+            let srv_hits = Arc::clone(&status_hits);
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut req = [0u8; 512];
+                let _ = std::io::Read::read(&mut stream, &mut req);
+                srv_hits.fetch_add(1, Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 {status} Denied\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            });
+            let t0 = Instant::now();
+            let err = reload_playlist(
+                &format!("http://{addr}/live.m3u8"),
+                &HashMap::new(),
+                "",
+                &previous,
+                &control,
+            )
+            .unwrap_err();
+            server.join().unwrap();
+            assert_eq!(
+                status_hits.load(Ordering::SeqCst),
+                1,
+                "HTTP {status} must not retry"
+            );
+            assert!(err.contains(&format!("HTTP {status}")), "{err}");
+            assert!(
+                t0.elapsed() < Duration::from_millis(220),
+                "HTTP {status} slept: {:?}",
+                t0.elapsed()
+            );
+        }
+
+        for fatal in [
+            "下载地址不在允许的域名范围内",
+            "public URL cannot target a private network",
+            "proxy not configured",
+            "invalid WinHTTP proxy",
+            "HLS playlist HTTP 403",
+        ] {
+            assert!(!is_retryable_live_manifest_error(fatal), "{fatal}");
+        }
+        assert!(is_retryable_live_manifest_error("connection reset by peer"));
+        assert!(is_retryable_live_manifest_error("HLS playlist HTTP 503"));
+
+        // 3. Control word ("finish" / "pause" / "cancel") wakes retry sleep immediately.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let wake_ctrl = control.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+            std::thread::sleep(Duration::from_millis(40));
+            fs::write(&wake_ctrl, "finish").unwrap();
+        });
+        let t_wake = Instant::now();
+        let err = reload_playlist(
+            &format!("http://{addr}/live.m3u8"),
+            &HashMap::new(),
+            "",
+            &previous,
+            &control,
+        )
+        .unwrap_err();
+        server.join().unwrap();
+        assert_eq!(err, "finish");
+        assert!(
+            t_wake.elapsed() < Duration::from_millis(220),
+            "finish must abort retry sleep promptly: {:?}",
+            t_wake.elapsed()
+        );
+
         let _ = fs::remove_dir_all(root);
     }
 }

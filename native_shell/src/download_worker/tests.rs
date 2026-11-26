@@ -13622,3 +13622,211 @@ fn t2_r8_magnet_metadata_proxy_preserves_global_manual_and_system_and_fails_clos
     drop(coordinator);
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn auto_retry_governance_skips_permanent_failures_while_retrying_transient_errors() {
+    // 1. Direct classifier & retry-gate coverage across permanent and transient errors.
+    for (error, expected_code) in [
+        ("write failed: no space left on device", "DISK_FULL"),
+        ("磁盘空间不足", "DISK_FULL"),
+        ("ffmpeg not found", "MEDIA_MERGE_FAILED"),
+        (
+            "外部工具路径必须指向 ffmpeg 可执行文件",
+            "MEDIA_MERGE_FAILED",
+        ),
+        (
+            "检测到受 DRM 加密保护的流媒体（Widevine/PlayReady），不支持直接解密下载",
+            "DRM_PROTECTED",
+        ),
+        ("不支持的 HLS 加密方法: SAMPLE-AES", "DRM_PROTECTED"),
+        (
+            "不支持 KEYFORMAT=com.apple.streamingkeydelivery / DRM 加密",
+            "DRM_PROTECTED",
+        ),
+        ("下载地址不在允许的域名范围内", "NETWORK_POLICY"),
+        (
+            "public URL cannot target a private network",
+            "NETWORK_POLICY",
+        ),
+        ("手动代理模式未配置代理服务器地址", "NETWORK_POLICY"),
+        ("proxy not configured", "NETWORK_POLICY"),
+        ("HTTP 403", "HTTP_403"),
+        ("HTTP 404", "HTTP_404"),
+    ] {
+        let failure = task_failure_from_error(error, "transfer", "https://cdn.test/x", 1, false);
+        assert_eq!(failure.code, expected_code, "error={error}");
+        assert!(
+            !is_auto_retryable_task_failure(&failure.code, error),
+            "permanent error must not auto-retry: {error} ({})",
+            failure.code
+        );
+    }
+
+    for (error, expected_code) in [
+        ("connection reset by peer", "DOWNLOAD_FAILED"),
+        (
+            "response body length mismatch: expected 100, got 5",
+            "SIZE_MISMATCH",
+        ),
+        ("socket read timed out", "NETWORK_TIMEOUT"),
+        ("代理连接或握手超时", "NETWORK_TIMEOUT"),
+        ("HTTP 503", "HTTP_503"),
+        ("HTTP 429", "HTTP_429"),
+    ] {
+        let failure = task_failure_from_error(error, "transfer", "https://cdn.test/x", 1, false);
+        assert_eq!(failure.code, expected_code, "error={error}");
+        assert!(
+            is_auto_retryable_task_failure(&failure.code, error),
+            "transient error must remain auto-retryable: {error} ({})",
+            failure.code
+        );
+    }
+
+    // 2. End-to-end worker test: DRM stream, `allowed_hosts`, and invalid manual proxy policy
+    // fail immediately on attempt 1 even when `auto_retry_failed_max = 3`, while a transient 503
+    // auto-retries to completion.
+    use std::sync::atomic::AtomicUsize;
+    let root = lifecycle_test_root("smart-retry-governance");
+    let drm_hits = Arc::new(AtomicUsize::new(0));
+    let drm_srv_hits = Arc::clone(&drm_hits);
+    let drm_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let drm_addr = drm_listener.local_addr().unwrap();
+    let drm_server = thread::spawn(move || {
+        if let Ok((mut stream, _)) = drm_listener.accept() {
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            drm_srv_hits.fetch_add(1, Ordering::SeqCst);
+            let body = b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://drm\"\n#EXTINF:4.0,\nseg0.ts\n#EXT-X-ENDLIST\n";
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+
+    let flaky_hits = Arc::new(AtomicUsize::new(0));
+    let flaky_srv_hits = Arc::clone(&flaky_hits);
+    let flaky_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let flaky_addr = flaky_listener.local_addr().unwrap();
+    let flaky_server = thread::spawn(move || {
+        while let Ok((mut stream, _)) = flaky_listener.accept() {
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf);
+            let n = flaky_srv_hits.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 3 {
+                // Exhaust HTTP engine's single-run transport retries so task-level auto-retry triggers.
+                let _ = stream.write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            } else {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nrecovered-ok",
+                );
+                break;
+            }
+        }
+    });
+
+    let coord = direct_http_coordinator(&root);
+    coord
+        .set_setting("auto_retry_failed_max", serde_json::json!(3))
+        .unwrap();
+    coord
+        .set_setting("queue_max_active", serde_json::json!(1))
+        .unwrap();
+
+    // Task 1: DRM-protected HLS must fail once (`error_attempt == 1`, `DRM_PROTECTED`) and unblock queue.
+    let ev_drm = coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{drm_addr}/drm.m3u8"),
+                resource_kind: crate::ResourceKind::Hls,
+                filename: "drm.mp4".into(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let drm_id = created_task_id(&ev_drm);
+
+    // Task 2: Transient 503 -> auto-retries via `auto_retry_failed_max` and completes.
+    let ev_flaky = coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{flaky_addr}/flaky.bin"),
+                resource_kind: crate::ResourceKind::File,
+                filename: "flaky.bin".into(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let flaky_id = created_task_id(&ev_flaky);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let tasks = coord.tasks().unwrap();
+        let flaky_done = tasks
+            .iter()
+            .any(|t| t.task_id == flaky_id && t.status == "completed");
+        if flaky_done {
+            let drm_snap = tasks.iter().find(|t| t.task_id == drm_id).unwrap();
+            assert_eq!(drm_snap.status, "failed");
+            assert_eq!(drm_snap.error_code.as_deref(), Some("DRM_PROTECTED"));
+            assert_eq!(drm_snap.error_attempt, 1);
+            assert_eq!(drm_hits.load(Ordering::SeqCst), 1);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for auto-retry governance tasks: {tasks:?}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(fs::read(root.join("flaky.bin")).unwrap(), b"recovered-ok");
+
+    // Task 3: `allowed_hosts` policy rejection after task creation fails immediately on attempt 1.
+    let ev_allow = coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{flaky_addr}/disallowed.bin"),
+                resource_kind: crate::ResourceKind::File,
+                filename: "disallowed.bin".into(),
+                start_paused: true,
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let allow_id = created_task_id(&ev_allow);
+    coord
+        .set_setting("allowed_hosts", serde_json::json!("allowed.example.test"))
+        .unwrap();
+    coord
+        .dispatch(CoreCommand::TaskAction {
+            task_id: allow_id.clone(),
+            action: "resume".into(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snap = coord.lock().unwrap().snapshot(&allow_id).cloned().unwrap();
+        if snap.status == "failed" {
+            assert_eq!(snap.error_code.as_deref(), Some("NETWORK_POLICY"));
+            assert_eq!(snap.error_attempt, 1);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "allowed_hosts failure did not settle to failed: {snap:?}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let _ = drm_server.join();
+    let _ = flaky_server.join();
+    drop(coord);
+    let _ = fs::remove_dir_all(root);
+}

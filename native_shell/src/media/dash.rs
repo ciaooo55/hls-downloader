@@ -2472,39 +2472,72 @@ fn refresh_live_manifest(
     proxy: &str,
     control: &Path,
 ) -> Result<Option<(Vec<u8>, String)>, String> {
-    for attempt in 0..4 {
-        match read_control(control).as_str() {
-            "run" => {}
-            "finish" => return Ok(None),
-            _ => return Err(control_stop_error(control)),
-        }
-        let (status, body, final_url) =
-            fetch_manifest_bytes(url, headers, proxy, false, super::MAX_MANIFEST_BYTES)
-                .map_err(|error| error.to_string())?;
-        if status == 200 || status == 206 {
-            return Ok(Some((body, final_url)));
-        }
-        if !matches!(status, 408 | 429 | 500..=599) || attempt == 3 {
-            return Err(format!(
-                "DASH live manifest HTTP {status} after {} attempt(s)",
-                attempt + 1
-            ));
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250 << attempt);
-        while std::time::Instant::now() < deadline {
+    let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
+    if throttle.control.as_os_str().is_empty() && !control.as_os_str().is_empty() {
+        throttle.control = control.to_path_buf();
+    }
+    crate::net_policy::with_throttle_context(Some(throttle), || {
+        let mut transport_retries = 0usize;
+        for attempt in 0..4 {
             match read_control(control).as_str() {
                 "run" => {}
                 "finish" => return Ok(None),
                 _ => return Err(control_stop_error(control)),
             }
-            std::thread::sleep(
-                deadline
-                    .saturating_duration_since(std::time::Instant::now())
-                    .min(std::time::Duration::from_millis(50)),
-            );
+            let backoff_ms =
+                match fetch_manifest_bytes(url, headers, proxy, false, super::MAX_MANIFEST_BYTES) {
+                    Ok((status, body, final_url)) => {
+                        if status == 200 || status == 206 {
+                            return Ok(Some((body, final_url)));
+                        }
+                        if !matches!(status, 408 | 425 | 429 | 500..=599) || attempt == 3 {
+                            return Err(format!(
+                                "DASH live manifest HTTP {status} after {} attempt(s)",
+                                attempt + 1
+                            ));
+                        }
+                        250u64 << attempt
+                    }
+                    Err(error) => {
+                        match read_control(control).as_str() {
+                            "finish" => return Ok(None),
+                            "run" => {}
+                            _ => return Err(control_stop_error(control)),
+                        }
+                        if matches!(
+                            error,
+                            crate::http_engine::EngineError::Pause
+                                | crate::http_engine::EngineError::Cancel
+                        ) {
+                            return Err(control_stop_error(control));
+                        }
+                        let message = error.to_string();
+                        if !super::hls::is_retryable_live_manifest_error(&message)
+                            || transport_retries >= 2
+                        {
+                            return Err(message);
+                        }
+                        let delay = 250u64 << transport_retries;
+                        transport_retries += 1;
+                        delay
+                    }
+                };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(backoff_ms);
+            while std::time::Instant::now() < deadline {
+                match read_control(control).as_str() {
+                    "run" => {}
+                    "finish" => return Ok(None),
+                    _ => return Err(control_stop_error(control)),
+                }
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .min(std::time::Duration::from_millis(50)),
+                );
+            }
         }
-    }
-    Err("DASH live manifest retries exhausted".into())
+        Err("DASH live manifest retries exhausted".into())
+    })
 }
 
 /// Picks the representation in `period` that continues `chosen`: same kind,
@@ -9292,6 +9325,148 @@ mod tests {
                 "finish_dash must preserve multi-period temp files until complete_payload succeeds"
             );
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dash_live_refresh_retries_transient_connection_resets_and_aborts_on_policy_or_control() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let root = std::env::temp_dir().join(format!(
+            "dash-refresh-reset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        // 1. Two transient connection resets recover on retry #2 (250ms + 500ms).
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let srv_hits = Arc::clone(&hits);
+        let server = std::thread::spawn(move || {
+            for idx in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 512];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                srv_hits.fetch_add(1, Ordering::SeqCst);
+                if idx < 2 {
+                    drop(stream);
+                } else {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\n<MPD/>\n",
+                        )
+                        .unwrap();
+                }
+            }
+        });
+        let started = Instant::now();
+        let url = format!("http://{addr}/live.mpd");
+        let refreshed = refresh_live_manifest(&url, &HashMap::new(), "", &control).unwrap();
+        server.join().unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        assert_eq!(refreshed, Some((b"<MPD/>\n".to_vec(), url)));
+        assert!(
+            started.elapsed() >= Duration::from_millis(650),
+            "expected ~750ms backoff across 2 retries, got {:?}",
+            started.elapsed()
+        );
+
+        // 2. Three consecutive resets exhaust the 2 bounded retries and return error.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let fail_hits = Arc::new(AtomicUsize::new(0));
+        let srv_hits = Arc::clone(&fail_hits);
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (stream, _) = listener.accept().unwrap();
+                srv_hits.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        let err = refresh_live_manifest(
+            &format!("http://{addr}/live.mpd"),
+            &HashMap::new(),
+            "",
+            &control,
+        )
+        .unwrap_err();
+        server.join().unwrap();
+        assert_eq!(fail_hits.load(Ordering::SeqCst), 3);
+        assert!(!err.is_empty());
+
+        // 3. Fatal policy error (e.g. invalid manual proxy) aborts immediately without retry sleep.
+        let t_policy = Instant::now();
+        let policy_err = refresh_live_manifest(
+            "http://127.0.0.1:1/live.mpd",
+            &HashMap::new(),
+            crate::net_policy::INVALID_MANUAL_PROXY,
+            &control,
+        )
+        .unwrap_err();
+        assert!(policy_err.contains("代理"), "{policy_err}");
+        assert!(t_policy.elapsed() < Duration::from_millis(200));
+
+        // 4. Control word ("finish") aborts retry sleep immediately and returns Ok(None).
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let wake_ctrl = control.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+            std::thread::sleep(Duration::from_millis(40));
+            fs::write(&wake_ctrl, "finish").unwrap();
+        });
+        let t_wake = Instant::now();
+        let finished = refresh_live_manifest(
+            &format!("http://{addr}/live.mpd"),
+            &HashMap::new(),
+            "",
+            &control,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(finished, None);
+        assert!(t_wake.elapsed() < Duration::from_millis(220));
+
+        // 5. Cloud CDN signed DASH segment identities match across token refresh while keeping ?t=/?seq= distinct.
+        let oss_seg_1 = dash_file_identity(
+            "video",
+            "0",
+            "v0",
+            "https://bucket.oss-cn-beijing.aliyuncs.com/dash/seg-1.m4s?t=1000&OSSAccessKeyId=A1&Expires=100&Signature=S1",
+            None,
+            "video/mp4",
+        );
+        let oss_seg_1_rot = dash_file_identity(
+            "video",
+            "0",
+            "v0",
+            "https://bucket.oss-cn-beijing.aliyuncs.com/dash/seg-1.m4s?t=1000&x-oss-credential=C2&x-oss-date=20261126T000000Z&x-oss-expires=900&x-oss-signature=S2",
+            None,
+            "video/mp4",
+        );
+        let oss_seg_2 = dash_file_identity(
+            "video",
+            "0",
+            "v0",
+            "https://bucket.oss-cn-beijing.aliyuncs.com/dash/seg-1.m4s?t=2000&x-oss-credential=C2&x-oss-date=20261126T000000Z&x-oss-expires=900&x-oss-signature=S2",
+            None,
+            "video/mp4",
+        );
+        assert_eq!(oss_seg_1, oss_seg_1_rot);
+        assert_ne!(oss_seg_1, oss_seg_2);
+
         let _ = fs::remove_dir_all(root);
     }
 }
