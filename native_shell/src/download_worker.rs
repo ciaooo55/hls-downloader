@@ -96,12 +96,77 @@ fn is_pre_expansion_container_source(url: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("torrent"))
 }
 
+fn is_torrent_like_source(url: &str) -> bool {
+    crate::classify_url(url) == crate::ResourceKind::Torrent
+}
+
+fn is_http_source_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+fn resolve_torrent_metadata_proxy(settings: &CoreSettings, url: &str, spec_proxy: &str) -> String {
+    let trimmed = spec_proxy.trim();
+    if trimmed == crate::net_policy::DIRECT_PROXY_SENTINEL
+        || trimmed.eq_ignore_ascii_case("__direct__")
+    {
+        return crate::net_policy::DIRECT_PROXY_SENTINEL.into();
+    }
+    if is_http_source_url(url) {
+        crate::net_policy::effective_proxy(
+            &settings.proxy_mode,
+            &settings.proxy_url,
+            &settings.proxy_bypass,
+            url,
+            trimmed,
+        )
+    } else {
+        trimmed.to_string()
+    }
+}
+
+static INTERNAL_TEARDOWN_CONTROLS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+fn internal_teardown_controls() -> &'static Mutex<HashSet<PathBuf>> {
+    INTERNAL_TEARDOWN_CONTROLS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn mark_internal_teardown_control(path: &Path) {
+    if let Ok(mut set) = internal_teardown_controls().lock() {
+        set.insert(path.to_path_buf());
+    }
+}
+
+fn clear_internal_teardown_control(path: &Path) {
+    if let Ok(mut set) = internal_teardown_controls().lock() {
+        set.remove(path);
+    }
+}
+
+fn take_internal_teardown_control(path: &Path) -> bool {
+    internal_teardown_controls()
+        .lock()
+        .ok()
+        .is_some_and(|mut set| set.remove(path))
+}
+
+fn merge_headers_case_insensitive(
+    target: &mut BTreeMap<String, String>,
+    overrides: BTreeMap<String, String>,
+) {
+    for (key, value) in overrides {
+        target.retain(|existing, _| !existing.eq_ignore_ascii_case(&key));
+        target.insert(key, value);
+    }
+}
+
 #[derive(Clone, Default)]
 struct ExplicitTaskSpecOverrides {
     proxy: String,
     concurrency: u32,
     speed_limit_kib: u32,
     download_dir: String,
+    work_dir: String,
     headers: BTreeMap<String, String>,
 }
 
@@ -112,6 +177,7 @@ impl ExplicitTaskSpecOverrides {
             concurrency: spec.concurrency,
             speed_limit_kib: spec.speed_limit_kib,
             download_dir: spec.download_dir.trim().to_string(),
+            work_dir: spec.work_dir.trim().to_string(),
             headers: spec.headers.clone(),
         }
     }
@@ -1864,6 +1930,17 @@ impl CoreCoordinator {
                         imported.queue_id = crate::DEFAULT_QUEUE_ID.into();
                     }
                     imported.allow_duplicate = spec.allow_duplicate;
+                    imported.url = imported
+                        .url
+                        .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+                        .to_string();
+                    if !crate::net_policy::url_allowed(&imported.url, &settings.allowed_hosts) {
+                        return Err("地址不在允许的域名白名单中".into());
+                    }
+                    imported.mirrors.retain(|m| {
+                        crate::http_engine::http_fetch_url_allowed(m)
+                            && crate::net_policy::url_allowed(m, &settings.allowed_hosts)
+                    });
                     let imported = self.apply_defaults_to_spec(imported)?;
                     validate_torrent_spec(self, imported, settings.bt_enable_dht)
                 })
@@ -1896,8 +1973,9 @@ impl CoreCoordinator {
                             child.headers.insert("Referer".into(), referer);
                         }
                     }
-                    if explicit.download_dir.is_empty() && child.crawl_resource_key.is_empty() {
-                        child.download_dir.clear();
+                    if child.crawl_resource_key.is_empty() {
+                        child.download_dir = explicit.download_dir.clone();
+                        child.work_dir = explicit.work_dir.clone();
                     }
                     child = self.apply_defaults_to_spec_inner(child, trust_download_dir)?;
                     if child.resource_kind != crate::ResourceKind::Torrent
@@ -1933,6 +2011,14 @@ impl CoreCoordinator {
                         &dirs,
                     );
                 }
+                reject_path_escape(&child.download_dir)?;
+                if explicit.work_dir.is_empty()
+                    && settings.temp_dir.trim().is_empty()
+                    && child.crawl_resource_key.is_empty()
+                {
+                    child.work_dir = child.download_dir.clone();
+                }
+                reject_path_escape(&child.work_dir)?;
                 Ok(child)
             })
             .collect()
@@ -2079,7 +2165,7 @@ impl CoreCoordinator {
         let parsed = crate::parse_curl_command(command)?
             .ok_or_else(|| "输入内容不是 cURL 命令".to_string())?;
         let mut request_headers = parsed.headers;
-        request_headers.extend(spec.headers);
+        merge_headers_case_insensitive(&mut request_headers, spec.headers);
         spec.headers = BTreeMap::new();
         let mut replay = serde_json::Map::new();
         if !parsed.body.is_empty() {
@@ -2348,11 +2434,11 @@ impl CoreCoordinator {
         if let (Some(task_id), Some(action @ ("resume" | "retry"))) =
             (task_id.as_deref(), start_action.as_deref())
         {
-            let action_allowed = self
+            let should_wait = self
                 .lock()?
                 .snapshot(task_id)
                 .is_some_and(|task| task.available_actions.iter().any(|item| item == action));
-            if action_allowed && matches!(action, "resume" | "retry") {
+            if should_wait {
                 self.wait_for_worker_stop(task_id)?;
             }
         }
@@ -2390,6 +2476,9 @@ impl CoreCoordinator {
                 return Err("下载引擎正在准备退出，暂不启动新任务".into());
             }
             if let Some(task_id) = task_id.as_deref() {
+                if start_action.is_some() && self.is_task_deleting(task_id)? {
+                    return Err("任务正在删除中".into());
+                }
                 if let Some(action) = start_action.as_deref() {
                     start_accepted = core.snapshot(task_id).is_some_and(|task| {
                         task.available_actions.iter().any(|item| item == action)
@@ -2402,6 +2491,7 @@ impl CoreCoordinator {
                     if let Some(spec) = core.task_spec(task_id).cloned() {
                         let paths = TaskPaths::for_task(task_id, &spec)?;
                         paths.prepare()?;
+                        clear_internal_teardown_control(&paths.control);
                         paths.set_control("run")?;
                     }
                 }
@@ -2412,6 +2502,7 @@ impl CoreCoordinator {
                     {
                         if let Some(spec) = core.task_spec(task_id).cloned() {
                             let paths = TaskPaths::for_task(task_id, &spec)?;
+                            clear_internal_teardown_control(&paths.control);
                             paths.set_control(if action == "pause" {
                                 "pause"
                             } else {
@@ -2445,6 +2536,7 @@ impl CoreCoordinator {
         if self.require_legal().is_err() {
             return Ok(());
         }
+        let mut attempted = HashSet::new();
         loop {
             let active_ids = self
                 .active
@@ -2480,6 +2572,7 @@ impl CoreCoordinator {
                             && (!scheduled_only || !task.scheduled_start_at.is_empty())
                             && !active_ids.contains(&task.task_id)
                             && !deleting_ids.contains(&task.task_id)
+                            && !attempted.contains(&task.task_id)
                             && task_schedule_allowed(task)
                     })
                     .collect();
@@ -2489,6 +2582,7 @@ impl CoreCoordinator {
             let Some(next) = next else {
                 return Ok(());
             };
+            attempted.insert(next.clone());
             self.spawn(next)?;
         }
     }
@@ -2730,6 +2824,10 @@ impl CoreCoordinator {
         trust_download_dir: bool,
     ) -> Result<TaskSpec, String> {
         validate_filename(&spec.filename)?;
+        spec.url = spec
+            .url
+            .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+            .to_string();
         let client_dir = spec.download_dir.trim().to_string();
         if spec.local_source_path.is_none() {
             spec = apply_site_rules_to_spec(&self.core(), spec)?;
@@ -2798,6 +2896,9 @@ impl CoreCoordinator {
             crate::http_engine::http_fetch_url_allowed(url)
                 && crate::net_policy::url_allowed(url, &settings.allowed_hosts)
         });
+        if spec.proxy.trim().eq_ignore_ascii_case("__direct__") {
+            spec.proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into();
+        }
         if !crate::net_policy::proxy_route_sentinel(&spec.proxy) && !proxy_url_allowed(&spec.proxy)
         {
             return Err("代理地址无效".into());
@@ -2814,13 +2915,23 @@ impl CoreCoordinator {
             spec.local_source_path = Some(path.to_string_lossy().into_owned());
             spec.proxy.clear();
         } else {
-            spec.proxy = crate::net_policy::effective_proxy(
-                &settings.proxy_mode,
-                &settings.proxy_url,
-                &settings.proxy_bypass,
-                &spec.url,
-                &spec.proxy,
-            );
+            let is_torrent = spec.resource_kind == crate::ResourceKind::Torrent
+                || is_torrent_like_source(&spec.url);
+            spec.proxy = if is_torrent
+                && spec.proxy.trim().is_empty()
+                && settings.proxy_mode.trim().eq_ignore_ascii_case("manual")
+                && !settings.proxy_url.trim().is_empty()
+            {
+                settings.proxy_url.trim().to_string()
+            } else {
+                crate::net_policy::effective_proxy(
+                    &settings.proxy_mode,
+                    &settings.proxy_url,
+                    &settings.proxy_bypass,
+                    &spec.url,
+                    &spec.proxy,
+                )
+            };
             reject_task_url(&spec.url)?;
             if !is_pre_expansion_container_source(&spec.url)
                 && !crate::net_policy::url_allowed(&spec.url, &settings.allowed_hosts)
@@ -3401,49 +3512,112 @@ impl CoreCoordinator {
         remove_owned_task_directory(&paths, published.as_deref())
     }
 
+    fn revert_unspawned_downloading_locked(
+        &self,
+        core: &mut PersistentCore,
+        task_id: &str,
+    ) -> Result<(), String> {
+        if self.is_task_deleting(task_id)? || self.worker_is_active(task_id)? {
+            return Ok(());
+        }
+        let progress = core
+            .snapshot(task_id)
+            .filter(|task| task.status == "downloading")
+            .map(|task| (task.downloaded_bytes, task.total_bytes));
+        if let Some((downloaded_bytes, total_bytes)) = progress {
+            core.handle(CoreCommand::UpdateProgress {
+                task_id: task_id.to_string(),
+                downloaded_bytes,
+                total_bytes,
+                speed_bytes_per_sec: 0,
+                stage: "waiting".into(),
+                status: "queued".into(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn revert_unspawned_downloading(&self, task_id: &str) -> Result<(), String> {
+        if self.is_task_deleting(task_id)? {
+            return Ok(());
+        }
+        let mut core = self.lock()?;
+        self.revert_unspawned_downloading_locked(&mut core, task_id)
+    }
+
     fn spawn(&self, task_id: String) -> Result<(), String> {
         if self.update_shutdown.load(Ordering::SeqCst) {
+            let _ = self.revert_unspawned_downloading(&task_id);
             return Err("下载引擎正在准备覆盖升级，暂不启动新任务".into());
         }
         if self.is_task_deleting(&task_id)? {
             return Ok(());
         }
-        let spec = self.lock()?.task_spec(&task_id).cloned();
-        if let Some(spec) = spec.as_ref() {
-            if !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
-                || crate::net_policy::scheduled_stop_hit(&spec.scheduled_stop_at)
-            {
+        // 状态检查、控制初始化和 worker 注册共用 core 锁，暂停不能漏掉尚未注册的启动。
+        let mut core = self.lock()?;
+        if self.is_task_deleting(&task_id)? {
+            return Ok(());
+        }
+        if self.update_shutdown.load(Ordering::SeqCst) {
+            self.revert_unspawned_downloading_locked(&mut core, &task_id)?;
+            return Ok(());
+        }
+        let Some(snapshot) = core.snapshot(&task_id).cloned() else {
+            return Ok(());
+        };
+        if !matches!(snapshot.status.as_str(), "queued" | "downloading") {
+            return Ok(());
+        }
+        let spec = core.task_spec(&task_id).cloned();
+        if !task_schedule_allowed(&snapshot)
+            || spec.as_ref().is_some_and(|spec| {
+                !crate::net_policy::scheduled_start_reached(&spec.scheduled_start_at)
+                    || crate::net_policy::scheduled_stop_hit(&spec.scheduled_stop_at)
+            })
+        {
+            self.revert_unspawned_downloading_locked(&mut core, &task_id)?;
+            return Ok(());
+        }
+        let queue_id = snapshot.queue_id.clone();
+        let profile = load_queue_profiles(core.store())?
+            .into_iter()
+            .find(|profile| profile.id == queue_id);
+        let Some(profile) = profile else {
+            self.revert_unspawned_downloading_locked(&mut core, &task_id)?;
+            return Err(format!("任务所属队列不存在: {queue_id}"));
+        };
+        if !queue_profile_allowed(&profile) {
+            self.revert_unspawned_downloading_locked(&mut core, &task_id)?;
+            return Ok(());
+        }
+        let max = profile.max_active.max(1) as usize;
+        {
+            let active = self
+                .active
+                .lock()
+                .map_err(|_| "download worker registry poisoned".to_string())?;
+            if active.contains(&task_id) {
+                return Ok(());
+            }
+            let active_in_queue = core
+                .tasks()
+                .iter()
+                .filter(|task| task.queue_id == queue_id && active.contains(&task.task_id))
+                .count();
+            if active_in_queue >= max {
+                drop(active);
+                self.revert_unspawned_downloading_locked(&mut core, &task_id)?;
                 return Ok(());
             }
         }
-        let queue_id = self
-            .lock()?
-            .snapshot(&task_id)
-            .map(|task| task.queue_id.clone())
-            .unwrap_or_else(|| crate::DEFAULT_QUEUE_ID.into());
-        let profile = self
-            .settings()?
-            .queue_profiles
-            .into_iter()
-            .find(|profile| profile.id == queue_id)
-            .ok_or_else(|| format!("任务所属队列不存在: {queue_id}"))?;
-        if !queue_profile_allowed(&profile) {
-            return Ok(());
-        }
-        // 状态检查、控制初始化和 worker 注册共用 core 锁，暂停不能漏掉尚未注册的启动。
-        let mut core = self.lock()?;
-        if self.update_shutdown.load(Ordering::SeqCst) || self.is_task_deleting(&task_id)? {
-            return Ok(());
-        }
-        let status = core.snapshot(&task_id).map(|task| task.status.clone());
-        if !matches!(status.as_deref(), Some("queued" | "downloading")) {
-            return Ok(());
-        }
-        if status.as_deref() == Some("queued") {
+        if snapshot.status == "queued" {
             if let Some(spec) = spec.as_ref() {
-                if let Err(error) = TaskPaths::for_task(&task_id, spec)
-                    .and_then(|paths| paths.prepare().and_then(|_| paths.set_control("run")))
-                {
+                if let Err(error) = TaskPaths::for_task(&task_id, spec).and_then(|paths| {
+                    paths.prepare().and_then(|_| {
+                        clear_internal_teardown_control(&paths.control);
+                        paths.set_control("run")
+                    })
+                }) {
                     // 无效目录只阻止当前任务，不能把它留在队列头阻塞所有后续下载。
                     core.report_failure(
                         &task_id,
@@ -3459,35 +3633,11 @@ impl CoreCoordinator {
                 }
             }
         }
-        let max = profile.max_active.max(1) as usize;
         {
             let mut active = self
                 .active
                 .lock()
                 .map_err(|_| "download worker registry poisoned".to_string())?;
-            let active_in_queue = core
-                .tasks()
-                .iter()
-                .filter(|task| task.queue_id == queue_id && active.contains(&task.task_id))
-                .count();
-            if active_in_queue >= max && !active.contains(&task_id) {
-                drop(active);
-                let progress = core
-                    .snapshot(&task_id)
-                    .filter(|task| task.status == "downloading")
-                    .map(|task| (task.downloaded_bytes, task.total_bytes));
-                if let Some((downloaded_bytes, total_bytes)) = progress {
-                    core.handle(CoreCommand::UpdateProgress {
-                        task_id: task_id.clone(),
-                        downloaded_bytes,
-                        total_bytes,
-                        speed_bytes_per_sec: 0,
-                        stage: "waiting".into(),
-                        status: "queued".into(),
-                    })?;
-                }
-                return Ok(());
-            }
             if !active.insert(task_id.clone()) {
                 return Ok(());
             }
@@ -3500,13 +3650,24 @@ impl CoreCoordinator {
         let coordinator = self.clone();
         thread::spawn(move || {
             let result = run_task_with_progress(Arc::clone(&core), &task_id);
+            crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
             if let Err(error) = result {
                 let control = core
                     .lock()
                     .ok()
                     .and_then(|guard| guard.task_spec(&task_id).cloned())
                     .and_then(|spec| TaskPaths::for_task(&task_id, &spec).ok())
-                    .map(|paths| crate::http_engine::read_control(&paths.control))
+                    .map(|paths| {
+                        let internal_teardown = take_internal_teardown_control(&paths.control);
+                        let current = crate::http_engine::read_control(&paths.control);
+                        if internal_teardown
+                            && matches!(current, crate::http_engine::Control::Cancel)
+                        {
+                            crate::http_engine::Control::Run
+                        } else {
+                            current
+                        }
+                    })
                     .unwrap_or(crate::http_engine::Control::Run);
                 let status = if matches!(control, crate::http_engine::Control::Cancel)
                     || error == "canceled"
@@ -3521,121 +3682,130 @@ impl CoreCoordinator {
                 let relay_core = Arc::clone(&core);
                 // 结束事件的文件事实同样在取锁前采集（任务登记已随 worker 返回而注销）。
                 let _facts = crate::progress_facts::prepare_for(&core, &task_id);
-                let mut reported_failure_attempt = None;
+                let mut retired = false;
                 let _ = core.lock().map(|mut core| {
                     // 先应用中继中排队的最后一次周期进度，结束状态基于最新字节数。
                     crate::progress_relay::flush_task_locked(&relay_core, &mut core, &task_id);
-                    let Some(current) = core.snapshot(&task_id).cloned() else {
-                        return;
-                    };
-                    if matches!(
-                        current.status.as_str(),
-                        "canceled" | "cancelled" | "completed" | "done"
-                    ) {
-                        return;
-                    }
-                    if current.status == "paused" && status != "canceled" {
-                        return;
-                    }
-                    let downloaded = current.downloaded_bytes;
-                    let total = current.total_bytes;
-                    let stage = if status == "paused" {
-                        "waiting".to_string()
-                    } else if status == "failed" {
-                        failure_stage(&current.stage, &error)
-                    } else {
-                        "finished".to_string()
-                    };
-                    if status == "failed" {
-                        let attempt = {
-                            let mut map = retries.lock().unwrap_or_else(|error| error.into_inner());
-                            let slot = map.entry(task_id.clone()).or_insert(0);
-                            *slot = current.error_attempt.max(*slot).saturating_add(1);
-                            *slot
-                        };
-                        let (url, has_credential_ref) = core
-                            .task_spec(&task_id)
-                            .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
-                            .unwrap_or_default();
-                        let failure = task_failure_from_error(
-                            &error,
-                            &stage,
-                            &url,
-                            attempt,
-                            has_credential_ref,
-                        );
-                        crate::record_runtime_log(
-                            "task_failed",
-                            serde_json::json!({
-                                "task_id": task_id, "stage": stage, "code": failure.code,
-                                "http_status": failure.http_status, "attempt": attempt,
-                                "downloaded_bytes": downloaded, "total_bytes": total,
-                            }),
-                        );
-                        let _ = core.report_failure(&task_id, failure);
-                        reported_failure_attempt = Some(attempt);
-                    } else {
-                        let _ = core.handle(CoreCommand::UpdateProgress {
-                            task_id: task_id.clone(),
-                            downloaded_bytes: downloaded,
-                            total_bytes: total,
-                            speed_bytes_per_sec: 0,
-                            stage: stage.clone(),
-                            status: status.into(),
-                        });
-                    }
-                    // 常驻 Core 的启动器可能已关闭诊断管道；日志写失败不能污染任务锁。
-                    let _ = writeln!(std::io::stderr(), "v7 task {task_id} {status}: {error}");
-                });
-                if let Some(attempt) = reported_failure_attempt {
-                    let max = coordinator
-                        .lock()
-                        .ok()
-                        .and_then(|guard| {
-                            guard.store().setting_u64("auto_retry_failed_max", 0).ok()
-                        })
-                        .unwrap_or(0);
-                    // HTTP 引擎已经完成传输级重试。鉴权、失效地址等错误需要用户更新请求，
-                    // 整任务调度不能绕过相同的判定，再用原请求重复下载。
-                    if u64::from(attempt) <= max
-                        && max > 0
-                        && !error.starts_with("resource identity changed:")
-                        && !error.starts_with("range response rejected:")
-                        && extract_http_status(&error)
-                            .is_none_or(crate::http_engine::retryable_http_status)
-                    {
-                        let _ = core.lock().map(|mut core| {
-                            let Some(snap) = core.snapshot(&task_id).cloned() else {
-                                return;
+                    let mut reported_failure_attempt = None;
+                    if let Some(current) = core.snapshot(&task_id).cloned() {
+                        let terminal_or_ignored = matches!(
+                            current.status.as_str(),
+                            "canceled" | "cancelled" | "completed" | "done"
+                        ) || (current.status == "paused"
+                            && status != "canceled");
+                        if !terminal_or_ignored {
+                            let downloaded = current.downloaded_bytes;
+                            let total = current.total_bytes;
+                            let stage = if status == "paused" {
+                                "waiting".to_string()
+                            } else if status == "failed" {
+                                failure_stage(&current.stage, &error)
+                            } else {
+                                "finished".to_string()
                             };
-                            if matches!(
-                                snap.status.as_str(),
-                                "paused" | "canceled" | "cancelled" | "completed" | "done"
-                            ) {
-                                return;
+                            if status == "failed" {
+                                let attempt = {
+                                    let mut map =
+                                        retries.lock().unwrap_or_else(|error| error.into_inner());
+                                    let slot = map.entry(task_id.clone()).or_insert(0);
+                                    *slot = current.error_attempt.max(*slot).saturating_add(1);
+                                    *slot
+                                };
+                                let (url, has_credential_ref) = core
+                                    .task_spec(&task_id)
+                                    .map(|spec| (spec.url.clone(), spec.credential_ref.is_some()))
+                                    .unwrap_or_default();
+                                let failure = task_failure_from_error(
+                                    &error,
+                                    &stage,
+                                    &url,
+                                    attempt,
+                                    has_credential_ref,
+                                );
+                                crate::record_runtime_log(
+                                    "task_failed",
+                                    serde_json::json!({
+                                        "task_id": task_id, "stage": stage, "code": failure.code,
+                                        "http_status": failure.http_status, "attempt": attempt,
+                                        "downloaded_bytes": downloaded, "total_bytes": total,
+                                    }),
+                                );
+                                let _ = core.report_failure(&task_id, failure);
+                                reported_failure_attempt = Some(attempt);
+                            } else {
+                                let _ = core.handle(CoreCommand::UpdateProgress {
+                                    task_id: task_id.clone(),
+                                    downloaded_bytes: downloaded,
+                                    total_bytes: total,
+                                    speed_bytes_per_sec: 0,
+                                    stage: stage.clone(),
+                                    status: status.into(),
+                                });
                             }
-                            let _ = core.handle(CoreCommand::UpdateProgress {
-                                task_id: task_id.clone(),
-                                downloaded_bytes: snap.downloaded_bytes,
-                                total_bytes: snap.total_bytes,
-                                speed_bytes_per_sec: 0,
-                                stage: "waiting".into(),
-                                status: "queued".into(),
-                            });
-                        });
+                            // 常驻 Core 的启动器可能已关闭诊断管道；日志写失败不能污染任务锁。
+                            let _ =
+                                writeln!(std::io::stderr(), "v7 task {task_id} {status}: {error}");
+                        }
                     }
-                } else if status == "canceled" {
-                    if let Ok(mut map) = retries.lock() {
-                        map.remove(&task_id);
+                    // Remove the retiring worker under `core` lock (`core -> active` order)
+                    // BEFORE auto-retry transitions status back to `"queued"`.
+                    if let Ok(mut active_set) = active.lock() {
+                        active_set.remove(&task_id);
+                        crate::sleep_inhibit::set_active(!active_set.is_empty());
+                        retired = true;
+                    }
+                    if let Some(attempt) = reported_failure_attempt {
+                        let max = core
+                            .store()
+                            .setting_u64("auto_retry_failed_max", 0)
+                            .unwrap_or(0);
+                        // HTTP 引擎已经完成传输级重试。鉴权、失效地址等错误需要用户更新请求，
+                        // 整任务调度不能绕过相同的判定，再用原请求重复下载。
+                        if u64::from(attempt) <= max
+                            && max > 0
+                            && !coordinator.update_shutdown.load(Ordering::SeqCst)
+                            && !coordinator.is_task_deleting(&task_id).unwrap_or(false)
+                            && !error.starts_with("resource identity changed:")
+                            && !error.starts_with("range response rejected:")
+                            && extract_http_status(&error)
+                                .is_none_or(crate::http_engine::retryable_http_status)
+                        {
+                            if let Some(snap) = core.snapshot(&task_id).cloned() {
+                                if !matches!(
+                                    snap.status.as_str(),
+                                    "paused" | "canceled" | "cancelled" | "completed" | "done"
+                                ) {
+                                    let _ = core.handle(CoreCommand::UpdateProgress {
+                                        task_id: task_id.clone(),
+                                        downloaded_bytes: snap.downloaded_bytes,
+                                        total_bytes: snap.total_bytes,
+                                        speed_bytes_per_sec: 0,
+                                        stage: "waiting".into(),
+                                        status: "queued".into(),
+                                    });
+                                }
+                            }
+                        }
+                    } else if status == "canceled" {
+                        if let Ok(mut map) = retries.lock() {
+                            map.remove(&task_id);
+                        }
+                    }
+                });
+                if !retired {
+                    if let Ok(mut active_set) = active.lock() {
+                        active_set.remove(&task_id);
+                        crate::sleep_inhibit::set_active(!active_set.is_empty());
                     }
                 }
-            } else if let Ok(mut map) = retries.lock() {
-                map.remove(&task_id);
-            }
-            crate::net_policy::clear_scoped_limit(&format!("task:{task_id}"));
-            if let Ok(mut active) = active.lock() {
-                active.remove(&task_id);
-                crate::sleep_inhibit::set_active(!active.is_empty());
+            } else {
+                if let Ok(mut map) = retries.lock() {
+                    map.remove(&task_id);
+                }
+                if let Ok(mut active_set) = active.lock() {
+                    active_set.remove(&task_id);
+                    crate::sleep_inhibit::set_active(!active_set.is_empty());
+                }
             }
             let _ = coordinator.start_next_queued(false);
         });
@@ -3691,17 +3861,26 @@ fn validate_torrent_spec(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Ok(spec);
     }
-    let headers = spec
-        .headers
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let meta = crate::torrent_engine::probe_torrent_source(
+    let explicit_headers = spec.headers.clone();
+    let (mut hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
+    merge_headers_case_insensitive(&mut hydrated.headers, explicit_headers.clone());
+    let replay = crate::credentials::apply_explicit_headers_to_replay_json(
+        &replay,
         &spec.url,
-        &headers,
-        &coordinator.transfer_proxy(&spec.proxy)?,
-        enable_dht,
-    )?;
+        &explicit_headers,
+    );
+    let headers = hydrated.headers.into_iter().collect();
+    let settings = coordinator.settings()?;
+    let raw_probe_proxy = resolve_torrent_metadata_proxy(&settings, &spec.url, &spec.proxy);
+    let probe_proxy = coordinator.transfer_proxy(&raw_probe_proxy)?;
+    let scoped_replay = if is_http_source_url(&spec.url) {
+        replay.as_str()
+    } else {
+        ""
+    };
+    let meta = with_replay_json(scoped_replay, || {
+        crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &probe_proxy, enable_dht)
+    })?;
     let mut checked = spec;
     checked.filename = resolved_torrent_filename(&checked, &meta.name);
     if checked.title.trim().is_empty() {
@@ -3957,19 +4136,43 @@ fn run_task_with_throttle(
             let mut paths = TaskPaths::for_task(task_id, &spec)?;
             paths.prepare()?;
             initialize_torrent_selection(&paths.torrent_selection, &spec.torrent_selection)?;
-            let torrent_options = {
+            let (torrent_options, metadata_proxy, proxy_bypass) = {
                 let guard = core
                     .lock()
                     .map_err(|_| "v7 Core mutex poisoned".to_string())?;
-                crate::torrent_engine::TorrentOptions {
-                    upload_limit_kib: guard.store().setting_u64("bt_upload_limit_kib", 1024)?,
-                    max_connections: guard
-                        .store()
-                        .setting_u64("bt_max_connections", 200)?
-                        .clamp(10, 1000) as usize,
-                    enable_dht: guard.store().setting_bool("bt_enable_dht", true)?,
-                    selection_path: paths.torrent_selection.clone(),
-                }
+                let proxy_mode = guard.store().setting_string("proxy_mode", "system")?;
+                let proxy_url = guard.store().setting_string("proxy_url", "")?;
+                let proxy_bypass = guard.store().setting_string("proxy_bypass", "")?;
+                let raw_meta_proxy = if spec.proxy.trim()
+                    == crate::net_policy::DIRECT_PROXY_SENTINEL
+                    || spec.proxy.trim().eq_ignore_ascii_case("__direct__")
+                {
+                    crate::net_policy::DIRECT_PROXY_SENTINEL.into()
+                } else if is_http_source_url(&spec.url) {
+                    crate::net_policy::effective_proxy(
+                        &proxy_mode,
+                        &proxy_url,
+                        &proxy_bypass,
+                        &spec.url,
+                        &spec.proxy,
+                    )
+                } else {
+                    spec.proxy.clone()
+                };
+                let metadata_proxy = guard.store().hydrate_proxy(&raw_meta_proxy)?;
+                (
+                    crate::torrent_engine::TorrentOptions {
+                        upload_limit_kib: guard.store().setting_u64("bt_upload_limit_kib", 1024)?,
+                        max_connections: guard
+                            .store()
+                            .setting_u64("bt_max_connections", 200)?
+                            .clamp(10, 1000) as usize,
+                        enable_dht: guard.store().setting_bool("bt_enable_dht", true)?,
+                        selection_path: paths.torrent_selection.clone(),
+                    },
+                    metadata_proxy,
+                    proxy_bypass,
+                )
             };
             let (meta, latest_spec) = {
                 let mut attempt = 0u8;
@@ -4003,19 +4206,70 @@ fn run_task_with_throttle(
                     let torrent_control = paths.control.clone();
                     let torrent_headers = headers.clone();
                     let torrent_proxy = spec.proxy.clone();
+                    let torrent_meta_proxy = metadata_proxy.clone();
+                    let torrent_bypass = proxy_bypass.clone();
+                    let torrent_cache_file = paths.task_dir().join("source.torrent");
+                    let torrent_replay = if is_http_source_url(&spec.url) {
+                        replay_json.clone()
+                    } else {
+                        String::new()
+                    };
                     let torrent_progress = crate::torrent_engine::progress_path(&torrent_output);
                     let options = torrent_options.clone();
                     let meta =
                         poll_media_progress(&core, task_id, &torrent_progress, false, move || {
-                            crate::torrent_engine::torrent_session().download_for_publication(
-                                &torrent_url,
-                                &torrent_output,
-                                &torrent_control,
-                                &torrent_headers,
-                                &torrent_proxy,
-                                options,
-                                &mut telemetry_reporter,
-                            )
+                            with_replay_json(&torrent_replay, || {
+                                let (effective_source, effective_swarm_proxy) =
+                                    if is_http_source_url(&torrent_url)
+                                        && torrent_meta_proxy != torrent_proxy
+                                    {
+                                        let (status, bytes) =
+                                            crate::http_engine::fetch_bytes_limited(
+                                                &torrent_url,
+                                                &torrent_headers,
+                                                &torrent_meta_proxy,
+                                                2 * 1024 * 1024,
+                                            )
+                                            .map_err(|error| error.to_string())?;
+                                        if !matches!(status, 200 | 206) {
+                                            return Err(format!("torrent metadata HTTP {status}"));
+                                        }
+                                        let parsed =
+                                            crate::torrent_engine::parse_torrent_file(&bytes)?;
+                                        let seeds_all_bypassed = !parsed.web_seeds.is_empty()
+                                            && parsed.announce.is_empty()
+                                            && parsed.hint_peers.is_empty()
+                                            && parsed.web_seeds.iter().all(|seed| {
+                                                crate::net_policy::host_bypassed(
+                                                    &crate::net_policy::url_host(seed),
+                                                    &torrent_bypass,
+                                                )
+                                            });
+                                        if seeds_all_bypassed {
+                                            fs::write(&torrent_cache_file, &bytes)
+                                                .map_err(|error| error.to_string())?;
+                                            (torrent_url.clone(), torrent_meta_proxy)
+                                        } else {
+                                            fs::write(&torrent_cache_file, &bytes)
+                                                .map_err(|error| error.to_string())?;
+                                            (
+                                                torrent_cache_file.to_string_lossy().into_owned(),
+                                                torrent_proxy,
+                                            )
+                                        }
+                                    } else {
+                                        (torrent_url.clone(), torrent_proxy)
+                                    };
+                                crate::torrent_engine::torrent_session().download_for_publication(
+                                    &effective_source,
+                                    &torrent_output,
+                                    &torrent_control,
+                                    &torrent_headers,
+                                    &effective_swarm_proxy,
+                                    options,
+                                    &mut telemetry_reporter,
+                                )
+                            })
                         })?;
                     let filename = resolved_torrent_filename(&spec, &meta.name);
                     paths.final_output = paths.final_output.with_file_name(&filename);
@@ -4809,16 +5063,24 @@ fn run_http_file(
         }
     })();
     if !worker_finished && result.is_err() {
+        // Abort the child HTTP worker (both multi-range and single-stream) while
+        // recording that `"cancel"` came from internal failure teardown so `spawn()`
+        // still classifies the outcome as `"failed"` rather than user-canceled.
         worker_abort.store(true, Ordering::SeqCst);
         if matches!(
             crate::http_engine::read_control(&paths.control),
             crate::http_engine::Control::Run
         ) {
+            mark_internal_teardown_control(&paths.control);
             let _ = paths.set_control("cancel");
         }
     }
     let joined = worker.join();
-    result.and_then(|()| joined.map_err(|_| "download HTTP worker panicked".into()))
+    match (result, joined) {
+        (Ok(()), Ok(())) => Ok(()),
+        (_, Err(_)) => Err("download HTTP worker panicked".into()),
+        (Err(error), Ok(())) => Err(error),
+    }
 }
 
 fn http_response_filename(paths: &TaskPaths) -> Option<String> {
@@ -5435,7 +5697,7 @@ fn finish_published_task(
             }
         }
     }
-    if let Err(error) = maybe_schedule_power(core, spec) {
+    if let Err(error) = maybe_schedule_power(core, task_id, spec) {
         let _ = writeln!(
             std::io::stderr(),
             "v7 task {task_id} was published but its completion power action failed: {error}"
@@ -5474,6 +5736,7 @@ fn cleanup_task_metadata(paths: &TaskPaths) -> Result<(), String> {
         "progress.json",
         "progress.json.tmp",
         "torrent-selection.json",
+        "source.torrent",
         "published.path",
         "progress.response.json",
         "native-engine.active.json.tmp",
@@ -5616,7 +5879,9 @@ fn cleanup_completed_media(
                     | ".vod_segments.json.tmp"
                     | ".dash_vod_segments.json.tmp"
                     | "live_state.json"
+                    | "live_dash_state.json"
                     | "live_subtitles.json"
+                    | "source.torrent"
                     | "audio.control"
                     | "request-body.bin"
                     | "native-engine.ranges.json"
@@ -5640,6 +5905,7 @@ fn cleanup_completed_media(
                     | ".preview.m3u8.tmp"
                     | ".preview-video.m3u8.tmp"
                     | ".live_state.json.tmp"
+                    | ".live_dash_state.json.tmp"
             ) || name
                 .strip_prefix("seg-")
                 .and_then(|name| name.split_once('.'))
@@ -5803,7 +6069,11 @@ fn copy_subtitle_sidecars(task_dir: &Path, published: &Path) -> Result<(), Strin
     Ok(())
 }
 
-fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> Result<(), String> {
+fn maybe_schedule_power(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    spec: &TaskSpec,
+) -> Result<(), String> {
     let (action, title) = if crate::power_action::is_armed(&spec.completion_action) {
         let title = if spec.filename.trim().is_empty() {
             spec.url.clone()
@@ -5816,10 +6086,26 @@ fn maybe_schedule_power(core: &Arc<Mutex<PersistentCore>>, spec: &TaskSpec) -> R
             .lock()
             .map_err(|_| "v7 Core mutex poisoned".to_string())?;
         let profiles = load_queue_profiles(guard.store())?;
-        let disrupted = guard.batch_disrupted_for_queue(&spec.queue_id);
-        let Some(decision) =
-            queue_completion_decision_for_batch(&guard.tasks(), &profiles, spec, disrupted)
-        else {
+        let current_queue_id = guard
+            .snapshot(task_id)
+            .map(|task| task.queue_id.as_str())
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or(&spec.queue_id);
+        let disrupted = guard.batch_disrupted_for_queue(current_queue_id);
+        let mut effective_spec;
+        let spec_for_queue = if current_queue_id == spec.queue_id {
+            spec
+        } else {
+            effective_spec = spec.clone();
+            effective_spec.queue_id = current_queue_id.to_string();
+            &effective_spec
+        };
+        let Some(decision) = queue_completion_decision_for_batch(
+            &guard.tasks(),
+            &profiles,
+            spec_for_queue,
+            disrupted,
+        ) else {
             return Ok(());
         };
         decision
@@ -6658,24 +6944,50 @@ fn cast_control_events(
     if generation.is_some_and(|expected| expected == 0 || expected != current) {
         return Err("投屏会话已经改变，请刷新后重试".into());
     }
-    let playback = crate::cast::control_session(action)?;
     if action == "stop" {
+        let fallback = crate::cast::last_session_status();
+        let stop_result = crate::cast::control_session("stop");
         clear_cast_mount();
+        let playback = match stop_result {
+            Ok(playback) => playback,
+            Err(_) => crate::cast::CastPlaybackStatus {
+                label: fallback.label,
+                device_kind: fallback.device_kind,
+                state: "STOPPED".into(),
+                ..Default::default()
+            },
+        };
+        return coordinator.lock()?.emit(CoreEvent::CastSession {
+            active: false,
+            session_generation: current,
+            title: String::new(),
+            device: playback.label,
+            status: "STOPPED".into(),
+            task_id: String::new(),
+            media_url: String::new(),
+            device_kind: playback.device_kind,
+            supported_actions: Vec::new(),
+            playing: false,
+            paused: false,
+            position_seconds: 0,
+            duration_seconds: 0,
+            position_available: false,
+        });
     }
+    let playback = crate::cast::control_session(action)?;
     let mount = active_cast_mount()
         .lock()
         .map_err(|_| "投屏来源锁不可用")?
         .clone()
         .unwrap_or_default();
     coordinator.lock()?.emit(CoreEvent::CastSession {
-        active: action != "stop" && !playback.device_kind.is_empty(),
+        active: !playback.device_kind.is_empty(),
         session_generation: current,
         title: mount.title,
         device: playback.label,
         status: match action {
             "pause" => "已暂停投屏".into(),
             "play" => "继续投屏".into(),
-            "stop" => "已停止投屏".into(),
             "status" => playback.state.clone(),
             "seek_back" => "已后退 10 秒".into(),
             "seek_forward" => "已快进 10 秒".into(),
@@ -7081,23 +7393,29 @@ fn task_torrent_files(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Err("该任务不是 BT 任务".into());
     }
-    let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
+    let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
     let headers = hydrated
         .headers
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let is_http_source = {
-        let lower = hydrated.url.trim_start().to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
+    let settings = coordinator.settings()?;
+    let probe_proxy = coordinator.transfer_proxy(&resolve_torrent_metadata_proxy(
+        &settings,
+        &hydrated.url,
+        &spec.proxy,
+    ))?;
+    let scoped_replay = if is_http_source_url(&hydrated.url) {
+        replay.as_str()
+    } else {
+        ""
     };
-    let scoped_replay = if is_http_source { replay.as_str() } else { "" };
     let meta = with_replay_json(scoped_replay, || {
         crate::torrent_engine::probe_torrent_source(
             &hydrated.url,
             &headers,
-            &hydrated.proxy,
-            coordinator.settings()?.bt_enable_dht,
+            &probe_proxy,
+            settings.bt_enable_dht,
         )
     })?;
     let selections =
@@ -7143,17 +7461,23 @@ fn set_task_torrent_files(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let is_http_source = {
-        let lower = hydrated.url.trim_start().to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
+    let settings = coordinator.settings()?;
+    let probe_proxy = coordinator.transfer_proxy(&resolve_torrent_metadata_proxy(
+        &settings,
+        &hydrated.url,
+        &spec.proxy,
+    ))?;
+    let scoped_replay = if is_http_source_url(&hydrated.url) {
+        replay.as_str()
+    } else {
+        ""
     };
-    let scoped_replay = if is_http_source { replay.as_str() } else { "" };
     let meta = with_replay_json(scoped_replay, || {
         crate::torrent_engine::probe_torrent_source(
             &hydrated.url,
             &headers,
-            &hydrated.proxy,
-            coordinator.settings()?.bt_enable_dht,
+            &probe_proxy,
+            settings.bt_enable_dht,
         )
     })?;
     spec.torrent_selection = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;

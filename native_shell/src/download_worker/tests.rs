@@ -213,8 +213,14 @@ fn speed_schedule_times_are_validated_before_persistence() {
     );
 }
 
+static TEST_CAST_LOCK: Mutex<()> = Mutex::new(());
+static TEST_POWER_LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn stale_cast_control_cannot_stop_a_replacement_session() {
+    let _cast_guard = TEST_CAST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
     let previous = {
         let _operation = cast_operation().lock().unwrap();
@@ -8724,6 +8730,7 @@ fn dual_track_audio_url_downloads_both_streams_and_muxes_to_mp4() {
     let completed = wait_for_task_status(&coordinator, "completed");
     assert_eq!(completed.task_id, task_id);
     assert_eq!(completed.filename, "30280.mp4");
+    coordinator.wait_for_worker_stop(&task_id).unwrap();
 
     let final_mp4 = out_dir.join("30280.mp4");
     assert!(
@@ -10379,6 +10386,9 @@ fn progress_clears_stale_error_fields_preserving_attempt_cap_until_manual_retry_
 
 #[test]
 fn batch_disrupted_tracks_only_fresh_transitions_and_power_action_toasts_use_cleared_level() {
+    let _power_guard = TEST_POWER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let _ = crate::power_action::cancel();
     let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
     coordinator
@@ -10469,7 +10479,7 @@ fn batch_disrupted_tracks_only_fresh_transitions_and_power_action_toasts_use_cle
         .task_spec("task-2")
         .cloned()
         .expect("spec2");
-    maybe_schedule_power(&coordinator.core(), &spec2).expect("maybe_schedule_power");
+    maybe_schedule_power(&coordinator.core(), "task-2", &spec2).expect("maybe_schedule_power");
     assert!(
         woke.load(Ordering::SeqCst),
         "maybe_schedule_power must wake BackgroundToast when only non-UI subscriber is attached"
@@ -11395,5 +11405,1271 @@ fn handoff_editor_non_sensitive_header_edits_override_replay_context_and_workben
         wire_headers.get("X-Custom").map(String::as_str),
         Some("edited-value")
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_1_spawn_reverts_early_exits_and_start_waits_for_retiring_worker_and_auto_retry_retires_before_requeue(
+) {
+    let root = lifecycle_test_root("g1-1-zombie-downloading");
+    fs::create_dir_all(&root).unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+
+    // 1a. Early return on `update_shutdown` while task is `"downloading"` with 0 active workers reverts to `"queued"`.
+    let t_shutdown = lifecycle_task(&coordinator, &root, "downloading");
+    coordinator.update_shutdown.store(true, Ordering::SeqCst);
+    assert!(coordinator.spawn(t_shutdown.clone()).is_err());
+    coordinator.update_shutdown.store(false, Ordering::SeqCst);
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&t_shutdown)
+            .unwrap()
+            .status,
+        "queued"
+    );
+
+    // 1b. Early return on future `scheduled_start_at` reverts `"downloading"` -> `"queued"`.
+    let t_sched = lifecycle_task(&coordinator, &root, "downloading");
+    let mut sched_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&t_sched)
+        .unwrap()
+        .clone();
+    sched_spec.scheduled_start_at = "2999-01-01T00:00:00Z".into();
+    coordinator
+        .lock()
+        .unwrap()
+        .replace_spec(&t_sched, sched_spec)
+        .unwrap();
+    coordinator.spawn(t_sched.clone()).unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&t_sched)
+            .unwrap()
+            .status,
+        "queued"
+    );
+
+    // 1c. Early return on disabled queue reverts `"downloading"` -> `"queued"`.
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([
+                QueueProfile {
+                    id: "default".into(),
+                    name: "默认队列".into(),
+                    ..QueueProfile::default()
+                },
+                QueueProfile {
+                    id: "disabled-q".into(),
+                    name: "禁用队列".into(),
+                    enabled: false,
+                    ..QueueProfile::default()
+                }
+            ]),
+        )
+        .unwrap();
+    let t_disabled = lifecycle_task(&coordinator, &root, "downloading");
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::AssignQueue {
+            task_ids: vec![t_disabled.clone()],
+            queue_id: "disabled-q".into(),
+        })
+        .unwrap();
+    coordinator.spawn(t_disabled.clone()).unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&t_disabled)
+            .unwrap()
+            .status,
+        "queued"
+    );
+
+    // 1d. Live worker in `active` must NOT be reverted, and `"paused"` / `"canceled"` / `deleting` are untouched.
+    let t_live = lifecycle_task(&coordinator, &root, "downloading");
+    coordinator.active.lock().unwrap().insert(t_live.clone());
+    coordinator.spawn(t_live.clone()).unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&t_live)
+            .unwrap()
+            .status,
+        "downloading"
+    );
+    coordinator.active.lock().unwrap().remove(&t_live);
+
+    let t_deleting = lifecycle_task(&coordinator, &root, "downloading");
+    let guard = coordinator.enter_deleting_task(&t_deleting).unwrap();
+    coordinator.spawn(t_deleting.clone()).unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot(&t_deleting)
+            .unwrap()
+            .status,
+        "downloading"
+    );
+    drop(guard);
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: t_deleting,
+            action: "delete".into(),
+        })
+        .unwrap();
+    for id in [t_shutdown, t_sched, t_disabled, t_live] {
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: id,
+                action: "delete".into(),
+            })
+            .unwrap();
+    }
+
+    // 2. `"start"` waits for a retiring worker in `active` instead of stranding `"downloading"` with 0 workers.
+    let address = serve_http_fixture(b"start-after-retire");
+    let run_coord = direct_http_coordinator(&root);
+    run_coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{address}/retire.bin"),
+                filename: "retire.bin".into(),
+                scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task_id = "task-1".to_string();
+    // Clear future schedule directly on spec & snapshot while keeping `"queued"` status.
+    {
+        let mut core = run_coord.lock().unwrap();
+        let mut clean_spec = core.task_spec(&task_id).unwrap().clone();
+        clean_spec.scheduled_start_at.clear();
+        core.replace_spec(&task_id, clean_spec).unwrap();
+    }
+    // Simulate retiring worker still registered in `active` when `"start"` is dispatched.
+    run_coord.active.lock().unwrap().insert(task_id.clone());
+    let (wait_tx, wait_rx) = mpsc::channel();
+    *run_coord.worker_wait_started.lock().unwrap() = Some(wait_tx);
+    let active_clone = Arc::clone(&run_coord.active);
+    let retire_id = task_id.clone();
+    let releaser = thread::spawn(move || {
+        wait_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        active_clone.lock().unwrap().remove(&retire_id);
+    });
+    run_coord
+        .dispatch(CoreCommand::TaskAction {
+            task_id: task_id.clone(),
+            action: "start".into(),
+        })
+        .unwrap();
+    releaser.join().unwrap();
+    // Clear snapshot scheduled_start_at if still set or verify wait_for_worker_stop ran cleanly:
+    // Note `replace_spec` preserves `snapshot.scheduled_start_at`, so test auto-retry on a fresh task below!
+    assert_eq!(
+        run_coord.lock().unwrap().snapshot(&task_id).unwrap().status,
+        "queued"
+    );
+
+    // Also test `"start"` on an unscheduled queued task while retiring worker releases:
+    let address2 = serve_http_fixture(b"start-completes-payload");
+    run_coord
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([QueueProfile {
+                id: "default".into(),
+                name: "默认队列".into(),
+                enabled: false,
+                ..QueueProfile::default()
+            }]),
+        )
+        .unwrap();
+    run_coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{address2}/started.bin"),
+                filename: "started.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let task2_id = "task-2".to_string();
+    run_coord.active.lock().unwrap().insert(task2_id.clone());
+    // Re-enable queue (task2 is skipped by start_next_queued while still in `active`),
+    // then dispatch `"start"` while releaser removes retiring `active` entry!
+    run_coord
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([QueueProfile {
+                id: "default".into(),
+                name: "默认队列".into(),
+                enabled: true,
+                ..QueueProfile::default()
+            }]),
+        )
+        .unwrap();
+    let (wait_tx2, wait_rx2) = mpsc::channel();
+    *run_coord.worker_wait_started.lock().unwrap() = Some(wait_tx2);
+    let active_clone2 = Arc::clone(&run_coord.active);
+    let retire_id2 = task2_id.clone();
+    let releaser2 = thread::spawn(move || {
+        wait_rx2.recv_timeout(Duration::from_secs(3)).unwrap();
+        active_clone2.lock().unwrap().remove(&retire_id2);
+    });
+    run_coord
+        .dispatch(CoreCommand::TaskAction {
+            task_id: task2_id.clone(),
+            action: "start".into(),
+        })
+        .unwrap();
+    releaser2.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let snap = run_coord
+            .lock()
+            .unwrap()
+            .snapshot(&task2_id)
+            .cloned()
+            .unwrap();
+        if snap.status == "completed" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "task2 stuck: {snap:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        fs::read(root.join("started.bin")).unwrap(),
+        b"start-completes-payload"
+    );
+
+    // 3. Auto-retry removes retiring worker before/with `"queued"` transition so scheduler retries cleanly.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let retry_addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicU64::new(0));
+    let server_hits = Arc::clone(&hits);
+    let retry_server = thread::spawn(move || {
+        // HTTP engine may retry 503 internally; fail enough requests to trigger whole-task failure #1,
+        // then succeed with 200 OK on the auto-retried task run!
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let n = server_hits.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                // Non-503/non-401 error (e.g. truncated Content-Length) fails HTTP transfer immediately on attempt 1!
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort"
+                );
+                let _ = stream.flush();
+            } else {
+                let body = b"auto-retried-ok";
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+                if n >= 1 {
+                    break;
+                }
+            }
+        }
+    });
+    let retry_coord = direct_http_coordinator(&root);
+    retry_coord
+        .set_setting("auto_retry_failed_max", serde_json::json!(2))
+        .unwrap();
+    retry_coord
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{retry_addr}/flaky.bin"),
+                filename: "flaky.bin".into(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let completed = wait_for_task_status(&retry_coord, "completed");
+    assert_eq!(completed.filename, "flaky.bin");
+    assert_eq!(
+        fs::read(root.join("flaky.bin")).unwrap(),
+        b"auto-retried-ok"
+    );
+    let _ = retry_server.join();
+    drop(retry_coord);
+    drop(run_coord);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_2_expand_create_avoids_double_category_nesting_and_untrusted_dir_false_rejection_and_syncs_work_dir(
+) {
+    let root = lifecycle_test_root("g1-2-category-expand");
+    let default_dl = root.join("downloads");
+    let external_media = root.join("external-media");
+    let external_rule = root.join("external-rule");
+    fs::create_dir_all(&default_dl).unwrap();
+    fs::create_dir_all(&external_media).unwrap();
+    fs::create_dir_all(&external_rule).unwrap();
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(default_dl.to_string_lossy().into_owned()),
+            ),
+            ("temp_dir".into(), serde_json::json!("")),
+            ("auto_category_dirs".into(), serde_json::json!(true)),
+        ]))
+        .unwrap();
+
+    // 1. Non-empty explicit relative `download_dir` ("batch") + `auto_category_dirs = true`
+    // when expanding a local link file (`child.url != parent_url`) must NOT double-nest `媒体\媒体`.
+    let link_list = root.join("links.txt");
+    fs::write(&link_list, "https://cdn.example.test/episode1.mp4\n").unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: link_list.to_string_lossy().into_owned(),
+                download_dir: "batch".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let spec1 = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    let expected_cat_dir = default_dl
+        .join("batch")
+        .join(crate::category::category_label("media"));
+    assert_eq!(
+        Path::new(&spec1.download_dir),
+        expected_cat_dir,
+        "must resolve category subdir once without double nesting: {}",
+        spec1.download_dir
+    );
+    assert_eq!(
+        Path::new(&spec1.work_dir),
+        expected_cat_dir,
+        "work_dir must sync to resolved child download_dir when temp_dir is empty"
+    );
+
+    // 2. `browser_category_dirs` outside `settings.download_dir` AND parent site rule `download_dir`
+    // outside `settings.download_dir` with `trust_download_dir = false` (both empty and non-empty explicit dir).
+    let rules = crate::format_site_rules(&[crate::SiteRule {
+        host: "portal.example.test".into(),
+        download_dir: external_rule.to_string_lossy().into_owned(),
+        ..Default::default()
+    }]);
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("site_rules".into(), serde_json::json!(rules)),
+            (
+                "browser_category_dirs".into(),
+                serde_json::json!(serde_json::json!({
+                    "media": external_media.to_string_lossy(),
+                })
+                .to_string()),
+            ),
+        ]))
+        .unwrap();
+
+    let inline_metalink = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="movie.mkv">
+    <url>https://cdn.other.test/movie.mkv</url>
+  </file>
+  <file name="notes.txt">
+    <url>https://cdn.other.test/notes.txt</url>
+  </file>
+</metalink>"#;
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: inline_metalink.into(),
+                download_dir: "custom-sub".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let spec2 = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .unwrap()
+        .clone();
+    let spec3 = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-3")
+        .unwrap()
+        .clone();
+    assert_eq!(Path::new(&spec2.download_dir), external_media);
+    assert_eq!(Path::new(&spec2.work_dir), external_media);
+    let expected_other_dir = default_dl
+        .join("custom-sub")
+        .join(crate::category::category_label("other"));
+    assert_eq!(Path::new(&spec3.download_dir), expected_other_dir);
+    assert_eq!(Path::new(&spec3.work_dir), expected_other_dir);
+
+    // Also test parent HTTP `.meta4` matching `portal.example.test` site rule (`external_rule`)
+    // expanding to `cdn.other.test` with empty `explicit.download_dir` (`trust_download_dir = false`).
+    let meta_addr = serve_http_fixture(inline_metalink.as_bytes());
+    let host_rules = crate::format_site_rules(&[crate::SiteRule {
+        host: "127.0.0.1".into(),
+        download_dir: external_rule.to_string_lossy().into_owned(),
+        proxy_mode: "direct".into(),
+        ..Default::default()
+    }]);
+    coordinator
+        .set_setting("site_rules", serde_json::json!(host_rules))
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{meta_addr}/feed.meta4"),
+                allow_duplicate: true,
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let spec5 = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-5")
+        .unwrap()
+        .clone();
+    // `cdn.other.test` does NOT match `127.0.0.1` site rule, so its base is `default_dl` (not stale `external_rule`!).
+    assert_eq!(
+        Path::new(&spec5.download_dir),
+        default_dl.join(crate::category::category_label("other"))
+    );
+    assert_eq!(Path::new(&spec5.work_dir), Path::new(&spec5.download_dir));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_3_and_g7_5_authenticated_http_torrent_hydrates_replay_headers_and_preserves_manual_swarm_proxy_on_bypass(
+) {
+    let root = lifecycle_test_root("g1-3-g7-5-torrent-auth-proxy");
+    fs::create_dir_all(&root).unwrap();
+
+    // Start an authenticated HTTP server serving both `/auth.torrent` and `/seed.bin`,
+    // requiring BOTH `Cookie: bt_auth=1` and `Authorization: Bearer bt-secret`.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let payload = b"authenticated-torrent-payload-bytes".to_vec();
+    let seed_url = format!("http://{addr}/seed.bin");
+    let mut torrent_bytes = format!(
+        "d8:url-list{}:{}4:infod6:lengthi{}e4:name12:auth-item.ts12:piece lengthi64e6:pieces20:",
+        seed_url.len(),
+        seed_url,
+        payload.len()
+    )
+    .into_bytes();
+    torrent_bytes.extend_from_slice(&crate::crypto_lite::sha1(&payload));
+    torrent_bytes.extend_from_slice(b"ee");
+
+    let stop_server = Arc::new(AtomicBool::new(false));
+    let server_stop = Arc::clone(&stop_server);
+    let server_torrent = torrent_bytes.clone();
+    let server_payload = payload.clone();
+    let server = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        while !server_stop.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            let mut has_cookie = false;
+            let mut has_auth = false;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("cookie:") && line.contains("bt_auth=1") {
+                    has_cookie = true;
+                }
+                if lower.starts_with("authorization:") && line.contains("Bearer bt-secret") {
+                    has_auth = true;
+                }
+            }
+            if !has_cookie || !has_auth {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\nConnection: close\r\n\r\nunauthorized"
+                );
+                let _ = stream.flush();
+                continue;
+            }
+            let body = if request_line.contains("/seed.bin") {
+                &server_payload
+            } else {
+                &server_torrent
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(body);
+            let _ = stream.flush();
+        }
+    });
+
+    // 1. Configure `proxy_mode = "manual"` with a dead proxy `http://127.0.0.1:1`,
+    // AND `proxy_bypass = "127.0.0.1"`!
+    // Import via cURL (`G1-3` + `G7-5`):
+    // - `spec.proxy` must retain `"http://127.0.0.1:1"` for the swarm (NOT `DIRECT_PROXY_SENTINEL`!).
+    // - Admission (`validate_torrent_spec`) AND BT `.torrent` fetch must evaluate `effective_proxy`
+    //   against `spec.url` (`127.0.0.1` bypassed -> direct!) AND send hydrated Cookie + Authorization!
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            ("proxy_url".into(), serde_json::json!("http://127.0.0.1:1")),
+            ("proxy_bypass".into(), serde_json::json!("127.0.0.1")),
+            ("bt_enable_dht".into(), serde_json::json!(false)),
+        ]))
+        .unwrap();
+
+    let torrent_url = format!("http://{addr}/auth.torrent");
+    let curl_cmd =
+        format!("curl -b 'bt_auth=1' -H 'Authorization: Bearer bt-secret' '{torrent_url}'");
+    coordinator
+        .dispatch(CoreCommand::ImportCurl {
+            command: curl_cmd,
+            options: TaskSpec::default(),
+        })
+        .unwrap();
+
+    let spec1 = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        spec1.proxy, "http://127.0.0.1:1",
+        "Torrent spec.proxy must keep manual proxy_url for external swarm instead of baking DIRECT_PROXY_SENTINEL"
+    );
+    assert_eq!(spec1.filename, "auth-item.ts");
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(
+        fs::read(&completed.output_path).unwrap(),
+        payload.as_slice()
+    );
+
+    // 2. Explicit `"__direct__"` on a Torrent spec must still honor `DIRECT_PROXY_SENTINEL`.
+    let explicit_direct = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: torrent_url,
+            resource_kind: ResourceKind::Torrent,
+            proxy: "__direct__".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        explicit_direct.proxy,
+        crate::net_policy::DIRECT_PROXY_SENTINEL
+    );
+
+    stop_server.store(true, Ordering::SeqCst);
+    let _ = std::net::TcpStream::connect(addr);
+    let _ = server.join();
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_4_enabling_queue_deleting_queue_and_raising_max_active_immediately_start_queued_tasks() {
+    let root = lifecycle_test_root("g1-4-queue-kick");
+    fs::create_dir_all(&root).unwrap();
+    let coordinator = direct_http_coordinator(&root);
+
+    // 1. Queue starts disabled; non-scheduled task is queued; enabling queue starts it immediately.
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([
+                QueueProfile {
+                    id: "default".into(),
+                    name: "默认队列".into(),
+                    max_active: 1,
+                    ..QueueProfile::default()
+                },
+                QueueProfile {
+                    id: "batch-q".into(),
+                    name: "批量队列".into(),
+                    enabled: false,
+                    ..QueueProfile::default()
+                },
+                QueueProfile {
+                    id: "temp-q".into(),
+                    name: "临时队列".into(),
+                    enabled: false,
+                    ..QueueProfile::default()
+                }
+            ]),
+        )
+        .unwrap();
+
+    let addr1 = serve_http_fixture(b"enabled-queue-ok");
+    let addr2 = serve_http_fixture(b"deleted-queue-migrated-ok");
+    let addr3 = serve_http_fixture(b"max-active-raised-ok");
+
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{addr1}/q1.bin"),
+                filename: "q1.bin".into(),
+                queue_id: "batch-q".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-1")
+            .unwrap()
+            .status,
+        "queued"
+    );
+
+    // Enabling `batch-q` via `set_setting("queue_profiles", ...)` must trigger `start_next_queued(false)`.
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([
+                QueueProfile {
+                    id: "default".into(),
+                    name: "默认队列".into(),
+                    max_active: 1,
+                    ..QueueProfile::default()
+                },
+                QueueProfile {
+                    id: "batch-q".into(),
+                    name: "批量队列".into(),
+                    enabled: true,
+                    ..QueueProfile::default()
+                },
+                QueueProfile {
+                    id: "temp-q".into(),
+                    name: "临时队列".into(),
+                    enabled: false,
+                    ..QueueProfile::default()
+                }
+            ]),
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-1")
+            .unwrap()
+            .status
+            == "completed"
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "task-1 stuck in batch-q");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // 2. Deleting disabled `temp-q` migrates its orphan queued task to `"default"` AND starts it!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{addr2}/q2.bin"),
+                filename: "q2.bin".into(),
+                queue_id: "temp-q".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-2")
+            .unwrap()
+            .status,
+        "queued"
+    );
+    coordinator
+        .set_setting(
+            "queue_profiles",
+            serde_json::json!([QueueProfile {
+                id: "default".into(),
+                name: "默认队列".into(),
+                max_active: 1,
+                ..QueueProfile::default()
+            }]),
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let snap = coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-2")
+            .cloned()
+            .unwrap();
+        if snap.status == "completed" {
+            assert_eq!(snap.queue_id, "default");
+            break;
+        }
+        assert!(Instant::now() < deadline, "migrated task-2 stuck: {snap:?}");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // 3. Occupy slot 1 of `"default"` (`max_active = 1`), queue `task-4`, then raise `queue_max_active` to 2!
+    let blocker_id = lifecycle_task(&coordinator, &root, "downloading");
+    coordinator
+        .active
+        .lock()
+        .unwrap()
+        .insert(blocker_id.clone());
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{addr3}/q3.bin"),
+                filename: "q3.bin".into(),
+                queue_id: "default".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-4")
+            .unwrap()
+            .status,
+        "queued"
+    );
+    coordinator
+        .set_setting("queue_max_active", serde_json::json!(2))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if coordinator
+            .lock()
+            .unwrap()
+            .snapshot("task-4")
+            .unwrap()
+            .status
+            == "completed"
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task-4 stuck after max_active raise"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    coordinator.active.lock().unwrap().remove(&blocker_id);
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_5_g1_7_g1_8_and_g4_7_deleting_guard_curl_headers_http_error_control_and_dash_live_cleanup() {
+    let root = lifecycle_test_root("g1-misc-fixes");
+    fs::create_dir_all(&root).unwrap();
+    let coordinator = direct_http_coordinator(&root);
+
+    // 1. G1-5: `dispatch_inner` rejects start actions when `is_task_deleting` without creating `.hls-tasks/{id}/control`.
+    let del_id = lifecycle_task(&coordinator, &root, "queued");
+    let del_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&del_id)
+        .unwrap()
+        .clone();
+    let del_paths = TaskPaths::for_task(&del_id, &del_spec).unwrap();
+    let _ = fs::remove_dir_all(del_paths.task_dir());
+    {
+        let _del_guard = coordinator.enter_deleting_task(&del_id).unwrap();
+        let err = coordinator
+            .dispatch_inner(CoreCommand::TaskAction {
+                task_id: del_id.clone(),
+                action: "start".into(),
+            })
+            .unwrap_err();
+        assert!(err.contains("正在删除"), "{err}");
+        assert!(
+            !del_paths.task_dir().exists(),
+            "deleting task must never recreate .hls-tasks directory"
+        );
+    }
+
+    // 2. G1-7: `import_curl_command` merges `options.headers` case-insensitively over lowercase cURL headers.
+    let mut explicit_headers = BTreeMap::new();
+    explicit_headers.insert("Authorization".into(), "Bearer explicit-new".into());
+    explicit_headers.insert("X-Custom-Key".into(), "explicit-val".into());
+    explicit_headers.insert("Referer".into(), "https://explicit.example/page".into());
+    coordinator
+        .dispatch(CoreCommand::ImportCurl {
+            command: "curl -H 'authorization: Bearer curl-old' -H 'x-custom-key: curl-old' -H 'referer: https://curl.example/old' 'https://cdn.example.test/item.bin'".into(),
+            options: TaskSpec {
+                headers: explicit_headers,
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let curl_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .unwrap()
+        .clone();
+    let (hydrated_curl, replay_curl) =
+        hydrate_replay_headers(&coordinator.core(), curl_spec).unwrap();
+    assert_eq!(
+        hydrated_curl
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Bearer explicit-new"]
+    );
+    assert_eq!(
+        hydrated_curl
+            .headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("x-custom-key"))
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>(),
+        vec!["explicit-val"]
+    );
+    assert_eq!(
+        hydrated_curl
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("referer"))
+            .map(|(_, v)| v.as_str()),
+        Some("https://explicit.example/page")
+    );
+    assert!(!replay_curl.contains("curl-old"), "{replay_curl}");
+
+    // 3. G1-8: `run_http_file` does not overwrite `paths.control` with `"cancel"` on error/disconnect,
+    // so genuine failures remain `"failed"` instead of `"canceled"`.
+    let fail_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let fail_addr = fail_listener.local_addr().unwrap();
+    let fail_server = thread::spawn(move || {
+        if let Ok((mut stream, _)) = fail_listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = write!(
+                stream,
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found"
+            );
+            let _ = stream.flush();
+        }
+    });
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{fail_addr}/missing.bin"),
+                filename: "missing.bin".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let failed = loop {
+        if let Some(task) = coordinator
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .find(|task| task.task_id == "task-3" && task.status == "failed")
+        {
+            break task;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for task-3 failed: {:?}",
+            coordinator.tasks().unwrap()
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(failed.task_id, "task-3");
+    assert_eq!(failed.http_status, Some(404));
+    let fail_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-3")
+        .unwrap()
+        .clone();
+    let fail_paths = TaskPaths::for_task("task-3", &fail_spec).unwrap();
+    assert_eq!(
+        crate::http_engine::read_control(&fail_paths.control),
+        crate::http_engine::Control::Run
+    );
+    let _ = fail_server.join();
+
+    // 4. G4-7: `cleanup_completed_media` removes `"live_dash_state.json"` and `".live_dash_state.json.tmp"`.
+    let dash_spec = TaskSpec {
+        url: "https://cdn.example.test/live.mpd".into(),
+        resource_kind: ResourceKind::Dash,
+        filename: "live-dash.mp4".into(),
+        download_dir: root.to_string_lossy().into_owned(),
+        work_dir: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let dash_paths = TaskPaths::for_task("task-dash-live", &dash_spec).unwrap();
+    dash_paths.prepare().unwrap();
+    let published = root.join("live-dash.mp4");
+    fs::write(&published, b"published-dash-mp4").unwrap();
+    fs::write(dash_paths.task_dir().join("live_dash_state.json"), b"{}").unwrap();
+    fs::write(
+        dash_paths.task_dir().join(".live_dash_state.json.tmp"),
+        b"{}",
+    )
+    .unwrap();
+    cleanup_completed_media(&dash_paths, &published, false).unwrap();
+    cleanup_task_metadata(&dash_paths).unwrap();
+    assert!(
+        !dash_paths.task_dir().exists(),
+        "live_dash_state.json artifacts must be cleaned so task directory is removed"
+    );
+
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g1_6_maybe_schedule_power_uses_live_snapshot_queue_id_after_cross_queue_assign() {
+    let _power_guard = TEST_POWER_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let _ = crate::power_action::cancel();
+    let root = lifecycle_test_root("g1-6-power-queue-id");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            (
+                "queue_profiles".into(),
+                serde_json::json!([
+                    QueueProfile {
+                        id: "default".into(),
+                        name: "默认队列".into(),
+                        completion_action: "none".into(),
+                        ..QueueProfile::default()
+                    },
+                    QueueProfile {
+                        id: "night".into(),
+                        name: "夜间队列".into(),
+                        completion_action: "sleep".into(),
+                        ..QueueProfile::default()
+                    }
+                ]),
+            ),
+        ]))
+        .unwrap();
+
+    // 1. Seed a historical failure in `night` so `batch_disrupted["night"]` is non-empty while `night` is idle.
+    let fail_night_id = lifecycle_task(&coordinator, &root, "queued");
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::AssignQueue {
+            task_ids: vec![fail_night_id.clone()],
+            queue_id: "night".into(),
+        })
+        .unwrap();
+    coordinator
+        .lock()
+        .unwrap()
+        .report_failure(
+            &fail_night_id,
+            crate::TaskFailure {
+                code: "HTTP_500".into(),
+                message: "boom".into(),
+                stage: "transfer".into(),
+                url: "https://cdn.example.test/fail.bin".into(),
+                hint: String::new(),
+                http_status: Some(500),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+    assert!(coordinator
+        .lock()
+        .unwrap()
+        .batch_disrupted_for_queue("night")
+        .is_some());
+
+    // 2. Start a task in `"default"`, capture its stale worker-launch `spec` (`queue_id == "default"`),
+    // then move it while live to `"night"` via `AssignQueue` and complete it!
+    let live_id = lifecycle_task(&coordinator, &root, "downloading");
+    let stale_launch_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec(&live_id)
+        .unwrap()
+        .clone();
+    assert_eq!(stale_launch_spec.queue_id, "default");
+
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::AssignQueue {
+            task_ids: vec![live_id.clone()],
+            queue_id: "night".into(),
+        })
+        .unwrap();
+    assert!(
+        coordinator
+            .lock()
+            .unwrap()
+            .batch_disrupted_for_queue("night")
+            .is_none(),
+        "AssignQueue of live task into idle night queue must clear stale batch_disrupted"
+    );
+
+    coordinator
+        .lock()
+        .unwrap()
+        .handle(CoreCommand::UpdateProgress {
+            task_id: live_id.clone(),
+            downloaded_bytes: 64,
+            total_bytes: Some(64),
+            speed_bytes_per_sec: 0,
+            stage: "finished".into(),
+            status: "completed".into(),
+        })
+        .unwrap();
+
+    maybe_schedule_power(&coordinator.core(), &live_id, &stale_launch_spec)
+        .expect("maybe_schedule_power");
+    let (action, title, _) =
+        crate::power_action::pending_details().expect("night queue completion must arm sleep");
+    assert_eq!(action, "sleep");
+    assert_eq!(title, "队列：夜间队列");
+    let _ = crate::power_action::cancel();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn g5_4_and_g7_8_json_task_import_enforces_allowed_hosts_and_cast_stop_clears_mount_on_offline_receiver(
+) {
+    let root = lifecycle_test_root("g5-4-g7-8-import-and-cast");
+    fs::create_dir_all(&root).unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            (
+                "allowed_hosts".into(),
+                serde_json::json!("allowed.example.test"),
+            ),
+        ]))
+        .unwrap();
+
+    // 1. G5-4: JSON task import rejects disallowed primary URL (including `.torrent` container URLs)
+    // with `"地址不在允许的域名白名单中"` and strips disallowed mirrors!
+    let bad_json = root.join("bad-tasks.json");
+    fs::write(
+        &bad_json,
+        serde_json::json!({
+            "schema": "hls-downloader.tasks.v1",
+            "tasks": [{
+                "url": "https://blocked.example.test/evil.torrent",
+                "filename": "evil.torrent",
+                "start_paused": true
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let err = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: bad_json.to_string_lossy().into_owned(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap_err();
+    assert_eq!(err, "地址不在允许的域名白名单中");
+
+    let mixed_mirrors_json = root.join("mirrors-tasks.json");
+    fs::write(
+        &mixed_mirrors_json,
+        serde_json::json!({
+            "schema": "hls-downloader.tasks.v1",
+            "tasks": [{
+                "url": "https://allowed.example.test/pkg.zip",
+                "filename": "pkg.zip",
+                "mirrors": [
+                    "https://allowed.example.test/mirror1.zip",
+                    "https://blocked.example.test/mirror2.zip"
+                ],
+                "scheduled_start_at": "2999-01-01T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: mixed_mirrors_json.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let imported_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        imported_spec.mirrors,
+        vec!["https://allowed.example.test/mirror1.zip".to_string()]
+    );
+
+    // 2. G7-8: `cast_control_events` on `"stop"` ALWAYS calls `clear_cast_mount()` and emits
+    // `CoreEvent::CastSession { active: false, status: "STOPPED", .. }` even when `control_session("stop")` fails!
+    {
+        let _cast_guard = TEST_CAST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let media_file = root.join("cast-secret.mp4");
+        fs::write(&media_file, b"secret-cast-stream").unwrap();
+        let server = shared_media().unwrap();
+        let token = crate::playback::random_mount_token();
+        server.mount(&token, media_file);
+        let loopback_url = server.url_for(&token);
+
+        // Verify mounted token is currently reachable on loopback before stop.
+        let (_, before_bytes) = crate::http_engine::fetch_bytes_limited(
+            &loopback_url,
+            &std::collections::HashMap::new(),
+            crate::net_policy::DIRECT_PROXY_SENTINEL,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(before_bytes, b"secret-cast-stream");
+
+        // Ensure `crate::cast::control_session("stop")` returns `Err(...)` (no active cast device in `last_cast`!).
+        let _ = crate::cast::control_session("stop");
+        let gen = crate::cast::session_generation();
+        assert!(
+            crate::cast::control_session("stop").is_err(),
+            "precondition: control_session(\"stop\") must return Err when receiver/session is unavailable"
+        );
+        remember_cast_mount(&token, &loopback_url, "Secret Cast", "task-1");
+        assert!(active_cast_mount().lock().unwrap().is_some());
+
+        let stop_events = if gen > 0 {
+            coordinator.cast_control(gen, "stop").unwrap()
+        } else {
+            coordinator
+                .dispatch(CoreCommand::ControlCast {
+                    action: "stop".into(),
+                })
+                .unwrap()
+        };
+        assert!(
+            active_cast_mount().lock().unwrap().is_none(),
+            "cast stop must always clear active_cast_mount even on receiver error"
+        );
+        assert!(
+            matches!(
+                &stop_events.last().unwrap().event,
+                CoreEvent::CastSession {
+                    active: false,
+                    status,
+                    media_url,
+                    ..
+                } if status == "STOPPED" && media_url.is_empty()
+            ),
+            "expected CastSession STOPPED event, got: {stop_events:?}"
+        );
+
+        // Verify the MediaServer mount was unmounted so the token is no longer served!
+        let (status_after, _) = crate::http_engine::fetch_bytes_limited(
+            &loopback_url,
+            &std::collections::HashMap::new(),
+            crate::net_policy::DIRECT_PROXY_SENTINEL,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(status_after, 404);
+    }
+
     let _ = fs::remove_dir_all(root);
 }

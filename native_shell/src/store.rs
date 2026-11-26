@@ -288,7 +288,9 @@ impl CoreStore {
         let path = self.path.as_ref()?;
         let mut connection = Connection::open(path).ok()?;
         connection
-            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+            .execute_batch(
+                "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;",
+            )
             .ok()?;
         connection.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         Some(connection)
@@ -1177,28 +1179,108 @@ fn write_settings(
     }
     if !previous.is_empty() {
         let current = configured_proxy_keys(transaction)?;
-        let mut removed: std::collections::BTreeSet<_> = previous.difference(&current).collect();
+        let mut removed: std::collections::BTreeSet<String> =
+            previous.difference(&current).cloned().collect();
         if !removed.is_empty() {
+            let mut referenced = std::collections::BTreeSet::new();
             // Queued tasks retain the selected proxy across changes to defaults.
-            let mut query = transaction.prepare("SELECT json_extract(spec_json,'$.proxy') FROM task_specs WHERE json_valid(spec_json) AND json_type(spec_json,'$.proxy')='text'").map_err(|e| e.to_string())?;
-            let proxies = query
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| e.to_string())?;
-            for proxy in proxies {
-                if let Some(key) =
-                    crate::url_credentials::proxy_password_key(&proxy.map_err(|e| e.to_string())?)
-                {
-                    removed.remove(&key);
-                }
-                if removed.is_empty() {
-                    break;
+            {
+                let mut stmt = transaction
+                    .prepare("SELECT spec_json FROM task_specs")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for row in rows {
+                    let json = row.map_err(|e| e.to_string())?;
+                    if let Ok(spec) = serde_json::from_str::<TaskSpec>(&json) {
+                        if let Some(key) = crate::url_credentials::proxy_password_key(&spec.proxy) {
+                            referenced.insert(key);
+                        }
+                    }
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                        crate::url_credentials::collect_referenced_url_password_keys(
+                            &val,
+                            false,
+                            &mut referenced,
+                        );
+                    }
                 }
             }
+            // Pending handoffs, remaining settings, and crawl_projects may also reference proxy credentials.
+            {
+                let mut stmt = transaction
+                    .prepare("SELECT public_json FROM handoffs WHERE status = 'pending'")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for row in rows {
+                    let json = row.map_err(|e| e.to_string())?;
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                        crate::url_credentials::collect_referenced_url_password_keys(
+                            &val,
+                            false,
+                            &mut referenced,
+                        );
+                    }
+                }
+            }
+            {
+                let mut stmt = transaction
+                    .prepare("SELECT key, value_json FROM settings")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| e.to_string())?;
+                for row in rows {
+                    let (key, raw_json) = row.map_err(|e| e.to_string())?;
+                    if key == "site_rules" {
+                        let raw = serde_json::from_str::<String>(&raw_json)
+                            .unwrap_or_else(|_| raw_json.clone());
+                        for rule in crate::parse_site_rules(&raw) {
+                            if let Some(pk) =
+                                crate::url_credentials::proxy_password_key(&rule.proxy)
+                            {
+                                referenced.insert(pk);
+                            }
+                        }
+                    }
+                    let val = serde_json::from_str::<serde_json::Value>(&raw_json)
+                        .unwrap_or(serde_json::Value::String(raw_json));
+                    crate::url_credentials::collect_referenced_url_password_keys(
+                        &val,
+                        true,
+                        &mut referenced,
+                    );
+                }
+            }
+            {
+                let mut stmt = transaction
+                    .prepare("SELECT state_json FROM crawl_projects")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for row in rows {
+                    let json = row.map_err(|e| e.to_string())?;
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                        crate::url_credentials::collect_referenced_url_password_keys(
+                            &val,
+                            false,
+                            &mut referenced,
+                        );
+                    }
+                }
+            }
+            removed.retain(|key| !referenced.contains(key));
             #[cfg(windows)]
             let delete = "DELETE FROM credentials WHERE credential_ref=?1 AND kind='url_password'";
             #[cfg(not(windows))]
             let delete = "DELETE FROM volatile_vault.url_passwords WHERE credential_ref=?1";
-            for key in removed {
+            for key in &removed {
                 transaction
                     .execute(delete, [key])
                     .map_err(|e| e.to_string())?;
@@ -2532,6 +2614,172 @@ mod tests {
                 "expected {kept} to be preserved by GC"
             );
         }
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn progress_writer_busy_timeout_and_write_settings_preserves_crawl_and_pending_handoff_proxies()
+    {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-store-g5-1-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("epoch")
+                .as_nanos()
+        ));
+        let db = root.join("core.sqlite3");
+        let mut store = CoreStore::open(&db).expect("open store");
+
+        // 1. Verify `open_progress_writer_connection` sets `PRAGMA busy_timeout = 5000`
+        // and waits cleanly for a concurrent `IMMEDIATE` transaction instead of `SQLITE_BUSY`.
+        let mut runtime = crate::CoreRuntime::new();
+        let spec = TaskSpec {
+            url: "https://example.test/sample.bin".into(),
+            filename: "sample.bin".into(),
+            ..Default::default()
+        };
+        let created = runtime.handle(crate::CoreCommand::CreateTask { spec: spec.clone() });
+        store
+            .apply_events_and_spec(&created, Some(&spec))
+            .expect("create sample task");
+        let snapshot = store.load_tasks().expect("load tasks").remove(0);
+
+        let mut writer = store
+            .open_progress_writer_connection()
+            .expect("open progress writer connection");
+        let timeout_ms: i64 = writer
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("query busy_timeout");
+        assert_eq!(timeout_ms, 5000);
+
+        let blocker = Connection::open(&db).expect("open blocker");
+        blocker
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("begin immediate lock");
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            blocker.execute_batch("COMMIT").expect("commit blocker");
+        });
+        let mut updated_snapshot = snapshot;
+        updated_snapshot.downloaded_bytes = 777;
+        let written = write_progress_rows(
+            &mut writer,
+            &[ProgressRow {
+                snapshot: updated_snapshot,
+                sequence: 99,
+            }],
+        )
+        .expect("progress writer must wait on busy_timeout instead of failing");
+        assert_eq!(written, 1);
+        releaser.join().expect("join releaser");
+        drop(writer);
+
+        // 2. Verify `write_settings` preserves proxy `url_password` credentials referenced by
+        // `crawl_projects`, pending `handoffs`, and remaining `settings`, while removing true orphans.
+        let crawl_proxy_full = "http://cuser:crawl-secret@crawl-proxy.example:8080";
+        let crawl_proxy_redacted = "http://cuser@crawl-proxy.example:8080";
+        let handoff_proxy_full = "http://huser:handoff-secret@handoff-proxy.example:8080";
+        let handoff_proxy_redacted = "http://huser@handoff-proxy.example:8080";
+        let setting_proxy_full = "socks5://suser:setting-secret@setting-proxy.example:1080";
+        let setting_proxy_redacted = "socks5://suser@setting-proxy.example:1080";
+        let orphan_proxy_full = "http://ouser:orphan-secret@orphan-proxy.example:8080";
+        let orphan_proxy_redacted = "http://ouser@orphan-proxy.example:8080";
+
+        let initial_rules = serde_json::json!([
+            { "host": "h.example", "proxy_mode": "manual", "proxy": handoff_proxy_full },
+            { "host": "s.example", "proxy_mode": "manual", "proxy": setting_proxy_full },
+            { "host": "o.example", "proxy_mode": "manual", "proxy": orphan_proxy_full }
+        ])
+        .to_string();
+        store
+            .set_settings(&BTreeMap::from([
+                ("proxy_url".into(), serde_json::json!(crawl_proxy_full)),
+                ("site_rules".into(), serde_json::json!(initial_rules)),
+                (
+                    "custom_aux_proxy".into(),
+                    serde_json::json!(setting_proxy_redacted),
+                ),
+            ]))
+            .expect("store initial proxy settings");
+
+        let crawl_state_json = serde_json::json!({
+            "project": { "id": "crawl-1", "status": "paused" },
+            "proxy": crawl_proxy_redacted
+        })
+        .to_string();
+        store
+            .connection
+            .execute(
+                "INSERT INTO crawl_projects(project_id, state_json) VALUES ('crawl-1', ?1)",
+                params![crawl_state_json],
+            )
+            .expect("insert crawl project");
+
+        let pending_handoff_json = serde_json::json!({
+            "id": "handoff-keep",
+            "status": "pending",
+            "offer": {
+                "url": "https://h.example/file.bin",
+                "proxy": handoff_proxy_redacted
+            }
+        })
+        .to_string();
+        store
+            .save_handoff("handoff-keep", &pending_handoff_json, "pending", None, 10)
+            .expect("save pending handoff");
+
+        let rejected_handoff_json = serde_json::json!({
+            "id": "handoff-drop",
+            "status": "rejected",
+            "offer": {
+                "url": "https://o.example/file.bin",
+                "proxy": orphan_proxy_redacted
+            }
+        })
+        .to_string();
+        store
+            .save_handoff("handoff-drop", &rejected_handoff_json, "rejected", None, 11)
+            .expect("save rejected handoff");
+
+        // Clear global proxy_url and site_rules.
+        store
+            .set_settings(&BTreeMap::from([
+                ("proxy_url".into(), serde_json::json!("")),
+                ("site_rules".into(), serde_json::json!("[]")),
+            ]))
+            .expect("clear global proxy_url and site_rules");
+
+        assert_eq!(
+            store
+                .hydrate_proxy(crawl_proxy_redacted)
+                .expect("hydrate crawl"),
+            crawl_proxy_full,
+            "active/paused crawl project proxy password must survive global proxy_url change"
+        );
+        assert_eq!(
+            store
+                .hydrate_proxy(handoff_proxy_redacted)
+                .expect("hydrate pending handoff"),
+            handoff_proxy_full,
+            "pending handoff proxy password must survive site_rules change"
+        );
+        assert_eq!(
+            store
+                .hydrate_proxy(setting_proxy_redacted)
+                .expect("hydrate remaining setting"),
+            setting_proxy_full,
+            "remaining settings proxy password must survive site_rules change"
+        );
+        assert_eq!(
+            store
+                .hydrate_proxy(orphan_proxy_redacted)
+                .expect("hydrate orphan"),
+            orphan_proxy_redacted,
+            "unreferenced / rejected-handoff proxy password must still be deleted"
+        );
 
         drop(store);
         let _ = fs::remove_dir_all(root);

@@ -58,7 +58,7 @@ pub(crate) fn decode_proxy_userinfo(user: &str) -> Option<String> {
 }
 
 pub(crate) fn proxy_password_key(url: &str) -> Option<String> {
-    let url = url.trim();
+    let url = url.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
     let (scheme, rest) = url.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next()?;
     let (userinfo, endpoint) = authority.rsplit_once('@')?;
@@ -68,7 +68,7 @@ pub(crate) fn proxy_password_key(url: &str) -> Option<String> {
 }
 
 pub(crate) fn transfer_url_password_key(url: &str) -> Option<String> {
-    let url = url.trim();
+    let url = url.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
     let (scheme, rest) = url.split_once("://")?;
     if !matches!(
         scheme.to_ascii_lowercase().as_str(),
@@ -242,11 +242,17 @@ impl CoreStore {
     }
 
     pub(crate) fn hydrate_url(&self, url: &str) -> Result<String, String> {
-        self.hydrate_url_field(url, false)
+        self.hydrate_url_field(
+            url.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}'),
+            false,
+        )
     }
 
     pub(crate) fn hydrate_proxy(&self, url: &str) -> Result<String, String> {
-        self.hydrate_url_field(url.trim(), true)
+        self.hydrate_url_field(
+            url.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}'),
+            true,
+        )
     }
 
     fn hydrate_url_field(&self, url: &str, proxy: bool) -> Result<String, String> {
@@ -306,9 +312,16 @@ impl CoreStore {
     }
 
     pub(crate) fn migrate_url_passwords(&self) -> Result<(), String> {
+        struct RestoreSecureDelete<'a>(&'a rusqlite::Connection);
+        impl Drop for RestoreSecureDelete<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.execute_batch("PRAGMA secure_delete=OFF");
+            }
+        }
         self.connection
             .execute_batch("PRAGMA secure_delete=ON")
             .map_err(|e| e.to_string())?;
+        let _restore_secure_delete = RestoreSecureDelete(&self.connection);
         self.connection
             .execute_batch("SAVEPOINT url_password_migration")
             .map_err(|e| e.to_string())?;
@@ -966,5 +979,89 @@ mod tests {
             status: "downloading".into(),
         };
         assert_eq!(redact_urls(plain_cmd.clone()).unwrap(), plain_cmd);
+    }
+
+    #[test]
+    fn migrate_url_passwords_restores_secure_delete_off_on_success_and_error() {
+        let store = CoreStore::in_memory().unwrap();
+        let read_secure_delete = |store: &CoreStore| -> i64 {
+            store
+                .connection
+                .query_row("PRAGMA secure_delete", [], |row| row.get(0))
+                .unwrap()
+        };
+        store
+            .connection
+            .execute_batch("PRAGMA secure_delete=OFF")
+            .unwrap();
+        assert_eq!(read_secure_delete(&store), 0);
+
+        // 1. Success path with mutated row (`changed = true`).
+        let legacy_spec = TaskSpec {
+            url: "ftp://alice:pw-success@files.example/archive.bin".into(),
+            ..Default::default()
+        };
+        store
+            .connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES ('t-ok', ?1)",
+                [serde_json::to_string(&legacy_spec).unwrap()],
+            )
+            .unwrap();
+        store.migrate_url_passwords().unwrap();
+        assert_eq!(
+            read_secure_delete(&store),
+            0,
+            "secure_delete must be restored to OFF after successful migration"
+        );
+
+        // 2. Error path (`UPDATE` aborted by trigger -> rollback savepoint).
+        let failing_spec = TaskSpec {
+            url: "ftp://bob:pw-fail@files.example/archive.bin".into(),
+            ..Default::default()
+        };
+        store
+            .connection
+            .execute(
+                "INSERT INTO task_specs(task_id, spec_json) VALUES ('t-err', ?1)",
+                [serde_json::to_string(&failing_spec).unwrap()],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER abort_task_specs_update BEFORE UPDATE ON task_specs \
+                 BEGIN SELECT RAISE(ABORT, 'simulated migration write failure'); END;",
+            )
+            .unwrap();
+        let err = store.migrate_url_passwords().unwrap_err();
+        assert!(err.contains("simulated migration write failure"), "{err}");
+        assert_eq!(
+            read_secure_delete(&store),
+            0,
+            "secure_delete must be restored to OFF after failed migration"
+        );
+    }
+
+    #[test]
+    fn hydrate_url_trims_outer_whitespace_and_bom_before_restoring_password() {
+        let store = CoreStore::in_memory().unwrap();
+        let spec = TaskSpec {
+            url: "sftp://ops:vault-secret@sftp.example.test:2222/archive.tar".into(),
+            ..Default::default()
+        };
+        let clean = store.sanitize_urls(spec).unwrap();
+        assert_eq!(clean.url, "sftp://ops@sftp.example.test:2222/archive.tar");
+        for padded in [
+            format!("  {}  ", clean.url),
+            format!("\u{00a0}\u{3000}{}\r\n", clean.url),
+            format!("\u{feff}{}", clean.url),
+        ] {
+            assert_eq!(
+                store.hydrate_url(&padded).unwrap(),
+                "sftp://ops:vault-secret@sftp.example.test:2222/archive.tar",
+                "hydrate_url must trim outer whitespace/BOM: {padded:?}"
+            );
+        }
     }
 }

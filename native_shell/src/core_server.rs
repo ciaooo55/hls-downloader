@@ -1372,10 +1372,11 @@ fn spawn_queue_scheduler(coordinator: CoreCoordinator, stop: Arc<AtomicBool>) {
         let mut latch = QueueSchedulerLatch::default();
         while !stop.load(Ordering::SeqCst) {
             if let Ok(settings) = coordinator.settings() {
-                let any_queue_schedule = settings
-                    .queue_profiles
-                    .iter()
-                    .any(|profile| profile.schedule_enabled);
+                let any_queue_schedule = settings.queue_profiles.iter().any(|profile| {
+                    profile.schedule_enabled
+                        || (!profile.active_days.trim().is_empty()
+                            && profile.active_days.trim() != "1,2,3,4,5,6,7")
+                });
                 let any_global_schedule =
                     settings.queue_auto_start_enabled || settings.queue_auto_stop_enabled;
                 if !settings.queue_auto_stop_enabled {

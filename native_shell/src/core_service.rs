@@ -458,13 +458,23 @@ impl PersistentCore {
             let proxy_mode = self.store.setting_string("proxy_mode", "system")?;
             let proxy_url = self.store.setting_string("proxy_url", "")?;
             let proxy_bypass = self.store.setting_string("proxy_bypass", "")?;
-            let effective = crate::net_policy::effective_proxy(
-                &proxy_mode,
-                &proxy_url,
-                &proxy_bypass,
-                offer.url.trim(),
-                &rule_proxy,
-            );
+            let is_torrent = offer.resource_kind == crate::ResourceKind::Torrent
+                || crate::classify_url(offer.url.trim()) == crate::ResourceKind::Torrent;
+            let effective = if is_torrent
+                && rule_proxy.trim().is_empty()
+                && proxy_mode.trim().eq_ignore_ascii_case("manual")
+                && !proxy_url.trim().is_empty()
+            {
+                proxy_url.trim().to_string()
+            } else {
+                crate::net_policy::effective_proxy(
+                    &proxy_mode,
+                    &proxy_url,
+                    &proxy_bypass,
+                    offer.url.trim(),
+                    &rule_proxy,
+                )
+            };
             if !crate::net_policy::proxy_route_sentinel(&effective)
                 && !crate::download_worker::proxy_url_allowed(&effective)
             {
@@ -1148,7 +1158,8 @@ impl PersistentCore {
                 crate::CoreEvent::TaskUpdated { snapshot }
                 | crate::CoreEvent::TaskProgress { snapshot } => {
                     let prev = before.snapshot(&snapshot.task_id);
-                    if prev.is_some_and(|p| p.queue_id != snapshot.queue_id) {
+                    let queue_changed = prev.is_some_and(|p| p.queue_id != snapshot.queue_id);
+                    if queue_changed {
                         self.clear_task_from_disrupted(&snapshot.task_id);
                     }
                     if Self::is_disrupted_task_status(&snapshot.status) {
@@ -1163,7 +1174,9 @@ impl PersistentCore {
                     } else if Self::is_live_task_status(&snapshot.status) {
                         let was_live = prev.is_some_and(|p| Self::is_live_task_status(&p.status));
                         self.clear_task_from_disrupted(&snapshot.task_id);
-                        if !was_live && !before.queue_has_live_work(&snapshot.queue_id) {
+                        if (!was_live || queue_changed)
+                            && !before.queue_has_live_work(&snapshot.queue_id)
+                        {
                             self.batch_disrupted.remove(&snapshot.queue_id);
                         }
                     }
@@ -2995,6 +3008,89 @@ mod tests {
         assert!(handle.join().unwrap() > 0);
         drop(core);
         remove_db(&path);
+    }
+
+    #[test]
+    fn cross_queue_assign_of_live_task_into_idle_queue_clears_stale_batch_disrupted() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        // 1. Create and fail a task in `night` so `batch_disrupted["night"]` is populated
+        // and `night` subsequently has zero live work.
+        let mut night_failed = test_spec();
+        night_failed.queue_id = "night".into();
+        night_failed.url = "https://example.test/night-fail.bin".into();
+        core.handle(CoreCommand::CreateTask { spec: night_failed })
+            .unwrap();
+        core.report_failure(
+            "task-1",
+            crate::TaskFailure {
+                code: "HTTP_500".into(),
+                message: "HTTP 500".into(),
+                stage: "transfer".into(),
+                url: "https://example.test/night-fail.bin".into(),
+                hint: String::new(),
+                http_status: Some(500),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+        assert!(core
+            .batch_disrupted_for_queue("night")
+            .is_some_and(|ids| ids.contains("task-1")));
+
+        // 2. Create a live (`queued`) task in `default`, then move it to idle `night` via `AssignQueue`.
+        let mut moving = test_spec();
+        moving.queue_id = "default".into();
+        moving.url = "https://example.test/moving-live.bin".into();
+        core.handle(CoreCommand::CreateTask { spec: moving })
+            .unwrap();
+        assert_eq!(core.snapshot("task-2").unwrap().status, "queued");
+
+        core.handle(CoreCommand::AssignQueue {
+            task_ids: vec!["task-2".into()],
+            queue_id: "night".into(),
+        })
+        .unwrap();
+        assert!(
+            core.batch_disrupted_for_queue("night").is_none(),
+            "moving live work into an idle queue must start a fresh batch and clear stale batch_disrupted"
+        );
+
+        // 3. Also verify `assign_queue_and_set_settings` (e.g. orphan migration on queue deletion)
+        // clears stale `batch_disrupted` on an idle `default` queue.
+        let mut default_failed = test_spec();
+        default_failed.queue_id = "default".into();
+        default_failed.url = "https://example.test/default-fail.bin".into();
+        core.handle(CoreCommand::CreateTask {
+            spec: default_failed,
+        })
+        .unwrap();
+        core.report_failure(
+            "task-3",
+            crate::TaskFailure {
+                code: "HTTP_502".into(),
+                message: "HTTP 502".into(),
+                stage: "transfer".into(),
+                url: "https://example.test/default-fail.bin".into(),
+                hint: String::new(),
+                http_status: Some(502),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+        assert!(core
+            .batch_disrupted_for_queue("default")
+            .is_some_and(|ids| ids.contains("task-3")));
+
+        core.assign_queue_and_set_settings(
+            vec!["task-2".into()],
+            "default".into(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            core.batch_disrupted_for_queue("default").is_none(),
+            "assign_queue_and_set_settings moving live task into idle default queue must clear stale batch_disrupted"
+        );
     }
 
     fn test_spec() -> TaskSpec {
