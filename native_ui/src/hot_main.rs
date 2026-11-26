@@ -4098,6 +4098,12 @@ fn apply_hud_settings_result(
     }
     match completed.result {
         Ok(()) => {
+            apply_hud_settings_rollback(
+                item,
+                presenter_settings,
+                open_folder_on_complete,
+                &hud_settings_baseline.borrow(),
+            );
             item.set_action_error(false);
             item.set_action_text(completed.success_text.into());
         }
@@ -7317,5 +7323,116 @@ mod tests {
             "SystemTools update dialog keeps newly instantiated Workbench alive to surface install failure"
         );
         workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn hud_settings_serial_batch_reverts_earlier_failed_op_when_later_op_succeeds() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let progress = super::ProgressWindow::new().unwrap();
+        let presenter_settings = std::sync::Mutex::new(super::PresenterSettings {
+            speed_limit_enabled: false,
+            speed_limit_kib: 0,
+            completion_power_action: "none".into(),
+            ..Default::default()
+        });
+        let open_folder_on_complete = std::cell::Cell::new(false);
+        let hud_settings_gen = std::cell::Cell::new(0u64);
+        let hud_settings_settled_gen = std::cell::Cell::new(0u64);
+        let hud_settings_baseline = std::cell::RefCell::new(
+            super::HudSettingsBaseline::from_settings(&presenter_settings.lock().unwrap(), false),
+        );
+        let (job_tx, job_rx) = std::sync::mpsc::channel();
+        let (reload_tx, reload_rx) = std::sync::mpsc::channel();
+
+        // Op 1 (gen=1): CompletionAction -> "shutdown" (will fail)
+        let op1 = super::HudSettingsWriteOp::CompletionAction {
+            index: 2,
+            open_folder_on_complete: false,
+            wire_action: "shutdown".into(),
+        };
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder_on_complete,
+            &hud_settings_gen,
+            &hud_settings_settled_gen,
+            &hud_settings_baseline,
+            &job_tx,
+            &reload_tx,
+            op1.clone(),
+            "已设置关机".into(),
+            "保存完成后动作失败",
+        );
+
+        // Op 2 (gen=2) queued before Op 1 finishes: SpeedLimit -> (true, 2048) (will succeed)
+        let mut speed_values = std::collections::BTreeMap::new();
+        speed_values.insert(
+            "download_speed_limit_enabled".into(),
+            serde_json::json!(true),
+        );
+        speed_values.insert("download_speed_limit_kib".into(), serde_json::json!(2048));
+        let op2 = super::HudSettingsWriteOp::SpeedLimit {
+            enabled: true,
+            kib: 2048,
+            values: speed_values,
+        };
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder_on_complete,
+            &hud_settings_gen,
+            &hud_settings_settled_gen,
+            &hud_settings_baseline,
+            &job_tx,
+            &reload_tx,
+            op2.clone(),
+            "已开启限速".into(),
+            "保存限速失败",
+        );
+        assert_eq!(job_rx.try_iter().count(), 2);
+
+        // Op 1 fails while gen=2 is still pending -> triggers reload, keeps baseline completion="none".
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder_on_complete,
+            &hud_settings_gen,
+            &hud_settings_settled_gen,
+            &hud_settings_baseline,
+            &reload_tx,
+            super::HudSettingsResult {
+                gen: 1,
+                op: op1,
+                success_text: "已设置关机".into(),
+                error_prefix: "保存完成后动作失败",
+                result: Err("写入失败".into()),
+            },
+        );
+        assert!(reload_rx.try_recv().is_ok());
+
+        // Op 2 succeeds (gen=2 == current gen) -> MUST commit speed=(true, 2048) AND roll back completion_action to "none" (index 0)!
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder_on_complete,
+            &hud_settings_gen,
+            &hud_settings_settled_gen,
+            &hud_settings_baseline,
+            &reload_tx,
+            super::HudSettingsResult {
+                gen: 2,
+                op: op2,
+                success_text: "已开启限速".into(),
+                error_prefix: "保存限速失败",
+                result: Ok(()),
+            },
+        );
+        assert!(progress.get_speed_limit_enabled());
+        assert_eq!(progress.get_speed_limit_kib(), 2048);
+        assert_eq!(progress.get_completion_action_index(), 0);
+        let final_settings = presenter_settings.lock().unwrap().clone();
+        assert!(final_settings.speed_limit_enabled);
+        assert_eq!(final_settings.speed_limit_kib, 2048);
+        assert_eq!(final_settings.completion_power_action, "none");
     }
 }

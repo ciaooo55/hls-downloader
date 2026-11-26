@@ -67,6 +67,7 @@ interface LocalDownloadHandoff {
   importUrl?: string
   handoffId?: string
   intent?: DownloadClickIntent
+  explicitUserAction?: boolean
   retryAt?: number
   pollAttempts?: number
   waitPolls?: number
@@ -109,6 +110,7 @@ async function persistLocalDownloads(): Promise<void> {
 
 async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<void> {
   await hydrateLocalDownloads()
+  record.explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
   const [item] = await browser.downloads.search({ id: record.downloadId })
   record.sourceStartedAt = item?.startTime
   // 浏览器可在接收响应时按 MIME 调整文件名；完成后才固定导入路径。
@@ -121,7 +123,11 @@ async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<
   if (existing && existing.sourceKey !== record.sourceKey) {
     throw new Error('浏览器下载身份已变化，保留原文件并停止自动导入')
   }
-  if (!existing) localDownloadHandoffs.set(record.requestId, record)
+  if (existing) {
+    if (record.explicitUserAction) existing.explicitUserAction = true
+  } else {
+    localDownloadHandoffs.set(record.requestId, record)
+  }
   await persistLocalDownloads()
   void continueLocalDownloadHandoffs().catch(error => console.warn('HLS Downloader local file handoff failed', error))
 }
@@ -379,11 +385,16 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           // 先固定完成文件的路径，丢回执后也不能把同 ID 的另一条路径当作原件删除。
           record.sourceFilename = item.filename
           await persistLocalDownloads()
-          const response = await native({ op: 'offer_local_file', resource: {
-            url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
-            mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
-            client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
-          } })
+          const explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
+          const response = await native({
+            op: 'offer_local_file',
+            ...(explicitUserAction ? { explicit_user_action: true } : {}),
+            resource: {
+              url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
+              mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
+              client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
+            },
+          })
           // A transport failure or empty success envelope is not a rejection:
           // Core may already own the import. Retain the original request ID
           // and source file, and retry at the recovery cadence rather than
@@ -1359,8 +1370,12 @@ async function readyResourceChain(
 ): Promise<RequestChain | undefined> {
   let chain = successfulChainForResource(resource, explicitChain)
   if (!usesShortLivedMediaSignature(resource)) return chain
+  const isChainSignatureUsable = (candidate: RequestChain | undefined): candidate is RequestChain =>
+    Boolean(candidate && isShortLivedMediaSignatureUsable({ ...resource, url: candidate.finalUrl }))
   if ((options.allowUnverified || resource.kind === 'file') && isShortLivedMediaSignatureUsable(resource)) {
-    return chain ?? explicitChain
+    if (isChainSignatureUsable(chain)) return chain
+    if (isChainSignatureUsable(explicitChain)) return explicitChain
+    return undefined
   }
   // A Performance/media-element observation may arrive before the browser has
   // received its signed response. Do not hand the desktop a raw s/e/_t URL in
@@ -1431,7 +1446,11 @@ async function resourceRequest(
     }, Date.now(), resource.tabId !== undefined && resource.tabId >= 0 ? resource.tabId : undefined, requireSuccessfulRequest).kind === 'ambiguous'
   )
   const mustVerifyIdentity = hasResponseIdentity && (!alreadyObserved || isAmbiguousIdentity())
-  if (!chain && (!options.allowUnverified || mustVerifyIdentity) && resource.kind !== 'magnet') {
+  const skipChainPollForFreshSignedFile = !mustVerifyIdentity
+    && resource.kind === 'file'
+    && usesShortLivedMediaSignature(resource)
+    && isShortLivedMediaSignatureUsable(resource)
+  if (!chain && (!options.allowUnverified || mustVerifyIdentity) && !skipChainPollForFreshSignedFile && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
     // controller or stale signed gateway without a successful response chain
     // is how HTML pages became download tasks. Close the short observation
@@ -1473,7 +1492,9 @@ async function resourcePayload(
     : undefined
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
-    if (matchesResourceRequest(resource, freshUrl)) {
+    if (matchesResourceRequest(resource, freshUrl)
+      && (!usesShortLivedMediaSignature(resource)
+        || isShortLivedMediaSignatureUsable({ ...resource, url: freshUrl }))) {
       // LL-HLS and signed files keep refreshing while the selection panel is
       // open. Always hand off the most recently successful browser request,
       // not a stale Performance/fetch observation rendered by the page.

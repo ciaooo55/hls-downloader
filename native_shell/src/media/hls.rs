@@ -2264,15 +2264,10 @@ fn load_key(
                     return Err(message);
                 }
                 if !control.as_os_str().is_empty() {
-                    if let Err(stop) = wait_with_control(
+                    wait_with_control(
                         control,
                         SEGMENT_RETRY_DELAY_MS as f64 * f64::from(attempt) / 1000.0,
-                    ) {
-                        if stop == "finish" {
-                            return Err(message);
-                        }
-                        return Err(stop);
-                    }
+                    )?;
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(
                         SEGMENT_RETRY_DELAY_MS * u64::from(attempt),
@@ -2286,15 +2281,10 @@ fn load_key(
                     return Err(message);
                 }
                 if !control.as_os_str().is_empty() {
-                    if let Err(stop) = wait_with_control(
+                    wait_with_control(
                         control,
                         SEGMENT_RETRY_DELAY_MS as f64 * f64::from(attempt) / 1000.0,
-                    ) {
-                        if stop == "finish" {
-                            return Err(message);
-                        }
-                        return Err(stop);
-                    }
+                    )?;
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(
                         SEGMENT_RETRY_DELAY_MS * u64::from(attempt),
@@ -2842,15 +2832,10 @@ fn download_segment(
                 if attempt == MAX_SEGMENT_ATTEMPTS {
                     return Err(format!("{message}（已重试 {} 次）", attempt - 1));
                 }
-                if let Err(stop) = wait_with_control(
+                wait_with_control(
                     control,
                     SEGMENT_RETRY_DELAY_MS as f64 * attempt as f64 / 1000.0,
-                ) {
-                    if stop == "finish" {
-                        return Err(message);
-                    }
-                    return Err(stop);
-                }
+                )?;
                 attempt += 1;
             }
         }
@@ -6037,6 +6022,95 @@ mod tests {
         assert_eq!(prepared.len(), 1);
         assert!(!prepared[0].needs_download);
         assert!(prepared[0].key_bytes.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_key_and_segment_retry_backoff_propagate_finish_control() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-finish-backoff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let key_control = control.clone();
+        let key_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let key_addr = key_listener.local_addr().unwrap();
+        let key_server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = key_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = fs::write(&key_control, "finish");
+            }
+        });
+        let media_key = MediaKey {
+            method: "AES-128".into(),
+            uri: format!("http://127.0.0.1:{}/live.key", key_addr.port()),
+            iv: Some([0; 16]),
+        };
+        let key_err = load_key(
+            &media_key,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut HashMap::new(),
+        )
+        .unwrap_err();
+        key_server.join().unwrap();
+        assert_eq!(key_err, "finish");
+
+        fs::write(&control, "run").unwrap();
+        let seg_control = control.clone();
+        let seg_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let seg_addr = seg_listener.local_addr().unwrap();
+        let seg_server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = seg_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = fs::write(&seg_control, "finish");
+            }
+        });
+        let seg = Segment {
+            uri: format!("http://127.0.0.1:{}/seg0.ts", seg_addr.port()),
+            media_sequence: 0,
+            part_index: None,
+            key: None,
+            init_map: None,
+            gap: false,
+            duration: 2.0,
+            discontinuity: false,
+            byterange: None,
+            is_part: false,
+            is_ad: false,
+        };
+        let seg_err = download_segment(
+            &seg,
+            &HashMap::new(),
+            "",
+            &root.join("seg0.ts"),
+            &control,
+            None,
+            None,
+            0,
+            true,
+        )
+        .unwrap_err();
+        seg_server.join().unwrap();
+        assert_eq!(seg_err, "finish");
         let _ = fs::remove_dir_all(root);
     }
 }

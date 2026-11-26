@@ -1405,16 +1405,14 @@ impl LiveDashTrack {
         if !initial && ((!next_period && change_init) || (change_init && init_key.is_none())) {
             return Err("直播 DASH 初始化段改变，无法安全接续当前轨道".into());
         }
-        if next_period {
-            self.seen.clear();
-        }
+        let mut pending_period_reset = next_period;
         let first_media = self.new_media_start(track, next_period);
         let mut recording_started = !self.durations.is_empty();
         let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
         let mut index = self.files.len();
         let mut push =
             |url: &str, range, name: String, duration: Option<f64>| -> Result<(), String> {
-                if matches!(read_control(control).as_str(), "pause" | "cancel") {
+                if read_control(control) != "run" {
                     return Err(control_stop_error(control));
                 }
                 let path = resume_or_fetch(
@@ -1451,15 +1449,26 @@ impl LiveDashTrack {
 
         if change_init {
             if let Some(url) = &track.init {
-                if read_control(control) == "finish" {
-                    return Ok(());
+                match read_control(control).as_str() {
+                    "run" => {}
+                    "finish" => return Ok(()),
+                    _ => return Err(control_stop_error(control)),
                 }
                 let (name, duration) = if initial {
                     ("init.mp4".into(), None)
                 } else {
                     (format!("seg-{index:04}-init.mp4"), Some(0.0))
                 };
-                push(url, track.init_range, name, duration)?;
+                if let Err(error) = push(url, track.init_range, name, duration) {
+                    if error == "finish" {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                if pending_period_reset {
+                    self.seen.clear();
+                    pending_period_reset = false;
+                }
                 index += 1;
             }
             self.init = init_key;
@@ -1474,7 +1483,7 @@ impl LiveDashTrack {
             }
             let range = track.media_ranges[media_index];
             let seen_key = (live_dash_url_key(url), range);
-            if self.seen.contains(&seen_key) {
+            if !pending_period_reset && self.seen.contains(&seen_key) {
                 continue;
             }
             let name = if boundary {
@@ -1487,7 +1496,16 @@ impl LiveDashTrack {
                 .get(media_index)
                 .copied()
                 .unwrap_or(0.0);
-            push(url, range, name, Some(duration))?;
+            if let Err(error) = push(url, range, name, Some(duration)) {
+                if error == "finish" {
+                    break;
+                }
+                return Err(error);
+            }
+            if pending_period_reset {
+                self.seen.clear();
+                pending_period_reset = false;
+            }
             self.seen.insert(seen_key);
             if !recording_started {
                 self.first_presentation_start = track
@@ -1747,9 +1765,10 @@ fn download_live_dash(
             {
                 continue;
             }
+            let current_has_secondary = choices.as_ref().is_some_and(|(_, sec)| sec.is_some());
             let do_primary = index >= primary_start;
-            let do_audio =
-                !audio_blocked && (choices.is_none() || (has_secondary && index >= audio_start));
+            let do_audio = !audio_blocked
+                && (choices.is_none() || (current_has_secondary && index >= audio_start));
             if !do_primary && !do_audio {
                 break;
             }
@@ -1835,6 +1854,9 @@ fn download_live_dash(
                 };
             if let Some(track) = &mut track {
                 if let Err(error) = expand_segment_base(track, headers, proxy, control) {
+                    if error == "finish" || read_control(control) == "finish" {
+                        break;
+                    }
                     if read_control(control) == "cancel" || error == "canceled" {
                         return Err("canceled".into());
                     }
@@ -1856,6 +1878,9 @@ fn download_live_dash(
             }
             if let Some(secondary) = &mut secondary {
                 if let Err(error) = expand_segment_base(secondary, headers, proxy, control) {
+                    if error == "finish" || read_control(control) == "finish" {
+                        break;
+                    }
                     if read_control(control) == "cancel" || error == "canceled" {
                         return Err("canceled".into());
                     }
@@ -1946,6 +1971,10 @@ fn download_live_dash(
                         }
                     }
                     if let Err(error) = append_res {
+                        if error == "finish" {
+                            remember_live_cursor(&mut cursors, period, track_ref);
+                            break;
+                        }
                         if read_control(control) == "cancel" || error == "canceled" {
                             return Err("canceled".into());
                         }
@@ -1961,6 +1990,9 @@ fn download_live_dash(
                                 &subtitles,
                             );
                             return Err("paused".into());
+                        }
+                        if read_control(control) == "finish" {
+                            break;
                         }
                         return Err(error);
                     }
@@ -2006,6 +2038,10 @@ fn download_live_dash(
                             }
                         }
                         if let Err(error) = append_res {
+                            if error == "finish" {
+                                remember_live_cursor(&mut cursors, period, item);
+                                break;
+                            }
                             if read_control(control) == "cancel" || error == "canceled" {
                                 return Err("canceled".into());
                             }
@@ -2021,6 +2057,9 @@ fn download_live_dash(
                                     &subtitles,
                                 );
                                 return Err("paused".into());
+                            }
+                            if read_control(control) == "finish" {
+                                break;
                             }
                             return Err(error);
                         }
@@ -2156,6 +2195,9 @@ fn download_live_dash(
             Ok(Some(pair)) => pair,
             Ok(None) => break,
             Err(error) => {
+                if error == "finish" || read_control(control) == "finish" {
+                    break;
+                }
                 if read_control(control) == "cancel" || error == "canceled" {
                     return Err("canceled".into());
                 }
@@ -3207,6 +3249,7 @@ fn read_control(path: &Path) -> String {
 fn control_stop_error(control: &Path) -> String {
     match read_control(control).as_str() {
         "pause" => "paused".to_string(),
+        "finish" => "finish".to_string(),
         _ => "canceled".to_string(),
     }
 }
@@ -8290,6 +8333,172 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "canceled");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_dash_period_transition_pause_preserves_seen_and_retry_honors_finish() {
+        let root = std::env::temp_dir().join(format!(
+            "dash-t3-live-fixes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let p0_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let p0_hits_srv = std::sync::Arc::clone(&p0_hits);
+        let pause_control = control.clone();
+        let pause_on_p1 = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let pause_on_p1_srv = std::sync::Arc::clone(&pause_on_p1);
+        let origin = super::super::harness::serve_dynamic(std::sync::Arc::new(move |path, _| {
+            if path == "/p0-seg0.m4s" {
+                p0_hits_srv.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            if path == "/p1-seg0.m4s"
+                && pause_on_p1_srv.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                let _ = fs::write(&pause_control, "pause");
+            }
+            Some(b"MOOFMDAT".to_vec())
+        }));
+
+        let mut vod = DashCheckpoint::load(&root);
+        let other = LiveDashTrack::default();
+        let mut live_track = LiveDashTrack::default();
+        let rep_p0 = Representation {
+            id: "v".into(),
+            period: 0,
+            mime: "video/mp4".into(),
+            init: Some(format!("{}/init.mp4", origin.base)),
+            media: vec![format!("{}/p0-seg0.m4s", origin.base)],
+            media_ranges: vec![None],
+            media_durations: vec![2.0],
+            ..Default::default()
+        };
+        live_track
+            .append(
+                &rep_p0,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap();
+        assert_eq!(live_track.durations.len(), 1);
+        assert_eq!(live_track.seen.len(), 1);
+        assert_eq!(p0_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Next period with same init: pause right before/during first segment of Period 1 -> must NOT wipe Period 0 `seen`!
+        fs::write(&control, "pause").unwrap();
+        let rep_p1 = Representation {
+            id: "v".into(),
+            period: 1,
+            mime: "video/mp4".into(),
+            init: Some(format!("{}/init.mp4", origin.base)),
+            media: vec![format!("{}/p1-seg0.m4s", origin.base)],
+            media_ranges: vec![None],
+            media_durations: vec![2.0],
+            ..Default::default()
+        };
+        let paused_err = live_track
+            .append(
+                &rep_p1,
+                true,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap_err();
+        assert_eq!(paused_err, "paused");
+        assert_eq!(
+            live_track.seen.len(),
+            1,
+            "Period 0 seen set must survive uncommitted next_period pause"
+        );
+
+        // Resuming on Period 0 must skip already-seen p0-seg0.m4s without re-downloading or duplicating!
+        fs::write(&control, "run").unwrap();
+        assert!(!live_track.has_new_media(&rep_p0, false));
+        live_track
+            .append(
+                &rep_p0,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap();
+        assert_eq!(live_track.durations.len(), 1);
+        assert_eq!(p0_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // BUG-T3-3: `finish` during retry backoff returns `"finish"` (not `"canceled"`), and `append` keeps existing segments cleanly!
+        let finish_control = control.clone();
+        let retry_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let retry_addr = retry_listener.local_addr().unwrap();
+        let retry_srv = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = retry_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = fs::write(&finish_control, "finish");
+            }
+        });
+        let finish_err = save_dash_segment_with_retry(
+            &format!("http://127.0.0.1:{}/live-tail.m4s", retry_addr.port()),
+            &HashMap::new(),
+            "",
+            &root.join("tail.m4s"),
+            &control,
+            None,
+            true,
+        )
+        .unwrap_err();
+        retry_srv.join().unwrap();
+        assert_eq!(finish_err, "finish");
+
+        // `append` receiving `"finish"` returns Ok(()) preserving recorded `durations`.
+        live_track
+            .append(
+                &rep_p1,
+                true,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap();
+        assert_eq!(live_track.durations.len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 }

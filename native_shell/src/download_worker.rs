@@ -2880,6 +2880,7 @@ impl CoreCoordinator {
             resource_key: offer.resource_key.clone(),
             ..Default::default()
         };
+        let from_editor_override = spec_override.is_some();
         if let Some(override_spec) = spec_override {
             let override_trimmed = override_spec.url.trim();
             if !override_trimmed.is_empty() {
@@ -2899,6 +2900,18 @@ impl CoreCoordinator {
             events.extend(self.dispatch_created_for_handoff(item, guard_id)?);
         }
         self.start_next_queued(false)?;
+        let has_committed_task = events.iter().any(|envelope| {
+            matches!(
+                &envelope.event,
+                CoreEvent::TaskCreated { .. } | CoreEvent::TaskUpdated { .. }
+            )
+        });
+        let has_duplicate_blocked = events
+            .iter()
+            .any(|envelope| matches!(&envelope.event, CoreEvent::DuplicateOffered { .. }));
+        if from_editor_override && !has_committed_task && has_duplicate_blocked {
+            return Ok(events);
+        }
         let task_id = events.iter().find_map(|envelope| match &envelope.event {
             CoreEvent::TaskCreated { snapshot } | CoreEvent::TaskUpdated { snapshot } => {
                 Some(snapshot.task_id.clone())
@@ -5948,8 +5961,20 @@ fn seal_spec_secrets(
         None => serde_json::Map::new(),
         _ => return Err("请求凭据中的请求头已损坏，请重新获取站点凭据".into()),
     };
+    let non_cookie_protected: serde_json::Map<String, Value> = protected_headers
+        .iter()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("cookie"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     crate::credentials::merge_protected_headers(&mut existing_headers, protected_headers);
     context.insert("request_headers".into(), Value::Object(existing_headers));
+    if !non_cookie_protected.is_empty() {
+        crate::credentials::overwrite_replay_headers(
+            &mut context,
+            &spec.url,
+            &non_cookie_protected,
+        );
+    }
     if let Some(cookie) = new_cookie {
         crate::credentials::overwrite_replay_cookie(&mut context, &spec.url, &cookie);
     }
@@ -6585,8 +6610,34 @@ fn probe_command(
     reject_task_url(url)?;
     let mut spec = spec.cloned().unwrap_or_default();
     spec.url = url.to_string();
+    // Read-only URL probing never writes to disk; ignore editor target paths so
+    // custom folders outside the default download root do not trip untrusted-dir guards.
+    spec.download_dir.clear();
+    spec.work_dir.clear();
+    spec.filename.clear();
+    spec.body_path.clear();
+    let explicit_headers: BTreeMap<String, String> = spec
+        .headers
+        .iter()
+        .filter(|(key, value)| header_value_allowed(key, value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     let spec = coordinator.apply_defaults_to_spec(spec)?;
-    let (spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
+    let (mut spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
+    for (key, value) in &explicit_headers {
+        let stale: Vec<String> = spec
+            .headers
+            .keys()
+            .filter(|existing| existing.eq_ignore_ascii_case(key))
+            .cloned()
+            .collect();
+        for old_key in stale {
+            spec.headers.remove(&old_key);
+        }
+        spec.headers.insert(key.clone(), value.clone());
+    }
+    let replay =
+        crate::credentials::apply_explicit_headers_to_replay_json(&replay, url, &explicit_headers);
     let headers = spec.headers.into_iter().collect();
     let result = with_replay_json(&replay, || {
         crate::recognize::probe_with_harvest_context(url, &headers, &spec.proxy)

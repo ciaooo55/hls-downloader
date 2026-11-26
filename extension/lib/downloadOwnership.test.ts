@@ -2471,4 +2471,108 @@ describe('browser download ownership through registered event listeners', () => 
     expect(await ffRespBlocked).toEqual({ cancel: true })
     expect(mocks.native.mock.calls.filter(([m]) => m.op === 'offer' && m.resource.url === 'https://cdn.test/forced-resp.iso')).toHaveLength(1)
   })
+
+  it('keeps fresh short-lived signed file URLs when an older 200 chain in the same tab has expired and forwards explicit_user_action on forced local imports', async () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const expiredUrl = `https://cdn.test/media/clip.mp4?s=oldsig&e=${nowSec - 120}`
+    const freshUrl = `https://cdn.test/media/clip.mp4?s=newsig&e=${nowSec + 600}`
+
+    // Seed an older HTTP 200 chain for the same canonical resource whose signature has since expired.
+    const staleReq = {
+      requestId: 'stale-signed-1',
+      url: expiredUrl,
+      method: 'GET',
+      tabId: 7,
+      frameId: 0,
+      type: 'media',
+      documentUrl: 'https://site.test/',
+      initiator: 'https://site.test',
+      timeStamp: Date.now() - 10_000,
+    }
+    listener(mocks.browser.webRequest.onBeforeRequest)(staleReq)
+    listener(mocks.browser.webRequest.onSendHeaders)({
+      ...staleReq,
+      requestHeaders: [{ name: 'Referer', value: 'https://site.test/' }],
+    })
+    listener(mocks.browser.webRequest.onHeadersReceived)({
+      ...staleReq,
+      statusCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }],
+    })
+    listener(mocks.browser.webRequest.onCompleted)({
+      ...staleReq,
+      statusCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }],
+    })
+
+    mocks.native.mockClear()
+    const menuClick = listener(mocks.browser.contextMenus.onClicked)
+    menuClick(
+      {
+        menuItemId: 'hls-download-link',
+        linkUrl: freshUrl,
+        pageUrl: 'https://site.test/',
+        frameId: 0,
+      },
+      { id: 7, url: 'https://site.test/', title: 'Fresh Signed Clip' },
+    )
+    await vi.advanceTimersByTimeAsync(300)
+    const signedOffers = mocks.native.mock.calls.filter(([m]) => m.op === 'offer')
+    expect(signedOffers).toHaveLength(1)
+    expect(signedOffers[0][0].resource.url).toBe(freshUrl)
+
+    // Forced Insert-click (`ctrlForce: true`) on a blob local download while Core is in `user_shutdown`
+    // must forward `explicit_user_action: true` on `offer_local_file` and wake Core!
+    mocks.native.mockClear()
+    let engineAwake = false
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') {
+        return engineAwake
+          ? { ok: true }
+          : { ok: false, code: 'core_unreachable', error_code: 'user_shutdown', user_shutdown: true }
+      }
+      if (message.op === 'offer_local_file') {
+        if (message.explicit_user_action === true) {
+          engineAwake = true
+          return { ok: true, handoff: { id: 'handoff-forced-local', status: 'pending' } }
+        }
+        return { ok: false, code: 'core_unreachable', error_code: 'user_shutdown', user_shutdown: true }
+      }
+      if (message.op === 'handoff_status') {
+        return { ok: true, handoff: { id: 'handoff-forced-local', status: 'accepted', task_status: 'completed' } }
+      }
+      return { ok: false }
+    })
+
+    const { localDownloadIntentUrl } = await import('./resources')
+    const blobUrl = 'blob:https://site.test/forced-blob-1'
+    const blobIntentHref = await localDownloadIntentUrl(blobUrl)
+    item = {
+      id: 191,
+      url: blobUrl,
+      finalUrl: blobUrl,
+      referrer: 'https://site.test/',
+      filename: 'C:\\Downloads\\forced-blob.bin',
+      mime: 'application/octet-stream',
+      state: 'complete',
+      paused: false,
+      bytesReceived: 2048,
+      totalBytes: 2048,
+      fileSize: 2048,
+      tabId: 7,
+      startTime: '2026-10-29T00:05:00.000Z',
+    }
+    await new Promise<void>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'click-intent', href: blobIntentHref, pageUrl: 'https://site.test/', altBypass: false, ctrlForce: true, generic: false },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+      () => resolve(),
+    ))
+    const forcedLocalCreated = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(1_500)
+    await forcedLocalCreated
+    await vi.advanceTimersByTimeAsync(500)
+    const localOffers = mocks.native.mock.calls.filter(([m]) => m.op === 'offer_local_file')
+    expect(localOffers).toHaveLength(1)
+    expect(localOffers[0][0].explicit_user_action).toBe(true)
+  })
 })

@@ -40,7 +40,7 @@ pub struct Workbench {
     resource_commands: mpsc::SyncSender<WorkbenchJob>,
     system_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
-    editor: RefCell<Option<TaskEditorWindow>>,
+    editor: Rc<RefCell<Option<TaskEditorWindow>>>,
     editor_id: Cell<u64>,
     editor_variants: RefCell<Vec<StreamVariant>>,
     editor_queues: RefCell<Vec<hls_client::QueueProfile>>,
@@ -51,7 +51,7 @@ pub struct Workbench {
     settings_response: RefCell<Option<CorePipeResponse>>,
     settings_open_id: Cell<Option<u64>>,
     settings_save_id: Cell<Option<u64>>,
-    speed_limit_toggle: RefCell<Option<(u64, bool, u64)>>,
+    speed_limit_toggle: RefCell<Option<(u64, u64, bool, u64)>>,
     queues: RefCell<Option<QueueEditor>>,
     queues_open_id: Cell<Option<u64>>,
     queue_save: RefCell<Option<QueueSave>>,
@@ -265,7 +265,7 @@ impl Workbench {
             resource_commands,
             system_commands,
             next_id: Cell::new(1),
-            editor: RefCell::new(None),
+            editor: Rc::new(RefCell::new(None)),
             editor_id: Cell::new(0),
             editor_variants: RefCell::new(Vec::new()),
             editor_queues: RefCell::new(crate::queue_editor::ordered_profiles(&[])),
@@ -627,6 +627,7 @@ impl Workbench {
         #[cfg(windows)]
         {
             let weak = self.window.as_weak();
+            let editor_slot = Rc::clone(&self.editor);
             let _ = slint::spawn_local(async move {
                 let Some(ui) = weak.upgrade() else {
                     report_ui_ready(launch_id, "main_failed");
@@ -647,6 +648,11 @@ impl Workbench {
                 }
                 native_window::set_cloaked(ui.window(), false);
                 native_window::activate(ui.window());
+                if let Some(editor) = editor_slot.borrow().as_ref() {
+                    if editor.window().is_visible() {
+                        native_window::activate(editor.window());
+                    }
+                }
                 // Windows can refuse foreground activation. The receipt confirms
                 // the window is visible and can be reached from the taskbar.
                 report_ui_ready(launch_id, "main");
@@ -834,8 +840,37 @@ impl Workbench {
                     request_id: self.id(),
                 });
             }
+            CoreEvent::HandoffResolved { handoff_id, .. } => {
+                let matched = self
+                    .editor_handoff
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|offer| &offer.handoff_id == handoff_id);
+                if matched {
+                    self.editor_handoff.borrow_mut().take();
+                    if let Some(editor) = self.editor.borrow().as_ref() {
+                        if editor.window().is_visible() && editor.get_mode().as_str() == "new" {
+                            editor.set_cookie("".into());
+                            editor.set_headers("".into());
+                            let _ = editor.hide();
+                        }
+                    }
+                }
+            }
             CoreEvent::UiShow { surface } if surface == "main" => {
-                let _ = self.show();
+                if self.window.window().is_visible()
+                    && self
+                        .editor
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|editor| editor.window().is_visible())
+                {
+                    if let Some(editor) = self.editor.borrow().as_ref() {
+                        native_window::activate(editor.window());
+                    }
+                } else {
+                    let _ = self.show();
+                }
             }
             CoreEvent::UiShow { surface } if surface == "new_download" => {
                 let _ = self.show();
@@ -1447,8 +1482,13 @@ impl Workbench {
                     toggle_speed_limit_values(current_enabled, current_kib);
                 let request_id = self.id();
                 if self.request(CorePipeRequest::StoreSettings { request_id, values }) {
+                    let (first_id, base_enabled, base_kib) = self
+                        .speed_limit_toggle
+                        .borrow()
+                        .map(|(first, _, enabled, kib)| (first, enabled, kib))
+                        .unwrap_or((request_id, current_enabled, current_kib));
                     *self.speed_limit_toggle.borrow_mut() =
-                        Some((request_id, current_enabled, current_kib));
+                        Some((first_id, request_id, base_enabled, base_kib));
                     self.sync_speed_limit_pill(next_enabled, effective_kib);
                 }
             }
@@ -1908,9 +1948,21 @@ impl Workbench {
                                             .collect::<Vec<_>>(),
                                     )));
                                 }
-                                CoreEvent::TaskCreated { .. } => {
+                                CoreEvent::TaskCreated { .. } | CoreEvent::TaskUpdated { .. } => {
                                     editor.set_result_tone("success".into());
                                     editor.set_result("任务已交给下载引擎".into())
+                                }
+                                CoreEvent::DuplicateOffered { message, .. } => {
+                                    editor.set_result_tone("warning".into());
+                                    editor.set_result(
+                                        format!(
+                                            "{message}；可勾选“允许重复下载”或修改文件名后重试"
+                                        )
+                                        .into(),
+                                    );
+                                    if editor.window().is_visible() {
+                                        editor.set_advanced_expanded(true);
+                                    }
                                 }
                                 CoreEvent::Error { message, .. } => {
                                     editor.set_result_tone("error".into());
@@ -1922,16 +1974,19 @@ impl Workbench {
                                 _ => {}
                             }
                         }
-                        if events
-                            .iter()
-                            .any(|event| matches!(event.event, CoreEvent::TaskCreated { .. }))
-                            && !events.iter().any(|event| {
-                                matches!(
-                                    event.event,
-                                    CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
-                                )
-                            })
-                        {
+                        if events.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                CoreEvent::TaskCreated { .. }
+                                    | CoreEvent::TaskUpdated { .. }
+                                    | CoreEvent::HandoffResolved { .. }
+                            )
+                        }) && !events.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
+                            )
+                        }) {
                             self.editor_handoff.borrow_mut().take();
                             editor.set_cookie("".into());
                             editor.set_headers("".into());
@@ -1971,17 +2026,6 @@ impl Workbench {
             }
             response @ CorePipeResponse::Settings { request_id, .. } => {
                 self.set_engine_online(true);
-                let speed_toggle_settled = {
-                    let mut pending_toggle = self.speed_limit_toggle.borrow_mut();
-                    match *pending_toggle {
-                        Some((toggle_id, _, _)) if toggle_id == request_id => {
-                            *pending_toggle = None;
-                            true
-                        }
-                        Some(_) => false,
-                        None => true,
-                    }
-                };
                 if let CorePipeResponse::Settings {
                     task_sort,
                     reduce_motion,
@@ -1990,6 +2034,24 @@ impl Workbench {
                     ..
                 } = &response
                 {
+                    let speed_toggle_settled = {
+                        let mut pending_toggle = self.speed_limit_toggle.borrow_mut();
+                        match &mut *pending_toggle {
+                            Some((_, latest_id, _, _)) if *latest_id == request_id => {
+                                *pending_toggle = None;
+                                true
+                            }
+                            Some((first_id, latest_id, base_enabled, base_kib))
+                                if request_id >= *first_id && request_id < *latest_id =>
+                            {
+                                *base_enabled = *speed_limit_enabled;
+                                *base_kib = *speed_limit_kib;
+                                false
+                            }
+                            Some(_) => false,
+                            None => true,
+                        }
+                    };
                     self.apply_appearance(
                         crate::theme::ThemeMode::from_response(Some(&response)).is_dark(),
                         *reduce_motion || hls_client::os_reduce_motion(),
@@ -2082,11 +2144,11 @@ impl Workbench {
                 if code == "ui_connection" {
                     self.set_engine_online(false);
                 }
-                if let Some((_, rollback_enabled, rollback_kib)) = {
+                if let Some((_, _, rollback_enabled, rollback_kib)) = {
                     let mut pending_toggle = self.speed_limit_toggle.borrow_mut();
                     if pending_toggle
                         .as_ref()
-                        .is_some_and(|(toggle_id, _, _)| Some(*toggle_id) == request_id)
+                        .is_some_and(|(_, latest_id, _, _)| Some(*latest_id) == request_id)
                     {
                         pending_toggle.take()
                     } else {
@@ -5645,6 +5707,133 @@ mod file_selection_tests {
             },
         });
         assert!(workbench.system.borrow().as_ref().unwrap().keeps_ui_alive());
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn handoff_editor_duplicate_retry_reused_task_close_and_rapid_speed_limit_toggle_baseline() {
+        use hls_client::{
+            CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, ResourceKind,
+            ResourceOffer, TaskSnapshot,
+        };
+        use slint::ComponentHandle;
+        use std::sync::mpsc;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let (live_tx, live_rx) = mpsc::sync_channel(16);
+        let (editor_tx, editor_rx) = mpsc::sync_channel(16);
+        *workbench.commands.borrow_mut() = live_tx;
+        *workbench.editor_commands.borrow_mut() = editor_tx;
+
+        // 1. BUG-T5-3: Rapid double toggle where BOTH requests fail rolls back to original confirmed baseline (false, 0).
+        workbench.sync_speed_limit_pill(false, 0);
+        workbench.action("toggle_speed_limit");
+        let req1 = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected req1"),
+        };
+        assert!(workbench.window.get_speed_limit_enabled());
+        assert_eq!(workbench.window.get_speed_limit_kib(), 1024);
+
+        // Second click while req1 is still in flight -> optimistic UI flips to (false, 1024), baseline stays (false, 0)!
+        workbench.action("toggle_speed_limit");
+        let req2 = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected req2"),
+        };
+        assert!(!workbench.window.get_speed_limit_enabled());
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(req1),
+            code: "store_failed".into(),
+            message: "第一次保存失败".into(),
+        });
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(req2),
+            code: "store_failed".into(),
+            message: "第二次保存失败".into(),
+        });
+        assert!(!workbench.window.get_speed_limit_enabled());
+        assert_eq!(workbench.window.get_speed_limit_kib(), 0);
+
+        // 2. BUG-T5-1: Handoff in TaskEditorWindow encountering `DuplicateOffered` stays open with offer intact;
+        //    subsequent `TaskUpdated` + `HandoffResolved` closes editor without sending `RejectHandoff`.
+        let offer = ResourceOffer {
+            handoff_id: "handoff-dup-editor".into(),
+            url: "https://cdn.example.test/archive.zip".into(),
+            resource_kind: ResourceKind::File,
+            filename: "archive.zip".into(),
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer, "archive.zip", "D:/Downloads", "default");
+        let editor_req_id = workbench.editor_id.get();
+        workbench.editor_action("create");
+        let _terms = editor_rx.try_recv().unwrap();
+        let _batch1 = editor_rx.try_recv().unwrap();
+
+        workbench.response(CorePipeResponse::Events {
+            request_id: editor_req_id,
+            events: vec![EventEnvelope {
+                sequence: 10,
+                event: CoreEvent::DuplicateOffered {
+                    task_id: "task-existing".into(),
+                    action: "open".into(),
+                    output_missing: false,
+                    message: "已有相同链接任务".into(),
+                },
+            }],
+        });
+        assert!(
+            workbench.editor_handoff.borrow().is_some(),
+            "DuplicateOffered must preserve editor_handoff so user can tick allow_duplicate and retry"
+        );
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert!(editor.window().is_visible());
+            assert!(editor.get_result().as_str().contains("允许重复下载"));
+        }
+
+        // Now simulate reusing a paused task (`TaskUpdated` + `HandoffResolved`) -> editor closes and clears `editor_handoff`!
+        workbench.response(CorePipeResponse::Events {
+            request_id: editor_req_id,
+            events: vec![
+                EventEnvelope {
+                    sequence: 11,
+                    event: CoreEvent::TaskUpdated {
+                        snapshot: TaskSnapshot {
+                            task_id: "task-existing".into(),
+                            status: "downloading".into(),
+                            ..Default::default()
+                        },
+                    },
+                },
+                EventEnvelope {
+                    sequence: 12,
+                    event: CoreEvent::HandoffResolved {
+                        handoff_id: "handoff-dup-editor".into(),
+                        task_id: Some("task-existing".into()),
+                    },
+                },
+            ],
+        });
+        assert!(workbench.editor_handoff.borrow().is_none());
+        assert!(!workbench
+            .editor
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .window()
+            .is_visible());
+        // Closing editor afterwards must NOT emit `RejectHandoff`!
+        workbench.editor_action("close");
+        assert!(
+            !std::iter::from_fn(|| live_rx.try_recv().ok()).any(|job| matches!(
+                job,
+                WorkbenchJob::Request(req)
+                    if matches!(*req, CorePipeRequest::Command { command: CoreCommand::RejectHandoff { .. }, .. })
+            ))
+        );
         workbench.window.hide().unwrap();
     }
 }

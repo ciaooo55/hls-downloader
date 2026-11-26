@@ -10650,3 +10650,290 @@ fn accept_handoff_spec_override_merges_fields_and_enforces_origin_and_url_bounda
     assert!(spec3.replay_context_ref.is_none());
     assert!(spec3.expected_size.is_none());
 }
+
+#[test]
+fn accept_handoff_override_and_probe_preserve_explicit_headers_custom_dir_and_duplicate_retry() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local probe server");
+    let addr = listener.local_addr().expect("local addr");
+    let seen_requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen_clone = Arc::clone(&seen_requests);
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let count = stream.read(&mut buf).unwrap_or(0);
+            seen_clone
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..count]).into_owned());
+            let body =
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480\n480p.m3u8\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let root = std::env::temp_dir().join(format!(
+        "hls-t1-t5-probe-override-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let default_dir = root.join("default-downloads");
+    let outside_dir = root.join("custom-outside-videos");
+    fs::create_dir_all(&default_dir).unwrap();
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(default_dir.to_string_lossy()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+
+    let origin = format!("http://127.0.0.1:{}", addr.port());
+    let target_url = format!("{origin}/vod/master.m3u8");
+    let replay_json = serde_json::json!({
+        "cookie": "sid=old-cookie",
+        "request_contexts": {
+            &origin: {
+                "cookie": "sid=old-scoped-cookie",
+                "request_headers": {
+                    "Authorization": "Bearer old-token",
+                    "X-Custom-Static": "from-browser"
+                },
+                "url_contexts": {
+                    &target_url: {
+                        "request_headers": {
+                            "Authorization": "Bearer old-url-token"
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .to_string();
+    let blob = if cfg!(windows) {
+        crate::CredentialVault.protect(&replay_json).unwrap()
+    } else {
+        replay_json.clone()
+    };
+    coordinator
+        .store_credential("cred-browser-scoped", &blob, "browser_replay")
+        .unwrap();
+
+    // 1. BUG-T5-5: ProbeUrl with custom outside `download_dir` + explicit Cookie & Authorization succeeds and sends explicit headers!
+    let mut probe_headers = std::collections::BTreeMap::new();
+    probe_headers.insert("Cookie".into(), "sid=editor-fresh".into());
+    probe_headers.insert("Authorization".into(), "Bearer editor-fresh".into());
+    probe_headers.insert("X-Editor-Header".into(), "yes".into());
+    let probe_events = coordinator
+        .dispatch(CoreCommand::ProbeUrl {
+            url: target_url.clone(),
+            spec: Some(TaskSpec {
+                url: target_url.clone(),
+                download_dir: outside_dir.to_string_lossy().into_owned(),
+                filename: "movie.mp4".into(),
+                credential_ref: Some("cred-browser-scoped".into()),
+                headers: probe_headers.clone(),
+                ..Default::default()
+            }),
+        })
+        .expect("probe_command must not reject custom download_dir");
+    server.join().unwrap();
+    assert!(
+        probe_events
+            .iter()
+            .any(|ev| matches!(ev.event, CoreEvent::ProbeResult { .. })),
+        "probe_events={probe_events:?}"
+    );
+    let raw_req = seen_requests
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let lower_req = raw_req.to_ascii_lowercase();
+    assert!(
+        lower_req.contains("cookie: sid=editor-fresh"),
+        "req={raw_req}"
+    );
+    assert!(
+        lower_req.contains("authorization: bearer editor-fresh"),
+        "req={raw_req}"
+    );
+    assert!(lower_req.contains("x-editor-header: yes"), "req={raw_req}");
+
+    // 2a. BUG-T1-1 & BUG-T5-1: Credential-free HLS handoff hitting a completed duplicate with editor `spec_override`
+    //     emits `DuplicateOffered` while keeping `pending_handoff` alive; retrying with `allow_duplicate: true` creates the task
+    //     and clears stale `offer.preferred_variant_id` in favor of the probed 480p variant!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                filename: "existing.mp4".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    {
+        let mut core = coordinator.lock().unwrap();
+        let mut snap = core.snapshot("task-1").cloned().unwrap();
+        snap.status = "completed".into();
+        snap.output_path = default_dir
+            .join("existing.mp4")
+            .to_string_lossy()
+            .into_owned();
+        fs::write(&snap.output_path, b"done").unwrap();
+        let _ = core
+            .emit(CoreEvent::TaskUpdated { snapshot: snap })
+            .unwrap();
+    }
+
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-dup-then-allow".into(),
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_variant_id: "1080p.m3u8".into(),
+                preferred_height: 1080,
+                filename: "existing.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    let first_try = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-dup-then-allow".into(),
+            filename: "existing.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    assert!(first_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::DuplicateOffered { .. })));
+    assert!(!first_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::HandoffResolved { .. })));
+    assert!(coordinator
+        .lock()
+        .unwrap()
+        .pending_handoff("h-dup-then-allow")
+        .is_some());
+
+    let second_try = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-dup-then-allow".into(),
+            filename: "existing-copy.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    assert!(second_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::TaskCreated { .. })));
+    assert!(second_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::HandoffResolved { .. })));
+
+    let dup_copy_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .cloned()
+        .unwrap();
+    assert!(dup_copy_spec.preferred_variant_id.is_empty());
+    assert_eq!(dup_copy_spec.preferred_height, 480);
+
+    // 2b. BUG-T1-2: Authenticated browser handoff with `request_contexts[origin]` overrides both Cookie
+    //     and non-Cookie sensitive headers (`Authorization`) when sealed via `spec_override`!
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-auth-override".into(),
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                credential_ref: Some("cred-browser-scoped".into()),
+                filename: "authed.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-auth-override".into(),
+            filename: "authed.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url,
+                resource_kind: crate::ResourceKind::Hls,
+                headers: probe_headers,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    let created_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-3")
+        .cloned()
+        .unwrap();
+    let (hydrated_spec, _) = hydrate_replay_headers(&coordinator.core, created_spec).unwrap();
+    assert_eq!(
+        hydrated_spec
+            .headers
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer editor-fresh")
+    );
+    assert_eq!(
+        hydrated_spec.headers.get("Cookie").map(String::as_str),
+        Some("sid=editor-fresh")
+    );
+    let _ = fs::remove_dir_all(root);
+}

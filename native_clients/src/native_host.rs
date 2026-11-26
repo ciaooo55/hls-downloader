@@ -1262,8 +1262,7 @@ pub fn run() -> i32 {
             &mut session,
             &message,
             |policy| {
-                let op = message.get("op").and_then(Value::as_str).unwrap_or("");
-                NativeHostSession::open_for_policy(policy, is_explicit_autostart_op(op))
+                NativeHostSession::open_for_policy(policy, is_explicit_autostart_message(&message))
             },
             |active, msg| active.dispatch(msg),
         );
@@ -1285,6 +1284,16 @@ fn is_explicit_autostart_op(op: &str) -> bool {
     matches!(op, "activate" | "offer" | "download" | "media_push")
 }
 
+fn is_explicit_autostart_message(message: &Value) -> bool {
+    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
+    is_explicit_autostart_op(op)
+        || (op == "offer_local_file"
+            && message
+                .get("explicit_user_action")
+                .and_then(Value::as_bool)
+                .unwrap_or(false))
+}
+
 fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectPolicy {
     // Explicit user-initiated launch/action operations may always cold-start
     // HLSDownloaderEngine (clearing any prior tray-quit marker on spawn).
@@ -1302,6 +1311,9 @@ fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectP
 }
 
 fn core_connect_policy_with(message: &Value, user_shutdown_active: bool) -> CoreConnectPolicy {
+    if is_explicit_autostart_message(message) {
+        return CoreConnectPolicy::AllowAutostart;
+    }
     let op = message.get("op").and_then(Value::as_str).unwrap_or("");
     autostart_policy_for_op(op, user_shutdown_active)
 }
@@ -1405,9 +1417,8 @@ fn dispatch_session_message_inner<S>(
     mut open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
-    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
     let report_user_shutdown = |is_shutdown: &mut dyn FnMut() -> bool| -> bool {
-        !is_explicit_autostart_op(op) && is_shutdown()
+        !is_explicit_autostart_message(message) && is_shutdown()
     };
     for attempt in 0..2 {
         let active = match session.as_mut() {
@@ -3684,6 +3695,29 @@ mod tests {
         assert_eq!(
             reconnected, 1,
             "Capabilities transport failure must drop dead session and retry activate"
+        );
+    }
+
+    #[test]
+    fn explicit_offer_local_file_autostarts_core_despite_user_shutdown() {
+        let passive = json!({
+            "op": "offer_local_file",
+            "resource": { "url": "blob:https://site.test/passive" }
+        });
+        let explicit = json!({
+            "op": "offer_local_file",
+            "explicit_user_action": true,
+            "resource": { "url": "blob:https://site.test/forced" }
+        });
+        assert!(!is_explicit_autostart_message(&passive));
+        assert!(is_explicit_autostart_message(&explicit));
+        assert_eq!(
+            core_connect_policy_with(&passive, true),
+            CoreConnectPolicy::ExistingOnly
+        );
+        assert_eq!(
+            core_connect_policy_with(&explicit, true),
+            CoreConnectPolicy::AllowAutostart
         );
     }
 }

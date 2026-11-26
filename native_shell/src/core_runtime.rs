@@ -1348,6 +1348,8 @@ pub(crate) fn merge_handoff_spec_override(
             }
             if !override_spec.preferred_variant_id.trim().is_empty() {
                 spec.preferred_variant_id = override_spec.preferred_variant_id;
+            } else if override_spec.preferred_bandwidth > 0 || override_spec.preferred_height > 0 {
+                spec.preferred_variant_id.clear();
             }
             if !override_spec.preferred_audio.trim().is_empty() {
                 spec.preferred_audio = override_spec.preferred_audio;
@@ -1374,6 +1376,8 @@ pub(crate) fn merge_handoff_spec_override(
         }
         if !override_spec.preferred_variant_id.trim().is_empty() {
             spec.preferred_variant_id = override_spec.preferred_variant_id;
+        } else if override_spec.preferred_bandwidth > 0 || override_spec.preferred_height > 0 {
+            spec.preferred_variant_id.clear();
         }
         if !override_spec.preferred_audio.trim().is_empty() {
             spec.preferred_audio = override_spec.preferred_audio;
@@ -2136,5 +2140,48 @@ mod tests {
         assert!(runtime.events_after(0, 10).len() <= 10);
         assert!(runtime.latest_sequence() >= 5000);
         assert!(runtime.events.len() <= 4096);
+    }
+
+    #[test]
+    fn merge_handoff_spec_override_clears_stale_variant_id_on_same_url_quality_change() {
+        let offer_url = "https://cdn.example.test/live/master.m3u8";
+        let mut base = TaskSpec {
+            url: offer_url.into(),
+            resource_kind: ResourceKind::Hls,
+            preferred_bandwidth: 5_000_000,
+            preferred_height: 1080,
+            preferred_variant_id: "1080p/index.m3u8".into(),
+            ..Default::default()
+        };
+        // Unprobed editor submission (bandwidth=0, height=0, variant_id="") keeps original offer variant.
+        merge_handoff_spec_override(
+            &mut base,
+            offer_url,
+            TaskSpec {
+                url: offer_url.into(),
+                resource_kind: ResourceKind::Hls,
+                ..Default::default()
+            },
+        );
+        assert_eq!(base.preferred_variant_id, "1080p/index.m3u8");
+        assert_eq!(base.preferred_height, 1080);
+
+        // Probed HLS variant selection on same URL emits empty `preferred_variant_id` with new height/bandwidth;
+        // stale `preferred_variant_id` must be cleared so `hls::select_variant_for` honors 480p.
+        merge_handoff_spec_override(
+            &mut base,
+            offer_url,
+            TaskSpec {
+                url: offer_url.into(),
+                resource_kind: ResourceKind::Hls,
+                preferred_bandwidth: 1_200_000,
+                preferred_height: 480,
+                preferred_variant_id: String::new(),
+                ..Default::default()
+            },
+        );
+        assert!(base.preferred_variant_id.is_empty());
+        assert_eq!(base.preferred_height, 480);
+        assert_eq!(base.preferred_bandwidth, 1_200_000);
     }
 }
