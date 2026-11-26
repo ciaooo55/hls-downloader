@@ -98,7 +98,7 @@ fn setting_text_ok(value: &str) -> bool {
     !value.chars().any(char::is_control)
 }
 
-fn site_rule_match_host(host: &str) -> String {
+pub(crate) fn site_rule_match_host(host: &str) -> String {
     let trimmed = host
         .trim()
         .strip_prefix("*.")
@@ -117,7 +117,7 @@ fn site_rule_match_host(host: &str) -> String {
     trimmed
 }
 
-fn valid_site_rule_host(host: &str) -> bool {
+pub(crate) fn valid_site_rule_host(host: &str) -> bool {
     let wildcard = host.starts_with("*.");
     let host = host.strip_prefix("*.").unwrap_or(host);
     if site_rule_match_host(host).is_empty()
@@ -172,11 +172,16 @@ pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
         if rule.concurrency > 0 {
             existing.concurrency = rule.concurrency;
         }
-        if !rule.proxy.is_empty() {
-            existing.proxy = rule.proxy;
-        }
-        if !rule.proxy_mode.is_empty() {
+        if matches!(rule.proxy_mode.as_str(), "direct" | "system") {
             existing.proxy_mode = rule.proxy_mode;
+            existing.proxy.clear();
+        } else {
+            if !rule.proxy.is_empty() {
+                existing.proxy = rule.proxy;
+            }
+            if !rule.proxy_mode.is_empty() {
+                existing.proxy_mode = rule.proxy_mode;
+            }
         }
         if !rule.download_dir.is_empty() {
             existing.download_dir = rule.download_dir;

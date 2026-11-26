@@ -5,7 +5,7 @@ import { NavigationItem } from "workbench_components.slint";
 import { SiteRulesEditor, SiteRuleRow } from "site_rules.slint";
 export { SiteRuleRow } from "site_rules.slint";
 
-export struct SettingField { key: string, label: string, value: string, checked: bool, kind: string, choices: [string] }
+export struct SettingField { key: string, label: string, value: string, checked: bool, kind: string, choices: [string], choice-index: int }
 
 export component SettingsWindow inherits Window {
     icon: @image-url("../../assets/app-icon.png");
@@ -72,7 +72,19 @@ export component SettingsWindow inherits Window {
                                 clicked => { root.action("preview_sound"); }
                             }
                         }
-                        if field.kind == "choice": HotComboBox { a11y-label: field.label; model: field.choices; current-value <=> field.value; height: Tokens.control-height; selected(value) => { root.edited(field.key, value); } }
+                        if field.kind == "choice": HotComboBox {
+                            a11y-label: field.label;
+                            model: field.choices;
+                            height: Tokens.control-height;
+                            property <string> bound: field.key + ":" + field.choice-index;
+                            current-index: field.choice-index;
+                            changed bound => {
+                                self.current-index = field.choice-index;
+                            }
+                            selected(value) => {
+                                root.edited(field.key, self.current-index >= 0 && self.current-index < field.choices.length ? field.choices[self.current-index] : value);
+                            }
+                        }
                         if field.kind == "text" || field.kind == "number" || field.kind == "directory": HorizontalLayout {
                             spacing: Tokens.control-gap;
                             LineEdit { text <=> field.value; height: Tokens.control-height; accessible-label: field.label; edited(value) => { root.edited(field.key, value); } }

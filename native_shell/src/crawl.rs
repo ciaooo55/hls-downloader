@@ -260,13 +260,18 @@ pub(crate) fn dispatch(
     match request {
         CrawlRequest::Pause { .. } => {
             state.project.status = "paused".into();
-            state.project.reason = "用户暂停".into();
+            if !state.project.reason.starts_with("达到") {
+                state.project.reason = "用户暂停".into();
+            }
             if control.exists() {
                 std::fs::write(control, "pause").map_err(|e| e.to_string())?;
             }
         }
         CrawlRequest::Resume { .. } => {
-            if state.project.reason.starts_with("达到") {
+            if state.project.status != "paused"
+                && state.pending.is_empty()
+                && state.project.reason.starts_with("达到")
+            {
                 return Err("已达到项目边界；请创建范围更窄的项目".into());
             }
             state.project.status = if state.pending.is_empty() {
@@ -275,7 +280,9 @@ pub(crate) fn dispatch(
                 "discovering"
             }
             .into();
-            state.project.reason.clear();
+            if !state.project.reason.starts_with("达到") {
+                state.project.reason.clear();
+            }
             if control.exists() {
                 std::fs::write(control, "run").map_err(|e| e.to_string())?;
             }
@@ -399,7 +406,27 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
         .saturating_sub(active)
         .min(state.project.spec.page_concurrency as usize);
     if state.project.status == "discovering" && capacity > 0 {
-        let pages: Vec<_> = state.pending.iter().take(capacity).cloned().collect();
+        let pages: Vec<_> = state
+            .pending
+            .iter()
+            .filter(|p| {
+                p.kind != "page" || state.project.visited_pages < state.project.spec.max_pages
+            })
+            .take(capacity)
+            .cloned()
+            .collect();
+        if pages.is_empty() && !state.pending.is_empty() {
+            let core = coordinator.lock()?;
+            let mut latest = core.store().crawl_state(id)?;
+            if latest.project.visited_pages >= latest.project.spec.max_pages {
+                latest.pending.retain(|p| p.kind != "page");
+                latest.project.reason = "达到页面数量上限".into();
+            }
+            if latest.pending.is_empty() && latest.project.status == "discovering" {
+                latest.project.status = "ready".into();
+            }
+            core.store().save_crawl(&latest)?;
+        }
         let results = std::thread::scope(|scope| {
             let handles: Vec<_> = pages
                 .iter()
@@ -444,10 +471,11 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
             }
             latest.metadata_bytes += text.len() as u64;
             if latest.metadata_bytes > PROJECT_LIMIT {
-                latest.project.status = "paused".into();
+                latest.pending.clear();
+                latest.project.status = "ready".into();
                 latest.project.reason = "达到 32 MiB 页面元数据上限".into();
                 core.store().save_crawl(&latest)?;
-                return Ok(());
+                break;
             }
             if latest.project.spec.offline {
                 atomic_write(
@@ -479,7 +507,6 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                         && latest.project.visited_pages + queued_pages
                             >= latest.project.spec.max_pages
                     {
-                        latest.project.status = "paused".into();
                         latest.project.reason = "达到页面数量上限".into();
                     } else if latest.seen.len() <= MAX_RESOURCES {
                         latest.pending.push_back(Page {
@@ -491,7 +518,8 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                 }
             }
             if latest.project.resources.len() >= MAX_RESOURCES {
-                latest.project.status = "paused".into();
+                latest.pending.clear();
+                latest.project.status = "ready".into();
                 latest.project.reason = "达到 2000 个资源上限".into();
             }
             if latest.pending.is_empty() && latest.project.status == "discovering" {
@@ -1381,6 +1409,162 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(saved, "crawl resource should complete and publish cleanly");
+
+        server_stop.store(true, Ordering::Release);
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn max_pages_cap_transitions_to_ready_and_still_downloads_selected_resources() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = server_stop.clone();
+        let server = std::thread::spawn(move || {
+            while !stop_flag.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0u8; 2048];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req = String::from_utf8_lossy(&buf[..n]);
+                        let first = req.lines().next().unwrap_or("");
+                        let head = first.starts_with("HEAD ");
+                        let path = first.split_whitespace().nth(1).unwrap_or("/");
+                        let (ct, body, etag) = match path {
+                            "/index.html" => (
+                                "text/html; charset=utf-8",
+                                b"<a href=\"/p2.html\">2</a><a href=\"/p3.html\">3</a><a href=\"/file.bin\">dl</a>".as_slice(),
+                                None,
+                            ),
+                            "/p2.html" => ("text/html; charset=utf-8", b"<p>page 2</p>".as_slice(), None),
+                            "/p3.html" => ("text/html; charset=utf-8", b"<p>page 3</p>".as_slice(), None),
+                            "/file.bin" => ("application/octet-stream", b"cap-ok".as_slice(), Some("\"v1\"")),
+                            _ => ("text/plain", b"missing".as_slice(), None),
+                        };
+                        let status = if body == b"missing" {
+                            "404 Not Found"
+                        } else {
+                            "200 OK"
+                        };
+                        let etag_hdr = etag.map(|e| format!("ETag: {e}\r\n")).unwrap_or_default();
+                        let hdr = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\n{etag_hdr}Connection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(hdr.as_bytes());
+                        if !head {
+                            let _ = stream.write_all(body);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!("hls-v7-crawl-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("temp_dir", serde_json::json!(""))
+            .unwrap();
+        coordinator
+            .set_setting("proxy_mode", serde_json::json!("direct"))
+            .unwrap();
+        let project = dispatch(
+            &coordinator,
+            CrawlRequest::Create {
+                spec: CrawlSpec {
+                    entry_url: format!("http://{addr}/index.html"),
+                    output_dir: String::new(),
+                    max_depth: 2,
+                    max_pages: 2,
+                    page_concurrency: 1,
+                    same_origin: true,
+                    offline: false,
+                    extensions: vec!["bin".into()],
+                    queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        let project_id = project.id;
+        let stop = AtomicBool::new(false);
+
+        // Tick 1 visits /index.html (1 page), queues /p2.html (reaching max_pages=2), and skips /p3.html without pausing!
+        tick(&coordinator, &project_id, &stop).unwrap();
+        // Tick 2 visits /p2.html (visited_pages=2) and transitions cleanly to "ready" with boundary reason preserved.
+        tick(&coordinator, &project_id, &stop).unwrap();
+        let after_discovery = load(&coordinator, &project_id).unwrap().project;
+        assert_eq!(after_discovery.visited_pages, 2);
+        assert_eq!(after_discovery.status, "ready");
+        assert_eq!(after_discovery.reason, "达到页面数量上限");
+
+        // Enqueue discovered resource after hitting max_pages: must still sync & download!
+        dispatch(
+            &coordinator,
+            CrawlRequest::Enqueue {
+                project_id: project_id.clone(),
+                urls: Vec::new(),
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut saved = false;
+        while std::time::Instant::now() < deadline {
+            tick(&coordinator, &project_id, &stop).unwrap();
+            let current = load(&coordinator, &project_id).unwrap();
+            if current.project.resources[0].saved {
+                saved = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        assert!(
+            saved,
+            "cap-completed crawl project must still download enqueued resources"
+        );
+
+        // User Pause -> Resume must also recover to "ready" without erroring on boundary reason.
+        dispatch(
+            &coordinator,
+            CrawlRequest::Pause {
+                project_id: project_id.clone(),
+            },
+        )
+        .unwrap();
+        let resumed = dispatch(
+            &coordinator,
+            CrawlRequest::Resume {
+                project_id: project_id.clone(),
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(resumed.status, "ready");
+        // Calling Resume again when already "ready" at boundary still informs user cleanly.
+        assert!(dispatch(&coordinator, CrawlRequest::Resume { project_id }).is_err());
 
         server_stop.store(true, Ordering::Release);
         let _ = server.join();

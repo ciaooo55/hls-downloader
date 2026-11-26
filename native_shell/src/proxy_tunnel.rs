@@ -160,7 +160,11 @@ impl Proxy {
         let (scheme, rest) = url.split_once("://").ok_or("代理地址无效")?;
         let protocol = match scheme.to_ascii_lowercase().as_str() {
             "http" => Protocol::Http,
-            "https" => return Err("原生 FTP/SFTP 尚不支持到 HTTPS 代理的 TLS 连接".into()),
+            "https" => {
+                return Err(
+                    "原生代理隧道尚不支持 HTTPS 代理协议，请改用 HTTP 或 SOCKS5 代理".into(),
+                )
+            }
             "socks5" => Protocol::Socks5 { remote_dns: false },
             "socks5h" => Protocol::Socks5 { remote_dns: true },
             "socks4" => Protocol::Socks4 { remote_dns: false },

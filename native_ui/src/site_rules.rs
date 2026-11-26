@@ -30,7 +30,7 @@ impl SiteRuleDraft {
     }
 
     fn from_object(original: Map<String, Value>) -> Self {
-        let text = |key: &str| {
+        let text = |key: &str| -> slint::SharedString {
             original
                 .get(key)
                 .and_then(Value::as_str)
@@ -45,6 +45,11 @@ impl SiteRuleDraft {
                 .to_string()
                 .into()
         };
+        let proxy = text("proxy");
+        let mut proxy_mode = text("proxy_mode");
+        if proxy_mode.as_str().trim().is_empty() && !proxy.as_str().trim().is_empty() {
+            proxy_mode = "manual".into();
+        }
         Self {
             row: SiteRuleRow {
                 host: text("host"),
@@ -54,8 +59,8 @@ impl SiteRuleDraft {
                     .unwrap_or(true),
                 concurrency: number("concurrency"),
                 speed: number("speed_limit_kib"),
-                proxy_mode: text("proxy_mode"),
-                proxy: text("proxy"),
+                proxy_mode,
+                proxy,
                 directory: text("download_dir"),
                 user_agent: text("user_agent"),
                 referer: text("referer"),
@@ -132,9 +137,15 @@ pub fn encode(rules: &[SiteRuleDraft], latest: &str) -> Result<String, String> {
             "speed_limit_kib".into(),
             number(&row.speed, u32::MAX, "限速")?.into(),
         );
+        let normalized_mode = row.proxy_mode.trim();
+        let effective_proxy = if normalized_mode == "manual" {
+            row.proxy.trim()
+        } else {
+            ""
+        };
+        object.insert("proxy_mode".into(), normalized_mode.into());
+        object.insert("proxy".into(), effective_proxy.into());
         for (key, value) in [
-            ("proxy_mode", &row.proxy_mode),
-            ("proxy", &row.proxy),
             ("download_dir", &row.directory),
             ("user_agent", &row.user_agent),
             ("referer", &row.referer),
@@ -184,6 +195,17 @@ mod tests {
         assert_eq!(row["user_agent"], "fixture");
         assert_eq!(row["referer"], "https://cdn.test/page");
         assert_eq!(row["origin"], "https://cdn.test");
+
+        // Legacy rules with proxy URL and empty proxy_mode map to "manual" on load,
+        // and switching proxy_mode away from "manual" clears the stale proxy URL on encode.
+        let mut legacy =
+            SiteRuleDraft::parse(r#"[{"host":"cdn.test","proxy":"http://localhost:8080"}]"#)
+                .unwrap();
+        assert_eq!(legacy[0].row.proxy_mode.as_str(), "manual");
+        legacy[0].edit("proxy_mode", "");
+        let cleared: Value = serde_json::from_str(&encode(&legacy, "").unwrap()).unwrap();
+        assert_eq!(cleared[0]["proxy_mode"], "");
+        assert_eq!(cleared[0]["proxy"], "");
     }
 
     #[test]
