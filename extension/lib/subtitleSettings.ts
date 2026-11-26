@@ -105,11 +105,21 @@ export function resolveSubtitleAudioSource<T extends { url: string; audioUrl?: s
   const logicalGroups = [...groups.values()]
   const selLang = (selection.audioLanguage || '').trim().toLowerCase()
   const selLabel = (selection.audioLabel || '').trim().toLowerCase()
-  const matchedGroups = (selLang || selLabel)
-    ? logicalGroups.filter(group => group.some(track =>
-        (selLang && (track.language || '').trim().toLowerCase() === selLang)
-        || (selLabel && (track.label || '').trim().toLowerCase() === selLabel)))
-    : []
+  const matchesLang = (track: SubtitleAudioTrackLike) =>
+    Boolean(selLang) && (track.language || '').trim().toLowerCase() === selLang
+  const matchesLabel = (track: SubtitleAudioTrackLike) =>
+    Boolean(selLabel) && (track.label || '').trim().toLowerCase() === selLabel
+  let matchedGroups: SubtitleAudioTrackLike[][] = []
+  if (selLang && selLabel) {
+    matchedGroups = logicalGroups.filter(group => group.some(track => matchesLang(track) && matchesLabel(track)))
+    if (matchedGroups.length === 0) {
+      matchedGroups = logicalGroups.filter(group => group.some(track => matchesLang(track) || matchesLabel(track)))
+    }
+  } else if (selLang) {
+    matchedGroups = logicalGroups.filter(group => group.some(matchesLang))
+  } else if (selLabel) {
+    matchedGroups = logicalGroups.filter(group => group.some(matchesLabel))
+  }
 
   const allLanguageFreeRenditions = tracks.length > 1
     && tracks.every(track => !(track.language || '').trim())

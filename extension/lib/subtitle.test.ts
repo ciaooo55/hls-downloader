@@ -71,6 +71,53 @@ describe('提前字幕的连续窗口和取消', () => {
       url: 'https://cdn.example/ja.m3u8',
       audioUrl: undefined,
     })
+
+    // G8-5: Multi-track same-language streams narrow by exact (lang && label) first,
+    // falling back to single-field match only when exact pair yields 0 matches.
+    const dualEnglish = {
+      url: 'https://cdn.example/master.m3u8',
+      audioTracks: [
+        { label: 'English Stereo', language: 'en', url: 'https://cdn.example/en-stereo.m3u8', default: true },
+        { label: 'English 5.1', language: 'en', url: 'https://cdn.example/en-51.m3u8', default: false },
+      ],
+    }
+    expect(resolveSubtitleAudioSource(dualEnglish, {
+      audioIndex: 0,
+      audioLanguage: 'en',
+      audioLabel: 'English Stereo',
+    })).toMatchObject({
+      url: 'https://cdn.example/en-stereo.m3u8',
+      audioUrl: undefined,
+    })
+    expect(resolveSubtitleAudioSource(dualEnglish, {
+      audioIndex: 1,
+      audioLanguage: 'en',
+      audioLabel: 'English 5.1',
+    })).toMatchObject({
+      url: 'https://cdn.example/en-51.m3u8',
+      audioUrl: undefined,
+    })
+    expect(resolveSubtitleAudioSource(dualEnglish, {
+      audioIndex: 1,
+      audioLanguage: '',
+      audioLabel: 'English 5.1',
+    })).toMatchObject({
+      url: 'https://cdn.example/en-51.m3u8',
+      audioUrl: undefined,
+    })
+    expect(() => resolveSubtitleAudioSource(dualEnglish, {
+      audioIndex: 1,
+      audioLanguage: 'en',
+      audioLabel: 'Unmatched Generic Track',
+    })).toThrow('无法确认当前备用音轨')
+    expect(resolveSubtitleAudioSource(multiLang, {
+      audioIndex: 0,
+      audioLanguage: 'en',
+      audioLabel: 'Player Track 1',
+    })).toMatchObject({
+      url: 'https://cdn.example/en.m3u8',
+      audioUrl: undefined,
+    })
   })
   it('断句跨下载分片连续计时，优先在静音处提交并限制连续讲话窗口', () => {
     const pcm = new Uint8Array(12 * 32000)

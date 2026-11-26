@@ -38,21 +38,84 @@ fn main() -> ExitCode {
     }
 }
 
+fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err("原安装目录必须是有效的绝对路径".into());
+    }
+    let mut cleaned = PathBuf::new();
+    let mut has_normal = false;
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                cleaned.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => {
+                has_normal = true;
+                cleaned.push(part);
+            }
+            std::path::Component::ParentDir => {
+                return Err("原安装目录路径不能包含上级目录引用".into());
+            }
+        }
+    }
+    if !has_normal || cleaned.parent().is_none() {
+        return Err("原安装目录不能为磁盘根目录".into());
+    }
+    match std::fs::canonicalize(&cleaned) {
+        Ok(canonical) => {
+            if canonical.parent().is_none() {
+                return Err("原安装目录不能为磁盘根目录".into());
+            }
+            Ok(canonical)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut missing_tail = Vec::new();
+            let mut cursor: &Path = &cleaned;
+            while let Some(parent) = cursor.parent() {
+                let Some(name) = cursor.file_name() else {
+                    break;
+                };
+                missing_tail.push(name.to_os_string());
+                match std::fs::canonicalize(parent) {
+                    Ok(mut base) => {
+                        for part in missing_tail.into_iter().rev() {
+                            base.push(part);
+                        }
+                        if base.parent().is_none() {
+                            return Err("原安装目录不能为磁盘根目录".into());
+                        }
+                        return Ok(base);
+                    }
+                    Err(parent_err) if parent_err.kind() == std::io::ErrorKind::NotFound => {
+                        cursor = parent;
+                    }
+                    Err(parent_err) => {
+                        return Err(format!("无法读取原安装目录: {parent_err}"));
+                    }
+                }
+            }
+            Ok(cleaned)
+        }
+        Err(error) => Err(format!("无法读取原安装目录: {error}")),
+    }
+}
+
 fn prepare_install(log: &mut File) -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 1 {
         return Err("升级前退出需要唯一的原安装目录".into());
     }
-    let root = std::fs::canonicalize(Path::new(&args[0]))
-        .map_err(|error| format!("无法读取原安装目录: {error}"))?;
-    if !root.join("HLSDownloader.exe").is_file()
-        || !root.join("app/resources/HLSDownloaderEngine.exe").is_file()
-    {
-        return Err("原安装目录缺少程序标识，未停止任何进程".into());
-    }
-    writeln!(log, "helper stage=entry install_dir={}", root.display())
-        .and_then(|_| log.flush())
-        .map_err(|error| error.to_string())?;
+    let root = resolve_existing_or_missing_path(Path::new(&args[0]))?;
+    let markers_present = root.join("HLSDownloader.exe").is_file()
+        && root.join("app/resources/HLSDownloaderEngine.exe").is_file();
+    writeln!(
+        log,
+        "helper stage=entry install_dir={} markers_present={markers_present}",
+        root.display()
+    )
+    .and_then(|_| log.flush())
+    .map_err(|error| error.to_string())?;
     #[cfg(windows)]
     return windows::shutdown(&root, log);
     #[cfg(not(windows))]
@@ -234,7 +297,8 @@ mod windows {
         use std::os::windows::ffi::OsStringExt;
         let written = (length as usize).min(buffer.len());
         let path = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..written]));
-        std::fs::canonicalize(path).map_err(|error| format!("无法确认进程实际路径: {error}"))
+        resolve_existing_or_missing_path(&path)
+            .map_err(|error| format!("无法确认进程实际路径: {error}"))
     }
     fn open(pid: u32, access: u32) -> Result<Option<OwnedHandle>, String> {
         // SAFETY: `OpenProcess` opens a non-inheritable process handle or returns null on failure.
@@ -626,19 +690,30 @@ mod windows {
         }
         writeln!(log, "helper stage=checkpoint-finished").map_err(|error| error.to_string())
     }
-    fn files_unlocked(root: &Path) -> Result<(), String> {
+    pub(super) fn files_unlocked(root: &Path) -> Result<(), String> {
         for directory in [root.to_path_buf(), root.join("app/resources")] {
-            for entry in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
-                let path = entry.map_err(|e| e.to_string())?.path();
+            let entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.to_string()),
+            };
+            for entry in entries {
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.to_string()),
+                };
                 if path
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
                 {
-                    OpenOptions::new()
-                        .read(true)
-                        .share_mode(0)
-                        .open(&path)
-                        .map_err(|e| format!("程序文件仍被占用 {}: {e}", path.display()))?;
+                    match OpenOptions::new().read(true).share_mode(0).open(&path) {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(format!("程序文件仍被占用 {}: {error}", path.display()));
+                        }
+                    }
                 }
             }
         }
@@ -811,5 +886,63 @@ mod tests {
     fn current_process_env_lookup_reads_systemroot_from_peb() {
         assert!(windows::process_env(std::process::id(), "systemroot")
             .is_some_and(|value| !value.is_empty()));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn missing_or_quarantined_install_files_are_treated_as_unlocked_while_real_locks_fail_closed() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let base = std::env::temp_dir().join(format!(
+            "hls-preflight-g10-1-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        // 1. Entire install directory already deleted (with `\.` suffix from MSI CustomAction).
+        let deleted_arg = base.join("deleted-install").join(".");
+        let resolved_deleted = resolve_existing_or_missing_path(&deleted_arg).unwrap();
+        assert!(resolved_deleted.ends_with("deleted-install"));
+        assert!(windows::files_unlocked(&resolved_deleted).is_ok());
+        let log_path =
+            std::env::temp_dir().join(format!("hls-preflight-test-log-{}.log", std::process::id()));
+        {
+            let mut log = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&log_path)
+                .unwrap();
+            assert!(windows::shutdown(&resolved_deleted, &mut log).is_ok());
+        }
+        let _ = std::fs::remove_file(&log_path);
+
+        // 2. Drive root and parent-dir traversal are rejected.
+        assert!(resolve_existing_or_missing_path(Path::new(r"C:\")).is_err());
+        assert!(resolve_existing_or_missing_path(Path::new(r"C:\.\")).is_err());
+        assert!(resolve_existing_or_missing_path(Path::new(r"C:\Program Files\..")).is_err());
+        assert!(resolve_existing_or_missing_path(Path::new("relative-dir")).is_err());
+
+        // 3. Partial install directory where HLSDownloader.exe / HLSDownloaderEngine.exe were quarantined,
+        //    leaving an unlocked helper .exe, succeeds; holding an exclusive lock fails closed.
+        let partial = base.join("partial-install");
+        let app_res = partial.join("app/resources");
+        std::fs::create_dir_all(&app_res).unwrap();
+        let remaining_exe = app_res.join("HLSDownloaderNativeHost.exe");
+        std::fs::write(&remaining_exe, b"stub").unwrap();
+        assert!(windows::files_unlocked(&partial).is_ok());
+
+        let exclusive_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&remaining_exe)
+            .unwrap();
+        let err = windows::files_unlocked(&partial).unwrap_err();
+        assert!(err.contains("程序文件仍被占用"), "err={err}");
+        drop(exclusive_lock);
+        assert!(windows::files_unlocked(&partial).is_ok());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

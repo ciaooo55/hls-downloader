@@ -220,29 +220,46 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
     for (const adaptationBlock of blocks(period.body, 'AdaptationSet')) {
       const adaptation = adaptationBlock.attributes
       const kind = `${adaptation.contenttype || ''} ${adaptation.mimetype || ''}`.toLowerCase()
-      if (kind.includes('audio') && audioTracks.length < 24) {
-        const labelTag = blocks(adaptationBlock.body, 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim() || ''
-        const label = adaptation.label || labelTag || adaptation.lang || '音轨'
-        const language = adaptation.lang || ''
+      const adaptationLabelTag = blocks(withoutBlocks(adaptationBlock.body, 'Representation'), 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim()
+        || blocks(adaptationBlock.body, 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim()
+        || ''
+      const rememberAudioTrack = (repAttributes?: Record<string, string>, repBody = '') => {
+        if (audioTracks.length >= 24) return
+        const repLabelTag = repBody ? (blocks(repBody, 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim() || '') : ''
+        const language = adaptation.lang || repAttributes?.lang || ''
+        const label = adaptation.label || adaptationLabelTag || repAttributes?.label || repLabelTag || language || '音轨'
         const audioKey = `${label}\0${language}`
         if (!seenAudioKeys.has(audioKey)) {
           seenAudioKeys.add(audioKey)
           audioTracks.push({ label, language })
         }
       }
+      if (kind.includes('audio') && !kind.includes('video')) {
+        rememberAudioTrack()
+      }
       const representations = blocks(adaptationBlock.body, 'Representation')
       const candidates = representations.length
         ? representations.map(representation => ({
             attributes: { ...adaptation, ...representation.attributes },
+            repAttributes: representation.attributes,
             body: representation.body,
           }))
-        : [{ attributes: adaptation, body: '' }]
+        : [{ attributes: adaptation, repAttributes: undefined, body: '' }]
       for (const candidate of candidates) {
         const mime = `${kind} ${candidate.attributes.contenttype || ''} ${candidate.attributes.mimetype || ''}`.toLowerCase()
+        const codecs = (candidate.attributes.codecs || '').toLowerCase()
         const bandwidth = positiveFiniteNumber(candidate.attributes.bandwidth)
         const width = positiveFiniteNumber(candidate.attributes.width)
         const height = positiveFiniteNumber(candidate.attributes.height)
-        if (mime.includes('video') || width > 0 || height > 0) {
+        const isVideo = mime.includes('video') || width > 0 || height > 0
+          || /\b(?:avc[13]|hev1|hvc1|vp0?[89]|av01|dvh[1e]|dva[1v]|mp4v|vvc1|vvi1|theora)\b/.test(codecs)
+        const isNonAudioTextOrImage = mime.includes('text') || mime.includes('image') || mime.includes('ttml') || mime.includes('vtt')
+        const isAudio = !isVideo && !isNonAudioTextOrImage && (
+          mime.includes('audio')
+          || positiveFiniteNumber(candidate.attributes.audiosamplingrate) > 0
+          || /\b(?:mp4a|ac-3|ec-3|ac-4|opus|flac|vorbis|alac|mp3|aac|dtsc|dtse|dtsh|dtsl|dtsx|pcm|ulaw|alaw|amr|speex)\b/.test(codecs)
+        )
+        if (isVideo) {
           video.push({
             id: candidate.attributes.id || '',
             width,
@@ -252,8 +269,9 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
             adaptationBody: adaptationBlock.body,
             representationBody: candidate.body,
           })
-        } else if (mime.includes('audio') && bandwidth > 0) {
-          audioBandwidth.push(bandwidth)
+        } else if (isAudio) {
+          rememberAudioTrack(candidate.repAttributes, candidate.body)
+          if (bandwidth > 0) audioBandwidth.push(bandwidth)
         }
       }
     }

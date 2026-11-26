@@ -23,7 +23,13 @@ const mocks = vi.hoisted(() => {
   }
 })
 vi.mock('wxt/browser', () => ({ browser: mocks.browser }))
-vi.mock('./nativeBridge', () => ({ NativeBridge: class { request = mocks.native } }))
+vi.mock('./nativeBridge', async importOriginal => {
+  const actual = await importOriginal<typeof import('./nativeBridge')>()
+  return {
+    ...actual,
+    NativeBridge: class { request = mocks.native },
+  }
+})
 vi.mock('./subtitleBackground', () => ({ installSubtitleBackground: vi.fn() }))
 vi.mock('./hlsInspection', () => ({ inspectHlsResource: mocks.inspectHls }))
 
@@ -2574,5 +2580,223 @@ describe('browser download ownership through registered event listeners', () => 
     const localOffers = mocks.native.mock.calls.filter(([m]) => m.op === 'offer_local_file')
     expect(localOffers).toHaveLength(1)
     expect(localOffers[0][0].explicit_user_action).toBe(true)
+  })
+
+  it('evicts superseded canceled/failed trackedHandoffs on non-forceResend retry and returns newest active state first in download-states (G8-1)', async () => {
+    let offerSeq = 0
+    const handoffStatuses = new Map<string, string>()
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer') {
+        const id = `handoff-retry-${++offerSeq}`
+        handoffStatuses.set(id, 'pending')
+        return { ok: true, handoff: { id, status: 'pending', client_request_id: message.resource.client_request_id } }
+      }
+      if (message.op === 'handoff_status') {
+        const id = String(message.handoff_id || '')
+        return { ok: true, handoff: { id, status: handoffStatuses.get(id) || 'pending' } }
+      }
+      return { ok: false }
+    })
+
+    const resource = {
+      id: 'res-g8-1',
+      url: 'https://cdn.test/video-g8-1.mp4',
+      kind: 'media',
+      pageUrl: 'https://site.test/',
+      seenAt: Date.now(),
+    }
+
+    // 1st attempt is offered, then canceled on desktop.
+    const first = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    expect(first.handoff.id).toBe('handoff-retry-1')
+    handoffStatuses.set('handoff-retry-1', 'canceled')
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    const statesAfterCancel = await new Promise<any[]>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-states', tabId: 7 },
+      {},
+      resolve,
+    ))
+    expect(statesAfterCancel).toMatchObject([{ id: 'handoff-retry-1', status: 'canceled' }])
+
+    // Non-forceResend retry creates handoff-retry-2 and evicts stale 'canceled' handoff-retry-1!
+    const second = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-now', resource },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    await flush()
+    expect(second.handoff.id).toBe('handoff-retry-2')
+
+    const statesAfterRetry = await new Promise<any[]>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'download-states', tabId: 7 },
+      {},
+      resolve,
+    ))
+    expect(statesAfterRetry.map(entry => entry.id)).toEqual(['handoff-retry-2'])
+    expect(statesAfterRetry[0].status).toBe('pending')
+  })
+
+  it('recognizes Chromium interrupted+canResume downloads as parked in follow-ups and cleanup while ignoring USER_CANCELED (G8-2)', async () => {
+    const background = await import('../entrypoints/background')
+    expect(background.isParkedBrowserDownload({ state: 'interrupted', paused: false, canResume: true, error: 'USER_SHUTDOWN' } as any)).toBe(true)
+    expect(background.isParkedBrowserDownload({ state: 'interrupted', paused: false, canResume: true, error: 'NETWORK_FAILED' } as any)).toBe(true)
+    expect(background.isParkedBrowserDownload({ state: 'interrupted', paused: false, canResume: true, error: 'USER_CANCELED' } as any)).toBe(false)
+    expect(background.isParkedBrowserDownload({ state: 'interrupted', paused: false, canResume: false, error: 'NETWORK_FAILED' } as any)).toBe(false)
+
+    // Case A: Parked download transitions to state='interrupted', paused=false, canResume=true, error='USER_SHUTDOWN';
+    // when desktop accepts & downloads bytes, follow-up erases the browser item cleanly even if cancel() rejects on interrupted item.
+    item.url = item.finalUrl = 'https://site.test/parked-interrupted.m3u8'
+    item.state = 'in_progress'
+    let handoffOutcome: Record<string, unknown> | null = null
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer') return { ok: false, transport_error: true, error: 'receipt lost' }
+      if (message.op === 'handoff_status' && handoffOutcome) return { ok: true, handoff: handoffOutcome }
+      throw new Error('Core temporarily unreachable')
+    })
+    mocks.browser.downloads.cancel.mockRejectedValue(new Error('Download must be in progress'))
+    mocks.browser.downloads.erase.mockClear()
+
+    response(true)
+    const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await takeover
+
+    // Simulate Chromium restart turning paused item into interrupted + canResume: true + paused: false.
+    item.paused = false
+    item.state = 'interrupted'
+    item.canResume = true
+    item.error = 'USER_SHUTDOWN'
+
+    // Still unreachable at +60s -> follow-up MUST keep record rather than dropping it!
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect((local['paused-handoff-followups-v1'] as any[]).length).toBe(1)
+
+    // Desktop recovers and confirms handoff -> browser item is erased and follow-up dropped!
+    handoffOutcome = { id: 'recovered-interrupted', status: 'accepted', task_status: 'downloading', task_downloaded_bytes: 4096 }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mocks.browser.downloads.erase).toHaveBeenCalledWith({ id: 42 })
+    expect(local['paused-handoff-followups-v1']).toEqual([])
+  })
+
+  it('drops local-download handoffs immediately on host_missing/host_forbidden and bounds transient retries by cap & TTL (G8-3)', async () => {
+    const { NativeHostError } = await import('./nativeBridge')
+
+    // 1. Permanent host_missing / host_forbidden thrown during continueLocalDownloadHandoffs drops immediately without retries.
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer_local_file') {
+        throw new NativeHostError('Specified native messaging host not found.', 'host_missing')
+      }
+      return { ok: false }
+    })
+    response(false, 'POST')
+    const missingHostTakeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await missingHostTakeover
+    await flush()
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'offer_local_file')).toHaveLength(1)
+    expect(local['local-browser-download-handoffs']).toEqual([])
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'offer_local_file')).toHaveLength(1)
+
+    // 2. Pre-queue readiness === 'host_missing' skips queuing localDownloadHandoffs entirely (even on POST / blob).
+    mocks.native.mockClear()
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') {
+        throw new NativeHostError('Access to the specified native messaging host is forbidden.', 'host_forbidden')
+      }
+      return { ok: false }
+    })
+    item = { ...item, id: 143, startTime: '2026-10-29T03:00:00.000Z' }
+    response(false, 'POST')
+    const forbiddenTakeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await forbiddenTakeover
+    await flush()
+    expect(mocks.native.mock.calls.some(([m]) => m.op === 'offer_local_file')).toBe(false)
+    expect(local['local-browser-download-handoffs']).toEqual([])
+
+    // 3. Persistent core_unreachable retries a bounded number of times and prunes cleanly without deleting browser file.
+    mocks.native.mockClear()
+    mocks.browser.downloads.removeFile.mockClear()
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'offer_local_file') {
+        return { ok: false, code: 'core_unreachable', stage: 'core', error: '下载引擎未响应' }
+      }
+      return { ok: false }
+    })
+    item = { ...item, id: 144, startTime: '2026-10-29T04:00:00.000Z' }
+    response(false, 'POST')
+    const boundedTakeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+    await vi.advanceTimersByTimeAsync(500)
+    await boundedTakeover
+    await flush()
+    expect((local['local-browser-download-handoffs'] as any[]).length).toBe(1)
+
+    // Advance 20 minutes: retries stop at cap (5 attempts) and storage is pruned cleanly!
+    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    const offerAttempts = mocks.native.mock.calls.filter(([m]) => m.op === 'offer_local_file').length
+    expect(offerAttempts).toBe(5)
+    expect(local['local-browser-download-handoffs']).toEqual([])
+    expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
+  })
+
+  it('probes child media playlist in inspectAdaptive for extensionless HLS master playlists sniffed by hooks.content.ts (G8-4, G10-2)', async () => {
+    mocks.inspectHls.mockResolvedValue({
+      inspected: true,
+      manifestType: 'master',
+      isLive: false,
+      drmProtected: true,
+      duration: 180,
+      estimatedSize: 45_000_000,
+      variants: [{ url: 'https://cdn.test/rendition-1080.ts.m3u8', height: 1080, bandwidth: 2_000_000 }],
+      renditionUrls: [],
+      audioTracks: [],
+      playbackUrls: ['https://cdn.test/seg-1.ts'],
+      playbackUrlHashes: [],
+    })
+
+    // Extensionless URL sniffed as HLS Master in hooks.content.ts has inspected=true, manifestType='master', isLive=undefined.
+    const extensionlessUrl = 'https://cdn.test/api/v2/stream-manifest?video=99'
+    await resourceMessage({
+      url: extensionlessUrl,
+      kind: 'hls',
+      inspected: true,
+      manifestType: 'master',
+      variants: [{ url: 'https://cdn.test/rendition-1080.ts.m3u8', height: 1080, bandwidth: 2_000_000 }],
+    })
+    await flush()
+
+    expect(mocks.inspectHls).toHaveBeenCalledTimes(1)
+    const enriched = (session[pageResourceKey(7, 'https://site.test/')] as any[])
+      .find(entry => entry.url === extensionlessUrl)
+    expect(enriched).toMatchObject({
+      isLive: false,
+      duration: 180,
+      estimatedSize: 45_000_000,
+      drmProtected: true,
+    })
+
+    // G10-2: push-to-tv and cast-to-device attach idempotent request_id and retryCount=1.
+    mocks.native.mockImplementation(async message => message.op === 'media_push'
+      ? { ok: true, id: String(message.request_id || 'push-1'), status: 'pending' }
+      : { ok: true })
+    const castReply = await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      { type: 'cast-to-device', resource: { id: 'cast-1', url: 'https://cdn.test/live.m3u8', kind: 'hls', seenAt: Date.now() } },
+      { url: 'https://site.test/', tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    expect(castReply.ok).toBe(true)
+    const mediaPushCall = mocks.native.mock.calls.find(([m]) => m.op === 'media_push')!
+    expect(mediaPushCall[0].request_id).toMatch(/^media-push-/)
+    expect(mediaPushCall[2]).toBe(1)
   })
 })
