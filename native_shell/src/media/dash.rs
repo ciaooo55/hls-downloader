@@ -2853,6 +2853,7 @@ fn download_dash_primary(
                 let worker_sender = sender.clone();
                 let network_scope = network_scope.clone();
                 let replay = replay.clone();
+                let network_policy = crate::net_policy::current_network_policy();
                 let throttle = throttle.clone();
                 let pending = &pending;
                 let failed = &failed;
@@ -2866,129 +2867,137 @@ fn download_dash_primary(
                 let first_segments_ready = &first_segments_ready;
                 workers.push(scope.spawn(move || {
                     let _network = set_media_network_scope(network_scope);
-                    crate::net_policy::with_throttle_context(throttle, || {
-                        crate::with_replay_json(&replay, || {
-                            let record_error = |error: String| {
-                                failed.store(true, Ordering::Release);
-                                if let Ok(mut queue) = pending.lock() {
-                                    queue.clear();
-                                }
-                                if let Ok(mut slot) = first_error.lock() {
-                                    match slot.as_deref() {
-                                        None => *slot = Some(error),
-                                        Some("paused") if error == "canceled" => {
-                                            *slot = Some(error);
-                                        }
-                                        _ => {}
+                    crate::net_policy::with_network_policy(network_policy, || {
+                        crate::net_policy::with_throttle_context(throttle, || {
+                            crate::with_replay_json(&replay, || {
+                                let record_error = |error: String| {
+                                    failed.store(true, Ordering::Release);
+                                    if let Ok(mut queue) = pending.lock() {
+                                        queue.clear();
                                     }
-                                }
-                            };
-                            loop {
-                                if failed.load(Ordering::Acquire) {
-                                    break;
-                                }
-                                if read_control(control) != "run" {
-                                    record_error(control_stop_error(control));
-                                    break;
-                                }
-                                let next = {
-                                    let Ok(mut queue) = pending.lock() else {
-                                        record_error("DASH segment queue lock poisoned".into());
-                                        break;
-                                    };
+                                    if let Ok(mut slot) = first_error.lock() {
+                                        match slot.as_deref() {
+                                            None => *slot = Some(error),
+                                            Some("paused") if error == "canceled" => {
+                                                *slot = Some(error);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                };
+                                loop {
                                     if failed.load(Ordering::Acquire) {
                                         break;
                                     }
-                                    if let Some(priority) = super::preview::priority_file(task_dir)
-                                    {
-                                        if let Some(position) =
-                                            queue.iter().position(|(is_audio, index, _)| {
-                                                (if *is_audio {
-                                                    &audio_planned[*index]
-                                                } else {
-                                                    &planned[*index]
-                                                }) == &priority
-                                            })
-                                        {
-                                            queue.rotate_left(position);
-                                        }
+                                    if read_control(control) != "run" {
+                                        record_error(control_stop_error(control));
+                                        break;
                                     }
-                                    queue.pop_front()
-                                };
-                                let Some((is_audio, index, identity)) = next else {
-                                    break;
-                                };
-                                let (rep, path) = if is_audio {
-                                    let Some(audio_rep) = audio else {
-                                        record_error("DASH audio representation missing".into());
+                                    let next = {
+                                        let Ok(mut queue) = pending.lock() else {
+                                            record_error("DASH segment queue lock poisoned".into());
+                                            break;
+                                        };
+                                        if failed.load(Ordering::Acquire) {
+                                            break;
+                                        }
+                                        if let Some(priority) =
+                                            super::preview::priority_file(task_dir)
+                                        {
+                                            if let Some(position) =
+                                                queue.iter().position(|(is_audio, index, _)| {
+                                                    (if *is_audio {
+                                                        &audio_planned[*index]
+                                                    } else {
+                                                        &planned[*index]
+                                                    }) == &priority
+                                                })
+                                            {
+                                                queue.rotate_left(position);
+                                            }
+                                        }
+                                        queue.pop_front()
+                                    };
+                                    let Some((is_audio, index, identity)) = next else {
                                         break;
                                     };
-                                    (audio_rep, &audio_planned[index])
-                                } else {
-                                    (track, &planned[index])
-                                };
-                                let init = rep.init_markers.contains(&index);
-                                if let Err(error) = save_dash_segment_with_retry(
-                                    &rep.media[index],
-                                    headers,
-                                    proxy,
-                                    path,
-                                    control,
-                                    rep.media_ranges[index]
-                                        .map(|range| (range.start, range.length)),
-                                    init,
-                                ) {
-                                    record_error(error);
-                                    break;
-                                }
-                                let size = match path.metadata() {
-                                    Ok(meta) => meta.len(),
-                                    Err(error) => {
-                                        record_error(error.to_string());
+                                    let (rep, path) = if is_audio {
+                                        let Some(audio_rep) = audio else {
+                                            record_error(
+                                                "DASH audio representation missing".into(),
+                                            );
+                                            break;
+                                        };
+                                        (audio_rep, &audio_planned[index])
+                                    } else {
+                                        (track, &planned[index])
+                                    };
+                                    let init = rep.init_markers.contains(&index);
+                                    if let Err(error) = save_dash_segment_with_retry(
+                                        &rep.media[index],
+                                        headers,
+                                        proxy,
+                                        path,
+                                        control,
+                                        rep.media_ranges[index]
+                                            .map(|range| (range.start, range.length)),
+                                        init,
+                                    ) {
+                                        record_error(error);
                                         break;
                                     }
-                                };
-                                if worker_sender
-                                    .send(LandedSegment {
-                                        path: path.clone(),
-                                        identity,
-                                        size,
-                                        init,
-                                    })
-                                    .is_err()
-                                {
-                                    record_error("DASH segment checkpoint worker stopped".into());
-                                    break;
-                                }
-                                if let Err(error) = super::preview::mark_ready(task_dir, path) {
-                                    record_error(error);
-                                    break;
-                                }
-                                downloaded_bytes.fetch_add(size, Ordering::AcqRel);
-                                completed_segments.fetch_add(1, Ordering::AcqRel);
-                                if let Ok(_guard) = progress_lock.lock() {
-                                    report_dash_tracks_progress(
-                                        task_dir,
-                                        downloaded_bytes.load(Ordering::Acquire),
-                                        completed_segments.load(Ordering::Acquire),
-                                        total,
-                                        false,
-                                    );
-                                }
-                                if preview {
-                                    if let Ok(mut written) = preview_written.lock() {
-                                        if !*written && first_segments_ready(task_dir) {
-                                            if let Err(error) =
-                                                write_dash_preview_master(task_dir, audio.is_some())
-                                            {
-                                                record_error(error);
-                                                break;
+                                    let size = match path.metadata() {
+                                        Ok(meta) => meta.len(),
+                                        Err(error) => {
+                                            record_error(error.to_string());
+                                            break;
+                                        }
+                                    };
+                                    if worker_sender
+                                        .send(LandedSegment {
+                                            path: path.clone(),
+                                            identity,
+                                            size,
+                                            init,
+                                        })
+                                        .is_err()
+                                    {
+                                        record_error(
+                                            "DASH segment checkpoint worker stopped".into(),
+                                        );
+                                        break;
+                                    }
+                                    if let Err(error) = super::preview::mark_ready(task_dir, path) {
+                                        record_error(error);
+                                        break;
+                                    }
+                                    downloaded_bytes.fetch_add(size, Ordering::AcqRel);
+                                    completed_segments.fetch_add(1, Ordering::AcqRel);
+                                    if let Ok(_guard) = progress_lock.lock() {
+                                        report_dash_tracks_progress(
+                                            task_dir,
+                                            downloaded_bytes.load(Ordering::Acquire),
+                                            completed_segments.load(Ordering::Acquire),
+                                            total,
+                                            false,
+                                        );
+                                    }
+                                    if preview {
+                                        if let Ok(mut written) = preview_written.lock() {
+                                            if !*written && first_segments_ready(task_dir) {
+                                                if let Err(error) = write_dash_preview_master(
+                                                    task_dir,
+                                                    audio.is_some(),
+                                                ) {
+                                                    record_error(error);
+                                                    break;
+                                                }
+                                                *written = true;
                                             }
-                                            *written = true;
                                         }
                                     }
                                 }
-                            }
+                            });
                         });
                     });
                 }));

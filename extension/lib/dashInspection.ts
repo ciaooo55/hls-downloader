@@ -221,7 +221,6 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
       const adaptation = adaptationBlock.attributes
       const kind = `${adaptation.contenttype || ''} ${adaptation.mimetype || ''}`.toLowerCase()
       const adaptationLabelTag = blocks(withoutBlocks(adaptationBlock.body, 'Representation'), 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim()
-        || blocks(adaptationBlock.body, 'Label')[0]?.body?.replace(/<[^>]*>/g, '').trim()
         || ''
       const rememberAudioTrack = (repAttributes?: Record<string, string>, repBody = '') => {
         if (audioTracks.length >= 24) return
@@ -234,9 +233,6 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
           audioTracks.push({ label, language })
         }
       }
-      if (kind.includes('audio') && !kind.includes('video')) {
-        rememberAudioTrack()
-      }
       const representations = blocks(adaptationBlock.body, 'Representation')
       const candidates = representations.length
         ? representations.map(representation => ({
@@ -245,6 +241,7 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
             body: representation.body,
           }))
         : [{ attributes: adaptation, repAttributes: undefined, body: '' }]
+      let adaptationAddedAudio = false
       for (const candidate of candidates) {
         const mime = `${kind} ${candidate.attributes.contenttype || ''} ${candidate.attributes.mimetype || ''}`.toLowerCase()
         const codecs = (candidate.attributes.codecs || '').toLowerCase()
@@ -271,8 +268,12 @@ export function parseDashManifest(text: string, baseUrl: string): DashInspection
           })
         } else if (isAudio) {
           rememberAudioTrack(candidate.repAttributes, candidate.body)
+          adaptationAddedAudio = true
           if (bandwidth > 0) audioBandwidth.push(bandwidth)
         }
+      }
+      if (!adaptationAddedAudio && kind.includes('audio') && !kind.includes('video')) {
+        rememberAudioTrack()
       }
     }
   }

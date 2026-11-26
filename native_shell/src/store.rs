@@ -768,13 +768,21 @@ impl CoreStore {
         {
             let mut stmt = self
                 .connection
-                .prepare("SELECT spec_json FROM task_specs")
+                .prepare("SELECT spec_json, explicit_proxy FROM task_specs")
                 .map_err(|e| format!("prepare task_specs GC scan: {e}"))?;
             let rows = stmt
-                .query_map([], |row| row.get::<_, String>(0))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
                 .map_err(|e| format!("query task_specs for GC: {e}"))?;
             for row in rows {
-                let json = row.map_err(|e| format!("read task_specs row for GC: {e}"))?;
+                let (json, explicit_proxy) =
+                    row.map_err(|e| format!("read task_specs row for GC: {e}"))?;
+                if let Some(ep) = explicit_proxy {
+                    if let Some(key) = crate::url_credentials::proxy_password_key(&ep) {
+                        referenced.insert(key);
+                    }
+                }
                 if let Ok(spec) = serde_json::from_str::<TaskSpec>(&json) {
                     if let Some(cred) = spec
                         .credential_ref
@@ -1085,7 +1093,8 @@ impl CoreStore {
                  );\
                  CREATE TABLE IF NOT EXISTS task_specs (\
                    task_id TEXT PRIMARY KEY,\
-                   spec_json TEXT NOT NULL\
+                   spec_json TEXT NOT NULL,\
+                   explicit_proxy TEXT\
                  );\
                  CREATE TABLE IF NOT EXISTS task_ranges (\
                    task_id TEXT NOT NULL,\
@@ -1136,6 +1145,7 @@ impl CoreStore {
                  CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);",
             )
             .map_err(|error| format!("initialize Core schema: {error}"))?;
+        let _ = transaction.execute("ALTER TABLE task_specs ADD COLUMN explicit_proxy TEXT", []);
         // 同值赋值也会产生写事务；已是当前版本时，只补齐实际缺少的表和索引。
         if existing_version != CURRENT_SCHEMA_VERSION {
             if existing_version == 0 {
@@ -1158,6 +1168,38 @@ impl CoreStore {
             .map_err(|error| format!("commit Core schema: {error}"))?;
         mark("committed");
         Ok(())
+    }
+
+    pub(crate) fn set_task_explicit_proxy(
+        &mut self,
+        task_id: &str,
+        explicit_proxy: &str,
+    ) -> Result<(), String> {
+        let probe = TaskSpec {
+            proxy: explicit_proxy.trim().to_string(),
+            ..TaskSpec::default()
+        };
+        self.write_sanitized(probe, |clean, transaction| {
+            transaction
+                .execute(
+                    "UPDATE task_specs SET explicit_proxy = ?2 WHERE task_id = ?1",
+                    params![task_id, clean.proxy],
+                )
+                .map_err(|error| format!("persist Core task explicit proxy {task_id}: {error}"))?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn task_explicit_proxy(&self, task_id: &str) -> Result<Option<String>, String> {
+        self.connection
+            .query_row(
+                "SELECT explicit_proxy FROM task_specs WHERE task_id = ?1",
+                params![task_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(|error| format!("read Core task explicit proxy {task_id}: {error}"))
     }
 }
 
@@ -1186,13 +1228,20 @@ fn write_settings(
             // Queued tasks retain the selected proxy across changes to defaults.
             {
                 let mut stmt = transaction
-                    .prepare("SELECT spec_json FROM task_specs")
+                    .prepare("SELECT spec_json, explicit_proxy FROM task_specs")
                     .map_err(|e| e.to_string())?;
                 let rows = stmt
-                    .query_map([], |row| row.get::<_, String>(0))
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
                     .map_err(|e| e.to_string())?;
                 for row in rows {
-                    let json = row.map_err(|e| e.to_string())?;
+                    let (json, explicit_proxy) = row.map_err(|e| e.to_string())?;
+                    if let Some(ep) = explicit_proxy {
+                        if let Some(key) = crate::url_credentials::proxy_password_key(&ep) {
+                            referenced.insert(key);
+                        }
+                    }
                     if let Ok(spec) = serde_json::from_str::<TaskSpec>(&json) {
                         if let Some(key) = crate::url_credentials::proxy_password_key(&spec.proxy) {
                             referenced.insert(key);

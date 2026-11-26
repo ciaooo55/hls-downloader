@@ -536,13 +536,16 @@ fn dispatch(
         CorePipeRequest::PreviewZip { request_id, source } => {
             let result = if crate::http_engine::http_fetch_url_allowed(&source) {
                 coordinator
-                    .metadata_spec(&source)
-                    .and_then(|spec| {
+                    .metadata_spec_with_explicit_proxy(&source)
+                    .and_then(|(spec, explicit_proxy)| {
                         crate::download_worker::hydrate_replay_headers(&coordinator.core(), spec)
+                            .map(|(spec, replay)| (spec, replay, explicit_proxy))
                     })
-                    .and_then(|(spec, replay)| {
-                        crate::with_replay_json(&replay, || {
-                            crate::zip_preview::preview(&source, Some(spec))
+                    .and_then(|(spec, replay, explicit_proxy)| {
+                        coordinator.with_explicit_network_policy(&explicit_proxy, || {
+                            crate::with_replay_json(&replay, || {
+                                crate::zip_preview::preview(&source, Some(spec))
+                            })
                         })
                     })
             } else {

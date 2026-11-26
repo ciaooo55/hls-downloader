@@ -1057,7 +1057,7 @@ impl CoreCoordinator {
     fn prepare_quick_handoff_spec(
         &self,
         offer: &crate::ResourceOffer,
-    ) -> Result<Option<TaskSpec>, String> {
+    ) -> Result<Option<(TaskSpec, String)>, String> {
         let settings = self.settings()?;
         if !settings.quick_download_enabled
             || self.require_legal().is_err()
@@ -1078,40 +1078,46 @@ impl CoreCoordinator {
                 .unwrap_or("download")
                 .to_string()
         };
-        let base_spec = match self.apply_defaults_to_spec_inner(
-            TaskSpec {
-                url: offer.url.clone(),
-                resource_kind: offer.resource_kind,
-                local_source_path: offer.local_source_path.clone(),
-                title: if offer.title.trim().is_empty() {
-                    filename.clone()
-                } else {
-                    offer.title.clone()
+        let (base_spec, base_explicit_proxy) = match self
+            .apply_defaults_to_spec_with_explicit_proxy(
+                TaskSpec {
+                    url: offer.url.clone(),
+                    resource_kind: offer.resource_kind,
+                    local_source_path: offer.local_source_path.clone(),
+                    title: if offer.title.trim().is_empty() {
+                        filename.clone()
+                    } else {
+                        offer.title.clone()
+                    },
+                    filename,
+                    queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                    request_method: offer.request_method.clone(),
+                    mime_type: offer.mime_type.clone(),
+                    credential_ref: offer.credential_ref.clone(),
+                    replay_context_ref: offer.replay_context_ref.clone(),
+                    expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                        .then_some(offer.size),
+                    preferred_bandwidth: offer.preferred_bandwidth,
+                    preferred_height: offer.preferred_height,
+                    preferred_variant_id: offer.preferred_variant_id.clone(),
+                    source_page_url: offer.source_page_url.clone(),
+                    audio_url: offer.audio_url.clone(),
+                    resource_key: offer.resource_key.clone(),
+                    ..Default::default()
                 },
-                filename,
-                queue_id: crate::DEFAULT_QUEUE_ID.into(),
-                request_method: offer.request_method.clone(),
-                mime_type: offer.mime_type.clone(),
-                credential_ref: offer.credential_ref.clone(),
-                replay_context_ref: offer.replay_context_ref.clone(),
-                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
-                    .then_some(offer.size),
-                preferred_bandwidth: offer.preferred_bandwidth,
-                preferred_height: offer.preferred_height,
-                preferred_variant_id: offer.preferred_variant_id.clone(),
-                source_page_url: offer.source_page_url.clone(),
-                audio_url: offer.audio_url.clone(),
-                resource_key: offer.resource_key.clone(),
-                ..Default::default()
-            },
-            false,
-        ) {
-            Ok(spec) => spec,
+                false,
+            ) {
+            Ok(pair) => pair,
             Err(_) => return Ok(None),
         };
-        let expanded = match self.expand_create(base_spec) {
+        let (expanded, explicit_proxy) = match self.expand_create_with_explicit_and_proxy(
+            base_spec,
+            &ExplicitTaskSpecOverrides::default(),
+            &base_explicit_proxy,
+            false,
+        ) {
             Ok(mut list) if list.len() == 1 => match list.pop() {
-                Some(spec) => spec,
+                Some(pair) => pair,
                 None => return Ok(None),
             },
             _ => return Ok(None),
@@ -1120,7 +1126,7 @@ impl CoreCoordinator {
             Ok(spec) => spec,
             Err(_) => return Ok(None),
         };
-        Ok(Some(sealed))
+        Ok(Some((sealed, explicit_proxy)))
     }
 
     pub(crate) fn admit_handoff(&self, handoff_json: &str) -> Result<String, String> {
@@ -1142,7 +1148,9 @@ impl CoreCoordinator {
             .is_some_and(|guard| guard.is_some());
         if !has_armed {
             let quick_policy = match self.prepare_quick_handoff_spec(&original.offer)? {
-                Some(spec) => crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec)),
+                Some((spec, ep)) => {
+                    crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec), ep)
+                }
                 None => crate::core_service::QuickHandoffPolicy::Disabled,
             };
             let (encoded, quick_task_id) = self
@@ -1202,7 +1210,9 @@ impl CoreCoordinator {
             let Some((armed_task_id, current)) = armed_task_id else {
                 drop(core);
                 let quick_policy = match self.prepare_quick_handoff_spec(&original.offer)? {
-                    Some(spec) => crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec)),
+                    Some((spec, ep)) => {
+                        crate::core_service::QuickHandoffPolicy::Prepared(Box::new(spec), ep)
+                    }
                     None => crate::core_service::QuickHandoffPolicy::Disabled,
                 };
                 let (encoded, quick_task_id) = self
@@ -1857,8 +1867,9 @@ impl CoreCoordinator {
         if let CoreCommand::CreateTask { spec } = command {
             self.require_legal()?;
             let explicit = ExplicitTaskSpecOverrides::from_raw(&spec);
-            let spec = self.apply_defaults_to_spec(spec)?;
-            return self.create_prepared_task_with_explicit(spec, &explicit);
+            let (spec, explicit_proxy) =
+                self.apply_defaults_to_spec_with_explicit_proxy(spec, false)?;
+            return self.create_prepared_task_with_explicit(spec, &explicit, &explicit_proxy);
         }
         self.dispatch_inner(command)
     }
@@ -1867,10 +1878,16 @@ impl CoreCoordinator {
         &self,
         spec: TaskSpec,
         explicit: &ExplicitTaskSpecOverrides,
+        parent_explicit_proxy: &str,
     ) -> Result<Vec<EventEnvelope>, String> {
         let parent_url = spec.url.clone();
         let mut events = Vec::new();
-        for item in self.expand_create_with_explicit(spec, explicit, false)? {
+        for (item, item_ep) in self.expand_create_with_explicit_and_proxy(
+            spec,
+            explicit,
+            parent_explicit_proxy,
+            false,
+        )? {
             let child_explicit = if item.url == parent_url {
                 explicit.headers.clone()
             } else {
@@ -1880,25 +1897,30 @@ impl CoreCoordinator {
                 item,
                 None,
                 &child_explicit,
+                &item_ep,
             )?);
         }
         self.start_next_queued(false)?;
         Ok(events)
     }
 
+    #[allow(dead_code)]
     fn expand_create(&self, spec: TaskSpec) -> Result<Vec<TaskSpec>, String> {
         let explicit = ExplicitTaskSpecOverrides::default();
-        self.expand_create_with_explicit(spec, &explicit, false)
+        let ep = self.uncollapsed_proxy_for_ephemeral_spec(&spec)?;
+        self.expand_create_with_explicit_and_proxy(spec, &explicit, &ep, false)
+            .map(|items| items.into_iter().map(|(item, _)| item).collect())
     }
 
-    fn expand_create_with_explicit(
+    fn expand_create_with_explicit_and_proxy(
         &self,
         spec: TaskSpec,
         explicit: &ExplicitTaskSpecOverrides,
+        parent_explicit_proxy: &str,
         trust_download_dir: bool,
-    ) -> Result<Vec<TaskSpec>, String> {
+    ) -> Result<Vec<(TaskSpec, String)>, String> {
         if spec.local_source_path.is_some() {
-            return Ok(vec![spec]);
+            return Ok(vec![(spec, String::new())]);
         }
         let (auto, dirs) = {
             let core = self.lock()?;
@@ -1941,18 +1963,25 @@ impl CoreCoordinator {
                         crate::http_engine::http_fetch_url_allowed(m)
                             && crate::net_policy::url_allowed(m, &settings.allowed_hosts)
                     });
-                    let imported = self.apply_defaults_to_spec(imported)?;
-                    validate_torrent_spec(self, imported, settings.bt_enable_dht)
+                    let (imported, imported_ep) =
+                        self.apply_defaults_to_spec_with_explicit_proxy(imported, false)?;
+                    let imported = validate_torrent_spec_with_policy(
+                        self,
+                        imported,
+                        &imported_ep,
+                        settings.bt_enable_dht,
+                    )?;
+                    Ok((imported, imported_ep))
                 })
                 .collect();
         }
         let settings = self.settings()?;
         let enable_dht = settings.bt_enable_dht;
         let parent_url = spec.url.clone();
-        self.expand_new_sources(spec, auto, &dirs)?
+        self.expand_new_sources(spec, parent_explicit_proxy, auto, &dirs)?
             .into_iter()
             .map(|mut child| {
-                if child.url != parent_url {
+                let child_ep = if child.url != parent_url {
                     let preserved_bilibili_referer = child
                         .headers
                         .iter()
@@ -1977,7 +2006,9 @@ impl CoreCoordinator {
                         child.download_dir = explicit.download_dir.clone();
                         child.work_dir = explicit.work_dir.clone();
                     }
-                    child = self.apply_defaults_to_spec_inner(child, trust_download_dir)?;
+                    let (resolved_child, resolved_ep) =
+                        self.apply_defaults_to_spec_with_explicit_proxy(child, trust_download_dir)?;
+                    child = resolved_child;
                     if child.resource_kind != crate::ResourceKind::Torrent
                         && child.crawl_resource_key.is_empty()
                     {
@@ -1990,7 +2021,10 @@ impl CoreCoordinator {
                             &dirs,
                         );
                     }
-                }
+                    resolved_ep
+                } else {
+                    parent_explicit_proxy.to_string()
+                };
                 if !crate::net_policy::url_allowed(&child.url, &settings.allowed_hosts) {
                     return Err("地址不在允许的域名白名单中".into());
                 }
@@ -1998,7 +2032,8 @@ impl CoreCoordinator {
                     crate::http_engine::http_fetch_url_allowed(mirror)
                         && crate::net_policy::url_allowed(mirror, &settings.allowed_hosts)
                 });
-                let mut child = validate_torrent_spec(self, child, enable_dht)?;
+                let mut child =
+                    validate_torrent_spec_with_policy(self, child, &child_ep, enable_dht)?;
                 if child.resource_kind == crate::ResourceKind::Torrent
                     && child.crawl_resource_key.is_empty()
                 {
@@ -2019,7 +2054,7 @@ impl CoreCoordinator {
                     child.work_dir = child.download_dir.clone();
                 }
                 reject_path_escape(&child.work_dir)?;
-                Ok(child)
+                Ok((child, child_ep))
             })
             .collect()
     }
@@ -2027,6 +2062,7 @@ impl CoreCoordinator {
     fn expand_new_sources(
         &self,
         spec: TaskSpec,
+        parent_explicit_proxy: &str,
         auto: bool,
         dirs: &crate::category::CategoryDirs,
     ) -> Result<Vec<TaskSpec>, String> {
@@ -2048,21 +2084,23 @@ impl CoreCoordinator {
             return Ok(specs);
         }
         if spec.harvest {
-            let fetch_headers = hydrate_replay_headers(&self.core(), spec.clone())
-                .map(|(hydrated, _)| {
-                    hydrated
-                        .headers
-                        .into_iter()
-                        .collect::<std::collections::HashMap<_, _>>()
+            let (hydrated, replay) = hydrate_replay_headers(&self.core(), spec.clone())?;
+            let fetch_headers = hydrated
+                .headers
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let proxy = self.transfer_proxy(&spec.proxy)?;
+            let (_, body) = self.with_explicit_network_policy(parent_explicit_proxy, || {
+                with_replay_json(&replay, || {
+                    crate::http_engine::fetch_bytes_limited(
+                        &spec.url,
+                        &fetch_headers,
+                        &proxy,
+                        1024 * 1024,
+                    )
+                    .map_err(|error| error.to_string())
                 })
-                .unwrap_or_default();
-            let (_, body) = crate::http_engine::fetch_bytes_limited(
-                &spec.url,
-                &fetch_headers,
-                &self.transfer_proxy(&spec.proxy)?,
-                1024 * 1024,
-            )
-            .map_err(|error| error.to_string())?;
+            })?;
             let text = String::from_utf8_lossy(&body);
             if crate::looks_like_metalink(&text) {
                 return specs_from_metalink(&text, &spec, auto, dirs);
@@ -2082,21 +2120,23 @@ impl CoreCoordinator {
         }
         let lower = spec.url.to_ascii_lowercase();
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
-            let fetch_headers = hydrate_replay_headers(&self.core(), spec.clone())
-                .map(|(hydrated, _)| {
-                    hydrated
-                        .headers
-                        .into_iter()
-                        .collect::<std::collections::HashMap<_, _>>()
+            let (hydrated, replay) = hydrate_replay_headers(&self.core(), spec.clone())?;
+            let fetch_headers = hydrated
+                .headers
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>();
+            let proxy = self.transfer_proxy(&spec.proxy)?;
+            let (_, body) = self.with_explicit_network_policy(parent_explicit_proxy, || {
+                with_replay_json(&replay, || {
+                    crate::http_engine::fetch_bytes_limited(
+                        &spec.url,
+                        &fetch_headers,
+                        &proxy,
+                        1024 * 1024,
+                    )
+                    .map_err(|error| error.to_string())
                 })
-                .unwrap_or_default();
-            let (_, body) = crate::http_engine::fetch_bytes_limited(
-                &spec.url,
-                &fetch_headers,
-                &self.transfer_proxy(&spec.proxy)?,
-                1024 * 1024,
-            )
-            .map_err(|error| error.to_string())?;
+            })?;
             return specs_from_metalink(&String::from_utf8_lossy(&body), &spec, auto, dirs);
         }
         Ok(vec![spec_from_url(
@@ -2113,12 +2153,19 @@ impl CoreCoordinator {
         self.dispatch_created_for_handoff(spec, None)
     }
 
+    #[allow(dead_code)]
     fn dispatch_created_for_handoff(
         &self,
         spec: TaskSpec,
         expected_handoff_id: Option<&str>,
     ) -> Result<Vec<EventEnvelope>, String> {
-        self.dispatch_created_for_handoff_with_explicit(spec, expected_handoff_id, &BTreeMap::new())
+        let ep = self.uncollapsed_proxy_for_ephemeral_spec(&spec)?;
+        self.dispatch_created_for_handoff_with_explicit(
+            spec,
+            expected_handoff_id,
+            &BTreeMap::new(),
+            &ep,
+        )
     }
 
     fn dispatch_created_for_handoff_with_explicit(
@@ -2126,6 +2173,7 @@ impl CoreCoordinator {
         spec: TaskSpec,
         expected_handoff_id: Option<&str>,
         explicit_headers: &BTreeMap<String, String>,
+        explicit_proxy: &str,
     ) -> Result<Vec<EventEnvelope>, String> {
         let start_paused = spec.start_paused;
         let mut spec = seal_spec_secrets_with_explicit(self, spec, explicit_headers)?;
@@ -2151,7 +2199,15 @@ impl CoreCoordinator {
                     core.store().sanitize_urls(spec)?;
                     duplicate
                 }
-                None => return core.handle(CoreCommand::CreateTask { spec }),
+                None => {
+                    let events = core.handle(CoreCommand::CreateTask { spec })?;
+                    for envelope in &events {
+                        if let CoreEvent::TaskCreated { snapshot } = &envelope.event {
+                            core.set_task_explicit_proxy(&snapshot.task_id, explicit_proxy)?;
+                        }
+                    }
+                    return Ok(events);
+                }
             }
         };
         self.reuse_duplicate(task_id, &status, start_paused)
@@ -2804,10 +2860,49 @@ impl CoreCoordinator {
     }
 
     pub(crate) fn metadata_spec(&self, url: &str) -> Result<TaskSpec, String> {
-        self.apply_defaults_to_spec(TaskSpec {
-            url: url.into(),
-            ..TaskSpec::default()
-        })
+        self.metadata_spec_with_explicit_proxy(url)
+            .map(|(spec, _)| spec)
+    }
+
+    pub(crate) fn metadata_spec_with_explicit_proxy(
+        &self,
+        url: &str,
+    ) -> Result<(TaskSpec, String), String> {
+        self.apply_defaults_to_spec_with_explicit_proxy(
+            TaskSpec {
+                url: url.into(),
+                ..TaskSpec::default()
+            },
+            false,
+        )
+    }
+
+    pub(crate) fn with_explicit_network_policy<T>(
+        &self,
+        explicit_spec_proxy: &str,
+        work: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let policy = network_policy_for_explicit(&self.core, explicit_spec_proxy)?;
+        crate::net_policy::with_network_policy(Some(policy), work)
+    }
+
+    fn uncollapsed_proxy_for_ephemeral_spec(&self, spec: &TaskSpec) -> Result<String, String> {
+        if spec.local_source_path.is_some() {
+            return Ok(String::new());
+        }
+        let guard = self.lock()?;
+        let proxy_mode = guard.store().setting_string("proxy_mode", "system")?;
+        let raw_proxy_url = guard.store().setting_string("proxy_url", "")?;
+        let proxy_bypass = guard.store().setting_string("proxy_bypass", "")?;
+        let raw_site_rules = guard.store().setting_string("site_rules", "")?;
+        Ok(infer_uncollapsed_spec_proxy(
+            &spec.url,
+            &spec.proxy,
+            &proxy_mode,
+            &raw_proxy_url,
+            &proxy_bypass,
+            &raw_site_rules,
+        ))
     }
 
     pub(crate) fn read_metadata(
@@ -2817,12 +2912,16 @@ impl CoreCoordinator {
         limit: u64,
         origin: Option<&str>,
     ) -> Result<crate::http_engine::MetadataResponse, String> {
+        let explicit_proxy = self.uncollapsed_proxy_for_ephemeral_spec(&spec)?;
         let (spec, replay) = hydrate_replay_headers(&self.core(), spec)?;
-        with_replay_json(&replay, || {
-            crate::http_engine::read_metadata(&spec, range, limit, origin)
+        self.with_explicit_network_policy(&explicit_proxy, || {
+            with_replay_json(&replay, || {
+                crate::http_engine::read_metadata(&spec, range, limit, origin)
+            })
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn apply_defaults_to_spec(&self, spec: TaskSpec) -> Result<TaskSpec, String> {
         self.apply_defaults_to_spec_inner(spec, false)
     }
@@ -2831,11 +2930,21 @@ impl CoreCoordinator {
         self.lock()?.store().hydrate_proxy(proxy)
     }
 
+    #[allow(dead_code)]
     fn apply_defaults_to_spec_inner(
+        &self,
+        spec: TaskSpec,
+        trust_download_dir: bool,
+    ) -> Result<TaskSpec, String> {
+        self.apply_defaults_to_spec_with_explicit_proxy(spec, trust_download_dir)
+            .map(|(resolved, _)| resolved)
+    }
+
+    fn apply_defaults_to_spec_with_explicit_proxy(
         &self,
         mut spec: TaskSpec,
         trust_download_dir: bool,
-    ) -> Result<TaskSpec, String> {
+    ) -> Result<(TaskSpec, String), String> {
         validate_filename(&spec.filename)?;
         spec.url = spec
             .url
@@ -2916,6 +3025,7 @@ impl CoreCoordinator {
         {
             return Err("代理地址无效".into());
         }
+        let mut explicit_proxy = spec.proxy.trim().to_string();
         spec.audio_url = spec.audio_url.trim().to_string();
         if let Some(source_path) = spec.local_source_path.as_deref() {
             if spec.resource_kind != crate::ResourceKind::File {
@@ -2927,6 +3037,7 @@ impl CoreCoordinator {
             let path = validate_local_source_path(&spec.url, source_path, spec.expected_size)?;
             spec.local_source_path = Some(path.to_string_lossy().into_owned());
             spec.proxy.clear();
+            explicit_proxy.clear();
         } else {
             let is_torrent = spec.resource_kind == crate::ResourceKind::Torrent
                 || is_torrent_like_source(&spec.url);
@@ -3018,7 +3129,7 @@ impl CoreCoordinator {
         if spec.credential_ref.is_none() && is_http_url && self.default_cookie_configured()? {
             spec.credential_ref = Some(DEFAULT_COOKIE_CREDENTIAL_REF.into());
         }
-        Ok(spec)
+        Ok((spec, explicit_proxy))
     }
 
     fn duplicate_request_identity_matches(incoming: &TaskSpec, stored: &TaskSpec) -> bool {
@@ -3224,11 +3335,17 @@ impl CoreCoordinator {
                 *override_spec,
             );
         }
-        let spec = self.apply_defaults_to_spec_inner(raw_spec, trust_download_dir)?;
+        let (spec, parent_explicit_proxy) =
+            self.apply_defaults_to_spec_with_explicit_proxy(raw_spec, trust_download_dir)?;
         let parent_url = spec.url.clone();
-        let expanded = self.expand_create_with_explicit(spec, &explicit, trust_download_dir)?;
+        let expanded = self.expand_create_with_explicit_and_proxy(
+            spec,
+            &explicit,
+            &parent_explicit_proxy,
+            trust_download_dir,
+        )?;
         let mut events = Vec::new();
-        for (index, item) in expanded.into_iter().enumerate() {
+        for (index, (item, item_ep)) in expanded.into_iter().enumerate() {
             let guard_id = (index == 0).then_some(handoff_id.as_str());
             let child_explicit = if item.url == parent_url {
                 explicit.headers.clone()
@@ -3239,6 +3356,7 @@ impl CoreCoordinator {
                 item,
                 guard_id,
                 &child_explicit,
+                &item_ep,
             )?);
         }
         self.start_next_queued(false)?;
@@ -3866,9 +3984,10 @@ fn task_schedule_stop_due(task: &crate::TaskSnapshot, profiles: &[QueueProfile])
         }))
 }
 
-fn validate_torrent_spec(
+fn validate_torrent_spec_with_policy(
     coordinator: &CoreCoordinator,
     spec: TaskSpec,
+    explicit_proxy: &str,
     enable_dht: bool,
 ) -> Result<TaskSpec, String> {
     if spec.resource_kind != crate::ResourceKind::Torrent {
@@ -3884,15 +4003,22 @@ fn validate_torrent_spec(
     );
     let headers = hydrated.headers.into_iter().collect();
     let settings = coordinator.settings()?;
-    let raw_probe_proxy = resolve_torrent_metadata_proxy(&settings, &spec.url, &spec.proxy);
+    let raw_probe_proxy = resolve_torrent_metadata_proxy(&settings, &spec.url, explicit_proxy);
     let probe_proxy = coordinator.transfer_proxy(&raw_probe_proxy)?;
     let scoped_replay = if is_http_source_url(&spec.url) {
         replay.as_str()
     } else {
         ""
     };
-    let meta = with_replay_json(scoped_replay, || {
-        crate::torrent_engine::probe_torrent_source(&spec.url, &headers, &probe_proxy, enable_dht)
+    let meta = coordinator.with_explicit_network_policy(explicit_proxy, || {
+        with_replay_json(scoped_replay, || {
+            crate::torrent_engine::probe_torrent_source(
+                &spec.url,
+                &headers,
+                &probe_proxy,
+                enable_dht,
+            )
+        })
     })?;
     let mut checked = spec;
     checked.filename = resolved_torrent_filename(&checked, &meta.name);
@@ -3952,12 +4078,15 @@ fn run_task_with_progress(core: Arc<Mutex<PersistentCore>>, task_id: &str) -> Re
         .task_spec(task_id)
         .cloned()
         .ok_or_else(|| format!("unknown task {task_id}"))?;
+    let net_policy = task_network_policy_context(&core, task_id, &spec)?;
     let spec = apply_site_rules_to_spec(&core, spec)?;
     let (spec, replay_json) = hydrate_replay_headers(&core, spec)?;
     let throttle = task_throttle_context(&core, task_id, &spec)?;
     crate::net_policy::configure_throttle_context(&throttle);
-    crate::net_policy::with_throttle_context(Some(throttle), || {
-        run_task_with_throttle(core, task_id, spec, replay_json)
+    crate::net_policy::with_network_policy(Some(net_policy), || {
+        crate::net_policy::with_throttle_context(Some(throttle), || {
+            run_task_with_throttle(core, task_id, spec, replay_json)
+        })
     })
 }
 
@@ -4763,6 +4892,7 @@ fn run_dual_track_http_file(
     let (initial_bytes, _) = current_progress(&core, task_id);
     let mut rate = crate::http_engine::TransferRate::new(initial_bytes);
     let throttle = crate::net_policy::current_throttle_context();
+    let net_policy = crate::net_policy::current_network_policy();
 
     let mut video_finished = dual_track_part_complete(&video_tmp, &video_progress);
     let mut audio_finished = dual_track_part_complete(&audio_tmp, &audio_progress);
@@ -4771,9 +4901,12 @@ fn run_dual_track_http_file(
     let video_worker = (!video_finished).then(|| {
         let video_sender = sender.clone();
         let video_throttle = throttle.clone();
+        let video_policy = net_policy.clone();
         thread::spawn(move || {
-            let res = crate::net_policy::with_throttle_context(video_throttle, || {
-                run_job_report(&video_job)
+            let res = crate::net_policy::with_network_policy(video_policy, || {
+                crate::net_policy::with_throttle_context(video_throttle, || {
+                    run_job_report(&video_job)
+                })
             });
             let _ = video_sender.send((DualTrackKind::Video, res));
         })
@@ -4782,8 +4915,9 @@ fn run_dual_track_http_file(
     let audio_worker = (!audio_finished).then(|| {
         let audio_sender = sender.clone();
         thread::spawn(move || {
-            let res =
-                crate::net_policy::with_throttle_context(throttle, || run_job_report(&audio_job));
+            let res = crate::net_policy::with_network_policy(net_policy, || {
+                crate::net_policy::with_throttle_context(throttle, || run_job_report(&audio_job))
+            });
             let _ = audio_sender.send((DualTrackKind::Audio, res));
         })
     });
@@ -5010,9 +5144,11 @@ fn run_http_file(
     let mut worker_job = job.clone();
     worker_job.range_stop = Some(Arc::clone(&worker_abort));
     let throttle = crate::net_policy::current_throttle_context();
+    let net_policy = crate::net_policy::current_network_policy();
     let worker = thread::spawn(move || {
-        let result =
-            crate::net_policy::with_throttle_context(throttle, || run_job_report(&worker_job));
+        let result = crate::net_policy::with_network_policy(net_policy, || {
+            crate::net_policy::with_throttle_context(throttle, || run_job_report(&worker_job))
+        });
         let _ = sender.send(result);
     });
     let mut worker_finished = false;
@@ -6244,8 +6380,11 @@ where
 {
     let (sender, receiver) = mpsc::channel();
     let throttle = crate::net_policy::current_throttle_context();
+    let net_policy = crate::net_policy::current_network_policy();
     thread::spawn(move || {
-        let result = crate::net_policy::with_throttle_context(throttle, work);
+        let result = crate::net_policy::with_network_policy(net_policy, || {
+            crate::net_policy::with_throttle_context(throttle, work)
+        });
         let _ = sender.send(result);
     });
     let status = if live { "recording" } else { "downloading" };
@@ -6294,6 +6433,114 @@ where
             }
         }
     }
+}
+
+fn site_rule_proxy_for_url(raw_site_rules: &str, url: &str) -> String {
+    let rules = crate::parse_site_rules(raw_site_rules);
+    let Some(rule) = crate::site_rules::matching_rule(&rules, url) else {
+        return String::new();
+    };
+    match rule.proxy_mode.as_str() {
+        "direct" => crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+        "system" => crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
+        "manual" if !rule.proxy.trim().is_empty() => rule.proxy.trim().to_string(),
+        "manual" => crate::net_policy::INVALID_MANUAL_PROXY.into(),
+        _ if !rule.proxy.trim().is_empty() => rule.proxy.trim().to_string(),
+        _ => String::new(),
+    }
+}
+
+fn infer_uncollapsed_spec_proxy(
+    url: &str,
+    spec_proxy: &str,
+    proxy_mode: &str,
+    raw_proxy_url: &str,
+    proxy_bypass: &str,
+    raw_site_rules: &str,
+) -> String {
+    let rule_ep = site_rule_proxy_for_url(raw_site_rules, url);
+    let trimmed = spec_proxy.trim();
+    if trimmed.is_empty() {
+        return rule_ep;
+    }
+    if !rule_ep.is_empty() && trimmed == rule_ep {
+        return rule_ep;
+    }
+    if trimmed == crate::net_policy::DIRECT_PROXY_SENTINEL
+        && crate::net_policy::url_bypassed(url, proxy_bypass)
+    {
+        return String::new();
+    }
+    if trimmed == crate::net_policy::SYSTEM_PROXY_SENTINEL
+        && proxy_mode.trim().eq_ignore_ascii_case("system")
+    {
+        return String::new();
+    }
+    if proxy_mode.trim().eq_ignore_ascii_case("manual")
+        && !raw_proxy_url.trim().is_empty()
+        && trimmed == raw_proxy_url.trim()
+    {
+        return String::new();
+    }
+    trimmed.to_string()
+}
+
+pub(crate) fn network_policy_for_explicit(
+    core: &Arc<Mutex<PersistentCore>>,
+    explicit_spec_proxy: &str,
+) -> Result<crate::net_policy::NetworkPolicyContext, String> {
+    let guard = core
+        .lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+    let allowed_hosts = guard.store().setting_string("allowed_hosts", "")?;
+    let proxy_mode = guard.store().setting_string("proxy_mode", "system")?;
+    let raw_proxy_url = guard.store().setting_string("proxy_url", "")?;
+    let proxy_bypass = guard.store().setting_string("proxy_bypass", "")?;
+    let proxy_url = guard.store().hydrate_proxy(&raw_proxy_url)?;
+    let spec_proxy = guard.store().hydrate_proxy(explicit_spec_proxy)?;
+    Ok(crate::net_policy::NetworkPolicyContext {
+        allowed_hosts,
+        proxy_mode,
+        proxy_url,
+        proxy_bypass,
+        spec_proxy,
+    })
+}
+
+fn task_network_policy_context(
+    core: &Arc<Mutex<PersistentCore>>,
+    task_id: &str,
+    spec: &TaskSpec,
+) -> Result<crate::net_policy::NetworkPolicyContext, String> {
+    let guard = core
+        .lock()
+        .map_err(|_| "v7 Core mutex poisoned".to_string())?;
+    let allowed_hosts = guard.store().setting_string("allowed_hosts", "")?;
+    let proxy_mode = guard.store().setting_string("proxy_mode", "system")?;
+    let raw_proxy_url = guard.store().setting_string("proxy_url", "")?;
+    let proxy_bypass = guard.store().setting_string("proxy_bypass", "")?;
+    let raw_site_rules = guard.store().setting_string("site_rules", "")?;
+    let raw_spec_proxy = match guard.task_explicit_proxy(task_id)? {
+        Some(stored) if !stored.trim().is_empty() => stored,
+        Some(_) => site_rule_proxy_for_url(&raw_site_rules, &spec.url),
+        None => infer_uncollapsed_spec_proxy(
+            &spec.url,
+            &spec.proxy,
+            &proxy_mode,
+            &raw_proxy_url,
+            &proxy_bypass,
+            &raw_site_rules,
+        ),
+    };
+    let proxy_url = guard.store().hydrate_proxy(&raw_proxy_url)?;
+    let spec_proxy = guard.store().hydrate_proxy(&raw_spec_proxy)?;
+    Ok(crate::net_policy::NetworkPolicyContext {
+        allowed_hosts,
+        proxy_mode,
+        proxy_url,
+        proxy_bypass,
+        spec_proxy,
+    })
 }
 
 fn apply_site_rules_to_spec(
@@ -7190,18 +7437,23 @@ fn share_media(
         } else {
             title.trim().to_string()
         };
-        let spec = coordinator.apply_defaults_to_spec(TaskSpec {
-            url: url.to_string(),
-            mime_type: browser_request
-                .as_ref()
-                .map(|request| request.mime_type.clone())
-                .unwrap_or_default(),
-            credential_ref: browser_request.and_then(|request| request.credential_ref),
-            ..TaskSpec::default()
-        })?;
+        let (spec, explicit_proxy) = coordinator.apply_defaults_to_spec_with_explicit_proxy(
+            TaskSpec {
+                url: url.to_string(),
+                mime_type: browser_request
+                    .as_ref()
+                    .map(|request| request.mime_type.clone())
+                    .unwrap_or_default(),
+                credential_ref: browser_request.and_then(|request| request.credential_ref),
+                ..TaskSpec::default()
+            },
+            false,
+        )?;
         let (spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
         let host = cast_lan_host(device_id)?;
-        server.mount_proxy(&token, spec, replay)?;
+        coordinator.with_explicit_network_policy(&explicit_proxy, || {
+            server.mount_proxy(&token, spec, replay)
+        })?;
         match crate::cast::lan_media_url(server, &token, &host) {
             Ok(url) => url,
             Err(error) => {
@@ -7283,7 +7535,8 @@ fn probe_command(
         .filter(|(key, value)| header_value_allowed(key, value))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let spec = coordinator.apply_defaults_to_spec(spec)?;
+    let (spec, explicit_proxy) =
+        coordinator.apply_defaults_to_spec_with_explicit_proxy(spec, false)?;
     let (mut spec, replay) = hydrate_replay_headers(&coordinator.core, spec)?;
     for (key, value) in &explicit_headers {
         let stale: Vec<String> = spec
@@ -7300,8 +7553,10 @@ fn probe_command(
     let replay =
         crate::credentials::apply_explicit_headers_to_replay_json(&replay, url, &explicit_headers);
     let headers = spec.headers.into_iter().collect();
-    let result = with_replay_json(&replay, || {
-        crate::recognize::probe_with_harvest_context(url, &headers, &spec.proxy)
+    let result = coordinator.with_explicit_network_policy(&explicit_proxy, || {
+        with_replay_json(&replay, || {
+            crate::recognize::probe_with_harvest_context(url, &headers, &spec.proxy)
+        })
     });
     match result {
         Ok((kind, label, variants, harvest)) => {
@@ -7347,13 +7602,20 @@ fn probe_torrent_command(
     source: &str,
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
+    if is_http_source_url(source)
+        && !crate::net_policy::url_allowed(source, &settings.allowed_hosts)
+    {
+        return Err("下载地址不在允许的域名范围内".into());
+    }
     let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, source))?;
-    let meta = crate::torrent_engine::probe_torrent_source(
-        source,
-        &std::collections::HashMap::new(),
-        &proxy,
-        settings.bt_enable_dht,
-    )?;
+    let meta = coordinator.with_explicit_network_policy("", || {
+        crate::torrent_engine::probe_torrent_source(
+            source,
+            &std::collections::HashMap::new(),
+            &proxy,
+            settings.bt_enable_dht,
+        )
+    })?;
     coordinator.lock()?.emit(CoreEvent::TorrentProbeResult {
         source: source.to_string(),
         name: meta.name,
@@ -7369,13 +7631,20 @@ fn select_torrent_files_command(
     selections: &[crate::TorrentFileSelection],
 ) -> Result<Vec<EventEnvelope>, String> {
     let settings = coordinator.settings()?;
+    if is_http_source_url(source)
+        && !crate::net_policy::url_allowed(source, &settings.allowed_hosts)
+    {
+        return Err("下载地址不在允许的域名范围内".into());
+    }
     let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, source))?;
-    let meta = crate::torrent_engine::probe_torrent_source(
-        source,
-        &std::collections::HashMap::new(),
-        &proxy,
-        settings.bt_enable_dht,
-    )?;
+    let meta = coordinator.with_explicit_network_policy("", || {
+        crate::torrent_engine::probe_torrent_source(
+            source,
+            &std::collections::HashMap::new(),
+            &proxy,
+            settings.bt_enable_dht,
+        )
+    })?;
     let selections = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     let total_size = meta
         .files
@@ -7406,6 +7675,7 @@ fn task_torrent_files(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Err("该任务不是 BT 任务".into());
     }
+    let net_policy = task_network_policy_context(&coordinator.core, task_id, &spec)?;
     let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
     let headers = hydrated
         .headers
@@ -7416,20 +7686,22 @@ fn task_torrent_files(
     let probe_proxy = coordinator.transfer_proxy(&resolve_torrent_metadata_proxy(
         &settings,
         &hydrated.url,
-        &spec.proxy,
+        &net_policy.spec_proxy,
     ))?;
     let scoped_replay = if is_http_source_url(&hydrated.url) {
         replay.as_str()
     } else {
         ""
     };
-    let meta = with_replay_json(scoped_replay, || {
-        crate::torrent_engine::probe_torrent_source(
-            &hydrated.url,
-            &headers,
-            &probe_proxy,
-            settings.bt_enable_dht,
-        )
+    let meta = crate::net_policy::with_network_policy(Some(net_policy), || {
+        with_replay_json(scoped_replay, || {
+            crate::torrent_engine::probe_torrent_source(
+                &hydrated.url,
+                &headers,
+                &probe_proxy,
+                settings.bt_enable_dht,
+            )
+        })
     })?;
     let selections =
         crate::torrent_engine::validate_torrent_selection(&meta, &hydrated.torrent_selection)?;
@@ -7468,6 +7740,7 @@ fn set_task_torrent_files(
     if spec.resource_kind != crate::ResourceKind::Torrent {
         return Err("该任务不是 BT 任务".into());
     }
+    let net_policy = task_network_policy_context(&coordinator.core, task_id, &spec)?;
     let (hydrated, replay) = hydrate_replay_headers(&coordinator.core, spec.clone())?;
     let headers = hydrated
         .headers
@@ -7478,20 +7751,22 @@ fn set_task_torrent_files(
     let probe_proxy = coordinator.transfer_proxy(&resolve_torrent_metadata_proxy(
         &settings,
         &hydrated.url,
-        &spec.proxy,
+        &net_policy.spec_proxy,
     ))?;
     let scoped_replay = if is_http_source_url(&hydrated.url) {
         replay.as_str()
     } else {
         ""
     };
-    let meta = with_replay_json(scoped_replay, || {
-        crate::torrent_engine::probe_torrent_source(
-            &hydrated.url,
-            &headers,
-            &probe_proxy,
-            settings.bt_enable_dht,
-        )
+    let meta = crate::net_policy::with_network_policy(Some(net_policy), || {
+        with_replay_json(scoped_replay, || {
+            crate::torrent_engine::probe_torrent_source(
+                &hydrated.url,
+                &headers,
+                &probe_proxy,
+                settings.bt_enable_dht,
+            )
+        })
     })?;
     spec.torrent_selection = crate::torrent_engine::validate_torrent_selection(&meta, selections)?;
     if !spec
@@ -7569,59 +7844,64 @@ fn harvest_page(
         if probe_urls.len() > 100 {
             return Err("一次最多读取 100 个链接的大小".into());
         }
-        let mut links = Vec::new();
-        for candidate in probe_urls {
-            let candidate = candidate.trim();
-            if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
-                continue;
+        let links = coordinator.with_explicit_network_policy("", || {
+            let mut links = Vec::new();
+            for candidate in probe_urls {
+                let candidate = candidate.trim();
+                if !candidate.starts_with("http://") && !candidate.starts_with("https://") {
+                    continue;
+                }
+                if reject_task_url(candidate).is_err()
+                    || !crate::net_policy::url_allowed(candidate, &settings.allowed_hosts)
+                {
+                    continue;
+                }
+                let job = crate::http_engine::Job {
+                    url: candidate.to_string(),
+                    headers: headers.clone(),
+                    // 大小探测没有成品，留空以跳过下载后缀元数据落盘。
+                    output: PathBuf::new(),
+                    connections: 1,
+                    chunk_bytes: 1024 * 1024,
+                    total: 0,
+                    sequential: true,
+                    resume_from: 0,
+                    proxy: coordinator.transfer_proxy(&settings_proxy(&settings, candidate))?,
+                    resource_key: candidate.to_string(),
+                    etag: String::new(),
+                    last_modified: String::new(),
+                    control: PathBuf::new(),
+                    progress: PathBuf::new(),
+                    method: "GET".into(),
+                    body_path: PathBuf::new(),
+                    mirrors: Vec::new(),
+                    replay_json: String::new(),
+                    curl_body_limit: None,
+                    range_stop: None,
+                    installer_download: false,
+                    origin_boundary: String::new(),
+                };
+                let size = crate::http_engine::probe_resource(&job)
+                    .ok()
+                    .and_then(|probe| probe.total)
+                    .unwrap_or(0);
+                links.push(crate::HarvestCandidate {
+                    url: candidate.to_string(),
+                    size,
+                    ..Default::default()
+                });
             }
-            if reject_task_url(candidate).is_err()
-                || !crate::net_policy::url_allowed(candidate, &settings.allowed_hosts)
-            {
-                continue;
-            }
-            let job = crate::http_engine::Job {
-                url: candidate.to_string(),
-                headers: headers.clone(),
-                // 大小探测没有成品，留空以跳过下载后缀元数据落盘。
-                output: PathBuf::new(),
-                connections: 1,
-                chunk_bytes: 1024 * 1024,
-                total: 0,
-                sequential: true,
-                resume_from: 0,
-                proxy: coordinator.transfer_proxy(&settings_proxy(&settings, candidate))?,
-                resource_key: candidate.to_string(),
-                etag: String::new(),
-                last_modified: String::new(),
-                control: PathBuf::new(),
-                progress: PathBuf::new(),
-                method: "GET".into(),
-                body_path: PathBuf::new(),
-                mirrors: Vec::new(),
-                replay_json: String::new(),
-                curl_body_limit: None,
-                range_stop: None,
-                installer_download: false,
-                origin_boundary: String::new(),
-            };
-            let size = crate::http_engine::probe_resource(&job)
-                .ok()
-                .and_then(|probe| probe.total)
-                .unwrap_or(0);
-            links.push(crate::HarvestCandidate {
-                url: candidate.to_string(),
-                size,
-                ..Default::default()
-            });
-        }
+            Ok(links)
+        })?;
         return coordinator.lock()?.emit(CoreEvent::HarvestProbeResult {
             url: url.to_string(),
             links,
         });
     }
     let proxy = coordinator.transfer_proxy(&settings_proxy(&settings, url))?;
-    let (_, _, _, harvest) = crate::recognize::probe_with_harvest_context(url, &headers, &proxy)?;
+    let (_, _, _, harvest) = coordinator.with_explicit_network_policy("", || {
+        crate::recognize::probe_with_harvest_context(url, &headers, &proxy)
+    })?;
     coordinator.lock()?.emit(CoreEvent::HarvestResult {
         url: url.to_string(),
         links: harvest

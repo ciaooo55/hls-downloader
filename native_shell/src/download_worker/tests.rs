@@ -12695,3 +12695,784 @@ fn g5_4_and_g7_8_json_task_import_enforces_allowed_hosts_and_cast_stop_clears_mo
 
     let _ = fs::remove_dir_all(root);
 }
+
+fn created_task_id(events: &[EventEnvelope]) -> String {
+    events
+        .iter()
+        .find_map(|envelope| match &envelope.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .expect("expected TaskCreated event")
+}
+
+#[test]
+fn t2_r1_end_to_end_coordinator_enforces_redirect_allowed_hosts_across_all_workers_and_surfaces() {
+    let root = lifecycle_test_root("t2-r1-allowed-hosts-e2e");
+    fs::create_dir_all(&root).unwrap();
+
+    // Forbidden server on `127.0.0.2`: MUST NEVER receive a single request when `allowed_hosts = "127.0.0.1"`.
+    let forbidden_listener = TcpListener::bind("127.0.0.2:0").unwrap();
+    let forbidden_addr = forbidden_listener.local_addr().unwrap();
+    let forbidden_hits = Arc::new(AtomicU64::new(0));
+    let forbidden_hits_srv = Arc::clone(&forbidden_hits);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_forbidden = Arc::clone(&stop);
+    let forbidden_srv = thread::spawn(move || {
+        forbidden_listener.set_nonblocking(true).unwrap();
+        while !stop_forbidden.load(Ordering::SeqCst) {
+            if let Ok((mut stream, _)) = forbidden_listener.accept() {
+                forbidden_hits_srv.fetch_add(1, Ordering::SeqCst);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nforbidden"
+                );
+                let _ = stream.flush();
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    // Allowed server on `127.0.0.1` serving manifests/videos and 302 redirects to `127.0.0.2`.
+    let allowed_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let allowed_addr = allowed_listener.local_addr().unwrap();
+    let live_audio_playlist_hits = Arc::new(AtomicU64::new(0));
+    let live_audio_hits_srv = Arc::clone(&live_audio_playlist_hits);
+    let stop_allowed = Arc::clone(&stop);
+    let allowed_srv = thread::spawn(move || {
+        allowed_listener.set_nonblocking(true).unwrap();
+        while !stop_allowed.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = allowed_listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            let _ = reader.read_line(&mut request_line);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+            match path {
+                "/ok-video.mp4" | "/ok-seg.ts" => {
+                    let body = b"valid-media-bytes-payload";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(body);
+                }
+                "/vod.m3u8" => {
+                    let body = format!(
+                        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nhttp://{allowed_addr}/redir-seg.ts\n#EXT-X-ENDLIST\n"
+                    );
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                "/live-master.m3u8" => {
+                    let body = format!(
+                        "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Main\",DEFAULT=YES,URI=\"http://{allowed_addr}/live-audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO=\"aud\"\nhttp://{allowed_addr}/live-video.m3u8\n"
+                    );
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                "/live-video.m3u8" => {
+                    let body = format!(
+                        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nhttp://{allowed_addr}/ok-seg.ts\n#EXT-X-ENDLIST\n"
+                    );
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                "/live-audio.m3u8" => {
+                    live_audio_hits_srv.fetch_add(1, Ordering::SeqCst);
+                    let loc = format!("http://{forbidden_addr}/evil-audio.m3u8");
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                "/vod.mpd" => {
+                    let body = format!(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT4S">
+  <Period>
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="v1" bandwidth="500000" width="640" height="360">
+        <SegmentList duration="4">
+          <SegmentURL media="http://{allowed_addr}/redir-dash.m4s"/>
+        </SegmentList>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+                    );
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/dash+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                }
+                _ => {
+                    let loc = format!("http://{forbidden_addr}/evil-target.bin");
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+            }
+            let _ = stream.flush();
+        }
+    });
+
+    // Real CoreCoordinator WITHOUT manual `with_allowed_hosts` / `with_proxy_policy`!
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            ("proxy_mode".into(), serde_json::json!("direct")),
+            ("allowed_hosts".into(), serde_json::json!("127.0.0.1")),
+            ("auto_retry_failed_max".into(), serde_json::json!(0)),
+        ]))
+        .unwrap();
+
+    let wait_task_terminal = |coord: &CoreCoordinator, id: &str| -> crate::TaskSnapshot {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snap = coord.lock().unwrap().snapshot(id).cloned().unwrap();
+            if matches!(snap.status.as_str(), "failed" | "completed" | "canceled") {
+                return snap;
+            }
+            assert!(Instant::now() < deadline, "task {id} timed out: {snap:?}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    // 1. Single-track HTTP (`run_http_file` worker thread)
+    let ev1 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{allowed_addr}/redir-file.bin"),
+                filename: "single.bin".into(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let t1 = created_task_id(&ev1);
+    let snap1 = wait_task_terminal(&coordinator, &t1);
+    assert_eq!(
+        snap1.status, "failed",
+        "single-track redirect must fail: {snap1:?}"
+    );
+
+    // 2. Dual-track HTTP (`run_dual_track_http_file` audio worker thread)
+    let ev2 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{allowed_addr}/ok-video.mp4"),
+                audio_url: format!("http://{allowed_addr}/redir-audio.m4a"),
+                filename: "dual.mp4".into(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let t2 = created_task_id(&ev2);
+    let snap2 = wait_task_terminal(&coordinator, &t2);
+    assert_eq!(
+        snap2.status, "failed",
+        "dual-track audio redirect must fail: {snap2:?}"
+    );
+
+    // 3. VOD HLS (`poll_media_progress` + `download_batch` segment worker thread)
+    let ev3 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{allowed_addr}/vod.m3u8"),
+                resource_kind: crate::ResourceKind::Hls,
+                filename: "vod-hls.mp4".into(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let t3 = created_task_id(&ev3);
+    let snap3 = wait_task_terminal(&coordinator, &t3);
+    assert_eq!(
+        snap3.status, "failed",
+        "HLS segment redirect must fail: {snap3:?}"
+    );
+
+    // 4. Live HLS with `#EXT-X-MEDIA:TYPE=AUDIO` (`LiveAudioRecorder` worker thread!)
+    let ev4 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{allowed_addr}/live-master.m3u8"),
+                resource_kind: crate::ResourceKind::Live,
+                filename: "live-hls.ts".into(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let t4 = created_task_id(&ev4);
+    let snap4 = wait_task_terminal(&coordinator, &t4);
+    assert_eq!(
+        snap4.status, "failed",
+        "LiveAudioRecorder redirect must fail: {snap4:?}"
+    );
+    assert!(
+        live_audio_playlist_hits.load(Ordering::SeqCst) >= 1,
+        "LiveAudioRecorder must have fetched /live-audio.m3u8 on its spawned thread"
+    );
+
+    // 5. VOD DASH (`download_vod_dash` segment worker thread)
+    let ev5 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{allowed_addr}/vod.mpd"),
+                resource_kind: crate::ResourceKind::Dash,
+                filename: "vod-dash.mp4".into(),
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let t5 = created_task_id(&ev5);
+    let snap5 = wait_task_terminal(&coordinator, &t5);
+    assert_eq!(
+        snap5.status, "failed",
+        "DASH segment redirect must fail: {snap5:?}"
+    );
+
+    // 6. ProbeUrl & HarvestPage
+    let probe_ev = coordinator
+        .dispatch(CoreCommand::ProbeUrl {
+            url: format!("http://{allowed_addr}/probe-redir"),
+            spec: None,
+        })
+        .unwrap();
+    assert!(
+        probe_ev
+            .iter()
+            .any(|e| matches!(&e.event, CoreEvent::Error { code, .. } if code == "probe_failed")),
+        "ProbeUrl redirect to non-whitelisted host must emit probe_failed: {probe_ev:?}"
+    );
+    assert!(
+        coordinator
+            .dispatch(CoreCommand::HarvestPage {
+                url: format!("http://{allowed_addr}/harvest-redir"),
+                referer: String::new(),
+                probe_urls: Vec::new(),
+            })
+            .is_err(),
+        "HarvestPage redirect to non-whitelisted host must fail"
+    );
+    let harvest_probe_ev = coordinator
+        .dispatch(CoreCommand::HarvestPage {
+            url: format!("http://{allowed_addr}/ok-video.mp4"),
+            referer: String::new(),
+            probe_urls: vec![format!("http://{allowed_addr}/harvest-size-redir")],
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            &harvest_probe_ev[0].event,
+            CoreEvent::HarvestProbeResult { links, .. } if links.len() == 1 && links[0].size == 0
+        ),
+        "HarvestPage probe_urls redirect must be blocked (size == 0): {harvest_probe_ev:?}"
+    );
+
+    // 7. Crawl (`crawl::dispatch` + `crawl::spawn` background worker + `scope.spawn` page workers)
+    let created_crawl = crate::crawl::dispatch(
+        &coordinator,
+        crate::CrawlRequest::Create {
+            spec: crate::CrawlSpec {
+                entry_url: format!("http://{allowed_addr}/crawl-redir"),
+                same_origin: false,
+                max_pages: 5,
+                page_concurrency: 1,
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
+    let crawl_id = created_crawl[0].id.clone();
+    let crawl_stop = Arc::new(AtomicBool::new(false));
+    crate::crawl::spawn(coordinator.clone(), Arc::clone(&crawl_stop));
+    let crawl_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = crate::crawl::dispatch(&coordinator, crate::CrawlRequest::List).unwrap();
+        let proj = listed.iter().find(|p| p.id == crawl_id).unwrap();
+        if proj.status == "paused" {
+            assert!(
+                proj.reason.contains("allowed_hosts") || !proj.reason.is_empty(),
+                "crawl project must pause with error on disallowed redirect: {proj:?}"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < crawl_deadline,
+            "crawl did not fail/pause: {proj:?}"
+        );
+        thread::sleep(Duration::from_millis(30));
+    }
+    crawl_stop.store(true, Ordering::SeqCst);
+
+    // 8. ShareMedia / MediaProxy (`MediaServer` worker thread serving proxied stream)
+    {
+        let _cast_guard = TEST_CAST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let share_ev = coordinator
+            .dispatch(CoreCommand::ShareMedia {
+                path: String::new(),
+                url: format!("http://{allowed_addr}/cast-redir.mp4"),
+                title: "Cast Redirect Test".into(),
+                device_id: String::new(),
+                request_id: String::new(),
+            })
+            .unwrap();
+        let published_url = share_ev
+            .iter()
+            .find_map(|e| match &e.event {
+                CoreEvent::CastSession { media_url, .. } => Some(media_url.clone()),
+                _ => None,
+            })
+            .expect("ShareMedia should emit CastSession");
+        let token = media_token_from_url(&published_url).unwrap();
+        let loopback_proxy_url = shared_media().unwrap().url_for(&token);
+        let (proxy_status, _) = crate::http_engine::fetch_bytes_limited(
+            &loopback_proxy_url,
+            &std::collections::HashMap::new(),
+            crate::net_policy::DIRECT_PROXY_SENTINEL,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(
+            proxy_status, 502,
+            "MediaProxy must block redirect to disallowed host with 502"
+        );
+        clear_cast_mount();
+    }
+
+    assert_eq!(
+        forbidden_hits.load(Ordering::SeqCst),
+        0,
+        "non-whitelisted redirect target 127.0.0.2 must NEVER be contacted across any path!"
+    );
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = allowed_srv.join();
+    let _ = forbidden_srv.join();
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn t2_r1_end_to_end_coordinator_switches_manual_proxy_and_bypass_across_redirects_and_mirrors() {
+    let root = lifecycle_test_root("t2-r1-proxy-bypass-e2e");
+    fs::create_dir_all(&root).unwrap();
+
+    // `127.0.0.1` acts as "public" (NOT in `proxy_bypass` -> MUST use authenticated manual proxy!).
+    // `127.0.0.2` acts as "bypassed" (`proxy_bypass = "127.0.0.2"` -> MUST connect DIRECT!).
+    let public_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let public_addr = public_listener.local_addr().unwrap();
+    let bypass_listener = TcpListener::bind("127.0.0.2:0").unwrap();
+    let bypass_addr = bypass_listener.local_addr().unwrap();
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_addr = proxy_listener.local_addr().unwrap();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let proxied_targets: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let bypass_direct_hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Authenticated HTTP forward proxy (`puser:psecret`).
+    let expected_proxy_auth = format!("Basic {}", STANDARD.encode("puser:psecret"));
+    let stop_proxy = Arc::clone(&stop);
+    let proxied_log = Arc::clone(&proxied_targets);
+    let proxy_srv = thread::spawn(move || {
+        proxy_listener.set_nonblocking(true).unwrap();
+        while !stop_proxy.load(Ordering::SeqCst) {
+            let Ok((mut client, _)) = proxy_listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            client.set_nonblocking(false).unwrap();
+            let _ = client.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut reader = BufReader::new(client.try_clone().unwrap());
+            let mut req_line = String::new();
+            if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut authed = false;
+            let mut extra_headers = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if line
+                    .to_ascii_lowercase()
+                    .starts_with("proxy-authorization:")
+                {
+                    if line.contains(&expected_proxy_auth) {
+                        authed = true;
+                    }
+                } else if !line.to_ascii_lowercase().starts_with("proxy-connection:")
+                    && !line.to_ascii_lowercase().starts_with("connection:")
+                    && !line.to_ascii_lowercase().starts_with("host:")
+                {
+                    extra_headers.push(line);
+                }
+            }
+            if !authed {
+                let _ = write!(
+                    client,
+                    "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"test\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = client.flush();
+                continue;
+            }
+            let parts: Vec<&str> = req_line.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let method = parts[0];
+            let target_url = parts[1].to_string();
+            proxied_log.lock().unwrap().push(target_url.clone());
+
+            let without_scheme = target_url.strip_prefix("http://").unwrap_or(&target_url);
+            let (authority, path_part) = match without_scheme.split_once('/') {
+                Some((h, p)) => (h, format!("/{p}")),
+                None => (without_scheme, "/".to_string()),
+            };
+            if let Ok(mut upstream) = std::net::TcpStream::connect(authority) {
+                let _ = upstream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = write!(
+                    upstream,
+                    "{method} {path_part} HTTP/1.1\r\nHost: {authority}\r\nX-Via-Manual-Proxy: 1\r\nConnection: close\r\n"
+                );
+                for hdr in &extra_headers {
+                    let _ = upstream.write_all(hdr.as_bytes());
+                }
+                let _ = upstream.write_all(b"\r\n");
+                let _ = upstream.flush();
+                let mut resp = Vec::new();
+                let _ = upstream.read_to_end(&mut resp);
+                let _ = client.write_all(&resp);
+                let _ = client.flush();
+            }
+        }
+    });
+
+    // Public server (`127.0.0.1`): REJECTS direct connections missing `X-Via-Manual-Proxy: 1`!
+    let stop_public = Arc::clone(&stop);
+    let public_srv = thread::spawn(move || {
+        public_listener.set_nonblocking(true).unwrap();
+        while !stop_public.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = public_listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut req_line = String::new();
+            let _ = reader.read_line(&mut req_line);
+            let mut via_proxy = false;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if line.to_ascii_lowercase().starts_with("x-via-manual-proxy:") {
+                    via_proxy = true;
+                }
+            }
+            if !via_proxy {
+                // Direct leak to public server! Fail immediately with 403!
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 11\r\nConnection: close\r\n\r\ndirect-leak"
+                );
+                let _ = stream.flush();
+                continue;
+            }
+            let path = req_line.split_whitespace().nth(1).unwrap_or("/");
+            match path {
+                "/redir-to-bypass" => {
+                    let loc = format!("http://{bypass_addr}/from-public-redir.bin");
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                "/fail-primary" => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                "/public-target.bin" | "/public-mirror.bin" => {
+                    let body = b"served-via-authenticated-manual-proxy";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(body);
+                }
+                _ => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+            }
+            let _ = stream.flush();
+        }
+    });
+
+    // Bypassed server (`127.0.0.2`): REJECTS proxied connections carrying `X-Via-Manual-Proxy: 1`!
+    let stop_bypass = Arc::clone(&stop);
+    let bypass_log = Arc::clone(&bypass_direct_hits);
+    let bypass_srv = thread::spawn(move || {
+        bypass_listener.set_nonblocking(true).unwrap();
+        while !stop_bypass.load(Ordering::SeqCst) {
+            let Ok((mut stream, _)) = bypass_listener.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut req_line = String::new();
+            let _ = reader.read_line(&mut req_line);
+            let mut via_proxy = false;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                if line.to_ascii_lowercase().starts_with("x-via-manual-proxy:") {
+                    via_proxy = true;
+                }
+            }
+            if via_proxy {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 10\r\nConnection: close\r\n\r\nproxy-leak"
+                );
+                let _ = stream.flush();
+                continue;
+            }
+            let path = req_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/")
+                .to_string();
+            bypass_log.lock().unwrap().push(path.clone());
+            match path.as_str() {
+                "/redir-to-public" => {
+                    let loc = format!("http://{public_addr}/public-target.bin");
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                "/fail-bypass" => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+                "/from-public-redir.bin" | "/bypass-mirror.bin" => {
+                    let body = b"served-directly-via-bypass";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(body);
+                }
+                _ => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                }
+            }
+            let _ = stream.flush();
+        }
+    });
+
+    // Use a real disk-backed or in-memory PersistentCore with DPAPI-sealed proxy password!
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_settings(BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            ),
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            (
+                "proxy_url".into(),
+                serde_json::json!(format!("http://puser:psecret@{proxy_addr}")),
+            ),
+            ("proxy_bypass".into(), serde_json::json!("127.0.0.2")),
+            ("auto_retry_failed_max".into(), serde_json::json!(0)),
+        ]))
+        .unwrap();
+
+    let wait_done = |coord: &CoreCoordinator, id: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snap = coord.lock().unwrap().snapshot(id).cloned().unwrap();
+            if snap.status == "completed" {
+                return;
+            }
+            assert!(
+                snap.status != "failed",
+                "task {id} unexpectedly failed: {snap:?}"
+            );
+            assert!(Instant::now() < deadline, "task {id} timed out: {snap:?}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    // Case 1: Public (`127.0.0.1`, manual proxy) -> 302 redirect -> Bypassed (`127.0.0.2`, direct)
+    let ev1 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{public_addr}/redir-to-bypass"),
+                filename: "pub-to-bypass-redir.bin".into(),
+                concurrency: 1,
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let id1 = created_task_id(&ev1);
+    wait_done(&coordinator, &id1);
+    assert_eq!(
+        fs::read(root.join("pub-to-bypass-redir.bin")).unwrap(),
+        b"served-directly-via-bypass"
+    );
+
+    // Case 2: Public (`127.0.0.1`, manual proxy) -> mirror failover -> Bypassed (`127.0.0.2`, direct)
+    let ev2 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{public_addr}/fail-primary"),
+                mirrors: vec![format!("http://{bypass_addr}/bypass-mirror.bin")],
+                filename: "pub-to-bypass-mirror.bin".into(),
+                concurrency: 1,
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let id2 = created_task_id(&ev2);
+    wait_done(&coordinator, &id2);
+    assert_eq!(
+        fs::read(root.join("pub-to-bypass-mirror.bin")).unwrap(),
+        b"served-directly-via-bypass"
+    );
+
+    // Case 3: Bypassed (`127.0.0.2`, pre-collapsed `spec.proxy == DIRECT_PROXY_SENTINEL`!)
+    // -> 302 redirect -> Public (`127.0.0.1`, MUST switch to authenticated manual proxy!)
+    let ev3 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{bypass_addr}/redir-to-public"),
+                filename: "bypass-to-pub-redir.bin".into(),
+                concurrency: 1,
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let id3 = created_task_id(&ev3);
+    assert_eq!(
+        coordinator.lock().unwrap().task_spec(&id3).unwrap().proxy,
+        crate::net_policy::DIRECT_PROXY_SENTINEL,
+        "admission still records DIRECT_PROXY_SENTINEL for bypassed entry URL"
+    );
+    wait_done(&coordinator, &id3);
+    assert_eq!(
+        fs::read(root.join("bypass-to-pub-redir.bin")).unwrap(),
+        b"served-via-authenticated-manual-proxy"
+    );
+
+    // Case 4: Bypassed (`127.0.0.2`, direct) -> mirror failover -> Public (`127.0.0.1`, manual proxy!)
+    let ev4 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{bypass_addr}/fail-bypass"),
+                mirrors: vec![format!("http://{public_addr}/public-mirror.bin")],
+                filename: "bypass-to-pub-mirror.bin".into(),
+                concurrency: 1,
+                allow_duplicate: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let id4 = created_task_id(&ev4);
+    wait_done(&coordinator, &id4);
+    assert_eq!(
+        fs::read(root.join("bypass-to-pub-mirror.bin")).unwrap(),
+        b"served-via-authenticated-manual-proxy"
+    );
+
+    // Verify zero `127.0.0.2` URLs ever touched the manual proxy, and all `127.0.0.1` URLs DID!
+    let proxied = proxied_targets.lock().unwrap().clone();
+    assert!(
+        proxied.iter().all(|u| !u.contains("127.0.0.2")),
+        "bypassed 127.0.0.2 must NEVER go through manual proxy: {proxied:?}"
+    );
+    assert!(
+        proxied.iter().any(|u| u.contains("/public-target.bin")),
+        "redirect from bypassed 127.0.0.2 to public 127.0.0.1 must use manual proxy: {proxied:?}"
+    );
+    assert!(
+        proxied.iter().any(|u| u.contains("/public-mirror.bin")),
+        "mirror failover from bypassed 127.0.0.2 to public 127.0.0.1 must use manual proxy: {proxied:?}"
+    );
+    let direct_hits = bypass_direct_hits.lock().unwrap().clone();
+    assert!(direct_hits.contains(&"/redir-to-public".to_string()));
+    assert!(direct_hits.contains(&"/from-public-redir.bin".to_string()));
+    assert!(direct_hits.contains(&"/bypass-mirror.bin".to_string()));
+
+    stop.store(true, Ordering::SeqCst);
+    let _ = proxy_srv.join();
+    let _ = public_srv.join();
+    let _ = bypass_srv.join();
+    drop(coordinator);
+    let _ = fs::remove_dir_all(root);
+}

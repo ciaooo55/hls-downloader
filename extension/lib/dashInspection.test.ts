@@ -306,4 +306,29 @@ describe('DASH browser inspection', () => {
     // Combined bandwidth = 4_000_000 (best video) + 384_000 (max audio) = 4_384_000 bps * 20s / 8 = 10_960_000 bytes
     expect(parsed?.estimatedSize).toBe(10_960_000)
   })
+
+  it('does not emit ghost duplicate audio tracks or bleed Representation <Label> across siblings (T5-R1)', () => {
+    const singleRepLabeledMpd = `<MPD type="static" mediaPresentationDuration="PT30S"><Period>
+      <AdaptationSet contentType="video"><Representation id="v" width="1280" height="720" bandwidth="2000000"/></AdaptationSet>
+      <AdaptationSet contentType="audio" mimeType="audio/mp4">
+        <Representation id="a1" lang="en" label="English Main" bandwidth="128000"/>
+      </AdaptationSet>
+    </Period></MPD>`
+    expect(parseDashManifest(singleRepLabeledMpd, 'https://cdn.test/single-rep.mpd')?.audioTracks).toEqual([
+      { label: 'English Main', language: 'en' },
+    ])
+
+    const siblingRepLabelsMpd = `<MPD type="static" mediaPresentationDuration="PT30S"><Period>
+      <AdaptationSet contentType="audio" mimeType="audio/mp4">
+        <Representation id="a-main" lang="en" bandwidth="192000"><Label>Main Mix</Label></Representation>
+        <Representation id="a-comm" lang="en" bandwidth="128000"><Label>Director Commentary</Label></Representation>
+      </AdaptationSet>
+      <AdaptationSet contentType="audio" lang="ja"/>
+    </Period></MPD>`
+    expect(parseDashManifest(siblingRepLabelsMpd, 'https://cdn.test/siblings.mpd')?.audioTracks).toEqual([
+      { label: 'Main Mix', language: 'en' },
+      { label: 'Director Commentary', language: 'en' },
+      { label: 'ja', language: 'ja' },
+    ])
+  })
 })

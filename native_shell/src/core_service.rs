@@ -28,7 +28,7 @@ struct PendingPresenterQueue {
 
 pub(crate) enum QuickHandoffPolicy {
     Disabled,
-    Prepared(Box<TaskSpec>),
+    Prepared(Box<TaskSpec>, String),
     StoreFallback,
 }
 
@@ -280,7 +280,7 @@ impl PersistentCore {
     fn default_quick_spec_from_store(
         &self,
         offer: &crate::ResourceOffer,
-    ) -> Result<Option<TaskSpec>, String> {
+    ) -> Result<Option<(TaskSpec, String)>, String> {
         if !self
             .store
             .setting_bool("browser_quick_download_enabled", false)?
@@ -437,8 +437,8 @@ impl PersistentCore {
                 headers.insert(header_name.into(), val);
             }
         }
-        let proxy = if local_source_path.is_some() {
-            String::new()
+        let (proxy, explicit_proxy) = if local_source_path.is_some() {
+            (String::new(), String::new())
         } else {
             let mut rule_proxy = String::new();
             if let Some(rule) = matched_rule {
@@ -480,7 +480,7 @@ impl PersistentCore {
             {
                 return Ok(None);
             }
-            effective
+            (effective, rule_proxy)
         };
         let mut credential_ref = offer.credential_ref.clone();
         if credential_ref.is_none() {
@@ -495,44 +495,47 @@ impl PersistentCore {
         if credential_ref.is_none() && is_http_url && self.store.default_cookie_configured()? {
             credential_ref = Some(crate::store::DEFAULT_COOKIE_CREDENTIAL_REF.into());
         }
-        Ok(Some(TaskSpec {
-            url: offer.url.trim().to_string(),
-            resource_kind: offer.resource_kind,
-            local_source_path,
-            title: if offer.title.trim().is_empty() {
-                filename.clone()
-            } else {
-                offer.title.clone()
+        Ok(Some((
+            TaskSpec {
+                url: offer.url.trim().to_string(),
+                resource_kind: offer.resource_kind,
+                local_source_path,
+                title: if offer.title.trim().is_empty() {
+                    filename.clone()
+                } else {
+                    offer.title.clone()
+                },
+                filename,
+                download_dir,
+                work_dir,
+                queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                allow_duplicate,
+                request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
+                mime_type: offer.mime_type.clone(),
+                concurrency,
+                speed_limit_kib,
+                proxy,
+                headers,
+                credential_ref,
+                replay_context_ref: offer.replay_context_ref.clone(),
+                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                    .then_some(offer.size),
+                preferred_bandwidth: offer.preferred_bandwidth,
+                preferred_height: offer.preferred_height,
+                preferred_variant_id: offer.preferred_variant_id.clone(),
+                source_page_url: offer.source_page_url.clone(),
+                audio_url: offer.audio_url.trim().to_string(),
+                resource_key: if offer.local_source_path.is_some() {
+                    String::new()
+                } else if offer.resource_key.trim().is_empty() {
+                    crate::http_engine::canonical_url_key(&offer.url)
+                } else {
+                    offer.resource_key.clone()
+                },
+                ..Default::default()
             },
-            filename,
-            download_dir,
-            work_dir,
-            queue_id: crate::DEFAULT_QUEUE_ID.into(),
-            allow_duplicate,
-            request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
-            mime_type: offer.mime_type.clone(),
-            concurrency,
-            speed_limit_kib,
-            proxy,
-            headers,
-            credential_ref,
-            replay_context_ref: offer.replay_context_ref.clone(),
-            expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
-                .then_some(offer.size),
-            preferred_bandwidth: offer.preferred_bandwidth,
-            preferred_height: offer.preferred_height,
-            preferred_variant_id: offer.preferred_variant_id.clone(),
-            source_page_url: offer.source_page_url.clone(),
-            audio_url: offer.audio_url.trim().to_string(),
-            resource_key: if offer.local_source_path.is_some() {
-                String::new()
-            } else if offer.resource_key.trim().is_empty() {
-                crate::http_engine::canonical_url_key(&offer.url)
-            } else {
-                offer.resource_key.clone()
-            },
-            ..Default::default()
-        }))
+            explicit_proxy,
+        )))
     }
 
     pub(crate) fn has_quick_handoff_duplicate_conflict(
@@ -707,13 +710,13 @@ impl PersistentCore {
             return Err("交接编号已属于另一请求".into());
         }
         let resolved_quick_spec = match quick_policy {
-            QuickHandoffPolicy::Prepared(spec) => Some(*spec),
+            QuickHandoffPolicy::Prepared(spec, explicit_proxy) => Some((*spec, explicit_proxy)),
             QuickHandoffPolicy::Disabled => None,
             QuickHandoffPolicy::StoreFallback => {
                 self.default_quick_spec_from_store(&original.offer)?
             }
         };
-        if let Some(spec) = resolved_quick_spec {
+        if let Some((spec, explicit_proxy)) = resolved_quick_spec {
             if crate::download_worker::validate_filename(&spec.filename).is_ok()
                 && !self.has_quick_handoff_duplicate_conflict(&original.offer, &spec)
             {
@@ -749,6 +752,8 @@ impl PersistentCore {
                         self.runtime = before;
                         return Err(error);
                     }
+                    self.store
+                        .set_task_explicit_proxy(&task_id, &explicit_proxy)?;
                     self.update_batch_disrupted_against(&before, &events);
                     self.committed(&events);
                     return Ok((encoded_accepted, Some(task_id)));
@@ -1341,6 +1346,18 @@ impl PersistentCore {
 
     pub fn task_spec(&self, task_id: &str) -> Option<&TaskSpec> {
         self.runtime.task_spec(task_id)
+    }
+
+    pub(crate) fn set_task_explicit_proxy(
+        &mut self,
+        task_id: &str,
+        explicit_proxy: &str,
+    ) -> Result<(), String> {
+        self.store.set_task_explicit_proxy(task_id, explicit_proxy)
+    }
+
+    pub(crate) fn task_explicit_proxy(&self, task_id: &str) -> Result<Option<String>, String> {
+        self.store.task_explicit_proxy(task_id)
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {

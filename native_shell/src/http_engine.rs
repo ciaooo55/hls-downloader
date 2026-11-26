@@ -3763,9 +3763,11 @@ fn system_route_is_direct(
     match lookup {
         // Explicit upstream proxy selected by Windows/PAC.
         Ok(Some(_)) => Ok(false),
-        // DIRECT (no system proxy / bypassed), or PAC lookup failed where WinHTTP
-        // AUTOMATIC_PROXY could fall back to direct: enforce NetworkScope DNS + pinning.
-        Ok(None) | Err(_) => Ok(true),
+        // Explicit DIRECT (no system proxy / bypassed): enforce NetworkScope DNS + pinning.
+        Ok(None) => Ok(true),
+        // Fail closed when system proxy or PAC resolution fails or encounters an
+        // unsupported proxy scheme so WinHTTP/curl never leaks DNS or downgrades to direct.
+        Err(error) => Err(EngineError::Failed(error)),
     }
 }
 
@@ -3840,7 +3842,7 @@ pub(crate) fn entry_network_scope(url: &str, proxy: &str) -> NetworkScope {
     }
     let resolves_direct = match proxy_route(&effective_proxy) {
         Ok(ProxyRoute::Direct) => true,
-        Ok(ProxyRoute::System) => system_route_is_direct(url, || Ok(())).unwrap_or(true),
+        Ok(ProxyRoute::System) => system_route_is_direct(url, || Ok(())).unwrap_or(false),
         Ok(ProxyRoute::Manual(_)) | Err(_) => false,
     };
     if resolves_direct && parsed.host.parse::<IpAddr>().is_err() {
@@ -13145,5 +13147,90 @@ mod tests {
         assert!(stall_err.to_string().contains("curl response stalled"));
         drop(stalled);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn system_proxy_lookup_failure_fails_closed_without_dns_leak_or_direct_fallback() {
+        use std::net::Ipv4Addr;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let direct_hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = Arc::clone(&direct_hits);
+        let srv = thread::spawn(move || {
+            let _ = listener.set_nonblocking(true);
+            let deadline = Instant::now() + Duration::from_millis(400);
+            while Instant::now() < deadline {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    hits_srv.fetch_add(1, Ordering::SeqCst);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nleak",
+                    );
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let dns_target = format!("http://pac-error.example.test:{}/secret.bin", addr.port());
+        let direct_loopback = format!("http://{addr}/secret.bin");
+
+        with_test_dns_override(
+            "pac-error.example.test",
+            vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
+            || {
+                // 1. Unsupported HTTPS system proxy error and PAC evaluation failure both fail closed.
+                for proxy_err in [
+                    "不支持 HTTPS 系统代理 https://corp-proxy.example:443",
+                    "WinHTTP PAC evaluation failed",
+                ] {
+                    with_test_system_proxy_override("http://", Err(proxy_err.to_string()), || {
+                        // `entry_network_scope` must NOT resolve local DNS when system proxy lookup errors.
+                        let scope = entry_network_scope(
+                            "http://lan-only-secret.corp.test/index",
+                            crate::net_policy::SYSTEM_PROXY_SENTINEL,
+                        );
+                        assert!(
+                            matches!(scope, NetworkScope::Public),
+                            "entry_network_scope must stay Public on system proxy error"
+                        );
+
+                        let parsed = parse_http_url(&dns_target).unwrap();
+                        let dest_err = scope
+                            .destination_for_url(
+                                &dns_target,
+                                &parsed,
+                                crate::net_policy::SYSTEM_PROXY_SENTINEL,
+                                || Ok(()),
+                            )
+                            .unwrap_err();
+                        assert!(
+                            dest_err.to_string().contains(proxy_err),
+                            "expected fail-closed error `{proxy_err}`, got `{dest_err}`"
+                        );
+
+                        // End-to-end `fetch_bytes_limited` (exercises curl-impersonate fallback -> WinHTTP/TCP)
+                        // must fail closed with `proxy_err` and NEVER connect directly to `listener`!
+                        let fetch_err = fetch_bytes_limited(
+                            &direct_loopback,
+                            &HashMap::new(),
+                            crate::net_policy::SYSTEM_PROXY_SENTINEL,
+                            1024,
+                        )
+                        .unwrap_err();
+                        assert!(
+                            fetch_err.to_string().contains(proxy_err),
+                            "expected fetch fail-closed `{proxy_err}`, got `{fetch_err}`"
+                        );
+                    });
+                }
+            },
+        );
+
+        let _ = srv.join();
+        assert_eq!(
+            direct_hits.load(Ordering::SeqCst),
+            0,
+            "system proxy lookup failure must never downgrade to direct connection"
+        );
     }
 }

@@ -2296,93 +2296,75 @@ fn download_prepared_segments(
             let completed = Arc::clone(&completed);
             let replay = replay.clone();
             let network_scope = network_scope.clone();
+            let network_policy = crate::net_policy::current_network_policy();
             let throttle = throttle.clone();
             let downloaded = &downloaded;
             let batch = &batch;
             scope.spawn(move || {
                 let _network = set_media_network_scope(network_scope);
-                crate::net_policy::with_throttle_context(throttle, || {
-                    crate::with_replay_json(&replay, || loop {
-                        match read_control(control).as_str() {
-                            "cancel" => {
-                                if let Ok(mut queue) = queue.lock() {
-                                    queue.clear();
+                crate::net_policy::with_network_policy(network_policy, || {
+                    crate::net_policy::with_throttle_context(throttle, || {
+                        crate::with_replay_json(&replay, || loop {
+                            match read_control(control).as_str() {
+                                "cancel" => {
+                                    if let Ok(mut queue) = queue.lock() {
+                                        queue.clear();
+                                    }
+                                    if let Ok(mut errors) = errors.lock() {
+                                        errors.push("canceled".into());
+                                    }
+                                    break;
                                 }
-                                if let Ok(mut errors) = errors.lock() {
-                                    errors.push("canceled".into());
+                                "pause" => {
+                                    if let Ok(mut queue) = queue.lock() {
+                                        queue.clear();
+                                    }
+                                    if let Ok(mut errors) = errors.lock() {
+                                        errors.push("paused".into());
+                                    }
+                                    break;
                                 }
-                                break;
+                                "finish" if durable.is_none() => {
+                                    if let Ok(mut queue) = queue.lock() {
+                                        queue.clear();
+                                    }
+                                    if let Ok(mut errors) = errors.lock() {
+                                        errors.push("finish".into());
+                                    }
+                                    break;
+                                }
+                                _ => {}
                             }
-                            "pause" => {
-                                if let Ok(mut queue) = queue.lock() {
-                                    queue.clear();
-                                }
-                                if let Ok(mut errors) = errors.lock() {
-                                    errors.push("paused".into());
-                                }
-                                break;
-                            }
-                            "finish" if durable.is_none() => {
-                                if let Ok(mut queue) = queue.lock() {
-                                    queue.clear();
-                                }
-                                if let Ok(mut errors) = errors.lock() {
-                                    errors.push("finish".into());
-                                }
-                                break;
-                            }
-                            _ => {}
-                        }
-                        let work = queue.lock().ok().and_then(|mut queue| {
-                            if let Some(priority) =
-                                control.parent().and_then(super::preview::priority_file)
-                            {
-                                if let Some(index) =
-                                    queue.iter().position(|work| work.path == priority)
+                            let work = queue.lock().ok().and_then(|mut queue| {
+                                if let Some(priority) =
+                                    control.parent().and_then(super::preview::priority_file)
                                 {
-                                    queue.rotate_left(index);
-                                }
-                            }
-                            queue.pop_front()
-                        });
-                        let Some(work) = work else {
-                            break;
-                        };
-                        match download_segment(
-                            &work.segment,
-                            headers,
-                            proxy,
-                            &work.path,
-                            control,
-                            work.key_bytes.as_ref(),
-                            work.segment.key.as_ref(),
-                            work.segment.media_sequence,
-                            durable.is_none(),
-                        ) {
-                            Ok(_) => {
-                                if let Some(root) = control.parent() {
-                                    if let Err(error) = super::preview::mark_ready(root, &work.path)
+                                    if let Some(index) =
+                                        queue.iter().position(|work| work.path == priority)
                                     {
-                                        if let Ok(mut queue) = queue.lock() {
-                                            queue.clear();
-                                        }
-                                        if let Ok(mut errors) = errors.lock() {
-                                            errors.push(error);
-                                        }
-                                        break;
+                                        queue.rotate_left(index);
                                     }
                                 }
-                                if let Ok(mut completed) = completed.lock() {
-                                    completed.insert(work.path.clone());
-                                    on_completed(&completed);
-                                }
-                                if let Some(durable) = durable {
-                                    let due = batch.lock().ok().and_then(|mut batch| {
-                                        batch.push(work.path.clone(), file_len(&work.path))
-                                    });
-                                    if let Some(due) = due {
+                                queue.pop_front()
+                            });
+                            let Some(work) = work else {
+                                break;
+                            };
+                            match download_segment(
+                                &work.segment,
+                                headers,
+                                proxy,
+                                &work.path,
+                                control,
+                                work.key_bytes.as_ref(),
+                                work.segment.key.as_ref(),
+                                work.segment.media_sequence,
+                                durable.is_none(),
+                            ) {
+                                Ok(_) => {
+                                    if let Some(root) = control.parent() {
                                         if let Err(error) =
-                                            commit_segment_batch(&due, durable, &completed)
+                                            super::preview::mark_ready(root, &work.path)
                                         {
                                             if let Ok(mut queue) = queue.lock() {
                                                 queue.clear();
@@ -2393,32 +2375,54 @@ fn download_prepared_segments(
                                             break;
                                         }
                                     }
-                                }
-                                if let Some((path, _, previous, total, live)) = progress {
-                                    if let Ok(mut bytes) = downloaded.lock() {
-                                        bytes.0 += file_len(&work.path);
-                                        bytes.1 += 1;
-                                        crate::http_engine::write_media_progress(
-                                            path,
-                                            bytes.0,
-                                            previous + bytes.1,
-                                            total,
-                                            live,
-                                        );
+                                    if let Ok(mut completed) = completed.lock() {
+                                        completed.insert(work.path.clone());
+                                        on_completed(&completed);
+                                    }
+                                    if let Some(durable) = durable {
+                                        let due = batch.lock().ok().and_then(|mut batch| {
+                                            batch.push(work.path.clone(), file_len(&work.path))
+                                        });
+                                        if let Some(due) = due {
+                                            if let Err(error) =
+                                                commit_segment_batch(&due, durable, &completed)
+                                            {
+                                                if let Ok(mut queue) = queue.lock() {
+                                                    queue.clear();
+                                                }
+                                                if let Ok(mut errors) = errors.lock() {
+                                                    errors.push(error);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if let Some((path, _, previous, total, live)) = progress {
+                                        if let Ok(mut bytes) = downloaded.lock() {
+                                            bytes.0 += file_len(&work.path);
+                                            bytes.1 += 1;
+                                            crate::http_engine::write_media_progress(
+                                                path,
+                                                bytes.0,
+                                                previous + bytes.1,
+                                                total,
+                                                live,
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            Err(error) => {
-                                // 已完成的分片仍正常记入 checkpoint；失败后不再派发新分片。
-                                if let Ok(mut queue) = queue.lock() {
-                                    queue.clear();
+                                Err(error) => {
+                                    // 已完成的分片仍正常记入 checkpoint；失败后不再派发新分片。
+                                    if let Ok(mut queue) = queue.lock() {
+                                        queue.clear();
+                                    }
+                                    if let Ok(mut errors) = errors.lock() {
+                                        errors.push(error);
+                                    }
+                                    break;
                                 }
-                                if let Ok(mut errors) = errors.lock() {
-                                    errors.push(error);
-                                }
-                                break;
                             }
-                        }
+                        })
                     })
                 });
             });
@@ -2679,6 +2683,7 @@ impl LiveAudioRecorder {
         let thread_parent = parent_control.to_path_buf();
         let thread_finishing = Arc::clone(&finishing);
         let network_scope = media_network_scope();
+        let network_policy = crate::net_policy::current_network_policy();
         let replay = crate::credentials::scoped_replay_json();
         let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
         // 保留主任务的限速/配额，但子请求须读取音轨自己的取消信号，否则 Drop 会等到网络超时。
@@ -2686,27 +2691,29 @@ impl LiveAudioRecorder {
         let handle = std::thread::spawn(move || {
             let _reg = crate::task_control::register(&thread_control);
             let _network = set_media_network_scope(network_scope);
-            crate::net_policy::with_throttle_context(Some(throttle), || {
-                crate::with_replay_json(&replay, || {
-                    let _ = set_media_network_scope(Some(entry_network_scope(&uri, &proxy)));
-                    super::with_media_headers(&uri, &headers, || {
-                        download_hls_scoped_with_control(
-                            &uri,
-                            &headers,
-                            &proxy,
-                            &audio_dir,
-                            LiveControl {
-                                control: &thread_control,
-                                parent_control: (!thread_parent.as_os_str().is_empty())
-                                    .then_some(thread_parent.as_path()),
-                                finishing: Some(&thread_finishing),
-                            },
-                            HlsDownloadOptions {
-                                live: true,
-                                download_subtitles: false,
-                                ..HlsDownloadOptions::default()
-                            },
-                        )
+            crate::net_policy::with_network_policy(network_policy, || {
+                crate::net_policy::with_throttle_context(Some(throttle), || {
+                    crate::with_replay_json(&replay, || {
+                        let _ = set_media_network_scope(Some(entry_network_scope(&uri, &proxy)));
+                        super::with_media_headers(&uri, &headers, || {
+                            download_hls_scoped_with_control(
+                                &uri,
+                                &headers,
+                                &proxy,
+                                &audio_dir,
+                                LiveControl {
+                                    control: &thread_control,
+                                    parent_control: (!thread_parent.as_os_str().is_empty())
+                                        .then_some(thread_parent.as_path()),
+                                    finishing: Some(&thread_finishing),
+                                },
+                                HlsDownloadOptions {
+                                    live: true,
+                                    download_subtitles: false,
+                                    ..HlsDownloadOptions::default()
+                                },
+                            )
+                        })
                     })
                 })
             })
@@ -2738,13 +2745,7 @@ impl LiveAudioRecorder {
         self.finishing.store(false, Ordering::SeqCst);
         let _ = crate::task_control::set(&self.control, control_word)
             .or_else(|_| fs::write(&self.control, control_word).map_err(|error| error.to_string()));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-        while !handle.is_finished() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        if handle.is_finished() {
-            let _ = handle.join();
-        }
+        let _ = handle.join();
     }
 
     fn finish(&mut self) -> Result<Option<PathBuf>, String> {
@@ -6669,21 +6670,41 @@ mod tests {
         let audio_playlist = fs::read_to_string(root.join("audio/local.m3u8")).unwrap();
         assert!(audio_playlist.contains("#EXT-X-ENDLIST"));
 
-        // 2. While finish() waits on a slow worker, parent "pause" and "cancel" return promptly and clear finishing.
+        // 2. While finish() waits on a slow worker (e.g. in-progress remux while `finishing == true`),
+        //    parent "pause" and "cancel" clear `finishing`, propagate `parent_word` to `audio.control`,
+        //    and join the worker once it exits.
         for (parent_word, expected_err) in [("pause", "paused"), ("cancel", "canceled")] {
             let sub = root.join(parent_word);
             fs::create_dir_all(&sub).unwrap();
             let p_ctrl = sub.join("control");
+            let a_ctrl = sub.join("audio.control");
             fs::write(&p_ctrl, "run").unwrap();
-            let (stop_worker_tx, stop_worker_rx) = mpsc::channel();
+            fs::write(&a_ctrl, "run").unwrap();
             let finishing = Arc::new(AtomicBool::new(false));
+            let worker_finishing = Arc::clone(&finishing);
+            let worker_a_ctrl = a_ctrl.clone();
+            let worker_exited = Arc::new(AtomicBool::new(false));
+            let worker_exited_flag = Arc::clone(&worker_exited);
             let mut slow_recorder = LiveAudioRecorder {
-                control: sub.join("audio.control"),
+                control: a_ctrl,
                 parent_control: p_ctrl.clone(),
                 finishing: Arc::clone(&finishing),
                 handle: Some(std::thread::spawn(move || {
-                    let _ = stop_worker_rx.recv_timeout(Duration::from_secs(10));
-                    Err("canceled".into())
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while Instant::now() < deadline {
+                        // Normal finish sets `(finishing=true, audio.control="cancel")`; simulate slow remux
+                        // until `propagate_parent_abort` clears `finishing=false` and writes `parent_word`.
+                        if !worker_finishing.load(Ordering::SeqCst)
+                            && read_control(&worker_a_ctrl) == parent_word
+                        {
+                            // Also take >200ms after observing abort to verify `finish()` joins instead of detaching!
+                            std::thread::sleep(Duration::from_millis(240));
+                            worker_exited_flag.store(true, Ordering::SeqCst);
+                            return Err(expected_err.into());
+                        }
+                        std::thread::sleep(Duration::from_millis(15));
+                    }
+                    Err("timed out waiting for propagated parent abort".into())
                 })),
             };
             let trigger_ctrl = p_ctrl.clone();
@@ -6694,13 +6715,16 @@ mod tests {
             let wait_started = Instant::now();
             let err = slow_recorder.finish().unwrap_err();
             let wait_elapsed = wait_started.elapsed();
-            let _ = stop_worker_tx.send(());
             signaler.join().unwrap();
             assert_eq!(err, expected_err);
             assert!(!finishing.load(Ordering::SeqCst));
             assert!(
-                wait_elapsed < Duration::from_secs(2),
-                "finish() ignored parent {parent_word}: {wait_elapsed:?}"
+                worker_exited.load(Ordering::SeqCst),
+                "finish() must join audio worker before returning on parent {parent_word}"
+            );
+            assert!(
+                wait_elapsed >= Duration::from_millis(280) && wait_elapsed < Duration::from_secs(2),
+                "finish() parent {parent_word} timing out of expected join window: {wait_elapsed:?}"
             );
         }
         let _ = fs::remove_dir_all(root);
@@ -6882,6 +6906,65 @@ mod tests {
             .map(|e| fs::read_to_string(&e.path).unwrap())
             .collect();
         assert_eq!(payloads, vec!["E1-0", "E1-1", "E2-0", "E2-1"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_audio_recorder_finish_waits_beyond_200ms_for_canceled_worker_join() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-live-audio-join-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let audio_dir = root.join("audio");
+        fs::create_dir_all(&audio_dir).unwrap();
+        let parent_control = root.join("parent.control");
+        let audio_control = root.join("audio.control");
+        fs::write(&parent_control, "cancel").unwrap();
+        fs::write(&audio_control, "run").unwrap();
+
+        let exited = Arc::new(AtomicBool::new(false));
+        let worker_exited = Arc::clone(&exited);
+        let worker_control = audio_control.clone();
+        let worker_done_file = audio_dir.join("teardown.done");
+        let handle = std::thread::spawn(move || -> Result<PathBuf, String> {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while read_control(&worker_control) != "cancel" {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "audio worker did not observe propagated cancel"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            // Simulate FFmpeg / WinHTTP teardown taking > 200ms (previously detached early).
+            std::thread::sleep(std::time::Duration::from_millis(320));
+            fs::write(&worker_done_file, b"flushed").unwrap();
+            worker_exited.store(true, Ordering::SeqCst);
+            Err("canceled".into())
+        });
+
+        let mut recorder = LiveAudioRecorder {
+            control: audio_control,
+            parent_control,
+            finishing: Arc::new(AtomicBool::new(false)),
+            handle: Some(handle),
+        };
+        let started = std::time::Instant::now();
+        let err = recorder.finish().unwrap_err();
+        assert_eq!(err, "canceled");
+        assert!(
+            exited.load(Ordering::SeqCst),
+            "LiveAudioRecorder::finish must block until the audio worker fully exits"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(300),
+            "finish returned before delayed audio teardown completed: {:?}",
+            started.elapsed()
+        );
+        assert!(audio_dir.join("teardown.done").is_file());
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -96,6 +96,7 @@ pub(crate) struct MediaProxy {
     spec: TaskSpec,
     replay: String,
     network_scope: crate::http_engine::NetworkScope,
+    network_policy: Option<crate::net_policy::NetworkPolicyContext>,
     root_is_loopback: bool,
     pub canceled: Arc<AtomicBool>,
     routes: Mutex<Routes>,
@@ -120,6 +121,7 @@ impl MediaProxy {
             return Err("媒体地址无效".into());
         }
         let root_is_loopback = is_loopback_media_host(&root_host);
+        let network_policy = crate::net_policy::current_network_policy();
         let network_scope = {
             let _clear = crate::http_engine::set_media_network_scope(None);
             crate::http_engine::entry_network_scope(&spec.url, &spec.proxy)
@@ -128,6 +130,7 @@ impl MediaProxy {
             replay: crate::credentials::bind_replay_source_url(&replay, &spec.url),
             spec,
             network_scope,
+            network_policy,
             root_is_loopback,
             canceled: Arc::new(AtomicBool::new(false)),
             routes: Mutex::new(Routes::default()),
@@ -144,6 +147,11 @@ impl MediaProxy {
             || crate::http_engine::http_origin(url).is_none()
         {
             return Err("清单包含无效媒体地址".into());
+        }
+        if let Some(policy) = &self.network_policy {
+            if !crate::net_policy::url_allowed(url, &policy.allowed_hosts) {
+                return Err("清单地址不在允许的域名范围内".into());
+            }
         }
         if !self.spec.origin_boundary.is_empty()
             && crate::http_engine::http_origin(url).as_deref()
@@ -330,114 +338,116 @@ impl MediaProxy {
         let mut started = false;
         let _network =
             crate::http_engine::set_media_network_scope(Some(self.network_scope.clone()));
-        let result = crate::http_engine::with_media_response(
-            &spec,
-            &self.replay,
-            &request_url,
-            method,
-            range,
-            &self.canceled,
-            Arc::clone(&peer),
-            |mut response| {
-                if !(200..300).contains(&response.status) {
-                    started = true;
-                    return status(
-                        stream,
-                        if (400..600).contains(&response.status) {
-                            response.status
-                        } else {
-                            502
-                        },
-                    );
-                }
-                let mut first = Vec::new();
-                if method != "HEAD" {
-                    (&mut response)
-                        .take(4096)
-                        .read_to_end(&mut first)
-                        .map_err(|e| e.to_string())?;
-                }
-                let kind = manifest_kind(&response.final_url, &response.content_type, &first);
-                if let Some(kind) = kind {
-                    if method == "HEAD" {
+        let result = crate::net_policy::with_network_policy(self.network_policy.clone(), || {
+            crate::http_engine::with_media_response(
+                &spec,
+                &self.replay,
+                &request_url,
+                method,
+                range,
+                &self.canceled,
+                Arc::clone(&peer),
+                |mut response| {
+                    if !(200..300).contains(&response.status) {
                         started = true;
-                        return write_head(stream, 200, mime(kind), None, None, false);
+                        return status(
+                            stream,
+                            if (400..600).contains(&response.status) {
+                                response.status
+                            } else {
+                                502
+                            },
+                        );
                     }
-                    if response.status != 200 {
-                        return Err("清单未返回完整正文".into());
+                    let mut first = Vec::new();
+                    if method != "HEAD" {
+                        (&mut response)
+                            .take(4096)
+                            .read_to_end(&mut first)
+                            .map_err(|e| e.to_string())?;
                     }
-                    let limit = crate::media::MAX_MANIFEST_BYTES;
-                    if response.content_length.is_some_and(|n| n > limit) {
-                        return Err("投屏清单超过读取上限".into());
-                    }
-                    (&mut response)
-                        .take(limit + 1 - first.len() as u64)
-                        .read_to_end(&mut first)
-                        .map_err(|e| e.to_string())?;
-                    if first.len() as u64 > limit {
-                        return Err("投屏清单超过读取上限".into());
-                    }
-                    if response
-                        .content_length
-                        .is_some_and(|n| n != first.len() as u64)
-                    {
-                        return Err("投屏清单正文不完整".into());
-                    }
-                    let text = std::str::from_utf8(&first).map_err(|_| "投屏清单不是 UTF-8")?;
-                    let mut route_bytes = 0;
-                    let mut register = |url: String, is_template: bool| {
-                        route_bytes += url.len();
-                        if route_bytes > MAX_ROUTE_BYTES / 2 {
-                            return Err("投屏清单地址总长度超限".into());
+                    let kind = manifest_kind(&response.final_url, &response.content_type, &first);
+                    if let Some(kind) = kind {
+                        if method == "HEAD" {
+                            started = true;
+                            return write_head(stream, 200, mime(kind), None, None, false);
                         }
-                        if is_template {
-                            self.route_template(prefix, url)
+                        if response.status != 200 {
+                            return Err("清单未返回完整正文".into());
+                        }
+                        let limit = crate::media::MAX_MANIFEST_BYTES;
+                        if response.content_length.is_some_and(|n| n > limit) {
+                            return Err("投屏清单超过读取上限".into());
+                        }
+                        (&mut response)
+                            .take(limit + 1 - first.len() as u64)
+                            .read_to_end(&mut first)
+                            .map_err(|e| e.to_string())?;
+                        if first.len() as u64 > limit {
+                            return Err("投屏清单超过读取上限".into());
+                        }
+                        if response
+                            .content_length
+                            .is_some_and(|n| n != first.len() as u64)
+                        {
+                            return Err("投屏清单正文不完整".into());
+                        }
+                        let text = std::str::from_utf8(&first).map_err(|_| "投屏清单不是 UTF-8")?;
+                        let mut route_bytes = 0;
+                        let mut register = |url: String, is_template: bool| {
+                            route_bytes += url.len();
+                            if route_bytes > MAX_ROUTE_BYTES / 2 {
+                                return Err("投屏清单地址总长度超限".into());
+                            }
+                            if is_template {
+                                self.route_template(prefix, url)
+                            } else {
+                                self.route_literal(prefix, url)
+                            }
+                        };
+                        let rewritten = if kind == "hls" {
+                            rewrite_hls(text, &response.final_url, |url| register(url, false))?
                         } else {
-                            self.route_literal(prefix, url)
-                        }
-                    };
-                    let rewritten = if kind == "hls" {
-                        rewrite_hls(text, &response.final_url, |url| register(url, false))?
-                    } else {
-                        rewrite_dash(text, &response.final_url, &mut register)?
-                    };
+                            rewrite_dash(text, &response.final_url, &mut register)?
+                        };
+                        started = true;
+                        write_head(
+                            stream,
+                            200,
+                            mime(kind),
+                            Some(rewritten.len() as u64),
+                            None,
+                            false,
+                        )?;
+                        return stream
+                            .write_all(rewritten.as_bytes())
+                            .map_err(|e| e.to_string());
+                    }
                     started = true;
                     write_head(
                         stream,
-                        200,
-                        mime(kind),
-                        Some(rewritten.len() as u64),
-                        None,
-                        false,
+                        response.status,
+                        &response.content_type,
+                        response.content_length,
+                        response.content_range.as_deref(),
+                        response.accept_ranges,
                     )?;
-                    return stream
-                        .write_all(rewritten.as_bytes())
-                        .map_err(|e| e.to_string());
-                }
-                started = true;
-                write_head(
-                    stream,
-                    response.status,
-                    &response.content_type,
-                    response.content_length,
-                    response.content_range.as_deref(),
-                    response.accept_ranges,
-                )?;
-                if method == "HEAD" {
-                    return Ok(());
-                }
-                stream.write_all(&first).map_err(|e| e.to_string())?;
-                let mut buffer = [0u8; 64 * 1024];
-                loop {
-                    let n = response.read(&mut buffer).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
+                    if method == "HEAD" {
+                        return Ok(());
                     }
-                    stream.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            },
-        );
+                    stream.write_all(&first).map_err(|e| e.to_string())?;
+                    let mut buffer = [0u8; 64 * 1024];
+                    loop {
+                        let n = response.read(&mut buffer).map_err(|e| e.to_string())?;
+                        if n == 0 {
+                            break;
+                        }
+                        stream.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                },
+            )
+        });
         if result.is_err() && !started {
             return status(stream, 502);
         }
