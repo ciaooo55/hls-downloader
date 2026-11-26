@@ -95,11 +95,19 @@ pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String>
 }
 
 pub(super) fn lookup(target_url: &str, allow_https: bool) -> Result<Option<String>, String> {
+    lookup_with(target_url, allow_https, lookup_url)
+}
+
+fn lookup_with(
+    target_url: &str,
+    allow_https: bool,
+    mut probe: impl FnMut(&str, bool) -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
     let candidates = pac_probe_urls(target_url)?;
     let mut first_error = None;
     let mut saw_direct = false;
     for candidate in &candidates {
-        match lookup_url(candidate, allow_https) {
+        match probe(candidate, allow_https) {
             Ok(Some(proxy)) => return Ok(Some(proxy)),
             Ok(None) => saw_direct = true,
             Err(error) => {
@@ -109,10 +117,12 @@ pub(super) fn lookup(target_url: &str, allow_https: bool) -> Result<Option<Strin
             }
         }
     }
-    if saw_direct {
+    if let Some(error) = first_error {
+        Err(error)
+    } else if saw_direct {
         Ok(None)
     } else {
-        Err(first_error.unwrap_or_else(|| "Windows 系统代理未返回路由".into()))
+        Err("Windows 系统代理未返回路由".into())
     }
 }
 
@@ -246,5 +256,59 @@ mod pac_probe_tests {
         assert!(pac_probe_urls("not-a-url").is_err());
         assert!(pac_probe_urls("sftp://user@/path").is_err());
         assert!(pac_probe_urls("https://evil.example\0.good.example/a").is_err());
+    }
+
+    #[test]
+    fn dual_scheme_ftps_lookup_fails_closed_when_direct_coexists_with_probe_error() {
+        use super::lookup_with;
+
+        // ftp -> DIRECT, https -> unsupported HTTPS proxy / PAC error: MUST fail closed!
+        let err = lookup_with("ftps://files.example.com:990/a.bin", false, |probe, _| {
+            if probe.starts_with("ftp://") {
+                Ok(None)
+            } else {
+                Err("原生 FTP/SFTP 尚不支持到 HTTPS 代理的 TLS 连接".into())
+            }
+        })
+        .unwrap_err();
+        assert!(err.contains("HTTPS 代理"), "{err}");
+
+        // ftp -> PAC error, https -> DIRECT: MUST also fail closed!
+        let err = lookup_with("ftps://files.example.com:990/a.bin", false, |probe, _| {
+            if probe.starts_with("ftp://") {
+                Err("Windows 系统代理解析失败（12167）".into())
+            } else {
+                Ok(None)
+            }
+        })
+        .unwrap_err();
+        assert!(err.contains("12167"), "{err}");
+
+        // ftp -> DIRECT, https -> usable proxy: resolves the usable proxy!
+        let resolved = lookup_with("ftps://files.example.com:990/a.bin", false, |probe, _| {
+            if probe.starts_with("ftp://") {
+                Ok(None)
+            } else {
+                Ok(Some("socks4://127.0.0.1:1080".into()))
+            }
+        })
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some("socks4://127.0.0.1:1080"));
+
+        // ftp -> error, https -> usable proxy: resolves the usable proxy!
+        let resolved = lookup_with("ftps://files.example.com:990/a.bin", false, |probe, _| {
+            if probe.starts_with("ftp://") {
+                Err("Windows 系统代理解析失败（12006）".into())
+            } else {
+                Ok(Some("http://127.0.0.1:8080".into()))
+            }
+        })
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some("http://127.0.0.1:8080"));
+
+        // Both probes return DIRECT without error: returns DIRECT (Ok(None)).
+        let direct =
+            lookup_with("ftps://files.example.com:990/a.bin", false, |_, _| Ok(None)).unwrap();
+        assert_eq!(direct, None);
     }
 }

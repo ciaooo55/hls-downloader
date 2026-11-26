@@ -14,6 +14,8 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_RESOURCES: usize = 2000;
+const MAX_SEEN: usize = 4096;
+const MAX_STATE_URL_BYTES: usize = 2 * 1024 * 1024;
 const DOCUMENT_LIMIT: u64 = 1024 * 1024;
 const PROJECT_LIMIT: u64 = 32 * 1024 * 1024;
 
@@ -305,6 +307,29 @@ pub(crate) fn dispatch(
             for resource in &mut state.project.resources {
                 if resource.selected {
                     resource.last_checked_ms = 0;
+                    resource.error.clear();
+                    if let Some(sync) = state.sync.get_mut(&resource.url) {
+                        if sync.pending {
+                            let key = format!(
+                                "{}:{}:{}",
+                                state.project.id,
+                                hash(&resource.url),
+                                sync.generation
+                            );
+                            let has_active_task = core.tasks().into_iter().any(|task| {
+                                !matches!(
+                                    task.status.as_str(),
+                                    "completed" | "failed" | "cancelled" | "canceled"
+                                ) && core
+                                    .task_spec(&task.task_id)
+                                    .is_some_and(|s| s.crawl_resource_key == key)
+                            });
+                            if !has_active_task {
+                                sync.pending = false;
+                                sync.digest.clear();
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -461,15 +486,24 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                     response.status
                 ));
             }
-            let text = String::from_utf8(response.body)
-                .map_err(|_| "页面不是 UTF-8 文本，待访问项已保留")?;
-            let refs = references(&text, &response.final_url, &page.kind);
+            let body_len = response.body.len() as u64;
+            let (refs, valid_utf8) = match String::from_utf8(response.body) {
+                Ok(text) => {
+                    let refs = references(&text, &response.final_url, &page.kind);
+                    (refs, Some(text))
+                }
+                Err(non_utf8) => {
+                    let lossy = String::from_utf8_lossy(non_utf8.as_bytes());
+                    let refs = references(&lossy, &response.final_url, &page.kind);
+                    (refs, None)
+                }
+            };
             let core = coordinator.lock()?;
             let mut latest = core.store().crawl_state(id)?;
             if !latest.pending.iter().any(|p| p.url == page.url) {
                 continue;
             }
-            latest.metadata_bytes += text.len() as u64;
+            latest.metadata_bytes += body_len;
             if latest.metadata_bytes > PROJECT_LIMIT {
                 latest.pending.clear();
                 latest.project.status = "ready".into();
@@ -478,16 +512,26 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                 break;
             }
             if latest.project.spec.offline {
-                atomic_write(
-                    &Path::new(&latest.cache_dir).join(format!("{}.source", hash(&page.url))),
-                    text.as_bytes(),
-                )?;
+                let source_cache =
+                    Path::new(&latest.cache_dir).join(format!("{}.source", hash(&page.url)));
+                if let Some(ref text) = valid_utf8 {
+                    atomic_write(&source_cache, text.as_bytes())?;
+                } else {
+                    let _ = std::fs::remove_file(&source_cache);
+                }
             }
             latest.pending.retain(|p| p.url != page.url);
             if page.kind == "page" {
                 latest.project.visited_pages += 1;
             }
-            add_resource(&mut latest, &page.url, &page.kind);
+            let mut url_bytes = state_url_bytes(&latest);
+            if url_bytes.saturating_add(page.url.len()) <= MAX_STATE_URL_BYTES
+                && add_resource(&mut latest, &page.url, &page.kind)
+            {
+                url_bytes = url_bytes.saturating_add(page.url.len());
+            }
+            let mut queued_pages =
+                latest.pending.iter().filter(|p| p.kind == "page").count() as u32;
             for reference in refs {
                 if reference.kind == "base" || !allowed(&latest.project.spec, &reference.url) {
                     continue;
@@ -496,19 +540,30 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
                 if reference.kind == "page" && depth > latest.project.spec.max_depth {
                     continue;
                 }
-                add_resource(&mut latest, &reference.url, &reference.kind);
+                if url_bytes.saturating_add(reference.url.len()) <= MAX_STATE_URL_BYTES
+                    && add_resource(&mut latest, &reference.url, &reference.kind)
+                {
+                    url_bytes = url_bytes.saturating_add(reference.url.len());
+                }
                 if (reference.kind == "page"
                     || latest.project.spec.offline && reference.kind == "style")
-                    && latest.seen.insert(reference.url.clone())
+                    && !latest.seen.contains(&reference.url)
                 {
-                    let queued_pages =
-                        latest.pending.iter().filter(|p| p.kind == "page").count() as u32;
                     if reference.kind == "page"
                         && latest.project.visited_pages + queued_pages
                             >= latest.project.spec.max_pages
                     {
                         latest.project.reason = "达到页面数量上限".into();
-                    } else if latest.seen.len() <= MAX_RESOURCES {
+                    } else if latest.project.resources.len() < MAX_RESOURCES
+                        && latest.seen.len() < MAX_SEEN
+                        && url_bytes.saturating_add(reference.url.len().saturating_mul(2))
+                            <= MAX_STATE_URL_BYTES
+                    {
+                        url_bytes = url_bytes.saturating_add(reference.url.len().saturating_mul(2));
+                        latest.seen.insert(reference.url.clone());
+                        if reference.kind == "page" {
+                            queued_pages += 1;
+                        }
                         latest.pending.push_back(Page {
                             url: reference.url,
                             depth,
@@ -554,13 +609,25 @@ fn tick(coordinator: &CoreCoordinator, id: &str, stop: &AtomicBool) -> Result<()
     Ok(())
 }
 
-fn add_resource(state: &mut CrawlState, url: &str, kind: &str) {
+fn state_url_bytes(state: &CrawlState) -> usize {
+    state
+        .project
+        .resources
+        .iter()
+        .map(|r| r.url.len())
+        .sum::<usize>()
+        .saturating_add(state.seen.iter().map(String::len).sum::<usize>())
+        .saturating_add(state.pending.iter().map(|p| p.url.len()).sum::<usize>())
+        .saturating_add(state.sync.keys().map(String::len).sum::<usize>())
+}
+
+fn add_resource(state: &mut CrawlState, url: &str, kind: &str) -> bool {
     if state.project.resources.len() >= MAX_RESOURCES
         || !resource_allowed(&state.project.spec, url, kind)
         || kind == "page" && !state.project.spec.offline
         || state.project.resources.iter().any(|r| r.url == url)
     {
-        return;
+        return false;
     }
     state.project.resources.push(CrawlResource {
         url: url.into(),
@@ -574,6 +641,7 @@ fn add_resource(state: &mut CrawlState, url: &str, kind: &str) {
         last_checked_ms: 0,
         error: String::new(),
     });
+    true
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -645,11 +713,13 @@ fn sync_resource(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(
                         );
                     }
                     let raw = std::fs::read(source).map_err(|e| e.to_string())?;
-                    std::str::from_utf8(&raw).map_err(|_| "离线文档不是 UTF-8 文本")?;
-                    atomic_write(
-                        &Path::new(&state.cache_dir).join(format!("{}.source", hash(url))),
-                        &raw,
-                    )?;
+                    let source_cache =
+                        Path::new(&state.cache_dir).join(format!("{}.source", hash(url)));
+                    if std::str::from_utf8(&raw).is_ok() {
+                        atomic_write(&source_cache, &raw)?;
+                    } else {
+                        let _ = std::fs::remove_file(&source_cache);
+                    }
                 }
                 // Store the digest before rename so a crash after publication can
                 // distinguish the new complete file from the previous version.
@@ -692,7 +762,8 @@ fn sync_resource(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(
         {
             return finish_sync(coordinator, id, url);
         }
-        let mut spec = coordinator.metadata_spec(url)?;
+        let (mut spec, explicit_proxy) = coordinator.metadata_spec_with_explicit_proxy(url)?;
+        spec.proxy = explicit_proxy;
         spec.queue_id = state.project.spec.queue_id.clone();
         spec.download_dir = Path::new(&state.project.spec.output_dir)
             .join(".updates")
@@ -829,9 +900,20 @@ fn resource_error(
     url: &str,
     error: &str,
 ) -> Result<(), String> {
-    update_resource(coordinator, id, url, |r| {
-        r.error = error.into();
-        r.last_checked_ms = now();
+    edit_state(coordinator, id, |state| {
+        if let Some(sync) = state.sync.get_mut(url) {
+            sync.pending = false;
+            sync.digest.clear();
+        }
+        let resource = state
+            .project
+            .resources
+            .iter_mut()
+            .find(|r| r.url == url)
+            .ok_or("资源不存在")?;
+        resource.error = error.into();
+        resource.last_checked_ms = now();
+        Ok(())
     })
 }
 fn finish_sync(coordinator: &CoreCoordinator, id: &str, url: &str) -> Result<(), String> {
@@ -1143,7 +1225,10 @@ fn rewrite_offline(coordinator: &CoreCoordinator, id: &str) -> Result<(), String
         if !raw.is_file() {
             continue;
         }
-        let mut text = std::fs::read_to_string(&raw).map_err(|e| e.to_string())?;
+        let raw_bytes = std::fs::read(&raw).map_err(|e| e.to_string())?;
+        let Ok(mut text) = String::from_utf8(raw_bytes) else {
+            continue;
+        };
         let base = state
             .sync
             .get(&resource.url)
@@ -1565,6 +1650,412 @@ mod tests {
         assert_eq!(resumed.status, "ready");
         // Calling Resume again when already "ready" at boundary still informs user cleanly.
         assert!(dispatch(&coordinator, CrawlRequest::Resume { project_id }).is_err());
+
+        server_stop.store(true, Ordering::Release);
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn offline_crawl_handles_non_utf8_documents_and_unwedges_failed_sync_tasks() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&server_stop);
+        let gbk_css: &'static [u8] = b"/* \xC4\xE3\xBA\xC3 GBK */ body { color: #123456; }";
+        let asset_v1: &'static [u8] = b"asset-generation-1";
+        let asset_v2: &'static [u8] = b"asset-generation-2-ok";
+        let use_v2 = Arc::new(AtomicBool::new(false));
+        let use_v2_server = Arc::clone(&use_v2);
+
+        let server = std::thread::spawn(move || {
+            let page = b"<html><head><link rel=\"stylesheet\" href=\"/gbk.css\"></head><body><a href=\"/flaky.bin\">dl</a></body></html>";
+            while !stop_flag.load(Ordering::Acquire) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut first_line = String::new();
+                if reader.read_line(&mut first_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut parts = first_line.split_whitespace();
+                let method = parts.next().unwrap_or("GET");
+                let path = parts.next().unwrap_or("/");
+                let (ct, etag, body): (&str, &str, &[u8]) = match path {
+                    "/index.html" => ("text/html", "\"idx-1\"", page.as_slice()),
+                    "/gbk.css" => ("text/css; charset=gbk", "\"gbk-1\"", gbk_css),
+                    "/flaky.bin" => {
+                        if use_v2_server.load(Ordering::Acquire) {
+                            ("application/octet-stream", "\"flaky-2\"", asset_v2)
+                        } else {
+                            ("application/octet-stream", "\"flaky-1\"", asset_v1)
+                        }
+                    }
+                    _ => {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        continue;
+                    }
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nETag: {etag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                if method != "HEAD" {
+                    let _ = stream.write_all(body);
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-crawl-g7-6-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("temp_dir", serde_json::json!(""))
+            .unwrap();
+        coordinator
+            .set_setting("proxy_mode", serde_json::json!("direct"))
+            .unwrap();
+
+        let project = dispatch(
+            &coordinator,
+            CrawlRequest::Create {
+                spec: CrawlSpec {
+                    entry_url: format!("http://{addr}/index.html"),
+                    output_dir: String::new(),
+                    max_depth: 1,
+                    max_pages: 5,
+                    page_concurrency: 1,
+                    same_origin: true,
+                    offline: true,
+                    queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        let project_id = project.id;
+        let stop = AtomicBool::new(false);
+
+        // Discover /index.html and /gbk.css without pausing on non-UTF-8 CSS bytes.
+        tick(&coordinator, &project_id, &stop).unwrap();
+        tick(&coordinator, &project_id, &stop).unwrap();
+        let discovered = load(&coordinator, &project_id).unwrap();
+        assert_eq!(discovered.project.status, "ready");
+        assert_eq!(discovered.project.resources.len(), 3);
+
+        let index_url = discovered
+            .project
+            .resources
+            .iter()
+            .find(|r| r.url.ends_with("/index.html"))
+            .unwrap()
+            .url
+            .clone();
+        let css_url = discovered
+            .project
+            .resources
+            .iter()
+            .find(|r| r.url.ends_with("/gbk.css"))
+            .unwrap()
+            .url
+            .clone();
+        let flaky_url = discovered
+            .project
+            .resources
+            .iter()
+            .find(|r| r.url.ends_with("/flaky.bin"))
+            .unwrap()
+            .url
+            .clone();
+
+        // Select /index.html and /gbk.css first: non-UTF-8 CSS must sync and save verbatim without aborting!
+        dispatch(
+            &coordinator,
+            CrawlRequest::Enqueue {
+                project_id: project_id.clone(),
+                urls: vec![index_url.clone(), css_url.clone()],
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            tick(&coordinator, &project_id, &stop).unwrap();
+            let cur = load(&coordinator, &project_id).unwrap();
+            assert_ne!(
+                cur.project.status, "paused",
+                "reason: {}",
+                cur.project.reason
+            );
+            let idx_res = cur
+                .project
+                .resources
+                .iter()
+                .find(|r| r.url == index_url)
+                .unwrap();
+            let css_res = cur
+                .project
+                .resources
+                .iter()
+                .find(|r| r.url == css_url)
+                .unwrap();
+            if idx_res.saved && css_res.saved && !cur.rewrite_needed {
+                let css_target = Path::new(&cur.project.spec.output_dir).join(&css_res.local_name);
+                assert_eq!(std::fs::read(&css_target).unwrap(), gbk_css);
+                let idx_target = Path::new(&cur.project.spec.output_dir).join(&idx_res.local_name);
+                let rewritten_html = std::fs::read_to_string(&idx_target).unwrap();
+                assert!(rewritten_html.contains(&css_res.local_name));
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        let after_css = load(&coordinator, &project_id).unwrap();
+        assert!(
+            after_css
+                .project
+                .resources
+                .iter()
+                .find(|r| r.url == css_url)
+                .unwrap()
+                .saved
+        );
+
+        // Now enqueue /flaky.bin, let generation-1 task complete on disk, then move its staged file
+        // BEFORE sync_resource harvests it so line 627 validation fails.
+        dispatch(
+            &coordinator,
+            CrawlRequest::Enqueue {
+                project_id: project_id.clone(),
+                urls: vec![flaky_url.clone()],
+            },
+        )
+        .unwrap();
+        // HEAD check -> pending=true, generation=1
+        sync_resource(&coordinator, &project_id, &flaky_url).unwrap();
+        // CreateTask for generation=1
+        sync_resource(&coordinator, &project_id, &flaky_url).unwrap();
+        let gen1_key = format!("{project_id}:{}:1", hash(&flaky_url));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut gen1_output = String::new();
+        while std::time::Instant::now() < deadline {
+            let maybe_done = {
+                let core = coordinator.lock().unwrap();
+                core.tasks().into_iter().find(|t| {
+                    t.status == "completed"
+                        && core
+                            .task_spec(&t.task_id)
+                            .is_some_and(|s| s.crawl_resource_key == gen1_key)
+                })
+            };
+            if let Some(done) = maybe_done {
+                gen1_output = done.output_path;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        assert!(!gen1_output.is_empty(), "gen1 sync task did not complete");
+        std::fs::remove_file(&gen1_output).unwrap();
+
+        // Harvesting now fails validation and MUST clear sync.pending so future syncs aren't wedged!
+        sync_resource(&coordinator, &project_id, &flaky_url).unwrap();
+        let failed_state = load(&coordinator, &project_id).unwrap();
+        assert!(!failed_state.sync[&flaky_url].pending);
+        assert!(failed_state
+            .project
+            .resources
+            .iter()
+            .find(|r| r.url == flaky_url)
+            .unwrap()
+            .error
+            .contains("下载成品已移动"));
+
+        // User clicks Sync after server updates to v2: must advance to generation 2 and succeed!
+        use_v2.store(true, Ordering::Release);
+        dispatch(
+            &coordinator,
+            CrawlRequest::Sync {
+                project_id: project_id.clone(),
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut recovered = false;
+        while std::time::Instant::now() < deadline {
+            tick(&coordinator, &project_id, &stop).unwrap();
+            let cur = load(&coordinator, &project_id).unwrap();
+            let res = cur
+                .project
+                .resources
+                .iter()
+                .find(|r| r.url == flaky_url)
+                .unwrap();
+            if res.saved && res.etag == "\"flaky-2\"" {
+                assert_eq!(cur.sync[&flaky_url].generation, 2);
+                let target = Path::new(&cur.project.spec.output_dir).join(&res.local_name);
+                assert_eq!(std::fs::read(&target).unwrap(), asset_v2);
+                recovered = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        assert!(recovered, "failed sync task stayed wedged after user Sync");
+
+        server_stop.store(true, Ordering::Release);
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn crawl_seen_set_is_bounded_by_max_pages_and_max_seen_under_sqlite_limit() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&server_stop);
+
+        let mut index_html = String::from("<html><body>");
+        for i in 0..1500 {
+            index_html.push_str(&format!(
+                "<a href=\"/p{i}.html?pad={}\">{i}</a>",
+                "x".repeat(120)
+            ));
+        }
+        index_html.push_str("</body></html>");
+        let index_bytes = index_html.into_bytes();
+
+        let server = std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            while !stop_flag.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut first_line = String::new();
+                        if reader.read_line(&mut first_line).unwrap_or(0) == 0 {
+                            continue;
+                        }
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                                break;
+                            }
+                        }
+                        let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+                        let body: &[u8] = if path == "/index.html" {
+                            &index_bytes
+                        } else {
+                            b"<html><body>leaf</body></html>"
+                        };
+                        let hdr = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(hdr.as_bytes());
+                        let _ = stream.write_all(body);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-crawl-seen-cap-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let coordinator = CoreCoordinator::new(crate::PersistentCore::in_memory().unwrap());
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .unwrap();
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        coordinator
+            .set_setting("temp_dir", serde_json::json!(""))
+            .unwrap();
+        coordinator
+            .set_setting("proxy_mode", serde_json::json!("direct"))
+            .unwrap();
+
+        let project = dispatch(
+            &coordinator,
+            CrawlRequest::Create {
+                spec: CrawlSpec {
+                    entry_url: format!("http://{addr}/index.html"),
+                    output_dir: String::new(),
+                    max_depth: 2,
+                    max_pages: 2,
+                    page_concurrency: 1,
+                    same_origin: true,
+                    offline: false,
+                    queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        let project_id = project.id;
+        let stop = AtomicBool::new(false);
+
+        tick(&coordinator, &project_id, &stop).unwrap();
+        tick(&coordinator, &project_id, &stop).unwrap();
+        let state = load(&coordinator, &project_id).unwrap();
+        assert_eq!(state.project.status, "ready");
+        assert_eq!(state.project.visited_pages, 2);
+        assert_eq!(state.project.reason, "达到页面数量上限");
+        assert_eq!(
+            state.seen.len(),
+            2,
+            "unvisited links past max_pages must not bloat state.seen"
+        );
+        assert!(state.seen.len() <= MAX_SEEN);
+        let serialized = serde_json::to_string(&state).unwrap();
+        assert!(serialized.len() < 3 * 1024 * 1024);
 
         server_stop.store(true, Ordering::Release);
         let _ = server.join();

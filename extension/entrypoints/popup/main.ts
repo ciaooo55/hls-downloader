@@ -1936,8 +1936,22 @@ async function main() {
   window.addEventListener('pagehide', () => clearInterval(transfersTimer), { once: true })
   void browser.runtime.sendMessage({ type: 'download-states', tabId: tab?.id }).then(pending => {
     if (!Array.isArray(pending)) return
+    const liveKeys = new Set(Object.keys(sending))
+    const resolvedByKey = new Map<string, { handoff: any; item: MediaResource; selected: MediaResource; restored: SendState }>()
+    const statePriority = (state: SendState): number => {
+      if (state === 'sending' || state === 'confirming' || state === 'checking') return 3
+      if (state === 'queued' || state === 'done') return 2
+      if (state === 'recoverable') return 1
+      return 0
+    }
     for (const handoff of pending) {
-      const item = resources.find(resource => resource.id === handoff.resourceId)
+      const item = resources.find(resource =>
+        resource.id === handoff.resourceId
+        || (typeof handoff.url === 'string' && handoff.url && (
+          resource.url === handoff.url
+          || resourceFingerprint(resource) === resourceFingerprint({ url: handoff.url, kind: resource.kind })
+        )),
+      )
       if (!item) continue
       const selected = handoff.selectionKey
         ? [item, ...(item.variants || []).map(variant => selectMediaVariant(item, variant))]
@@ -1945,10 +1959,27 @@ async function main() {
         : item
       if (!selected) continue
       const key = actionKey(selected)
+      if (liveKeys.has(key)) continue
+      const restored = sendStateFromHandoff({
+        status: handoff.status,
+        presentation: handoff.presentation,
+        taskStatus: handoff.taskStatus ?? handoff.task_status,
+        taskErrorCode: handoff.taskErrorCode ?? handoff.task_error_code,
+      })
+      const existing = resolvedByKey.get(key)
+      const nextPriority = statePriority(restored)
+      const prevPriority = existing ? statePriority(existing.restored) : -1
+      const newerCheckedAt = existing
+        ? (Number(handoff.checkedAt) || 0) > (Number(existing.handoff.checkedAt) || 0)
+        : false
+      if (!existing || nextPriority > prevPriority || (nextPriority === prevPriority && newerCheckedAt)) {
+        resolvedByKey.set(key, { handoff, item, selected, restored })
+      }
+    }
+    for (const [key, { handoff, item, selected, restored }] of resolvedByKey) {
       if (sending[key]) continue
       if (typeof handoff.url === 'string' && handoff.url) sentUrls[key] = handoff.url
       if (selected !== item && !chosenVariant[item.id]) chosenVariant[item.id] = downloadSelectionKey(selected)
-      const restored = sendStateFromHandoff(handoff)
       if (restored !== 'confirming') {
         sending[key] = restored
         renderList()

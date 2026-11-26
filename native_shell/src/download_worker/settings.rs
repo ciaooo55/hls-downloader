@@ -500,6 +500,22 @@ impl CoreCoordinator {
                     .map(|profile| (profile.id.as_str(), profile.speed_limit_kib)),
             );
         }
+        let should_start_queued = values.keys().any(|key| {
+            matches!(
+                key.as_str(),
+                "queue_profiles"
+                    | "queue_max_active"
+                    | "queue_auto_start_enabled"
+                    | "queue_auto_start_time"
+                    | "queue_auto_stop_enabled"
+                    | "queue_auto_stop_time"
+                    | "queue_active_days"
+            )
+        });
+        drop(core);
+        if should_start_queued {
+            self.start_next_queued(false)?;
+        }
         Ok(())
     }
 

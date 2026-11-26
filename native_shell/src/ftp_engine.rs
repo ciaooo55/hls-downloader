@@ -112,11 +112,19 @@ impl<'a> Conn<'a> {
     fn secure_data(&self, stream: FtpSocket<'a>, host: &str) -> Result<Self, String> {
         #[cfg(windows)]
         if let Self::Tls(_, credentials) = self {
+            let control = stream.control;
+            control.poll()?;
             // FTPS 服务器可能要求数据连接恢复控制连接的 TLS 会话；必须复用凭据句柄。
             let tls = schannel::tls_stream::Builder::new()
                 .domain(host)
                 .connect(credentials.clone(), stream)
-                .map_err(|error| format!("FTPS data TLS handshake failed: {error:?}"))?;
+                .map_err(|error| {
+                    if let Err(stopped) = control.poll() {
+                        return stopped;
+                    }
+                    format!("FTPS data TLS handshake failed: {error:?}")
+                })?;
+            control.poll()?;
             return Ok(Self::Tls(Box::new(tls), credentials.clone()));
         }
         let _ = (stream, host);
@@ -309,6 +317,10 @@ pub(crate) fn download_ftp_routed(
     route: &str,
 ) -> Result<u64, String> {
     let target = parse_ftp_url(url)?;
+    let allowed = crate::net_policy::active_allowed_hosts();
+    if !allowed.trim().is_empty() && !crate::net_policy::url_allowed(url, &allowed) {
+        return Err("下载地址不在允许的域名范围内".into());
+    }
     let mut control = FtpControl {
         proxy: None,
         path: control,
@@ -316,7 +328,8 @@ pub(crate) fn download_ftp_routed(
         checked: Cell::new(Instant::now()),
     };
     control.poll()?;
-    let proxy = Proxy::resolve(route, url, || control.check())?;
+    let effective_route = crate::net_policy::resolve_context_proxy(url, route);
+    let proxy = Proxy::resolve(&effective_route, url, || control.check())?;
     control.proxy = proxy.as_ref();
     // 直连遇到被动模式被拒/不可达时切到主动模式，后续连接沿用。
     let active = std::sync::atomic::AtomicBool::new(false);
@@ -328,9 +341,14 @@ pub(crate) fn download_ftp_routed(
         connections.max(1),
         &active,
     ) {
-        // 服务器声明了 REST STREAM 却拒绝首个分段的 REST：回落单连接（从头下载）。
+        // 服务器声明了 REST STREAM 却在无任何已落盘续传数据时拒绝首个分段：回落单连接（从头下载）。
         Err(error) if error == SEGMENTED_FALLBACK => {
-            transfer_ftp(&target, output, &control, false, 1, &active)
+            control.poll()?;
+            if output.with_extension(SEGMENT_STATE_EXTENSION).exists() {
+                Err("FTPS segmented resume failed before data transfer".into())
+            } else {
+                transfer_ftp(&target, output, &control, false, 1, &active)
+            }
         }
         other => other,
     };
@@ -1100,10 +1118,14 @@ fn segmented_outcome(
         Err(SegmentError::RestRejected) => {
             Err("FTP server rejected REST for a segmented resume".into())
         }
-        // 本次运行的首个分段就无法建立数据通道 TLS（如服务器要求的会话复用握手被拒）：辅助连接
-        // 尚未启动，回落单连接从头下载（已登记的分段表不再适用，否则续传会反复卡在同一处）。
-        Err(SegmentError::DataTls(_)) if !started_this_run => Err(SEGMENTED_FALLBACK.into()),
-        // 已有分段成功后才失败：按普通传输错误处理，重试时从已登记范围续传。
+        Err(SegmentError::DataTls(error)) if error == "paused" || error == "canceled" => Err(error),
+        // 仅当本次运行尚未启动任何分段且磁盘上没有任何已登记的续传范围时，首个分段的
+        // 数据通道 TLS 握手失败（如服务器要求不支持的会话复用）才回落单连接从头下载；
+        // 若已有前次或本次落盘范围，绝不能删除检查点或截断已下载数据。
+        Err(SegmentError::DataTls(_)) if !started_this_run && nothing_recorded => {
+            Err(SEGMENTED_FALLBACK.into())
+        }
+        // 已有分段成功或磁盘存在待续传范围时：按可恢复传输错误处理，保留检查点供下次续传。
         Err(SegmentError::DataTls(error)) => Err(format!("FTPS data TLS failed: {error}")),
         Err(SegmentError::Failed(error)) => Err(error),
     }
@@ -1145,8 +1167,18 @@ fn fetch_segment<'a>(
         // FTPS：服务器在 RETR 之后才启动数据通道 TLS；数据连接复用本控制连接的凭据/会话。
         // 握手成功后才算分段已启动，主连接据此决定是否开辅助连接。
         let mut data = if target.tls {
-            ctrl.secure_data(data_raw, &target.host)
-                .map_err(SegmentError::DataTls)?
+            match ctrl.secure_data(data_raw, &target.host) {
+                Ok(conn) => conn,
+                Err(error) => {
+                    if let Err(stopped) = control.poll() {
+                        return Err(SegmentError::Failed(stopped));
+                    }
+                    if error == "paused" || error == "canceled" {
+                        return Err(SegmentError::Failed(error));
+                    }
+                    return Err(SegmentError::DataTls(error));
+                }
+            }
         } else {
             Conn::Plain(data_raw)
         };
@@ -1354,6 +1386,7 @@ fn transfer_segmented<'a>(
     };
     crate::http_engine::write_progress(&shared.progress, already, size, 0.0, "downloading");
     let throttle = crate::net_policy::current_throttle_context();
+    let net_policy = crate::net_policy::current_network_policy();
     let control_path = control.path;
     let proxy = control.proxy;
     let started_this_run = std::cell::Cell::new(false);
@@ -1369,28 +1402,31 @@ fn transfer_segmented<'a>(
             started_this_run.set(true);
             for _ in 1..connections {
                 let throttle = throttle.clone();
+                let net_policy = net_policy.clone();
                 scope.spawn(move || {
-                    crate::net_policy::with_throttle_context(throttle, || {
-                        let helper_control = FtpControl {
-                            proxy,
-                            path: control_path,
-                            reason: Cell::new(crate::http_engine::Control::Run),
-                            checked: Cell::new(Instant::now()),
-                        };
-                        if helper_control.poll().is_err() {
-                            return;
-                        }
-                        // 连接数受限（421 等）或中途失败的辅助连接直接退出，分段由其余连接接手。
-                        let Ok(mut helper) = open_session(target, &helper_control) else {
-                            return;
-                        };
-                        let _ = run_segment_worker(
-                            &mut helper,
-                            target,
-                            &helper_control,
-                            shared,
-                            &mut || {},
-                        );
+                    crate::net_policy::with_network_policy(net_policy, || {
+                        crate::net_policy::with_throttle_context(throttle, || {
+                            let helper_control = FtpControl {
+                                proxy,
+                                path: control_path,
+                                reason: Cell::new(crate::http_engine::Control::Run),
+                                checked: Cell::new(Instant::now()),
+                            };
+                            if helper_control.poll().is_err() {
+                                return;
+                            }
+                            // 连接数受限（421 等）或中途失败的辅助连接直接退出，分段由其余连接接手。
+                            let Ok(mut helper) = open_session(target, &helper_control) else {
+                                return;
+                            };
+                            let _ = run_segment_worker(
+                                &mut helper,
+                                target,
+                                &helper_control,
+                                shared,
+                                &mut || {},
+                            );
+                        });
                     });
                 });
             }
@@ -1409,13 +1445,15 @@ fn transfer_segmented<'a>(
     if let Some(error) = fatal {
         return Err(error);
     }
+    control.poll()?;
     let done = shared
         .done
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
+    let nothing_recorded = done.is_empty() || done.iter().all(|(start, end)| start > end);
     if let Err(error) = segmented_outcome(primary, &done, started_this_run.get()) {
-        if error == SEGMENTED_FALLBACK {
+        if error == SEGMENTED_FALLBACK && nothing_recorded {
             let _ = std::fs::remove_file(&state_path);
         }
         return Err(error);
@@ -1448,6 +1486,8 @@ fn transfer_segmented<'a>(
 fn wrap_tls<'a>(stream: FtpSocket<'a>, host: &str) -> Result<Conn<'a>, String> {
     #[cfg(windows)]
     {
+        let control = stream.control;
+        control.poll()?;
         let cred = schannel::schannel_cred::SchannelCred::builder()
             // FTPS 数据通道需要恢复控制会话；本机 Schannel 的 TLS 1.3 重连被真实服务器拒绝。
             .enabled_protocols(&[schannel::schannel_cred::Protocol::Tls12])
@@ -1456,7 +1496,13 @@ fn wrap_tls<'a>(stream: FtpSocket<'a>, host: &str) -> Result<Conn<'a>, String> {
         let tls = schannel::tls_stream::Builder::new()
             .domain(host)
             .connect(cred.clone(), stream)
-            .map_err(|error| format!("FTPS control TLS handshake failed: {error:?}"))?;
+            .map_err(|error| {
+                if let Err(stopped) = control.poll() {
+                    return stopped;
+                }
+                format!("FTPS control TLS handshake failed: {error:?}")
+            })?;
+        control.poll()?;
         Ok(Conn::Tls(Box::new(tls), cred))
     }
     #[cfg(not(windows))]
@@ -3169,16 +3215,27 @@ mod tests {
     #[test]
     fn ftps_data_tls_failure_falls_back_only_before_any_segment_started() {
         let tls = || Err(SegmentError::DataTls("session reuse required".into()));
-        // First segment of this run could not secure its data channel: retry
-        // with one connection (also when an older run left ranges behind).
+        // Only a brand-new run with zero recorded ranges may fall back to single-stream.
         assert_eq!(
             segmented_outcome(tls(), &[], false),
             Err(SEGMENTED_FALLBACK.into())
         );
-        assert_eq!(
-            segmented_outcome(tls(), &[(0, 1023)], false),
-            Err(SEGMENTED_FALLBACK.into())
-        );
+        // When prior resume ranges exist on disk, DataTls must NEVER trigger
+        // single-stream File::create fallback or delete `ftp-ranges.json`.
+        let resumed_failed = segmented_outcome(tls(), &[(0, 1023)], false).unwrap_err();
+        assert_ne!(resumed_failed, SEGMENTED_FALLBACK);
+        assert!(resumed_failed.contains("FTPS data TLS failed"));
+        // Pause/cancel observed during data TLS handshake must propagate verbatim, never fallback.
+        for stop in ["paused", "canceled"] {
+            assert_eq!(
+                segmented_outcome(Err(SegmentError::DataTls(stop.into())), &[], false),
+                Err(stop.into())
+            );
+            assert_eq!(
+                segmented_outcome(Err(SegmentError::DataTls(stop.into())), &[(0, 1023)], false),
+                Err(stop.into())
+            );
+        }
         // After segments succeeded it is an ordinary, resumable failure.
         let failed = segmented_outcome(tls(), &[(0, 1023)], true).unwrap_err();
         assert_ne!(failed, SEGMENTED_FALLBACK);
@@ -3523,6 +3580,67 @@ mod tests {
         let mut changed = resource.clone();
         changed.modified = "20261116000000".into();
         assert_ne!(saved.resource, changed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn segmented_resume_preserves_recorded_payload_and_checkpoint_when_rest_or_tls_fails() {
+        let body = segment_body(SEGMENT_TEST_BYTES);
+        let server = spawn_segment_server(
+            std::sync::Arc::clone(&body),
+            SegmentServerOptions {
+                advertise_rest: true,
+                rest_ok: false,
+                max_connections: 16,
+                chunk_delay_ms: 0,
+                passive_refused: false,
+            },
+        );
+        let (root, output, control) = segment_root("preserve-resume-on-failure");
+        let saved_prefix_len = 512 * 1024;
+        let mut initial = vec![0u8; body.len()];
+        initial[..saved_prefix_len].copy_from_slice(&body[..saved_prefix_len]);
+        std::fs::write(&output, &initial).unwrap();
+        let state_path = output.with_extension(SEGMENT_STATE_EXTENSION);
+        let expected_state = SegmentState {
+            version: 1,
+            resource: ResumeState {
+                version: 1,
+                host: "127.0.0.1".into(),
+                port: server.address.port(),
+                user: "anonymous".into(),
+                path: "/big.bin".into(),
+                tls: false,
+                total: body.len() as u64,
+                modified: "20261115000000".into(),
+            },
+            done: vec![(0, saved_prefix_len as u64 - 1)],
+        };
+        write_segment_state(&state_path, &expected_state).unwrap();
+
+        let err = download_ftp_with(
+            &format!("ftp://{}/big.bin", server.address),
+            &output,
+            &control,
+            true,
+            4,
+        )
+        .unwrap_err();
+        assert!(err.contains("rejected REST"), "{err}");
+        assert!(
+            state_path.exists(),
+            "existing segmented checkpoint must never be deleted on resume failure"
+        );
+        let disk_state: SegmentState =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(disk_state.done, vec![(0, saved_prefix_len as u64 - 1)]);
+        let disk_bytes = std::fs::read(&output).unwrap();
+        assert_eq!(disk_bytes.len(), body.len());
+        assert_eq!(
+            &disk_bytes[..saved_prefix_len],
+            &body[..saved_prefix_len],
+            "downloaded prefix must not be truncated by File::create fallback"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

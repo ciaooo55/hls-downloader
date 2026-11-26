@@ -57,6 +57,17 @@ static THROTTLE: OnceLock<Mutex<ThrottleState>> = OnceLock::new();
 
 thread_local! {
     static THROTTLE_CONTEXT: RefCell<Option<ThrottleContext>> = const { RefCell::new(None) };
+    static NETWORK_POLICY_CONTEXT: RefCell<Option<NetworkPolicyContext>> =
+        const { RefCell::new(None) };
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkPolicyContext {
+    pub allowed_hosts: String,
+    pub proxy_mode: String,
+    pub proxy_url: String,
+    pub proxy_bypass: String,
+    pub spec_proxy: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -123,8 +134,12 @@ fn parse_nonzero_port(raw: &str) -> Option<u16> {
     raw.parse::<u16>().ok().filter(|&port| port != 0)
 }
 
+fn trim_url_outer(url: &str) -> &str {
+    url.trim().trim_start_matches('\u{feff}').trim()
+}
+
 pub(crate) fn parse_url_authority(url: &str) -> Option<ParsedUrlAuthority<'_>> {
-    let trimmed = url.trim_matches([' ', '\t']);
+    let trimmed = trim_url_outer(url);
     if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
         return None;
     }
@@ -199,7 +214,7 @@ fn host_key(url: &str) -> String {
     if let Some(auth) = parse_url_authority(url) {
         return auth.hostport();
     }
-    let trimmed = url.trim();
+    let trimmed = trim_url_outer(url);
     if trimmed.contains(':') || trimmed.chars().any(char::is_control) {
         // Non-authority URI schemes such as `magnet:?...` have no host authority.
         return String::new();
@@ -231,7 +246,7 @@ pub fn url_allowed(url: &str, patterns: &str) -> bool {
         return false;
     }
     patterns
-        .split([',', ';', '\n', '\t', ' '])
+        .split(|ch: char| matches!(ch, ',' | ';') || ch.is_whitespace())
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .any(|item| {
@@ -258,6 +273,7 @@ pub fn url_allowed(url: &str, patterns: &str) -> bool {
         })
 }
 
+#[cfg(test)]
 pub(crate) fn url_host(url: &str) -> String {
     url_host_port(url).0
 }
@@ -266,7 +282,7 @@ pub(crate) fn url_host_port(url: &str) -> (String, Option<u16>) {
     if let Some(auth) = parse_url_authority(url) {
         return (auth.host, auth.port);
     }
-    let trimmed = url.trim();
+    let trimmed = trim_url_outer(url);
     if trimmed.contains(':') || trimmed.chars().any(char::is_control) {
         return (String::new(), None);
     }
@@ -304,11 +320,11 @@ fn pattern_host_port(raw: &str) -> (String, Option<u16>) {
     if raw.matches(':').count() == 1 {
         if let Some((host, port)) = raw.rsplit_once(':') {
             if let Ok(port) = port.parse::<u16>() {
-                return (host.to_string(), Some(port));
+                return (host.trim_end_matches('.').to_string(), Some(port));
             }
         }
     }
-    (raw, None)
+    (raw.trim_end_matches('.').to_string(), None)
 }
 
 fn address_in_cidr(address: IpAddr, pattern: &str) -> bool {
@@ -946,34 +962,247 @@ fn in_window_at(start: &str, end: &str, now: u32) -> bool {
     }
 }
 
-pub fn host_bypassed(host: &str, bypass: &str) -> bool {
-    let host = host
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
+pub fn current_network_policy() -> Option<NetworkPolicyContext> {
+    NETWORK_POLICY_CONTEXT.with(|slot| slot.borrow().clone())
+}
+
+pub fn with_network_policy<T>(policy: Option<NetworkPolicyContext>, work: impl FnOnce() -> T) -> T {
+    struct Restore(Option<NetworkPolicyContext>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            NETWORK_POLICY_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+
+    let previous =
+        NETWORK_POLICY_CONTEXT.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), policy));
+    let _restore = Restore(previous);
+    work()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn with_allowed_hosts<T>(allowed_hosts: &str, work: impl FnOnce() -> T) -> T {
+    let mut next = current_network_policy().unwrap_or_default();
+    next.allowed_hosts = allowed_hosts.to_string();
+    with_network_policy(Some(next), work)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn with_proxy_policy<T>(
+    mode: &str,
+    configured: &str,
+    bypass: &str,
+    spec_proxy: &str,
+    work: impl FnOnce() -> T,
+) -> T {
+    let mut next = current_network_policy().unwrap_or_default();
+    next.proxy_mode = mode.to_string();
+    next.proxy_url = configured.to_string();
+    next.proxy_bypass = bypass.to_string();
+    next.spec_proxy = spec_proxy.to_string();
+    with_network_policy(Some(next), work)
+}
+
+pub fn active_allowed_hosts() -> String {
+    NETWORK_POLICY_CONTEXT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|policy| policy.allowed_hosts.clone())
+            .unwrap_or_default()
+    })
+}
+
+pub fn resolve_context_proxy(url: &str, fallback_proxy: &str) -> String {
+    let Some(policy) = current_network_policy() else {
+        return fallback_proxy.to_string();
+    };
+    let has_proxy_policy = !policy.proxy_mode.trim().is_empty()
+        || !policy.proxy_url.trim().is_empty()
+        || !policy.proxy_bypass.trim().is_empty()
+        || !policy.spec_proxy.trim().is_empty();
+    if !has_proxy_policy {
+        return fallback_proxy.to_string();
+    }
+    if !policy.proxy_mode.trim().is_empty() {
+        return effective_proxy(
+            &policy.proxy_mode,
+            &policy.proxy_url,
+            &policy.proxy_bypass,
+            url,
+            &policy.spec_proxy,
+        );
+    }
+    let base = if !policy.spec_proxy.trim().is_empty() {
+        policy.spec_proxy.trim()
+    } else {
+        fallback_proxy.trim()
+    };
+    if base == INVALID_MANUAL_PROXY {
+        return INVALID_MANUAL_PROXY.to_string();
+    }
+    if base == DIRECT_PROXY_SENTINEL {
+        return DIRECT_PROXY_SENTINEL.into();
+    }
+    if url_bypassed(url, &policy.proxy_bypass) {
+        return DIRECT_PROXY_SENTINEL.into();
+    }
+    base.to_string()
+}
+
+fn default_scheme_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        "ftp" => Some(21),
+        "ftps" => Some(990),
+        "sftp" => Some(22),
+        _ => None,
+    }
+}
+
+fn parse_bypass_target(raw: &str) -> Option<(String, Option<u16>)> {
+    let raw = trim_url_outer(raw);
+    if raw.is_empty() || raw.chars().any(char::is_control) {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix('[') {
+        let (ipv6_raw, tail) = rest.split_once(']')?;
+        let ip = ipv6_raw.parse::<std::net::Ipv6Addr>().ok()?;
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(parse_nonzero_port(tail.strip_prefix(':')?)?)
+        };
+        return Some((ip.to_string(), port));
+    }
+    if let Ok(ip) = raw.parse::<IpAddr>() {
+        return Some((ip.to_string(), None));
+    }
+    if raw.matches(':').count() == 1 {
+        let (h, p_str) = raw.rsplit_once(':')?;
+        let port = parse_nonzero_port(p_str)?;
+        let host = h.trim_end_matches('.').to_ascii_lowercase();
+        if host.is_empty() || host.chars().any(char::is_whitespace) {
+            return None;
+        }
+        return Some((host, Some(port)));
+    }
+    if raw.contains(':') || raw.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let host = raw.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some((host, None))
+}
+
+fn host_port_bypassed(host: &str, port: Option<u16>, bypass: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || bypass.trim().is_empty() {
         return false;
     }
     let host_ip = host.parse::<IpAddr>().ok();
     bypass
-        .split([';', ',', '\n', '\t', ' '])
+        .split(|ch: char| matches!(ch, ';' | ',') || ch.is_whitespace())
         .map(str::trim)
         .filter(|item| !item.is_empty())
-        .any(|pattern| {
-            let pattern = pattern
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .trim_start_matches('.')
-                .to_ascii_lowercase();
-            if pattern == "<local>" {
-                return !host.contains('.') && !host.contains(':');
+        .any(|raw_pattern| {
+            if let Some((net_raw, prefix_raw)) = raw_pattern.split_once('/') {
+                let net_clean = net_raw
+                    .trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .trim_end_matches('.');
+                if !prefix_raw.is_empty() && prefix_raw.bytes().all(|b| b.is_ascii_digit()) {
+                    if let Some(h_ip) = host_ip {
+                        return address_in_cidr(h_ip, &format!("{net_clean}/{prefix_raw}"));
+                    }
+                }
+                return false;
             }
-            if let (Some(h_ip), Ok(p_ip)) = (host_ip, pattern.parse::<IpAddr>()) {
+            let (pat_host, required_port) = if let Some(rest) = raw_pattern.strip_prefix('[') {
+                let Some((inner, tail)) = rest.split_once(']') else {
+                    return false;
+                };
+                let req_port = if tail.is_empty() {
+                    None
+                } else {
+                    let Some(p) = tail.strip_prefix(':').and_then(parse_nonzero_port) else {
+                        return false;
+                    };
+                    Some(p)
+                };
+                (inner.to_ascii_lowercase(), req_port)
+            } else if let Ok(ip) = raw_pattern.parse::<IpAddr>() {
+                (ip.to_string(), None)
+            } else if raw_pattern.matches(':').count() == 1 {
+                let Some((h, p_str)) = raw_pattern.rsplit_once(':') else {
+                    return false;
+                };
+                let Some(p) = parse_nonzero_port(p_str) else {
+                    return false;
+                };
+                (h.to_ascii_lowercase(), Some(p))
+            } else if raw_pattern.contains(':') {
+                return false;
+            } else {
+                (raw_pattern.to_ascii_lowercase(), None)
+            };
+            if let Some(req_port) = required_port {
+                if port != Some(req_port) {
+                    return false;
+                }
+            }
+            let pat_host = pat_host.trim_end_matches('.');
+            if pat_host.is_empty() {
+                return false;
+            }
+            if pat_host == "*" {
+                return true;
+            }
+            if pat_host == "<local>" {
+                return !host.contains('.') && !host.contains(':') && host_ip.is_none();
+            }
+            if let (Some(h_ip), Ok(p_ip)) = (host_ip, pat_host.parse::<IpAddr>()) {
                 return h_ip == p_ip;
             }
-            host == pattern || host.ends_with(&format!(".{pattern}"))
+            if pat_host.contains('*') || pat_host.contains('?') {
+                return wildcard_match(pat_host, &host);
+            }
+            if host_ip.is_some() {
+                return false;
+            }
+            let suffix = pat_host.trim_start_matches('.');
+            !suffix.is_empty() && (host == suffix || host.ends_with(&format!(".{suffix}")))
         })
+}
+
+pub fn host_bypassed(host: &str, bypass: &str) -> bool {
+    let Some((parsed_host, parsed_port)) = parse_bypass_target(host) else {
+        return false;
+    };
+    host_port_bypassed(&parsed_host, parsed_port, bypass)
+}
+
+pub fn url_bypassed(url: &str, bypass: &str) -> bool {
+    if bypass.trim().is_empty() {
+        return false;
+    }
+    if let Some(auth) = parse_url_authority(url) {
+        let port = auth.port.or_else(|| default_scheme_port(&auth.scheme));
+        return host_port_bypassed(&auth.host, port, bypass);
+    }
+    let trimmed = trim_url_outer(url);
+    if trimmed.contains("://") || trimmed.chars().any(char::is_control) {
+        return false;
+    }
+    let authority = trimmed
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("");
+    host_bypassed(authority, bypass)
 }
 
 pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
@@ -1004,8 +1233,10 @@ pub fn effective_proxy(
     {
         return INVALID_MANUAL_PROXY.to_string();
     }
-    let host = url_host(url);
-    if host_bypassed(&host, bypass) {
+    if spec_proxy == DIRECT_PROXY_SENTINEL {
+        return DIRECT_PROXY_SENTINEL.into();
+    }
+    if url_bypassed(url, bypass) {
         return DIRECT_PROXY_SENTINEL.into();
     }
     if proxy_route_sentinel(spec_proxy) || !spec_proxy.is_empty() {
@@ -1751,6 +1982,107 @@ mod tests {
                 "http://127.0.0.1:7890"
             ),
             DIRECT_PROXY_SENTINEL
+        );
+    }
+
+    #[test]
+    fn parse_url_authority_trims_unicode_whitespace_cr_lf_and_bom() {
+        for wrapped in [
+            "\u{00a0}https://Media.Example.Test:8443/path?x=1\u{00a0}",
+            "\u{3000}https://Media.Example.Test:8443/path?x=1\u{3000}",
+            "\r\n\t https://Media.Example.Test:8443/path?x=1 \r\n",
+            "\u{feff}https://Media.Example.Test:8443/path?x=1",
+            " \u{feff}\u{3000}https://Media.Example.Test:8443/path?x=1 ",
+        ] {
+            let auth = parse_url_authority(wrapped).expect(wrapped);
+            assert_eq!(auth.scheme, "https");
+            assert_eq!(auth.host, "media.example.test");
+            assert_eq!(auth.port, Some(8443));
+            assert_eq!(url_host(wrapped), "media.example.test");
+            assert_eq!(host_key(wrapped), "media.example.test:8443");
+            assert!(!url_allowed(wrapped, "other.example.test"));
+            assert!(url_allowed(wrapped, "media.example.test:8443"));
+            assert_eq!(
+                effective_proxy(
+                    "manual",
+                    "http://127.0.0.1:7890",
+                    "*.example.test",
+                    wrapped,
+                    "",
+                ),
+                DIRECT_PROXY_SENTINEL
+            );
+        }
+
+        // Interior control characters must still fail closed.
+        assert!(parse_url_authority("https://media.example.test/pa\nth").is_none());
+        assert!(parse_url_authority("https://media.example\r.test/path").is_none());
+    }
+
+    #[test]
+    fn host_and_url_bypass_support_wildcards_cidrs_ports_and_trailing_dots() {
+        // `*` wildcard and `*.domain` / trailing-dot normalization
+        assert!(host_bypassed("anything.example.com", "*"));
+        assert!(host_bypassed("api.example.com", "*.example.com"));
+        assert!(host_bypassed("api.example.com.", "*.example.com."));
+        assert!(host_bypassed("example.com.", ".example.com."));
+        assert!(!host_bypassed("example.com", "*.example.com"));
+
+        // IPv4 and IPv6 CIDR blocks + non-matching numeric domain suffixes
+        assert!(host_bypassed("10.24.0.9", "10.0.0.0/8, 192.168.0.0/16"));
+        assert!(host_bypassed("192.168.12.34", "10.0.0.0/8;192.168.0.0/16"));
+        assert!(!host_bypassed("172.16.0.1", "10.0.0.0/8, 192.168.0.0/16"));
+        assert!(host_bypassed("fd12:3456::1", "fd00::/8"));
+        assert!(host_bypassed("[fd12:3456::1]", "fd00::/8"));
+        assert!(!host_bypassed("2001:db8::1", "fd00::/8"));
+        assert!(!host_bypassed("127.0.0.1", "0.1"));
+
+        // Port-qualified IPv4, IPv6, and domain bypass entries + default scheme ports
+        assert!(host_bypassed("[::1]:8080", "[::1]:8080"));
+        assert!(!host_bypassed("[::1]:8081", "[::1]:8080"));
+        assert!(!host_bypassed("[::1]", "[::1]:8080"));
+        assert!(host_bypassed("127.0.0.1:8080", "127.0.0.1:8080"));
+        assert!(!host_bypassed("127.0.0.1:9090", "127.0.0.1:8080"));
+
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:7890",
+                "[::1]:8080, 127.0.0.1:8080, internal.example.com.:443",
+                "http://[0:0:0:0:0:0:0:1]:8080/video.mp4",
+                "",
+            ),
+            DIRECT_PROXY_SENTINEL
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:7890",
+                "[::1]:8080",
+                "http://[::1]:8081/video.mp4",
+                "",
+            ),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:7890",
+                "internal.example.com.:443",
+                "https://internal.example.com/secure.bin",
+                "",
+            ),
+            DIRECT_PROXY_SENTINEL
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "http://127.0.0.1:7890",
+                "internal.example.com:443",
+                "http://internal.example.com/plain.bin",
+                "",
+            ),
+            "http://127.0.0.1:7890"
         );
     }
 }

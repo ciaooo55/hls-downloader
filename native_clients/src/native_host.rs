@@ -487,6 +487,7 @@ impl NativeHostSession {
             .min(1_500);
         let batch = match self.core.events_after(since_sequence, wait_ms) {
             Ok(result) => result,
+            Err(error) if is_pipe_transport_error(&error) => return Err(error),
             Err(error) => {
                 let mut response = core_unreachable_response();
                 response["error"] = json!(error);
@@ -969,7 +970,64 @@ impl NativeHostSession {
         if !method.is_empty() && !method.eq_ignore_ascii_case("GET") {
             return Err("此媒体使用非 GET 请求，请先下载后投屏".into());
         }
-        let owned_credential_ref = self.persist_browser_context(payload)?;
+        let explicit_request_id = message
+            .get("request_id")
+            .or_else(|| payload.get("client_request_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 128
+                    && id.starts_with("media-push-")
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':'))
+            })
+            .map(str::to_owned);
+        if let Some(ref existing_id) = explicit_request_id {
+            let queried = self
+                .core
+                .query_handoffs(Some(existing_id), None, false)
+                .map_err(|error| {
+                    if is_pipe_transport_error(&error) {
+                        format!("precommit:{error}")
+                    } else {
+                        error
+                    }
+                })?;
+            if let Some(existing) = queried
+                .into_iter()
+                .filter_map(|encoded| serde_json::from_str::<MediaPushRequest>(&encoded).ok())
+                .find(|item| item.id == *existing_id)
+            {
+                if existing.status == "pending" {
+                    self.prompt_media_push_ui(&existing.id);
+                }
+                return Ok(json!({
+                    "ok": true,
+                    "id": existing.id,
+                    "kind": existing.push_kind,
+                    "status": existing.status,
+                    "message": existing.message,
+                    "location": existing.location,
+                }));
+            }
+        } else if matches!(&self.core, HostCore::Remote(_)) {
+            self.core.handle(CoreCommand::Ping).map_err(|error| {
+                if is_pipe_transport_error(&error) {
+                    format!("precommit:{error}")
+                } else {
+                    error
+                }
+            })?;
+        }
+        let owned_credential_ref = self.persist_browser_context(payload).map_err(|error| {
+            if is_pipe_transport_error(&error) {
+                format!("precommit:{error}")
+            } else {
+                error
+            }
+        })?;
         let mime_type = match field(payload, "mime_type") {
             mime if !mime.is_empty() => mime,
             _ => match field(payload, "resource_kind").as_str() {
@@ -979,11 +1037,13 @@ impl NativeHostSession {
             },
         };
         let request = MediaPushRequest {
-            id: format!(
-                "media-push-{:x}-{}",
-                unix_time_ms(),
-                NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed)
-            ),
+            id: explicit_request_id.unwrap_or_else(|| {
+                format!(
+                    "media-push-{:x}-{}",
+                    unix_time_ms(),
+                    NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed)
+                )
+            }),
             push_kind: kind.into(),
             url,
             title,
@@ -1461,6 +1521,17 @@ fn dispatch_session_message_inner<S>(
                     *session = None;
                 }
                 return value;
+            }
+            Err(error)
+                if error
+                    .strip_prefix("precommit:")
+                    .is_some_and(is_pipe_transport_error) =>
+            {
+                *session = None;
+                if attempt == 0 {
+                    continue;
+                }
+                return core_unreachable_response_with(report_user_shutdown(&mut is_user_shutdown));
             }
             Err(error) if is_pipe_transport_error(&error) => {
                 *session = None;
@@ -3745,5 +3816,103 @@ mod tests {
             core_connect_policy_with(&explicit, true),
             CoreConnectPolicy::AllowAutostart
         );
+    }
+
+    #[test]
+    fn stale_pipe_reconnects_and_autostarts_core_on_explicit_media_push_with_idempotent_request_id()
+    {
+        // 1. Live Core over TCP is shut down via Tray Exit (`CoreCommand::Shutdown` + user_shutdown=true)
+        //    while `NativeHostSession` stays alive holding the stale pipe.
+        let server = crate::CoreServer::in_memory().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let worker = server.serve(listener);
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client)));
+
+        let mut shutdown_client = CoreIpcClient::connect_addr(addr).unwrap();
+        shutdown_client.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown_client);
+        worker.join().unwrap().unwrap();
+
+        let mut autostart_calls = 0usize;
+        let push_msg = json!({
+            "op": "media_push",
+            "kind": "cast",
+            "request_id": "media-push-explicit-reconnect-1",
+            "resource": {
+                "url": "https://cdn.test/live.m3u8",
+                "title": "Live Cast",
+                "referer": "https://site.test/watch"
+            }
+        });
+        let pushed = dispatch_session_message_with_policy(
+            &mut session,
+            &push_msg,
+            |msg| core_connect_policy_with(msg, true),
+            |policy| {
+                assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                autostart_calls += 1;
+                NativeHostSession::in_memory()
+            },
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(pushed["ok"], true, "pushed={pushed}");
+        assert_eq!(pushed["id"], "media-push-explicit-reconnect-1");
+        assert_eq!(pushed["status"], "pending");
+        assert_eq!(autostart_calls, 1);
+
+        // 2. Re-sending the same `request_id` returns the already-admitted push idempotently
+        //    instead of creating a duplicate push or failing with overlap rejection!
+        let retried = session.as_mut().unwrap().dispatch(&push_msg).unwrap();
+        assert_eq!(retried["ok"], true);
+        assert_eq!(retried["id"], "media-push-explicit-reconnect-1");
+        assert_eq!(retried["status"], "pending");
+    }
+
+    #[test]
+    fn workbench_status_propagates_pipe_transport_error_so_stale_session_retries_once() {
+        let server1 = crate::CoreServer::in_memory().unwrap();
+        let listener1 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr1 = listener1.local_addr().unwrap();
+        let worker1 = server1.serve(listener1);
+        let client1 = CoreIpcClient::connect_addr(addr1).unwrap();
+        let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client1)));
+
+        let mut shutdown1 = CoreIpcClient::connect_addr(addr1).unwrap();
+        shutdown1.command(CoreCommand::Shutdown).unwrap();
+        drop(shutdown1);
+        worker1.join().unwrap().unwrap();
+
+        let mut replacement = NativeHostSession::in_memory().unwrap();
+        replacement
+            .core
+            .handle(CoreCommand::UiReady {
+                launch_id: "launch-after-restart".into(),
+                surface: "main".into(),
+            })
+            .unwrap();
+        let mut replacement_opt = Some(replacement);
+        let mut reconnects = 0usize;
+
+        let status = dispatch_session_message_with_policy(
+            &mut session,
+            &json!({
+                "op": "workbench_status",
+                "launch_id": "launch-after-restart",
+                "since_sequence": 0,
+                "wait_ms": 0
+            }),
+            |msg| core_connect_policy_with(msg, false),
+            |policy| {
+                assert_eq!(policy, CoreConnectPolicy::ExistingOnly);
+                reconnects += 1;
+                Ok(replacement_opt.take().unwrap())
+            },
+            |active, msg| active.dispatch(msg),
+        );
+        assert_eq!(status["ok"], true, "status={status}");
+        assert_eq!(status["ready"], true);
+        assert_eq!(reconnects, 1);
     }
 }

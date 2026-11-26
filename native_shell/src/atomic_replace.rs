@@ -9,6 +9,22 @@ pub(crate) fn replace_file(
     source: &std::path::Path,
     destination: &std::path::Path,
 ) -> io::Result<()> {
+    move_file_inner(source, destination, true)
+}
+
+/// Move within one filesystem without overwriting an existing destination file.
+pub(crate) fn move_file_exclusive(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> io::Result<()> {
+    move_file_inner(source, destination, false)
+}
+
+fn move_file_inner(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    allow_overwrite: bool,
+) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -23,17 +39,16 @@ pub(crate) fn replace_file(
             .encode_wide()
             .chain(Some(0))
             .collect();
+        let flags = if allow_overwrite {
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        } else {
+            MOVEFILE_WRITE_THROUGH
+        };
         replace_with_retry(|| {
             // SAFETY: `extended_path` rejects embedded NUL code units, and both `source`
             // and `destination` are NUL-terminated UTF-16 buffers that outlive each
             // synchronous `MoveFileExW` call inside this retry closure.
-            let moved = unsafe {
-                MoveFileExW(
-                    source.as_ptr(),
-                    destination.as_ptr(),
-                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                )
-            };
+            let moved = unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), flags) };
             if moved == 0 {
                 Err(io::Error::last_os_error())
             } else {
@@ -42,7 +57,14 @@ pub(crate) fn replace_file(
         })
     }
     #[cfg(not(windows))]
-    std::fs::rename(source, destination)
+    {
+        if allow_overwrite {
+            std::fs::rename(source, destination)
+        } else {
+            std::fs::hard_link(source, destination)?;
+            std::fs::remove_file(source)
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -244,5 +266,43 @@ mod tests {
                 "错误码 {code} 是永久错误，不应重试"
             );
         }
+    }
+
+    #[test]
+    fn move_file_exclusive_rejects_existing_destination_without_overwriting() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-exclusive-move-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let src1 = root.join("src1.tmp");
+        let dst = root.join("final.bin");
+        std::fs::write(&src1, b"first").unwrap();
+        move_file_exclusive(&src1, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"first");
+        assert!(!src1.exists());
+
+        let src2 = root.join("src2.tmp");
+        std::fs::write(&src2, b"second").unwrap();
+        let err = move_file_exclusive(&src2, &dst).unwrap_err();
+        assert!(
+            err.kind() == io::ErrorKind::AlreadyExists
+                || matches!(err.raw_os_error(), Some(80 | 183)),
+            "expected AlreadyExists, got: {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"first",
+            "existing destination must never be overwritten"
+        );
+        assert!(
+            src2.exists(),
+            "source payload must remain intact on conflict"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

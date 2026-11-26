@@ -4,38 +4,62 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock, RwLock};
 
-pub(crate) fn hls_input_options(command: &mut Command) {
-    static SUPPORT: OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> = OnceLock::new();
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct HlsDemuxerSupport {
+    extension_picky: bool,
+    max_reload: bool,
+    m3u8_hold_counters: bool,
+}
+
+fn probe_hls_demuxer_support(program: &std::ffi::OsStr) -> HlsDemuxerSupport {
+    static SUPPORT: OnceLock<Mutex<std::collections::HashMap<PathBuf, HlsDemuxerSupport>>> =
+        OnceLock::new();
     let mut cache = SUPPORT
         .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let supported = *cache
-        .entry(PathBuf::from(command.get_program()))
-        .or_insert_with(|| {
-            let mut probe = Command::new(command.get_program());
-            probe.args(["-hide_banner", "-h", "demuxer=hls"]);
-            probe.stdin(Stdio::null());
-            probe.stdout(Stdio::piped());
-            probe.stderr(Stdio::piped());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                probe.creation_flags(0x08000000);
-            }
-            probe
-                .spawn()
-                .and_then(|child| {
-                    crate::job_object::assign_child(&child);
-                    child.wait_with_output()
-                })
-                .is_ok_and(|output| {
-                    output.status.success()
-                        && (has_extension_picky(&output.stdout)
-                            || has_extension_picky(&output.stderr))
-                })
-        });
-    command.args(hls_input_args(supported));
+    *cache.entry(PathBuf::from(program)).or_insert_with(|| {
+        let mut probe = Command::new(program);
+        probe.args(["-hide_banner", "-h", "demuxer=hls"]);
+        probe.stdin(Stdio::null());
+        probe.stdout(Stdio::piped());
+        probe.stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            probe.creation_flags(0x08000000);
+        }
+        probe
+            .spawn()
+            .and_then(|child| {
+                crate::job_object::assign_child(&child);
+                child.wait_with_output()
+            })
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| parse_hls_demuxer_support(&output.stdout, &output.stderr))
+            .unwrap_or_default()
+    })
+}
+
+pub(crate) fn hls_input_options(command: &mut Command) {
+    let support = probe_hls_demuxer_support(command.get_program());
+    command.args(hls_input_args(support.extension_picky));
+}
+
+fn hls_local_merge_input_options(command: &mut Command) {
+    let support = probe_hls_demuxer_support(command.get_program());
+    command.args(hls_local_merge_args(support));
+}
+
+fn parse_hls_demuxer_support(stdout: &[u8], stderr: &[u8]) -> HlsDemuxerSupport {
+    HlsDemuxerSupport {
+        extension_picky: has_extension_picky(stdout) || has_extension_picky(stderr),
+        max_reload: has_hls_int_option(stdout, "-max_reload")
+            || has_hls_int_option(stderr, "-max_reload"),
+        m3u8_hold_counters: has_hls_int_option(stdout, "-m3u8_hold_counters")
+            || has_hls_int_option(stderr, "-m3u8_hold_counters"),
+    }
 }
 
 fn has_extension_picky(help: &[u8]) -> bool {
@@ -44,12 +68,33 @@ fn has_extension_picky(help: &[u8]) -> bool {
         .any(|line| line.split_whitespace().next() == Some("-extension_picky"))
 }
 
+fn has_hls_int_option(help: &[u8], option: &str) -> bool {
+    String::from_utf8_lossy(help).lines().any(|line| {
+        let mut tokens = line.split_whitespace();
+        tokens.next() == Some(option) && tokens.next() == Some("<int>")
+    })
+}
+
 fn hls_input_args(extension_picky: bool) -> &'static [&'static str] {
     if extension_picky {
         &["-allowed_extensions", "ALL", "-extension_picky", "0"]
     } else {
         &["-allowed_extensions", "ALL"]
     }
+}
+
+fn hls_local_merge_args(support: HlsDemuxerSupport) -> Vec<&'static str> {
+    let mut args = vec!["-f", "hls", "-allowed_extensions", "ALL"];
+    if support.extension_picky {
+        args.extend_from_slice(&["-extension_picky", "0"]);
+    }
+    if support.max_reload {
+        args.extend_from_slice(&["-max_reload", "1"]);
+    }
+    if support.m3u8_hold_counters {
+        args.extend_from_slice(&["-m3u8_hold_counters", "2"]);
+    }
+    args
 }
 
 pub fn concat_files(inputs: &[PathBuf], output: &Path) -> Result<(), String> {
@@ -168,7 +213,7 @@ pub(crate) fn merge_with_ffmpeg_opts(
         "file,crypto",
     ]);
     // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
-    hls_input_options(&mut command);
+    hls_local_merge_input_options(&mut command);
     command
         .arg("-i")
         .arg(&input)
@@ -1249,6 +1294,99 @@ mod tests {
             fs::write(&control, "run").unwrap();
             let output = root.join("merged.mp4");
             merge_with_ffmpeg_opts(&root, &output, &control, true).unwrap();
+            let bytes = fs::read(&output).unwrap();
+            assert_eq!(&bytes[4..8], b"ftyp");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_local_merge_args_include_probed_reload_guards() {
+        assert_eq!(
+            hls_local_merge_args(HlsDemuxerSupport::default()),
+            vec!["-f", "hls", "-allowed_extensions", "ALL"]
+        );
+        let help = br#"hls demuxer AVOptions:
+  -extension_picky   <boolean> .D......... (default true)
+  -max_reload        <int>     .D......... (from 0 to INT_MAX) (default 100)
+  -m3u8_hold_counters <int>    .D......... (from 0 to INT_MAX) (default 1000)
+"#;
+        let parsed = parse_hls_demuxer_support(help, b"");
+        assert_eq!(
+            parsed,
+            HlsDemuxerSupport {
+                extension_picky: true,
+                max_reload: true,
+                m3u8_hold_counters: true,
+            }
+        );
+        assert_eq!(
+            hls_local_merge_args(parsed),
+            vec![
+                "-f",
+                "hls",
+                "-allowed_extensions",
+                "ALL",
+                "-extension_picky",
+                "0",
+                "-max_reload",
+                "1",
+                "-m3u8_hold_counters",
+                "2",
+            ]
+        );
+        assert!(!parse_hls_demuxer_support(b"Unrecognized option 'max_reload'\n", b"").max_reload);
+    }
+
+    #[test]
+    fn merge_with_ffmpeg_opts_does_not_stall_on_open_event_playlist() {
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-merge-open-event-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let seg = root.join("segments/000000.mp4");
+        let built = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x48:d=0.3:r=10",
+                "-c:v",
+                "mpeg4",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&seg)
+            .status()
+            .is_ok_and(|s| s.success());
+        if built {
+            fs::write(
+                root.join("local.m3u8"),
+                "#EXTM3U\n#EXT-X-VERSION:9\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-MAP:URI=\"segments/000000.mp4\"\n#EXTINF:0.300,\nsegments/000000.mp4\n",
+            )
+            .unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let output = root.join("merged.mp4");
+            let started = std::time::Instant::now();
+            merge_with_ffmpeg_opts(&root, &output, &control, true).unwrap();
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "open local playlist merge stalled: {:?}",
+                started.elapsed()
+            );
             let bytes = fs::read(&output).unwrap();
             assert_eq!(&bytes[4..8], b"ftyp");
         }

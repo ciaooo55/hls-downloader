@@ -65,6 +65,7 @@ pub struct Representation {
     pub media: Vec<String>,
     pub media_ranges: Vec<Option<ByteRange>>,
     pub media_durations: Vec<f64>,
+    media_presentation_starts: Vec<f64>,
     pub live_end: Option<f64>,
     /// Zero-based index of the Period this representation belongs to.
     pub period: usize,
@@ -261,14 +262,22 @@ fn parse_mpd_with_url_budget(
 }
 
 fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
-    const DRM_MARKERS: [&str; 7] = [
+    const DRM_MARKERS: [&str; 15] = [
         "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",
         "9a04f079-9840-4286-ab92-e65be0885f95",
+        "79f0049a-4098-8642-ab92-e65be0885f95",
         "94ce86fb-07ff-4f43-adb8-93d2fa968ca2",
+        "29701fe4-3cc7-4a34-8c5b-ae90c7439a47",
+        "e2719d58-a985-b3c9-781a-b030af78d30e",
+        "1077efec-c0b2-4d02-ace3-3c1e52e2fb4b",
+        "3d5e6d35-9b9a-41e8-b843-dd3c6e72c42c",
         "widevine",
         "playready",
         "fairplay",
         "clearkey",
+        "wiseplay",
+        "chinadrm",
+        "china-drm",
     ];
     for node in root.descendants().filter(|node| {
         node.is_element()
@@ -277,6 +286,10 @@ fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
                 .name()
                 .eq_ignore_ascii_case("ContentProtection")
     }) {
+        let explicit_none = node.attributes().any(|attr| {
+            attr.name().eq_ignore_ascii_case("value")
+                && attr.value().trim().eq_ignore_ascii_case("none")
+        });
         for attr in node.attributes() {
             let name = attr.name();
             let val_trimmed = attr.value().trim();
@@ -288,6 +301,12 @@ fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
             }
             let lower = val_trimmed.to_ascii_lowercase();
             if DRM_MARKERS.iter().any(|marker| lower.contains(marker)) {
+                return true;
+            }
+            if name.eq_ignore_ascii_case("schemeIdUri")
+                && lower == "urn:mpeg:dash:mp4protection:2011"
+                && !explicit_none
+            {
                 return true;
             }
             if name.eq_ignore_ascii_case("value")
@@ -318,6 +337,7 @@ fn has_drm_content_protection(root: roxmltree::Node<'_, '_>) -> bool {
     false
 }
 
+#[cfg(test)]
 fn cleanup_multi_period_temp_files(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -380,6 +400,7 @@ fn parse_mpd_for_recording(
     let mut live_segment_budget = 20_000;
     let mut expired_periods = HashSet::new();
     let mut before_start_window_periods = HashSet::new();
+    let mut active_window_periods = HashSet::new();
     let mut presentation_window = None;
     for node in root
         .descendants()
@@ -521,7 +542,18 @@ fn parse_mpd_for_recording(
         let mut media = Vec::new();
         let mut media_ranges = Vec::new();
         let mut media_durations = Vec::new();
+        let mut media_presentation_starts = Vec::new();
         let mut live_end = None;
+        let content_type = inherited("contentType");
+        let codecs = inherited("codecs");
+        let rep_kind = track_kind(&Representation {
+            id: id.clone(),
+            height,
+            mime: mime.clone(),
+            codecs: codecs.clone(),
+            content_type: content_type.clone(),
+            ..Default::default()
+        });
         if let Some(template) = media_template {
             if dynamic && !has_timeline {
                 let mut start = Some(0.0);
@@ -549,11 +581,15 @@ fn parse_mpd_for_recording(
                     id: None,
                     start: None,
                 });
-                let recording_period = cursors
+                let track_cursors: Vec<&LiveTrackCursor> = cursors
+                    .iter()
+                    .filter(|cursor| cursor.effective_kind() == rep_kind)
+                    .collect();
+                let recording_period = track_cursors
                     .iter()
                     .any(|cursor| cursor.period.same_as(&current_period));
                 let after_recording = !recording_period
-                    && cursors.iter().any(|cursor| {
+                    && track_cursors.iter().any(|cursor| {
                         periods
                             .iter()
                             .position(|node| DashPeriod::from_node(*node).same_as(&cursor.period))
@@ -581,9 +617,12 @@ fn parse_mpd_for_recording(
                     }) {
                         expired_periods.insert(period_index);
                     }
+                } else {
+                    active_window_periods.insert(period_index);
                 }
-                let cursor = cursors
+                let cursor = track_cursors
                     .iter()
+                    .copied()
                     .find(|cursor| cursor.matches(&current_period, &id, &mime))
                     .and_then(|cursor| cursor.end);
                 let window = LivePresentationWindow {
@@ -603,6 +642,7 @@ fn parse_mpd_for_recording(
                     start,
                     period_duration,
                     &mut media_durations,
+                    &mut media_presentation_starts,
                     &mut live_segment_budget,
                     &mut url_budget,
                 )?;
@@ -681,10 +721,12 @@ fn parse_mpd_for_recording(
                         period_duration.filter(|_| !dynamic || has_timeline),
                         live_clip,
                         &mut media_durations,
+                        &mut media_presentation_starts,
                         &mut url_budget,
                     )?;
                     media.extend(expanded);
                     live_end = end;
+                    active_window_periods.insert(period_index);
                 }
             }
             media_ranges.resize(media.len(), None);
@@ -774,8 +816,8 @@ fn parse_mpd_for_recording(
             height,
             mime,
             lang: inherited("lang"),
-            codecs: inherited("codecs"),
-            content_type: inherited("contentType"),
+            codecs,
+            content_type,
             label: inherited("label"),
             media_template: media_template.map(str::to_owned),
             base_url,
@@ -785,6 +827,7 @@ fn parse_mpd_for_recording(
             media,
             media_ranges,
             media_durations,
+            media_presentation_starts,
             live_end,
             period: period_index,
             init_markers: Vec::new(),
@@ -795,6 +838,8 @@ fn parse_mpd_for_recording(
     if representations.is_empty() {
         return Err("DASH manifest has no representations".into());
     }
+    before_start_window_periods
+        .retain(|index| expired_periods.contains(index) || !active_window_periods.contains(index));
     Ok(DashManifest {
         document_url: base.into(),
         dynamic,
@@ -1091,6 +1136,7 @@ struct LiveDashTrack {
     init: Option<(String, Option<ByteRange>)>,
     bytes: u64,
     first_presentation_start: Option<f64>,
+    last_presentation_end: Option<f64>,
     resumed_gap: bool,
 }
 
@@ -1101,6 +1147,7 @@ struct SavedLiveTrack {
     seen: Vec<(String, Option<ByteRange>)>,
     init: Option<(String, Option<ByteRange>)>,
     bytes: u64,
+    #[serde(default)]
     first_presentation_start: Option<f64>,
 }
 
@@ -1173,12 +1220,11 @@ impl From<SavedSubtitleTrack> for Representation {
 }
 
 fn live_dash_url_key(url: &str) -> String {
-    let canonical = crate::http_engine::canonical_url_key(url);
-    if canonical.is_empty() {
-        url.trim().to_string()
-    } else {
-        canonical
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return String::new();
     }
+    super::hls::stable_media_url(trimmed)
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1228,7 +1274,7 @@ impl LiveDashTrack {
             bytes = bytes.saturating_add(meta.len());
             files.push(path);
         }
-        let resumed_gap = !files.is_empty();
+        let resumed_gap = !saved.durations.is_empty();
         Some(Self {
             files,
             durations: saved.durations,
@@ -1242,6 +1288,7 @@ impl LiveDashTrack {
                 .map(|(url, range)| (live_dash_url_key(&url), range)),
             bytes,
             first_presentation_start: saved.first_presentation_start,
+            last_presentation_end: None,
             resumed_gap,
         })
     }
@@ -1340,7 +1387,7 @@ fn load_live_dash_state(
     let primary = LiveDashTrack::from_saved(state.primary, task_dir)?;
     let audio = LiveDashTrack::from_saved(state.audio, audio_dir)?;
     let audio_active = state.audio_active_period.or_else(|| {
-        (!audio.files.is_empty())
+        (!audio.durations.is_empty())
             .then(|| state.active.clone())
             .flatten()
     });
@@ -1396,17 +1443,31 @@ impl LiveDashTrack {
         other: &Self,
     ) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+        self.last_presentation_end = None;
         let init_key = track
             .init
             .as_deref()
             .map(|url| (live_dash_url_key(url), track.init_range));
-        let initial = self.files.is_empty();
         let change_init = init_key != self.init;
+        let init_only_unstarted = self.durations.is_empty()
+            && !self.files.is_empty()
+            && self.files.iter().all(|path| is_init_file(path));
+        if init_only_unstarted && change_init {
+            for path in self.files.drain(..) {
+                if init_key.is_none() {
+                    let _ = fs::remove_file(path);
+                }
+            }
+            self.bytes = 0;
+            self.seen.clear();
+            self.init = None;
+        }
+        let initial = self.files.is_empty();
         if !initial && ((!next_period && change_init) || (change_init && init_key.is_none())) {
             return Err("直播 DASH 初始化段改变，无法安全接续当前轨道".into());
         }
-        let mut pending_period_reset = next_period;
-        let first_media = self.new_media_start(track, next_period);
+        let mut pending_period_reset = next_period && !initial;
+        let first_media = self.new_media_start(track, next_period || initial);
         let mut recording_started = !self.durations.is_empty();
         let checkpoint_id = checkpoint_scope.map(|scope| format!("{scope}:{}", track.id));
         let mut index = self.files.len();
@@ -1473,7 +1534,7 @@ impl LiveDashTrack {
             }
             self.init = init_key;
         }
-        let mut boundary = (next_period || self.resumed_gap) && !change_init;
+        let mut boundary = ((next_period && !initial) || self.resumed_gap) && !change_init;
         self.resumed_gap = false;
         for (media_index, url) in track.media.iter().enumerate().skip(first_media) {
             match read_control(control).as_str() {
@@ -1507,13 +1568,21 @@ impl LiveDashTrack {
                 pending_period_reset = false;
             }
             self.seen.insert(seen_key);
+            let seg_start = track
+                .media_presentation_starts
+                .get(media_index)
+                .copied()
+                .or_else(|| {
+                    track
+                        .live_end
+                        .zip(track.media_durations.get(media_index..))
+                        .map(|(end, durations)| end - durations.iter().sum::<f64>())
+                });
             if !recording_started {
-                self.first_presentation_start = track
-                    .live_end
-                    .zip(track.media_durations.get(media_index..))
-                    .map(|(end, durations)| end - durations.iter().sum::<f64>());
+                self.first_presentation_start = seg_start;
                 recording_started = true;
             }
+            self.last_presentation_end = seg_start.map(|start| start + duration);
             index += 1;
             boundary = false;
         }
@@ -1610,11 +1679,23 @@ struct LiveTrackCursor {
     id: String,
     mime: String,
     end: Option<f64>,
+    #[serde(default)]
+    kind: Option<u8>,
 }
 
 impl LiveTrackCursor {
     fn matches(&self, period: &DashPeriod, id: &str, mime: &str) -> bool {
         self.period.same_as(period) && self.id == id && self.mime.eq_ignore_ascii_case(mime)
+    }
+
+    fn effective_kind(&self) -> u8 {
+        self.kind.unwrap_or_else(|| {
+            track_kind(&Representation {
+                id: self.id.clone(),
+                mime: self.mime.clone(),
+                ..Default::default()
+            })
+        })
     }
 }
 
@@ -1623,15 +1704,27 @@ fn remember_live_cursor(
     period: &DashPeriod,
     track: &Representation,
 ) {
+    remember_live_cursor_until(cursors, period, track, track.live_end);
+}
+
+fn remember_live_cursor_until(
+    cursors: &mut Vec<LiveTrackCursor>,
+    period: &DashPeriod,
+    track: &Representation,
+    recorded_end: Option<f64>,
+) {
+    let kind = track_kind(track);
     cursors.retain(|cursor| {
         cursor.period.same_as(period)
-            || !(cursor.id == track.id && cursor.mime.eq_ignore_ascii_case(&track.mime))
+            || (cursor.effective_kind() != kind
+                && !(cursor.id == track.id && cursor.mime.eq_ignore_ascii_case(&track.mime)))
     });
     if let Some(cursor) = cursors
         .iter_mut()
         .find(|cursor| cursor.matches(period, &track.id, &track.mime))
     {
-        if let Some(end) = track.live_end {
+        cursor.kind = Some(kind);
+        if let Some(end) = recorded_end {
             cursor.end = Some(cursor.end.map_or(end, |old| old.max(end)));
         }
     } else {
@@ -1639,7 +1732,8 @@ fn remember_live_cursor(
             period: period.clone(),
             id: track.id.clone(),
             mime: track.mime.clone(),
-            end: track.live_end,
+            end: recorded_end,
+            kind: Some(kind),
         });
     }
 }
@@ -1649,6 +1743,7 @@ fn strip_representation_media(rep: &Representation) -> Representation {
     meta.media.clear();
     meta.media_ranges.clear();
     meta.media_durations.clear();
+    meta.media_presentation_starts.clear();
     meta
 }
 
@@ -1873,6 +1968,19 @@ fn download_live_dash(
                         );
                         return Err("paused".into());
                     }
+                    if !primary.files.is_empty() || !audio.files.is_empty() || !subtitles.is_empty()
+                    {
+                        let _ = save_live_dash_state(
+                            task_dir,
+                            &primary_active,
+                            &audio_active,
+                            &first_period,
+                            &cursors,
+                            &choices,
+                            (&primary, &audio),
+                            &subtitles,
+                        );
+                    }
                     return Err(error);
                 }
             }
@@ -1896,6 +2004,19 @@ fn download_live_dash(
                             &subtitles,
                         );
                         return Err("paused".into());
+                    }
+                    if !primary.files.is_empty() || !audio.files.is_empty() || !subtitles.is_empty()
+                    {
+                        let _ = save_live_dash_state(
+                            task_dir,
+                            &primary_active,
+                            &audio_active,
+                            &first_period,
+                            &cursors,
+                            &choices,
+                            (&primary, &audio),
+                            &subtitles,
+                        );
                     }
                     return Err(error);
                 }
@@ -1950,6 +2071,7 @@ fn download_live_dash(
                 };
                 if primary.has_new_media(track_ref, primary_next_period) {
                     let prev_len = primary.durations.len();
+                    let prev_files = primary.files.len();
                     let append_res = primary.append(
                         track_ref,
                         primary_next_period,
@@ -1969,10 +2091,26 @@ fn download_live_dash(
                         if let Some((ref mut saved_primary, _)) = choices {
                             *saved_primary = strip_representation_media(track_ref);
                         }
+                        remember_live_cursor_until(
+                            &mut cursors,
+                            period,
+                            track_ref,
+                            primary.last_presentation_end,
+                        );
+                        appended_any = true;
+                    } else if primary.files.len() > prev_files {
+                        appended_any = true;
                     }
                     if let Err(error) = append_res {
                         if error == "finish" {
-                            remember_live_cursor(&mut cursors, period, track_ref);
+                            if primary.durations.len() == prev_len && primary_same_period {
+                                remember_live_cursor_until(
+                                    &mut cursors,
+                                    period,
+                                    track_ref,
+                                    primary.last_presentation_end,
+                                );
+                            }
                             break;
                         }
                         if read_control(control) == "cancel" || error == "canceled" {
@@ -1993,6 +2131,22 @@ fn download_live_dash(
                         }
                         if read_control(control) == "finish" {
                             break;
+                        }
+                        if appended_any
+                            || !primary.files.is_empty()
+                            || !audio.files.is_empty()
+                            || !subtitles.is_empty()
+                        {
+                            let _ = save_live_dash_state(
+                                task_dir,
+                                &primary_active,
+                                &audio_active,
+                                &first_period,
+                                &cursors,
+                                &choices,
+                                (&primary, &audio),
+                                &subtitles,
+                            );
                         }
                         return Err(error);
                     }
@@ -2018,6 +2172,7 @@ fn download_live_dash(
                             .clone()
                             .or_else(|| period.start.map(|time| time.to_string()));
                         let prev_len = audio.durations.len();
+                        let prev_files = audio.files.len();
                         let append_res = audio.append(
                             item,
                             audio_next_period,
@@ -2036,10 +2191,26 @@ fn download_live_dash(
                             if let Some((_, ref mut saved_secondary)) = choices {
                                 *saved_secondary = Some(strip_representation_media(item));
                             }
+                            remember_live_cursor_until(
+                                &mut cursors,
+                                period,
+                                item,
+                                audio.last_presentation_end,
+                            );
+                            appended_any = true;
+                        } else if audio.files.len() > prev_files {
+                            appended_any = true;
                         }
                         if let Err(error) = append_res {
                             if error == "finish" {
-                                remember_live_cursor(&mut cursors, period, item);
+                                if audio.durations.len() == prev_len && audio_same_period {
+                                    remember_live_cursor_until(
+                                        &mut cursors,
+                                        period,
+                                        item,
+                                        audio.last_presentation_end,
+                                    );
+                                }
                                 break;
                             }
                             if read_control(control) == "cancel" || error == "canceled" {
@@ -2060,6 +2231,22 @@ fn download_live_dash(
                             }
                             if read_control(control) == "finish" {
                                 break;
+                            }
+                            if appended_any
+                                || !primary.files.is_empty()
+                                || !audio.files.is_empty()
+                                || !subtitles.is_empty()
+                            {
+                                let _ = save_live_dash_state(
+                                    task_dir,
+                                    &primary_active,
+                                    &audio_active,
+                                    &first_period,
+                                    &cursors,
+                                    &choices,
+                                    (&primary, &audio),
+                                    &subtitles,
+                                );
                             }
                             return Err(error);
                         }
@@ -2213,6 +2400,18 @@ fn download_live_dash(
                         &subtitles,
                     );
                     return Err("paused".into());
+                }
+                if !primary.files.is_empty() || !audio.files.is_empty() || !subtitles.is_empty() {
+                    let _ = save_live_dash_state(
+                        task_dir,
+                        &primary_active,
+                        &audio_active,
+                        &first_period,
+                        &cursors,
+                        &choices,
+                        (&primary, &audio),
+                        &subtitles,
+                    );
                 }
                 return Err(error);
             }
@@ -2654,6 +2853,7 @@ fn download_dash_primary(
                 let worker_sender = sender.clone();
                 let network_scope = network_scope.clone();
                 let replay = replay.clone();
+                let network_policy = crate::net_policy::current_network_policy();
                 let throttle = throttle.clone();
                 let pending = &pending;
                 let failed = &failed;
@@ -2667,129 +2867,137 @@ fn download_dash_primary(
                 let first_segments_ready = &first_segments_ready;
                 workers.push(scope.spawn(move || {
                     let _network = set_media_network_scope(network_scope);
-                    crate::net_policy::with_throttle_context(throttle, || {
-                        crate::with_replay_json(&replay, || {
-                            let record_error = |error: String| {
-                                failed.store(true, Ordering::Release);
-                                if let Ok(mut queue) = pending.lock() {
-                                    queue.clear();
-                                }
-                                if let Ok(mut slot) = first_error.lock() {
-                                    match slot.as_deref() {
-                                        None => *slot = Some(error),
-                                        Some("paused") if error == "canceled" => {
-                                            *slot = Some(error);
-                                        }
-                                        _ => {}
+                    crate::net_policy::with_network_policy(network_policy, || {
+                        crate::net_policy::with_throttle_context(throttle, || {
+                            crate::with_replay_json(&replay, || {
+                                let record_error = |error: String| {
+                                    failed.store(true, Ordering::Release);
+                                    if let Ok(mut queue) = pending.lock() {
+                                        queue.clear();
                                     }
-                                }
-                            };
-                            loop {
-                                if failed.load(Ordering::Acquire) {
-                                    break;
-                                }
-                                if read_control(control) != "run" {
-                                    record_error(control_stop_error(control));
-                                    break;
-                                }
-                                let next = {
-                                    let Ok(mut queue) = pending.lock() else {
-                                        record_error("DASH segment queue lock poisoned".into());
-                                        break;
-                                    };
+                                    if let Ok(mut slot) = first_error.lock() {
+                                        match slot.as_deref() {
+                                            None => *slot = Some(error),
+                                            Some("paused") if error == "canceled" => {
+                                                *slot = Some(error);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                };
+                                loop {
                                     if failed.load(Ordering::Acquire) {
                                         break;
                                     }
-                                    if let Some(priority) = super::preview::priority_file(task_dir)
-                                    {
-                                        if let Some(position) =
-                                            queue.iter().position(|(is_audio, index, _)| {
-                                                (if *is_audio {
-                                                    &audio_planned[*index]
-                                                } else {
-                                                    &planned[*index]
-                                                }) == &priority
-                                            })
-                                        {
-                                            queue.rotate_left(position);
-                                        }
+                                    if read_control(control) != "run" {
+                                        record_error(control_stop_error(control));
+                                        break;
                                     }
-                                    queue.pop_front()
-                                };
-                                let Some((is_audio, index, identity)) = next else {
-                                    break;
-                                };
-                                let (rep, path) = if is_audio {
-                                    let Some(audio_rep) = audio else {
-                                        record_error("DASH audio representation missing".into());
+                                    let next = {
+                                        let Ok(mut queue) = pending.lock() else {
+                                            record_error("DASH segment queue lock poisoned".into());
+                                            break;
+                                        };
+                                        if failed.load(Ordering::Acquire) {
+                                            break;
+                                        }
+                                        if let Some(priority) =
+                                            super::preview::priority_file(task_dir)
+                                        {
+                                            if let Some(position) =
+                                                queue.iter().position(|(is_audio, index, _)| {
+                                                    (if *is_audio {
+                                                        &audio_planned[*index]
+                                                    } else {
+                                                        &planned[*index]
+                                                    }) == &priority
+                                                })
+                                            {
+                                                queue.rotate_left(position);
+                                            }
+                                        }
+                                        queue.pop_front()
+                                    };
+                                    let Some((is_audio, index, identity)) = next else {
                                         break;
                                     };
-                                    (audio_rep, &audio_planned[index])
-                                } else {
-                                    (track, &planned[index])
-                                };
-                                let init = rep.init_markers.contains(&index);
-                                if let Err(error) = save_dash_segment_with_retry(
-                                    &rep.media[index],
-                                    headers,
-                                    proxy,
-                                    path,
-                                    control,
-                                    rep.media_ranges[index]
-                                        .map(|range| (range.start, range.length)),
-                                    init,
-                                ) {
-                                    record_error(error);
-                                    break;
-                                }
-                                let size = match path.metadata() {
-                                    Ok(meta) => meta.len(),
-                                    Err(error) => {
-                                        record_error(error.to_string());
+                                    let (rep, path) = if is_audio {
+                                        let Some(audio_rep) = audio else {
+                                            record_error(
+                                                "DASH audio representation missing".into(),
+                                            );
+                                            break;
+                                        };
+                                        (audio_rep, &audio_planned[index])
+                                    } else {
+                                        (track, &planned[index])
+                                    };
+                                    let init = rep.init_markers.contains(&index);
+                                    if let Err(error) = save_dash_segment_with_retry(
+                                        &rep.media[index],
+                                        headers,
+                                        proxy,
+                                        path,
+                                        control,
+                                        rep.media_ranges[index]
+                                            .map(|range| (range.start, range.length)),
+                                        init,
+                                    ) {
+                                        record_error(error);
                                         break;
                                     }
-                                };
-                                if worker_sender
-                                    .send(LandedSegment {
-                                        path: path.clone(),
-                                        identity,
-                                        size,
-                                        init,
-                                    })
-                                    .is_err()
-                                {
-                                    record_error("DASH segment checkpoint worker stopped".into());
-                                    break;
-                                }
-                                if let Err(error) = super::preview::mark_ready(task_dir, path) {
-                                    record_error(error);
-                                    break;
-                                }
-                                downloaded_bytes.fetch_add(size, Ordering::AcqRel);
-                                completed_segments.fetch_add(1, Ordering::AcqRel);
-                                if let Ok(_guard) = progress_lock.lock() {
-                                    report_dash_tracks_progress(
-                                        task_dir,
-                                        downloaded_bytes.load(Ordering::Acquire),
-                                        completed_segments.load(Ordering::Acquire),
-                                        total,
-                                        false,
-                                    );
-                                }
-                                if preview {
-                                    if let Ok(mut written) = preview_written.lock() {
-                                        if !*written && first_segments_ready(task_dir) {
-                                            if let Err(error) =
-                                                write_dash_preview_master(task_dir, audio.is_some())
-                                            {
-                                                record_error(error);
-                                                break;
+                                    let size = match path.metadata() {
+                                        Ok(meta) => meta.len(),
+                                        Err(error) => {
+                                            record_error(error.to_string());
+                                            break;
+                                        }
+                                    };
+                                    if worker_sender
+                                        .send(LandedSegment {
+                                            path: path.clone(),
+                                            identity,
+                                            size,
+                                            init,
+                                        })
+                                        .is_err()
+                                    {
+                                        record_error(
+                                            "DASH segment checkpoint worker stopped".into(),
+                                        );
+                                        break;
+                                    }
+                                    if let Err(error) = super::preview::mark_ready(task_dir, path) {
+                                        record_error(error);
+                                        break;
+                                    }
+                                    downloaded_bytes.fetch_add(size, Ordering::AcqRel);
+                                    completed_segments.fetch_add(1, Ordering::AcqRel);
+                                    if let Ok(_guard) = progress_lock.lock() {
+                                        report_dash_tracks_progress(
+                                            task_dir,
+                                            downloaded_bytes.load(Ordering::Acquire),
+                                            completed_segments.load(Ordering::Acquire),
+                                            total,
+                                            false,
+                                        );
+                                    }
+                                    if preview {
+                                        if let Ok(mut written) = preview_written.lock() {
+                                            if !*written && first_segments_ready(task_dir) {
+                                                if let Err(error) = write_dash_preview_master(
+                                                    task_dir,
+                                                    audio.is_some(),
+                                                ) {
+                                                    record_error(error);
+                                                    break;
+                                                }
+                                                *written = true;
                                             }
-                                            *written = true;
                                         }
                                     }
                                 }
-                            }
+                            });
                         });
                     });
                 }));
@@ -2877,8 +3085,6 @@ fn finish_dash(
     } else {
         output
     };
-    cleanup_multi_period_temp_files(task_dir);
-    cleanup_multi_period_temp_files(&task_dir.join("audio"));
     save_dash_subtitles(task_dir, &subtitles, headers, proxy, control, vod);
     Ok(published)
 }
@@ -3949,6 +4155,7 @@ fn expand_live_duration(
     period_start: f64,
     period_duration: Option<f64>,
     durations: &mut Vec<f64>,
+    presentation_starts: &mut Vec<f64>,
     segment_budget: &mut u64,
     url_budget: &mut usize,
 ) -> Result<(Vec<String>, Option<f64>), String> {
@@ -4016,7 +4223,9 @@ fn expand_live_duration(
         media.push(url);
         let end = (index + 1) as f64 * duration as f64 / timescale as f64;
         let begin = index as f64 * duration as f64 / timescale as f64;
-        durations.push((end.min(edge) - begin.max(0.0)).max(0.0));
+        let clamped_begin = begin.max(0.0);
+        durations.push((end.min(edge) - clamped_begin).max(0.0));
+        presentation_starts.push(period_start + clamped_begin);
     }
     let end = (!media.is_empty())
         .then_some(period_start + (count as f64 * duration as f64 / timescale as f64).min(edge));
@@ -4039,6 +4248,7 @@ fn expand_timeline(
     period_duration: Option<f64>,
     live_clip: Option<TimelineLiveClip>,
     durations: &mut Vec<f64>,
+    presentation_starts: &mut Vec<f64>,
     url_budget: &mut usize,
 ) -> Result<(Vec<String>, Option<f64>), String> {
     let template_attr = |key: &str| {
@@ -4123,27 +4333,30 @@ fn expand_timeline(
                 .find(|node| mpd_element(*node, "S", timeline))
                 .and_then(|next| next.attribute("t")?.parse::<u64>().ok());
             if let Some(next_time) = next_time {
-                if next_time <= time {
+                let Some(span) = next_time.checked_sub(time).filter(|span| *span > 0) else {
                     return Err("unbounded DASH negative timeline repeat".into());
-                }
-                (next_time - time).div_ceil(duration) - 1
+                };
+                span.div_ceil(duration).saturating_sub(1)
             } else if let Some(seconds) = period_duration {
                 let boundary =
                     offset.saturating_add(ceil_segment_units(seconds * timescale as f64) as u64);
-                if boundary <= time {
+                let Some(span) = boundary.checked_sub(time).filter(|span| *span > 0) else {
                     return Err("unbounded DASH negative timeline repeat".into());
-                }
-                (boundary - time).div_ceil(duration) - 1
+                };
+                span.div_ceil(duration).saturating_sub(1)
             } else if let Some(clip) = live_clip {
                 let live_units = (clip.live_end * timescale as f64 + 1e-6).floor();
                 if !live_units.is_finite() || live_units <= 0.0 {
                     continue;
                 }
                 let boundary = offset.saturating_add(live_units as u64);
-                if boundary < time.saturating_add(duration) {
+                let Some(first_end) = time.checked_add(duration) else {
+                    return Err("DASH timeline overflow".into());
+                };
+                if boundary < first_end {
                     continue;
                 }
-                (boundary - time) / duration - 1
+                ((boundary - time) / duration).saturating_sub(1)
             } else {
                 return Err("unbounded DASH negative timeline repeat".into());
             }
@@ -4183,7 +4396,13 @@ fn expand_timeline(
                     continue;
                 }
             }
-            durations.push(seg_dur);
+            let clamped_end = period_duration.map_or(seg_end, |pd| seg_end.min(pd));
+            let emitted_dur = if live_clip.is_some() {
+                (clamped_end - seg_start).max(0.0)
+            } else {
+                seg_dur
+            };
+            durations.push(emitted_dur);
             let url = resolve(
                 base_url,
                 &apply_template(template, id, number, clock, bandwidth)?,
@@ -4191,7 +4410,7 @@ fn expand_timeline(
             consume_url_budget(&url, url_budget)?;
             media.push(url);
             if let Some(clip) = live_clip {
-                let clamped_end = period_duration.map_or(seg_end, |pd| seg_end.min(pd));
+                presentation_starts.push(clip.period_start + seg_start);
                 last_emitted_end = Some(clip.period_start + clamped_end);
             }
             number = number
@@ -7421,6 +7640,7 @@ mod tests {
                 media: vec!["https://cdn.test/en-0.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                media_presentation_starts: Vec::new(),
                 live_end: None,
                 period: 0,
                 init_markers: Vec::new(),
@@ -7447,6 +7667,7 @@ mod tests {
                 media: vec!["https://cdn.test/en-1.vtt".into()],
                 media_ranges: vec![None],
                 media_durations: vec![4.0],
+                media_presentation_starts: Vec::new(),
                 live_end: None,
                 period: 0,
                 init_markers: Vec::new(),
@@ -8499,6 +8720,578 @@ mod tests {
             )
             .unwrap();
         assert_eq!(live_track.durations.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_dash_url_key_preserves_time_query_segments_while_stripping_signatures() {
+        for param in ["t", "ts", "timestamp", "e"] {
+            let s1 = live_dash_url_key(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=1000&token=rot1"
+            ));
+            let s2 = live_dash_url_key(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=2000&token=rot2"
+            ));
+            let s1_rotated = live_dash_url_key(&format!(
+                "https://cdn.example.test/live/chunk.m4s?{param}=1000&token=rot9"
+            ));
+            assert_ne!(s1, s2, "segment query ?{param}= must not collide");
+            assert_eq!(s1, s1_rotated, "rotating token must still deduplicate");
+        }
+    }
+
+    #[test]
+    fn parse_mpd_for_recording_scopes_period_cursors_per_track_kind() {
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z">
+            <Period id="p0" start="PT0S" duration="PT200S">
+                <AdaptationSet contentType="video" mimeType="video/mp4">
+                    <SegmentTemplate duration="10" media="p0/v-$Number$.m4s"/>
+                    <Representation id="v" bandwidth="1000000"/>
+                </AdaptationSet>
+                <AdaptationSet contentType="audio" mimeType="audio/mp4">
+                    <SegmentTemplate duration="10" media="p0/a-$Number$.m4s"/>
+                    <Representation id="a" bandwidth="128000"/>
+                </AdaptationSet>
+            </Period>
+            <Period id="p1" start="PT200S">
+                <AdaptationSet contentType="video" mimeType="video/mp4">
+                    <SegmentTemplate duration="10" media="p1/v-$Number$.m4s"/>
+                    <Representation id="v" bandwidth="1000000"/>
+                </AdaptationSet>
+                <AdaptationSet contentType="audio" mimeType="audio/mp4">
+                    <SegmentTemplate duration="10" media="p1/a-$Number$.m4s"/>
+                    <Representation id="a" bandwidth="128000"/>
+                </AdaptationSet>
+            </Period>
+        </MPD>"#;
+        // Video already advanced to p1 (end=210s), while audio is still at the end of p0 (end=200s).
+        // At now=280s without timeShiftBufferDepth, default lookback is 220..280s, so audio in p1
+        // MUST still anchor at p1 start (200s -> p1/a-1.m4s, p1/a-2.m4s, ...), NOT skip 200..220s!
+        let cursors = vec![
+            LiveTrackCursor {
+                period: DashPeriod {
+                    id: Some("p1".into()),
+                    start: Some(200.0),
+                },
+                id: "v".into(),
+                mime: "video/mp4".into(),
+                end: Some(210.0),
+                kind: Some(0),
+            },
+            LiveTrackCursor {
+                period: DashPeriod {
+                    id: Some("p0".into()),
+                    start: Some(0.0),
+                },
+                id: "a".into(),
+                mime: "audio/mp4".into(),
+                end: Some(200.0),
+                kind: Some(1),
+            },
+        ];
+        let parsed = parse_mpd_for_recording(
+            xml,
+            "https://cdn.test/live.mpd",
+            280.0,
+            32 * 1024 * 1024,
+            &cursors,
+        )
+        .unwrap();
+        let p1_video = parsed
+            .representations
+            .iter()
+            .find(|r| r.period == 1 && r.id == "v")
+            .unwrap();
+        let p1_audio = parsed
+            .representations
+            .iter()
+            .find(|r| r.period == 1 && r.id == "a")
+            .unwrap();
+        assert_eq!(p1_video.media[0], "https://cdn.test/p1/v-2.m4s");
+        assert_eq!(
+            p1_audio.media[0], "https://cdn.test/p1/a-1.m4s",
+            "audio advancing from p0 into p1 must retain initial p1 segments"
+        );
+        assert_eq!(p1_audio.media.len(), 8);
+    }
+
+    #[test]
+    fn live_dash_init_only_pause_resumes_cleanly_across_period_init_rollover() {
+        let root = std::env::temp_dir().join(format!(
+            "dash-g4-3-init-rollover-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let pause_ctrl = control.clone();
+        let pause_after_init = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let server_flag = std::sync::Arc::clone(&pause_after_init);
+        let origin =
+            super::super::harness::serve_dynamic(std::sync::Arc::new(move |path, _| match path {
+                "/p0-init.mp4" => Some(b"INIT-P0".to_vec()),
+                "/p0-s1.m4s" => {
+                    if server_flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        let _ = fs::write(&pause_ctrl, "pause");
+                    }
+                    Some(b"MEDIA-P0-S1".to_vec())
+                }
+                "/p1-init.mp4" => Some(b"INIT-P1".to_vec()),
+                "/p1-s1.m4s" => Some(b"MEDIA-P1-S1".to_vec()),
+                _ => None,
+            }));
+
+        let mut vod = DashCheckpoint::load(&root);
+        let other = LiveDashTrack::default();
+        let mut track = LiveDashTrack::default();
+        let rep_p0 = Representation {
+            id: "v".into(),
+            mime: "video/mp4".into(),
+            init: Some(format!("{}/p0-init.mp4", origin.base)),
+            media: vec![format!("{}/p0-s1.m4s", origin.base)],
+            media_ranges: vec![None],
+            media_durations: vec![2.0],
+            ..Default::default()
+        };
+        let err = track
+            .append(
+                &rep_p0,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap_err();
+        assert_eq!(err, "paused");
+        assert_eq!(track.files.len(), 1);
+        assert!(track.durations.is_empty());
+
+        // Persist and reload state (`active = None`, `files = ["init.mp4"]`, `durations = []`).
+        save_live_dash_state(
+            &root,
+            &None,
+            &None,
+            &None,
+            &[],
+            &Some((strip_representation_media(&rep_p0), None)),
+            (&track, &other),
+            &[],
+        )
+        .unwrap();
+        let (active, _, _, _, _, mut resumed, _, _) =
+            load_live_dash_state(&root, &root.join("audio")).unwrap();
+        assert!(active.is_none());
+        assert!(!resumed.resumed_gap);
+
+        // Stream rolled to Period 1 with a brand new initialization URL while paused.
+        fs::write(&control, "run").unwrap();
+        let rep_p1 = Representation {
+            id: "v".into(),
+            mime: "video/mp4".into(),
+            init: Some(format!("{}/p1-init.mp4", origin.base)),
+            media: vec![format!("{}/p1-s1.m4s", origin.base)],
+            media_ranges: vec![None],
+            media_durations: vec![2.0],
+            ..Default::default()
+        };
+        resumed
+            .append(
+                &rep_p1,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+                None,
+                &other,
+            )
+            .unwrap();
+        assert_eq!(resumed.files.len(), 2);
+        assert_eq!(resumed.durations, vec![2.0]);
+        assert_eq!(fs::read(root.join("init.mp4")).unwrap(), b"INIT-P1");
+        assert_eq!(fs::read(root.join("seg-0001.m4s")).unwrap(), b"MEDIA-P1-S1");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_dash_mid_batch_pause_and_segment_error_persist_exact_cursor_without_skipping() {
+        let root = std::env::temp_dir().join(format!(
+            "dash-g4-4-mid-batch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let ctrl = control.clone();
+        let phase = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let srv_phase = std::sync::Arc::clone(&phase);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let count = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..count]);
+                let path = req
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/");
+                let current_phase = srv_phase.load(std::sync::atomic::Ordering::SeqCst);
+                if path == "/6.m4s" && current_phase == 0 {
+                    let _ = fs::write(&ctrl, "pause");
+                }
+                if path == "/7.m4s" && current_phase == 1 {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 4\r\nConnection: close\r\n\r\ngone",
+                    );
+                    continue;
+                }
+                if path == "/live.mpd" && current_phase == 2 {
+                    let _ = fs::write(&ctrl, "pause");
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    break;
+                }
+                let byte = path
+                    .trim_start_matches('/')
+                    .strip_suffix(".m4s")
+                    .and_then(|n| n.parse::<u8>().ok())
+                    .unwrap_or(0);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.write_all(&[byte]);
+            }
+        });
+
+        let make_xml = |elapsed_secs: i64| {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let ts = now_secs - elapsed_secs;
+            let days = ts.div_euclid(86_400);
+            let rem = ts.rem_euclid(86_400);
+            let z = days + 719_468;
+            let era = z.div_euclid(146_097);
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+            let mut y = yoe + era * 400;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            if m <= 2 {
+                y += 1;
+            }
+            let ast = format!(
+                "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+                rem / 3600,
+                (rem % 3600) / 60,
+                rem % 60
+            );
+            format!(
+                r#"<MPD type="dynamic" minimumUpdatePeriod="PT0.4S" availabilityStartTime="{ast}"><Period id="p0" start="PT0S"><SegmentTemplate duration="10" media="{base_url}/$Number$.m4s"/><Representation id="v" mimeType="video/mp4"/></Period></MPD>"#,
+            )
+        };
+        let mpd_url = format!("{base_url}/live.mpd");
+        let mut vod = DashCheckpoint::load(&root);
+
+        // Run 1 at elapsed=~105s (batch 5..=10): pauses after #5 (end=50s).
+        let xml1 = make_xml(105);
+        let err1 = download_live_dash(
+            parse_mpd(&xml1, &mpd_url).unwrap(),
+            xml1,
+            &mpd_url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            "",
+            false,
+            "",
+            &mut vod,
+        )
+        .unwrap_err();
+        assert_eq!(err1, "paused");
+        let (_, _, _, cursors1, _, loaded1, _, _) =
+            load_live_dash_state(&root, &root.join("audio")).unwrap();
+        assert_eq!(loaded1.files.len(), 1);
+        assert_eq!(cursors1[0].end, Some(50.0));
+
+        // Run 2 at elapsed=~155s (no timeShiftBufferDepth): must NOT skip #6..#10!
+        // Downloads #6 (end=60s), then hits 404 error on #7 -> must persist #6 before returning Err!
+        phase.store(1, std::sync::atomic::Ordering::SeqCst);
+        fs::write(&control, "run").unwrap();
+        let xml2 = make_xml(155);
+        let err2 = download_live_dash(
+            parse_mpd(&xml2, &mpd_url).unwrap(),
+            xml2,
+            &mpd_url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            "",
+            false,
+            "",
+            &mut vod,
+        )
+        .unwrap_err();
+        assert!(err2.contains("404"), "{err2}");
+        let (_, _, _, cursors2, _, loaded2, _, _) =
+            load_live_dash_state(&root, &root.join("audio")).unwrap();
+        assert_eq!(
+            loaded2.files.len(),
+            2,
+            "segment #6 downloaded before error on #7 must be persisted"
+        );
+        assert_eq!(cursors2[0].end, Some(60.0));
+
+        // Run 3 at elapsed=~155s: resumes cleanly at #7 and downloads #7..=#15 without gaps!
+        phase.store(2, std::sync::atomic::Ordering::SeqCst);
+        fs::write(&control, "run").unwrap();
+        let xml3 = make_xml(155);
+        let err3 = download_live_dash(
+            parse_mpd(&xml3, &mpd_url).unwrap(),
+            xml3,
+            &mpd_url,
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            0,
+            0,
+            "",
+            false,
+            "",
+            &mut vod,
+        )
+        .unwrap_err();
+        assert_eq!(err3, "paused");
+        let (_, _, _, _, _, loaded3, _, _) =
+            load_live_dash_state(&root, &root.join("audio")).unwrap();
+        let recorded_nums: Vec<u8> = loaded3
+            .files
+            .iter()
+            .map(|p| fs::read(p).unwrap()[0])
+            .collect();
+        assert_eq!(recorded_nums, (5..=15).collect::<Vec<u8>>());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_timeline_guards_u64_max_underflow_and_tracks_clipped_live_presentation_starts() {
+        // 1. G4-5: r="-1" with live_clip and t + d > u64::MAX or saturating to u64::MAX never panics/underflows.
+        let near_max = u64::MAX - 5;
+        let overflow_xml = format!(
+            r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z">
+                <Period start="PT0S">
+                    <Representation id="v" mimeType="video/mp4">
+                        <SegmentTemplate timescale="1" presentationTimeOffset="{near_max}" media="s-$Number$.m4s">
+                            <SegmentTimeline><S t="{near_max}" d="10" r="-1"/></SegmentTimeline>
+                        </SegmentTemplate>
+                    </Representation>
+                </Period>
+            </MPD>"#
+        );
+        assert!(parse_mpd_at(&overflow_xml, "https://cdn.test/live.mpd", 100.0).is_err());
+
+        let safe_max = u64::MAX - 25;
+        let valid_near_max_xml = format!(
+            r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z">
+                <Period start="PT0S">
+                    <Representation id="v" mimeType="video/mp4">
+                        <SegmentTemplate timescale="1" presentationTimeOffset="{safe_max}" media="s-$Number$.m4s">
+                            <SegmentTimeline><S t="{safe_max}" d="10" r="-1"/></SegmentTimeline>
+                        </SegmentTemplate>
+                    </Representation>
+                </Period>
+            </MPD>"#
+        );
+        let parsed_near =
+            parse_mpd_at(&valid_near_max_xml, "https://cdn.test/live.mpd", 15.0).unwrap();
+        assert_eq!(parsed_near.representations[0].media.len(), 1);
+
+        // 2. G4-6: Clipped period_duration + timeline gap records exact clipped duration and explicit first_presentation_start.
+        let gapped_xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z">
+            <Period id="p0" start="PT10S" duration="PT15S">
+                <Representation id="v" mimeType="video/mp4">
+                    <SegmentTemplate timescale="1" media="v-$Time$.m4s">
+                        <SegmentTimeline>
+                            <S t="2" d="4"/>
+                            <S t="12" d="4"/>
+                        </SegmentTimeline>
+                    </SegmentTemplate>
+                </Representation>
+            </Period>
+        </MPD>"#;
+        let parsed_gap = parse_mpd_at(gapped_xml, "https://cdn.test/live.mpd", 30.0).unwrap();
+        let rep = &parsed_gap.representations[0];
+        // Segment 1: 2..6s (dur 4.0, abs start 12.0); Segment 2: 12..16s clipped to 15s (dur 3.0, abs start 22.0, end 25.0).
+        assert_eq!(rep.media_durations, vec![4.0, 3.0]);
+        assert_eq!(rep.media_presentation_starts, vec![12.0, 22.0]);
+        assert_eq!(rep.live_end, Some(25.0));
+
+        let files = HashMap::from([
+            ("/v-2.m4s".to_string(), b"S1".to_vec()),
+            ("/v-12.m4s".to_string(), b"S2".to_vec()),
+        ]);
+        let (base, server) = serve_dash_files(files, 2);
+        let root = std::env::temp_dir().join(format!(
+            "dash-g4-6-starts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let mut live_rep = rep.clone();
+        for url in &mut live_rep.media {
+            *url = url.replace("https://cdn.test", &base);
+        }
+        let mut live_track = LiveDashTrack::default();
+        live_track
+            .append(
+                &live_rep,
+                false,
+                "video",
+                &root,
+                &root,
+                &HashMap::new(),
+                "",
+                &control,
+                &mut DashCheckpoint::load(&root),
+                None,
+                &LiveDashTrack::default(),
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            live_track.first_presentation_start,
+            Some(12.0),
+            "must record explicit first segment start (12.0), not live_end - sum(durations) (18.0)"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finish_dash_preserves_multi_period_temp_files_for_worker_publish_and_drm_catches_all_schemes(
+    ) {
+        // 1. G4-8: ClearKey, DASH-IF ClearKey, WisePlay, ChinaDRM, and bare mp4protection (except value="none").
+        for scheme in [
+            r#"schemeIdUri="urn:uuid:e2719d58-a985-b3c9-781a-b030af78d30e""#,
+            r#"schemeIdUri="urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b""#,
+            r#"schemeIdUri="urn:uuid:94ce86fb-07ff-4f43-adb8-93d2fa968ca2""#,
+            r#"schemeIdUri="urn:uuid:3d5e6d35-9b9a-41e8-b843-dd3c6e72c42c""#,
+            r#"schemeIdUri="urn:uuid:79f0049a-4098-8642-ab92-e65be0885f95""#,
+            r#"schemeIdUri="urn:mpeg:dash:mp4protection:2011""#,
+        ] {
+            let xml = format!(
+                r#"<MPD type="static" mediaPresentationDuration="PT4S"><Period><AdaptationSet mimeType="video/mp4"><ContentProtection {scheme}/><SegmentTemplate media="s$Number$.m4s" duration="2"/><Representation id="v" bandwidth="500000"/></AdaptationSet></Period></MPD>"#
+            );
+            assert!(
+                parse_mpd(&xml, "https://cdn.test/m.mpd").is_err(),
+                "must reject DRM scheme: {scheme}"
+            );
+        }
+        let clear_xml = r#"<MPD type="static" mediaPresentationDuration="PT4S"><Period><AdaptationSet mimeType="video/mp4"><ContentProtection schemeIdUri="urn:mpeg:dash:mp4protection:2011" value="none"/><SegmentTemplate media="s$Number$.m4s" duration="2"/><Representation id="v" bandwidth="500000"/></AdaptationSet></Period></MPD>"#;
+        assert!(
+            parse_mpd(clear_xml, "https://cdn.test/m.mpd").is_ok(),
+            "explicit value=\"none\" on mp4protection must remain downloadable"
+        );
+
+        // 2. G4-7: finish_dash must NOT delete seg-*-init.mp4 / seg-*-period.m4s before complete_payload.
+        let Some(ffmpeg) = crate::media::merge::locate_ffmpeg() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "dash-g4-7-preserve-temp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("audio")).unwrap();
+        let seg = root.join("seg-0001-period.m4s");
+        let built = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x48:d=0.3:r=10",
+                "-c:v",
+                "mpeg4",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+                "-f",
+                "mp4",
+            ])
+            .arg(&seg)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(built, "ffmpeg must build fragmented mp4 fixture");
+        if built {
+            let p1_init = root.join("seg-0000-init.mp4");
+            let a1_period = root.join("audio/seg-0001-period.m4s");
+            fs::copy(&seg, &p1_init).unwrap();
+            fs::copy(&seg, &a1_period).unwrap();
+            fs::write(
+                root.join("local.m3u8"),
+                "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-MAP:URI=\"seg-0000-init.mp4\"\n#EXTINF:0.300,\nseg-0001-period.m4s\n#EXT-X-ENDLIST\n",
+            )
+            .unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let mut vod = DashCheckpoint::load(&root);
+            let out = finish_dash(
+                &root,
+                None,
+                Vec::new(),
+                &HashMap::new(),
+                "",
+                &control,
+                &mut vod,
+            )
+            .unwrap();
+            assert!(out.is_file());
+            assert!(
+                p1_init.is_file() && seg.is_file() && a1_period.is_file(),
+                "finish_dash must preserve multi-period temp files until complete_payload succeeds"
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 }

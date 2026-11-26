@@ -790,6 +790,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let hud_settings_gen = Rc::new(std::cell::Cell::new(0u64));
     let hud_settings_settled_gen = Rc::new(std::cell::Cell::new(0u64));
     let hud_settings_baseline = Rc::new(RefCell::new(initial_hud_baseline));
+    let pending_settings_reload = Rc::new(std::cell::Cell::new(false));
     let (hud_settings_results_tx, hud_settings_results_rx) = mpsc::channel::<HudSettingsResult>();
     let hud_settings_tx = {
         let confirm = confirm.as_weak();
@@ -1021,49 +1022,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 window.replace(tasks.clone(), sequence);
             }
-            let (primary, position, processing_elapsed) = active_hud
-                .lock()
-                .map(|mut hud| {
-                    let primary = hud.reconcile(&tasks);
-                    let pos = hud.task_position();
-                    let elapsed = primary.as_ref().and_then(|task| {
-                        hud.processing_elapsed_secs(&task.task_id, std::time::Instant::now())
-                    });
-                    (primary, pos, elapsed)
-                })
-                .unwrap_or((None, (0, 0), None));
             let fallback_dir = presenter_settings
                 .lock()
                 .map(|settings| settings.download_dir.clone())
                 .unwrap_or_default();
-            match primary {
-                Some(primary) => {
-                    reset_progress_action_for_new_task(
-                        &progress,
-                        &rendered_hud_task,
-                        &hud_action_gen,
-                        &primary.task_id,
-                    );
-                    render_progress_hud(
-                        &progress,
-                        *runtime_settings.borrow(),
-                        &primary,
-                        position,
-                        &fallback_dir,
-                        processing_elapsed,
-                        Some(&progress_user_moved),
-                    );
-                }
-                None => {
-                    clear_progress_hud_task_state(&rendered_hud_task, &hud_action_gen);
-                    if let Some(item) = progress.upgrade() {
-                        item.set_action_busy(false);
-                        item.set_action_error(false);
-                        item.set_action_text("".into());
-                        let _ = item.hide();
-                    }
-                }
-            }
+            let current_workbench = workbench.borrow().clone();
+            resync_progress_hud(
+                &progress,
+                *runtime_settings.borrow(),
+                current_workbench.as_ref(),
+                &tasks,
+                &fallback_dir,
+                &active_hud,
+                &rendered_hud_task,
+                &hud_action_gen,
+                Some(&progress_user_moved),
+            );
         }
     });
     thread::spawn({
@@ -1083,10 +1057,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let pending = Arc::new(Mutex::new(initial_pending));
     let active_handoff = Arc::new(Mutex::new(None::<String>));
+    let claiming_handoff = Arc::new(Mutex::new(None::<String>));
     let quick_failed = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let (offer_worker_tx, offer_worker_rx) = mpsc::channel::<OfferPresentJob>();
     let offer_state = EventLoopState {
         pending: Arc::clone(&pending),
         active_handoff: Arc::clone(&active_handoff),
+        claiming_handoff: Arc::clone(&claiming_handoff),
+        offer_worker: offer_worker_tx,
         presenter_settings: Arc::clone(&presenter_settings),
         known_tasks: Arc::clone(&known_tasks),
         known_task_variants: Arc::clone(&known_task_variants),
@@ -1095,6 +1073,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         core_online: Arc::clone(&core_online),
         browser_connected: Arc::clone(&browser_connected),
     };
+    spawn_offer_present_worker_with_rx(offer_worker_rx, default_offer_present_executor(), {
+        let confirm = confirm.as_weak();
+        let state = offer_state.clone();
+        move |outcome| {
+            let window = confirm.clone();
+            let state = state.clone();
+            slint::invoke_from_event_loop(move || {
+                apply_offer_present_outcome(&window, &state, outcome);
+            })
+            .is_ok()
+        }
+    });
     let completed_task = Rc::new(RefCell::new(None::<String>));
     let completed_notified = Rc::new(RefCell::new(HashSet::<String>::new()));
 
@@ -1164,9 +1154,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             &hud_action_gen,
                             &snapshot.task_id,
                         );
+                        let current_workbench = workbench.borrow().clone();
                         render_progress_hud(
                             &window,
-                            *runtime_settings.borrow(),
+                            runtime_settings_for_workbench(
+                                *runtime_settings.borrow(),
+                                current_workbench.as_ref(),
+                            ),
                             &snapshot,
                             position,
                             &fallback_dir,
@@ -1793,7 +1787,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     match taken {
                         Some((offer, filename, download_dir, queue_id)) => {
-                            show_next_offer(&window, &offer_state);
                             item.invoke_open_workbench(true, "".into());
                             let current = workbench.borrow().clone();
                             let opened_in_workbench = if let Some(wb) = current.as_ref() {
@@ -1814,16 +1807,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     presenter_id().into()
                                 };
-                                thread::spawn(move || {
-                                    let _ = CoreIpcClient::connect().and_then(|mut client| {
-                                        client.command(CoreCommand::PresentHandoff {
-                                            handoff_id,
-                                            ok: opened_in_workbench,
-                                            presenter_id: presenter,
-                                        })
-                                    });
-                                });
+                                let _ = offer_state.offer_worker.send(
+                                    OfferPresentJob::TransferToWorkbench {
+                                        handoff_id,
+                                        ok: opened_in_workbench,
+                                        presenter_id: presenter,
+                                    },
+                                );
                             }
+                            show_next_offer(&window, &offer_state);
                         }
                         None => {
                             item.invoke_open_workbench(true, "".into());
@@ -1962,6 +1954,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let hud_settings_gen = Rc::clone(&hud_settings_gen);
         let hud_settings_settled_gen = Rc::clone(&hud_settings_settled_gen);
         let hud_settings_baseline = Rc::clone(&hud_settings_baseline);
+        let pending_settings_reload = Rc::clone(&pending_settings_reload);
         let progress_user_moved = Arc::clone(&progress_user_moved);
         let confirm = confirm.as_weak();
         let progress = progress.as_weak();
@@ -1976,6 +1969,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &hud_settings_gen,
                         &hud_settings_settled_gen,
                         &hud_settings_baseline,
+                        &pending_settings_reload,
                         &settings_reload,
                         hud_result,
                     );
@@ -1995,23 +1989,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             while let Ok(response) = settings_responses.try_recv() {
                 let hud_in_flight = hud_settings_settled_gen.get() < hud_settings_gen.get();
-                let next = if hud_in_flight {
-                    if matches!(response, CorePipeResponse::Settings { .. }) {
-                        let updated = PresenterRuntimeSettings::from_response(Some(&response));
-                        *runtime_settings.borrow_mut() = updated;
-                        Some(updated)
-                    } else {
-                        None
-                    }
-                } else {
-                    presenter_settings.lock().ok().and_then(|mut settings| {
-                        update_presenter_settings(
-                            &response,
-                            &mut settings,
-                            &mut runtime_settings.borrow_mut(),
-                        )
-                    })
-                };
+                let next = handle_settings_response(
+                    &response,
+                    hud_in_flight,
+                    &pending_settings_reload,
+                    &presenter_settings,
+                    &runtime_settings,
+                );
                 if let Some(next) = next {
                     if let (Some(confirm), Some(progress), Some(complete)) =
                         (confirm.upgrade(), progress.upgrade(), complete.upgrade())
@@ -2077,7 +2061,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     match envelope.event {
                         CoreEvent::HandoffOffered { .. } | CoreEvent::HandoffResolved { .. } => {}
                         CoreEvent::SettingsChanged { .. } => {
-                            let _ = settings_reload.send(());
+                            let hud_in_flight =
+                                hud_settings_settled_gen.get() < hud_settings_gen.get();
+                            handle_settings_changed_event(
+                                hud_in_flight,
+                                &pending_settings_reload,
+                                &settings_reload,
+                            );
                         }
                         CoreEvent::Toast { level, message } => {
                             if is_power_action_cleared_toast(&level, &message) {
@@ -2599,6 +2589,8 @@ fn remember_category_directory(
 struct EventLoopState {
     pending: Arc<Mutex<VecDeque<ResourceOffer>>>,
     active_handoff: Arc<Mutex<Option<String>>>,
+    claiming_handoff: Arc<Mutex<Option<String>>>,
+    offer_worker: mpsc::Sender<OfferPresentJob>,
     presenter_settings: Arc<Mutex<PresenterSettings>>,
     known_tasks: Arc<Mutex<Vec<TaskSnapshot>>>,
     known_task_variants: Arc<Mutex<HashMap<String, VariantSelection>>>,
@@ -2715,80 +2707,14 @@ fn event_loop(
             let mut batched = Vec::new();
             let mut shutting_down = false;
             for envelope in events {
-                match envelope.event {
-                    CoreEvent::HandoffOffered { offer } => {
-                        let offer_state = state.clone();
-                        if confirm
-                            .upgrade_in_event_loop(move |item| {
-                                if let Ok(mut items) = offer_state.pending.lock() {
-                                    if !items
-                                        .iter()
-                                        .any(|entry| entry.handoff_id == offer.handoff_id)
-                                    {
-                                        items.push_back(offer);
-                                    }
-                                }
-                                show_next_offer(&item.as_weak(), &offer_state);
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    CoreEvent::HandoffResolved {
-                        handoff_id,
-                        task_id,
-                        ..
-                    } => {
-                        let offer_state = state.clone();
-                        if confirm
-                            .upgrade_in_event_loop(move |item| {
-                                if let Ok(mut failed) = offer_state.quick_failed.lock() {
-                                    failed.remove(&handoff_id);
-                                }
-                                let resolved_variant =
-                                    offer_state.pending.lock().ok().and_then(|mut items| {
-                                        let variant = items
-                                            .iter()
-                                            .find(|entry| entry.handoff_id == handoff_id)
-                                            .map(VariantSelection::from_offer);
-                                        items.retain(|entry| entry.handoff_id != handoff_id);
-                                        variant
-                                    });
-                                if let (Some(task_id), Some(variant)) = (task_id, resolved_variant)
-                                {
-                                    if let Ok(mut variants) = offer_state.known_task_variants.lock()
-                                    {
-                                        variants.insert(task_id, variant);
-                                    }
-                                }
-                                show_next_offer(&item.as_weak(), &offer_state);
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    event => {
-                        if matches!(event, CoreEvent::Shutdown) {
-                            shutting_down = true;
-                        }
-                        if let CoreEvent::BrowserStatus { connected, .. } = &event {
-                            state
-                                .browser_connected
-                                .store(*connected, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        if let CoreEvent::TaskDeleted { ref task_id } = event {
-                            if let Ok(mut variants) = state.known_task_variants.lock() {
-                                variants.remove(task_id);
-                            }
-                        }
-                        update_known_tasks(&state.known_tasks, &event);
-                        batched.push(EventEnvelope {
-                            sequence: envelope.sequence,
-                            event,
-                        });
-                    }
+                if !route_event_loop_envelope(
+                    envelope,
+                    &state,
+                    &mut batched,
+                    &mut shutting_down,
+                    |action| confirm.upgrade_in_event_loop(action).is_ok(),
+                ) {
+                    return;
                 }
             }
             if !batched.is_empty() {
@@ -2853,16 +2779,106 @@ fn event_loop(
     }
 }
 
+fn resolve_handoff_in_state(state: &EventLoopState, handoff_id: &str, task_id: Option<&str>) {
+    if let Ok(mut failed) = state.quick_failed.lock() {
+        failed.remove(handoff_id);
+    }
+    let resolved_variant = state.pending.lock().ok().and_then(|mut items| {
+        let variant = items
+            .iter()
+            .find(|entry| entry.handoff_id == handoff_id)
+            .map(VariantSelection::from_offer);
+        items.retain(|entry| entry.handoff_id != handoff_id);
+        variant
+    });
+    if let (Some(task_id), Some(variant)) = (task_id, resolved_variant) {
+        if let Ok(mut variants) = state.known_task_variants.lock() {
+            variants.insert(task_id.to_owned(), variant);
+        }
+    }
+}
+
+fn route_event_loop_envelope(
+    envelope: EventEnvelope,
+    state: &EventLoopState,
+    batched: &mut Vec<EventEnvelope>,
+    shutting_down: &mut bool,
+    mut run_on_ui: impl FnMut(Box<dyn FnOnce(ConfirmWindow) + Send>) -> bool,
+) -> bool {
+    match envelope.event {
+        CoreEvent::HandoffOffered { offer } => {
+            let offer_state = state.clone();
+            run_on_ui(Box::new(move |item| {
+                if let Ok(mut items) = offer_state.pending.lock() {
+                    if !items
+                        .iter()
+                        .any(|entry| entry.handoff_id == offer.handoff_id)
+                    {
+                        items.push_back(offer);
+                    }
+                }
+                show_next_offer(&item.as_weak(), &offer_state);
+            }))
+        }
+        CoreEvent::HandoffResolved {
+            ref handoff_id,
+            ref task_id,
+        } => {
+            let resolved_handoff_id = handoff_id.clone();
+            let resolved_task_id = task_id.clone();
+            let offer_state = state.clone();
+            if !run_on_ui(Box::new(move |item| {
+                resolve_handoff_in_state(
+                    &offer_state,
+                    &resolved_handoff_id,
+                    resolved_task_id.as_deref(),
+                );
+                show_next_offer(&item.as_weak(), &offer_state);
+            })) {
+                return false;
+            }
+            batched.push(envelope);
+            true
+        }
+        event => {
+            if matches!(event, CoreEvent::Shutdown) {
+                *shutting_down = true;
+            }
+            if let CoreEvent::BrowserStatus { connected, .. } = &event {
+                state
+                    .browser_connected
+                    .store(*connected, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let CoreEvent::TaskDeleted { ref task_id } = event {
+                if let Ok(mut variants) = state.known_task_variants.lock() {
+                    variants.remove(task_id);
+                }
+            }
+            update_known_tasks(&state.known_tasks, &event);
+            batched.push(EventEnvelope {
+                sequence: envelope.sequence,
+                event,
+            });
+            true
+        }
+    }
+}
+
 fn load_handoff_state(
     client: &mut CoreIpcClient,
 ) -> (VecDeque<ResourceOffer>, HashMap<String, VariantSelection>) {
-    let encoded = match client.query_handoffs(None, None, false) {
-        Ok(encoded) => encoded,
+    match client.query_handoffs(None, None, false) {
+        Ok(encoded) => decode_handoff_state(encoded),
         Err(error) => {
             trace(&format!("恢复浏览器接管请求失败: {error}"));
-            return (VecDeque::new(), HashMap::new());
+            (VecDeque::new(), HashMap::new())
         }
-    };
+    }
+}
+
+fn decode_handoff_state(
+    encoded: Vec<String>,
+) -> (VecDeque<ResourceOffer>, HashMap<String, VariantSelection>) {
     let mut pending = VecDeque::new();
     let mut variants = HashMap::new();
     for encoded in encoded {
@@ -3100,6 +3116,173 @@ fn sync_confirm_filename_category(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OfferPresentJob {
+    Claim {
+        handoff_id: String,
+    },
+    Report {
+        handoff_id: String,
+        shown: bool,
+    },
+    TransferToWorkbench {
+        handoff_id: String,
+        ok: bool,
+        presenter_id: String,
+    },
+}
+
+#[derive(Clone)]
+enum OfferPresentOutcome {
+    Claimed {
+        handoff_id: String,
+    },
+    ClaimFailed {
+        handoff_id: String,
+        restored: Option<(VecDeque<ResourceOffer>, HashMap<String, VariantSelection>)>,
+    },
+    ReportFallback {
+        handoff_id: String,
+    },
+}
+
+const OFFER_WORKER_IDLE_REFRESH: Duration = Duration::from_secs(90);
+
+struct OfferPresentClient<C> {
+    inner: Option<(C, std::time::Instant)>,
+}
+
+impl<C> Default for OfferPresentClient<C> {
+    fn default() -> Self {
+        Self { inner: None }
+    }
+}
+
+impl<C> OfferPresentClient<C> {
+    fn run_with<T>(
+        &mut self,
+        now: std::time::Instant,
+        mut connect: impl FnMut() -> Result<C, String>,
+        mut op: impl FnMut(&mut C) -> Result<T, String>,
+    ) -> Result<T, String> {
+        if self.inner.as_ref().is_some_and(|(_, last_used)| {
+            now.saturating_duration_since(*last_used) >= OFFER_WORKER_IDLE_REFRESH
+        }) {
+            self.inner = None;
+        }
+        let (mut active, used_cached) = match self.inner.take() {
+            Some((existing, _)) => (existing, true),
+            None => (connect()?, false),
+        };
+        match op(&mut active) {
+            Ok(value) => {
+                self.inner = Some((active, std::time::Instant::now().max(now)));
+                Ok(value)
+            }
+            Err(error) if !used_cached => Err(error),
+            Err(_) => {
+                let mut fresh = connect()?;
+                let value = op(&mut fresh)?;
+                self.inner = Some((fresh, std::time::Instant::now().max(now)));
+                Ok(value)
+            }
+        }
+    }
+}
+
+fn default_offer_present_executor(
+) -> impl FnMut(OfferPresentJob) -> Option<OfferPresentOutcome> + Send + 'static {
+    let mut client = OfferPresentClient::<CoreIpcClient>::default();
+    move |job| {
+        let send_present = |client: &mut OfferPresentClient<CoreIpcClient>,
+                            handoff_id: String,
+                            ok: bool,
+                            presenter_id: String|
+         -> Result<(), String> {
+            let req = CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::PresentHandoff {
+                    handoff_id,
+                    ok,
+                    presenter_id,
+                },
+            };
+            match client.run_with(std::time::Instant::now(), CoreIpcClient::connect, |conn| {
+                conn.request(&req)
+            })? {
+                CorePipeResponse::Events { .. } => Ok(()),
+                CorePipeResponse::Error { message, .. } => Err(message),
+                other => Err(format!("unexpected Core command response: {other:?}")),
+            }
+        };
+
+        match job {
+            OfferPresentJob::Claim { handoff_id } => {
+                if send_present(&mut client, handoff_id.clone(), true, presenter_id().into())
+                    .is_ok()
+                {
+                    Some(OfferPresentOutcome::Claimed { handoff_id })
+                } else {
+                    let restored = client
+                        .run_with(std::time::Instant::now(), CoreIpcClient::connect, |conn| {
+                            conn.query_handoffs(None, None, false)
+                        })
+                        .ok()
+                        .map(decode_handoff_state);
+                    Some(OfferPresentOutcome::ClaimFailed {
+                        handoff_id,
+                        restored,
+                    })
+                }
+            }
+            OfferPresentJob::Report { handoff_id, shown } => {
+                let reported = send_present(
+                    &mut client,
+                    handoff_id.clone(),
+                    shown,
+                    presenter_id().into(),
+                )
+                .is_ok();
+                (!shown && reported).then_some(OfferPresentOutcome::ReportFallback { handoff_id })
+            }
+            OfferPresentJob::TransferToWorkbench {
+                handoff_id,
+                ok,
+                presenter_id,
+            } => {
+                let _ = send_present(&mut client, handoff_id, ok, presenter_id);
+                None
+            }
+        }
+    }
+}
+
+fn spawn_offer_present_worker_with_rx(
+    rx: mpsc::Receiver<OfferPresentJob>,
+    mut execute: impl FnMut(OfferPresentJob) -> Option<OfferPresentOutcome> + Send + 'static,
+    mut notify: impl FnMut(OfferPresentOutcome) -> bool + Send + 'static,
+) {
+    thread::spawn(move || {
+        while let Ok(job) = rx.recv() {
+            if let Some(outcome) = execute(job) {
+                if !notify(outcome) {
+                    break;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+fn spawn_offer_present_worker(
+    execute: impl FnMut(OfferPresentJob) -> Option<OfferPresentOutcome> + Send + 'static,
+    notify: impl FnMut(OfferPresentOutcome) -> bool + Send + 'static,
+) -> mpsc::Sender<OfferPresentJob> {
+    let (tx, rx) = mpsc::channel();
+    spawn_offer_present_worker_with_rx(rx, execute, notify);
+    tx
+}
+
 fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) {
     let Some(item) = window.upgrade() else {
         return;
@@ -3113,13 +3296,32 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
         if let Ok(mut active) = state.active_handoff.lock() {
             *active = None;
         }
+        if let Ok(mut claiming) = state.claiming_handoff.lock() {
+            *claiming = None;
+        }
         let _ = item.hide();
         return;
     };
-    if state
+    let already_active = state
         .active_handoff
         .lock()
         .map(|active| active.as_deref() == Some(offer.handoff_id.as_str()))
+        .unwrap_or(false);
+    if already_active {
+        return;
+    }
+    let had_stale_active = state
+        .active_handoff
+        .lock()
+        .map(|mut active| active.take().is_some())
+        .unwrap_or(false);
+    if had_stale_active {
+        let _ = item.hide();
+    }
+    if state
+        .claiming_handoff
+        .lock()
+        .map(|claiming| claiming.as_deref() == Some(offer.handoff_id.as_str()))
         .unwrap_or(false)
     {
         return;
@@ -3155,6 +3357,9 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
                 "quick download auto-accepting handoff {} ({})",
                 plan.handoff_id, plan.filename
             ));
+            if let Ok(mut claiming) = state.claiming_handoff.lock() {
+                *claiming = None;
+            }
             if let Ok(mut active) = state.active_handoff.lock() {
                 *active = Some(plan.handoff_id.clone());
             }
@@ -3205,8 +3410,8 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
                                 *active = None;
                             }
                         }
-                        let _ = weak.upgrade_in_event_loop(move |ui| {
-                            show_next_offer(&ui.as_weak(), &offer_state);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            show_next_offer(&weak, &offer_state);
                         });
                     }
                 }
@@ -3214,7 +3419,139 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
             return;
         }
     }
+    if let Ok(mut claiming) = state.claiming_handoff.lock() {
+        *claiming = Some(offer.handoff_id.clone());
+    }
+    if state
+        .offer_worker
+        .send(OfferPresentJob::Claim {
+            handoff_id: offer.handoff_id,
+        })
+        .is_err()
+    {
+        if let Ok(mut claiming) = state.claiming_handoff.lock() {
+            *claiming = None;
+        }
+    }
+}
+
+fn apply_offer_present_outcome(
+    window: &slint::Weak<ConfirmWindow>,
+    state: &EventLoopState,
+    outcome: OfferPresentOutcome,
+) {
+    match outcome {
+        OfferPresentOutcome::ClaimFailed {
+            handoff_id,
+            restored,
+        } => {
+            if let Ok(mut claiming) = state.claiming_handoff.lock() {
+                if claiming.as_deref() == Some(handoff_id.as_str()) {
+                    *claiming = None;
+                }
+            }
+            let still_front = state
+                .pending
+                .lock()
+                .map(|items| {
+                    items
+                        .front()
+                        .is_some_and(|front| front.handoff_id == handoff_id)
+                })
+                .unwrap_or(false);
+            if !still_front {
+                return;
+            }
+            if let Some((restored_pending, restored_variants)) = restored {
+                if let Ok(mut items) = state.pending.lock() {
+                    *items = restored_pending;
+                }
+                if let Ok(mut variants) = state.known_task_variants.lock() {
+                    *variants = restored_variants;
+                }
+            }
+            let next_front_differs = state
+                .pending
+                .lock()
+                .ok()
+                .and_then(|items| items.front().map(|front| front.handoff_id != handoff_id))
+                .unwrap_or(false);
+            if let Ok(mut active) = state.active_handoff.lock() {
+                if active.is_none() || active.as_deref() == Some(handoff_id.as_str()) {
+                    *active = None;
+                }
+            }
+            if let Some(item) = window.upgrade() {
+                let _ = item.hide();
+            }
+            if next_front_differs {
+                show_next_offer(window, state);
+            }
+        }
+        OfferPresentOutcome::Claimed { handoff_id } => {
+            if let Ok(mut claiming) = state.claiming_handoff.lock() {
+                if claiming.as_deref() == Some(handoff_id.as_str()) {
+                    *claiming = None;
+                }
+            }
+            let Some(item) = window.upgrade() else {
+                return;
+            };
+            let Some(offer) = state
+                .pending
+                .lock()
+                .ok()
+                .and_then(|items| items.front().cloned())
+                .filter(|front| front.handoff_id == handoff_id)
+            else {
+                show_next_offer(window, state);
+                return;
+            };
+            if state
+                .active_handoff
+                .lock()
+                .map(|active| active.as_deref() == Some(handoff_id.as_str()))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            present_claimed_offer(&item, state, &offer);
+        }
+        OfferPresentOutcome::ReportFallback { handoff_id } => {
+            let Some(item) = window.upgrade() else {
+                return;
+            };
+            let mut removed = false;
+            if let Ok(mut items) = state.pending.lock() {
+                let before = items.len();
+                items.retain(|entry| entry.handoff_id != handoff_id);
+                removed = items.len() != before;
+            }
+            if removed {
+                item.invoke_open_workbench(true, "".into());
+                show_next_offer(window, state);
+            }
+        }
+    }
+}
+
+fn present_claimed_offer(item: &ConfirmWindow, state: &EventLoopState, offer: &ResourceOffer) {
     trace(&format!("showing handoff {}", offer.handoff_id));
+    let settings_snapshot = state
+        .presenter_settings
+        .lock()
+        .map(|settings| settings.clone())
+        .unwrap_or_default();
+    let variants_snapshot = state
+        .known_task_variants
+        .lock()
+        .map(|variants| variants.clone())
+        .unwrap_or_default();
+    let tasks_snapshot = state
+        .known_tasks
+        .lock()
+        .map(|tasks| tasks.clone())
+        .unwrap_or_default();
     let filename = if offer.filename.trim().is_empty() {
         filename_from_url(&offer.url)
     } else {
@@ -3225,7 +3562,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     let (duplicate_text, duplicate_task_id) = find_duplicate_match(
         &tasks_snapshot,
         &variants_snapshot,
-        &offer,
+        offer,
         &download_dir,
         &filename,
     )
@@ -3242,10 +3579,10 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     );
     item.set_filename(filename.clone().into());
     item.set_download_dir(download_dir.clone().into());
-    sync_confirm_save_preview(&item);
+    sync_confirm_save_preview(item);
     item.set_category(category.into());
     sync_confirm_selectors(
-        &item,
+        item,
         &settings_snapshot,
         &download_dir,
         Some(hls_client::DEFAULT_QUEUE_ID),
@@ -3254,7 +3591,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     item.set_source_url(safe_display_url(&offer.source_page_url).into());
     item.set_source_host(url_host(&offer.source_page_url).into());
     item.set_download_host(url_host(&offer.url).into());
-    item.set_resource_meta(format_resource_meta(&offer, &filename).into());
+    item.set_resource_meta(format_resource_meta(offer, &filename).into());
     item.set_request_context(
         if offer.credential_ref.is_some() || offer.replay_context_ref.is_some() {
             "已安全继承网页凭据".into()
@@ -3264,7 +3601,7 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
             "直接下载链接".into()
         },
     );
-    item.set_request_details(format_request_details(&offer).into());
+    item.set_request_details(format_request_details(offer).into());
     item.set_duplicate_text(duplicate_text.into());
     item.set_duplicate_task_id(duplicate_task_id.into());
     item.set_details_expanded(false);
@@ -3272,8 +3609,8 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     item.set_suppress_site_kind(false);
     item.set_busy(false);
     item.set_busy_action("".into());
-    clear_confirm_issue(&item);
-    refresh_confirm_disk_space(&item, offer.size);
+    clear_confirm_issue(item);
+    refresh_confirm_disk_space(item, offer.size);
     let remaining = state
         .pending
         .lock()
@@ -3284,32 +3621,9 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
     } else {
         "".into()
     });
-    let claimed = CoreIpcClient::connect().and_then(|mut client| {
-        client.command(CoreCommand::PresentHandoff {
-            handoff_id: offer.handoff_id.clone(),
-            ok: true,
-            presenter_id: presenter_id().into(),
-        })
-    });
-    if claimed.is_err() {
-        if let Ok(mut client) = CoreIpcClient::connect() {
-            let (restored, restored_variants) = load_handoff_state(&mut client);
-            if let Ok(mut items) = state.pending.lock() {
-                *items = restored;
-            }
-            if let Ok(mut variants) = state.known_task_variants.lock() {
-                *variants = restored_variants;
-            }
-        }
-        if let Ok(mut active) = state.active_handoff.lock() {
-            *active = None;
-        }
-        let _ = item.hide();
-        return;
-    }
     let quiet_fullscreen = native_window::is_foreground_fullscreen_or_busy();
     let shown = if quiet_fullscreen {
-        native_window::show_non_activating(&item, false, true).is_ok()
+        native_window::show_non_activating(item, false, true).is_ok()
     } else {
         native_window::set_cloaked(item.window(), true);
         native_window::set_no_activate(item.window(), false);
@@ -3320,10 +3634,10 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
             *active = Some(offer.handoff_id.clone());
         }
         if quiet_fullscreen {
-            fit_confirm_window(&item);
+            fit_confirm_window(item);
         } else {
-            fit_confirm_window(&item);
-            native_window::prepare_dialog(&item, false, true, None);
+            fit_confirm_window(item);
+            native_window::prepare_dialog(item, false, true, None);
         }
     } else {
         native_window::set_cloaked(item.window(), false);
@@ -3331,21 +3645,10 @@ fn show_next_offer(window: &slint::Weak<ConfirmWindow>, state: &EventLoopState) 
             *active = None;
         }
     }
-    let reported = CoreIpcClient::connect()
-        .and_then(|mut client| {
-            client.command(CoreCommand::PresentHandoff {
-                handoff_id: offer.handoff_id.clone(),
-                ok: shown,
-                presenter_id: presenter_id().into(),
-            })
-        })
-        .is_ok();
-    if !shown && reported {
-        if let Ok(mut items) = state.pending.lock() {
-            items.retain(|item| item.handoff_id != offer.handoff_id);
-        }
-        item.invoke_open_workbench(true, "".into());
-    }
+    let _ = state.offer_worker.send(OfferPresentJob::Report {
+        handoff_id: offer.handoff_id.clone(),
+        shown,
+    });
 }
 
 fn update_known_tasks(tasks: &Arc<Mutex<Vec<TaskSnapshot>>>, event: &CoreEvent) {
@@ -4080,6 +4383,107 @@ fn stage_hud_settings_write(
     }
 }
 
+fn runtime_settings_for_workbench(
+    base: PresenterRuntimeSettings,
+    workbench: Option<&Rc<workbench::Workbench>>,
+) -> PresenterRuntimeSettings {
+    PresenterRuntimeSettings {
+        workbench_visible: workbench.is_some_and(|w| w.window.window().is_visible()),
+        ..base
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resync_progress_hud(
+    progress: &slint::Weak<ProgressWindow>,
+    runtime_settings: PresenterRuntimeSettings,
+    workbench: Option<&Rc<workbench::Workbench>>,
+    tasks: &[TaskSnapshot],
+    fallback_dir: &str,
+    active_hud: &Mutex<ActiveTaskHud>,
+    rendered_hud_task: &Mutex<Option<String>>,
+    hud_action_gen: &std::sync::atomic::AtomicU64,
+    progress_user_moved: Option<&Arc<std::sync::atomic::AtomicBool>>,
+) {
+    let (primary, position, processing_elapsed) = active_hud
+        .lock()
+        .map(|mut hud| {
+            let primary = hud.reconcile(tasks);
+            let pos = hud.task_position();
+            let elapsed = primary.as_ref().and_then(|task| {
+                hud.processing_elapsed_secs(&task.task_id, std::time::Instant::now())
+            });
+            (primary, pos, elapsed)
+        })
+        .unwrap_or((None, (0, 0), None));
+    match primary {
+        Some(primary) => {
+            reset_progress_action_for_new_task(
+                progress,
+                rendered_hud_task,
+                hud_action_gen,
+                &primary.task_id,
+            );
+            render_progress_hud(
+                progress,
+                runtime_settings_for_workbench(runtime_settings, workbench),
+                &primary,
+                position,
+                fallback_dir,
+                processing_elapsed,
+                progress_user_moved,
+            );
+        }
+        None => {
+            clear_progress_hud_task_state(rendered_hud_task, hud_action_gen);
+            if let Some(item) = progress.upgrade() {
+                item.set_action_busy(false);
+                item.set_action_error(false);
+                item.set_action_text("".into());
+                let _ = item.hide();
+            }
+        }
+    }
+}
+
+fn handle_settings_response(
+    response: &CorePipeResponse,
+    hud_in_flight: bool,
+    pending_settings_reload: &std::cell::Cell<bool>,
+    presenter_settings: &Mutex<PresenterSettings>,
+    runtime_settings: &RefCell<PresenterRuntimeSettings>,
+) -> Option<PresenterRuntimeSettings> {
+    if hud_in_flight {
+        if matches!(response, CorePipeResponse::Settings { .. }) {
+            pending_settings_reload.set(true);
+            let updated = PresenterRuntimeSettings::from_response(Some(response));
+            *runtime_settings.borrow_mut() = updated;
+            Some(updated)
+        } else {
+            None
+        }
+    } else {
+        let next = presenter_settings.lock().ok().and_then(|mut settings| {
+            update_presenter_settings(response, &mut settings, &mut runtime_settings.borrow_mut())
+        });
+        if next.is_some() {
+            pending_settings_reload.set(false);
+        }
+        next
+    }
+}
+
+fn handle_settings_changed_event(
+    hud_in_flight: bool,
+    pending_settings_reload: &std::cell::Cell<bool>,
+    settings_reload: &mpsc::Sender<()>,
+) {
+    if hud_in_flight {
+        pending_settings_reload.set(true);
+    }
+    let _ = settings_reload.send(());
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_hud_settings_result(
     item: &ProgressWindow,
@@ -4088,6 +4492,7 @@ fn apply_hud_settings_result(
     hud_settings_gen: &std::cell::Cell<u64>,
     hud_settings_settled_gen: &std::cell::Cell<u64>,
     hud_settings_baseline: &RefCell<HudSettingsBaseline>,
+    pending_settings_reload: &std::cell::Cell<bool>,
     settings_reload: &mpsc::Sender<()>,
     completed: HudSettingsResult,
 ) {
@@ -4099,6 +4504,7 @@ fn apply_hud_settings_result(
             .borrow_mut()
             .record_committed(&completed.op);
     } else if completed.gen < hud_settings_gen.get() {
+        pending_settings_reload.set(true);
         let _ = settings_reload.send(());
     }
     if completed.gen != hud_settings_gen.get() {
@@ -4114,6 +4520,9 @@ fn apply_hud_settings_result(
             );
             item.set_action_error(false);
             item.set_action_text(completed.success_text.into());
+            if pending_settings_reload.replace(false) {
+                let _ = settings_reload.send(());
+            }
         }
         Err(error) => {
             apply_hud_settings_rollback(
@@ -4124,6 +4533,7 @@ fn apply_hud_settings_result(
             );
             item.set_action_error(true);
             item.set_action_text(format!("{}：{error}", completed.error_prefix).into());
+            pending_settings_reload.set(false);
             let _ = settings_reload.send(());
         }
     }
@@ -7086,6 +7496,7 @@ mod tests {
         let gen = std::cell::Cell::new(0u64);
         let settled_gen = std::cell::Cell::new(0u64);
         let baseline = RefCell::new(super::HudSettingsBaseline::default());
+        let pending_reload = std::cell::Cell::new(false);
         let (reload_tx, reload_rx) = mpsc::channel();
 
         // 1. Verify single-worker FIFO execution order across rapid clicks.
@@ -7159,6 +7570,7 @@ mod tests {
             &gen,
             &settled_gen,
             &baseline,
+            &pending_reload,
             &reload_tx,
             r1,
         );
@@ -7173,6 +7585,7 @@ mod tests {
             &gen,
             &settled_gen,
             &baseline,
+            &pending_reload,
             &reload_tx,
             r2,
         );
@@ -7211,6 +7624,7 @@ mod tests {
             &gen,
             &settled_gen,
             &baseline,
+            &pending_reload,
             &reload_tx,
             r3,
         );
@@ -7349,6 +7763,7 @@ mod tests {
         let hud_settings_baseline = std::cell::RefCell::new(
             super::HudSettingsBaseline::from_settings(&presenter_settings.lock().unwrap(), false),
         );
+        let pending_settings_reload = std::cell::Cell::new(false);
         let (job_tx, job_rx) = std::sync::mpsc::channel();
         let (reload_tx, reload_rx) = std::sync::mpsc::channel();
 
@@ -7407,6 +7822,7 @@ mod tests {
             &hud_settings_gen,
             &hud_settings_settled_gen,
             &hud_settings_baseline,
+            &pending_settings_reload,
             &reload_tx,
             super::HudSettingsResult {
                 gen: 1,
@@ -7426,6 +7842,7 @@ mod tests {
             &hud_settings_gen,
             &hud_settings_settled_gen,
             &hud_settings_baseline,
+            &pending_settings_reload,
             &reload_tx,
             super::HudSettingsResult {
                 gen: 2,
@@ -7442,5 +7859,382 @@ mod tests {
         assert!(final_settings.speed_limit_enabled);
         assert_eq!(final_settings.speed_limit_kib, 2048);
         assert_eq!(final_settings.completion_power_action, "none");
+    }
+
+    #[test]
+    fn show_next_offer_offloads_ipc_without_blocking_ui_and_preserves_order() {
+        use hls_client::{ResourceKind, ResourceOffer};
+        use slint::ComponentHandle;
+        use std::{
+            collections::{HashMap, HashSet, VecDeque},
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                mpsc, Arc, Mutex,
+            },
+            time::{Duration, Instant},
+        };
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = super::ConfirmWindow::new().unwrap();
+        let (entered_claim, claim_started) = mpsc::channel();
+        let (release_claim, wait_claim) = mpsc::channel();
+        let (outcomes_tx, outcomes_rx) = mpsc::channel();
+        let seen_jobs = Arc::new(Mutex::new(Vec::new()));
+        let seen_jobs_log = Arc::clone(&seen_jobs);
+
+        let worker_tx = super::spawn_offer_present_worker(
+            move |job| {
+                seen_jobs_log.lock().unwrap().push(job.clone());
+                match job {
+                    super::OfferPresentJob::Claim { ref handoff_id } if handoff_id == "h-slow" => {
+                        let _ = entered_claim.send(());
+                        let _ = wait_claim.recv();
+                        Some(super::OfferPresentOutcome::Claimed {
+                            handoff_id: handoff_id.clone(),
+                        })
+                    }
+                    super::OfferPresentJob::Claim { ref handoff_id } if handoff_id == "h-stale" => {
+                        let restored_next = ResourceOffer {
+                            handoff_id: "h-after-stale".into(),
+                            url: "https://cdn.example.test/recovered.mp4".into(),
+                            filename: "recovered.mp4".into(),
+                            resource_kind: ResourceKind::File,
+                            ..Default::default()
+                        };
+                        Some(super::OfferPresentOutcome::ClaimFailed {
+                            handoff_id: handoff_id.clone(),
+                            restored: Some((VecDeque::from([restored_next]), HashMap::new())),
+                        })
+                    }
+                    super::OfferPresentJob::Claim { handoff_id } => {
+                        Some(super::OfferPresentOutcome::Claimed { handoff_id })
+                    }
+                    super::OfferPresentJob::Report { .. }
+                    | super::OfferPresentJob::TransferToWorkbench { .. } => None,
+                }
+            },
+            move |outcome| outcomes_tx.send(outcome).is_ok(),
+        );
+
+        let first = ResourceOffer {
+            handoff_id: "h-slow".into(),
+            url: "https://cdn.example.test/lecture-1.mp4".into(),
+            filename: "lecture-1.mp4".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+        let second = ResourceOffer {
+            handoff_id: "h-second".into(),
+            url: "https://cdn.example.test/lecture-2.mp4".into(),
+            filename: "lecture-2.mp4".into(),
+            resource_kind: ResourceKind::File,
+            ..Default::default()
+        };
+        let state = super::EventLoopState {
+            pending: Arc::new(Mutex::new(VecDeque::from([first, second]))),
+            active_handoff: Arc::new(Mutex::new(None)),
+            claiming_handoff: Arc::new(Mutex::new(None)),
+            offer_worker: worker_tx,
+            presenter_settings: Arc::new(Mutex::new(super::PresenterSettings {
+                download_dir: r"D:\Downloads".into(),
+                ..Default::default()
+            })),
+            known_tasks: Arc::new(Mutex::new(Vec::new())),
+            known_task_variants: Arc::new(Mutex::new(HashMap::new())),
+            quick_failed: Arc::new(Mutex::new(HashSet::new())),
+            confirm_dir_overridden: Arc::new(AtomicBool::new(false)),
+            core_online: Arc::new(AtomicBool::new(true)),
+            browser_connected: Arc::new(AtomicBool::new(true)),
+        };
+
+        // 1. show_next_offer returns immediately on the UI thread while background Claim is blocked!
+        let started_at = Instant::now();
+        super::show_next_offer(&confirm.as_weak(), &state);
+        assert!(started_at.elapsed() < Duration::from_millis(200));
+        claim_started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            state.claiming_handoff.lock().unwrap().as_deref(),
+            Some("h-slow")
+        );
+        assert!(state.active_handoff.lock().unwrap().is_none());
+
+        // Duplicate show_next_offer while Claim("h-slow") is in flight does NOT enqueue another Claim!
+        super::show_next_offer(&confirm.as_weak(), &state);
+        assert_eq!(seen_jobs.lock().unwrap().len(), 1);
+
+        // Release blocked Claim -> apply outcome on UI thread -> ConfirmWindow shows "lecture-1.mp4"
+        // and enqueues Phase 2 Report!
+        release_claim.send(()).unwrap();
+        let outcome1 = outcomes_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::apply_offer_present_outcome(&confirm.as_weak(), &state, outcome1);
+        assert!(state.claiming_handoff.lock().unwrap().is_none());
+        assert_eq!(
+            state.active_handoff.lock().unwrap().as_deref(),
+            Some("h-slow")
+        );
+        assert_eq!(confirm.get_filename().as_str(), "lecture-1.mp4");
+        assert_eq!(confirm.get_remaining().as_str(), "后面还有 1 个");
+
+        // 2. Resolving "h-slow" advances cleanly to "h-second"; if "h-second" is also resolved BEFORE
+        //    its Claim outcome arrives, ConfirmWindow does NOT pop a zombie dialog for "h-second"!
+        super::resolve_handoff_in_state(&state, "h-slow", Some("task-1"));
+        super::show_next_offer(&confirm.as_weak(), &state);
+        let outcome2 = outcomes_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::resolve_handoff_in_state(&state, "h-second", None);
+        super::apply_offer_present_outcome(&confirm.as_weak(), &state, outcome2);
+        assert!(state.active_handoff.lock().unwrap().is_none());
+        assert!(!confirm.window().is_visible());
+
+        // 3. ClaimFailed with restored queue replaces stale front item and immediately claims "h-after-stale".
+        state.pending.lock().unwrap().push_back(ResourceOffer {
+            handoff_id: "h-stale".into(),
+            url: "https://cdn.example.test/stale.mp4".into(),
+            filename: "stale.mp4".into(),
+            ..Default::default()
+        });
+        super::show_next_offer(&confirm.as_weak(), &state);
+        let failed_outcome = outcomes_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::apply_offer_present_outcome(&confirm.as_weak(), &state, failed_outcome);
+        let recovered_outcome = outcomes_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        super::apply_offer_present_outcome(&confirm.as_weak(), &state, recovered_outcome);
+        assert_eq!(
+            state.active_handoff.lock().unwrap().as_deref(),
+            Some("h-after-stale")
+        );
+        assert_eq!(confirm.get_filename().as_str(), "recovered.mp4");
+        let _ = confirm.hide();
+        let _ = Ordering::Relaxed;
+    }
+
+    #[test]
+    fn event_loop_forwards_handoff_resolved_to_workbench_closing_editor_without_duplicates() {
+        use hls_client::{CoreEvent, EventEnvelope, ResourceKind, ResourceOffer};
+        use slint::ComponentHandle;
+        use std::{
+            collections::{HashMap, HashSet, VecDeque},
+            sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+        };
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let confirm = super::ConfirmWindow::new().unwrap();
+        let workbench = crate::workbench::Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let (worker_tx, _worker_rx) = mpsc::channel();
+        let offer = ResourceOffer {
+            handoff_id: "h-ext-cancel".into(),
+            url: "https://cdn.example.test/live.m3u8".into(),
+            resource_kind: ResourceKind::Hls,
+            preferred_variant_id: "v1080".into(),
+            preferred_height: 1080,
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer, "live.mp4", "D:/Media", "default");
+
+        let state = super::EventLoopState {
+            pending: Arc::new(Mutex::new(VecDeque::from([offer]))),
+            active_handoff: Arc::new(Mutex::new(None)),
+            claiming_handoff: Arc::new(Mutex::new(None)),
+            offer_worker: worker_tx,
+            presenter_settings: Arc::new(Mutex::new(super::PresenterSettings::default())),
+            known_tasks: Arc::new(Mutex::new(Vec::new())),
+            known_task_variants: Arc::new(Mutex::new(HashMap::new())),
+            quick_failed: Arc::new(Mutex::new(HashSet::from(["h-ext-cancel".to_owned()]))),
+            confirm_dir_overridden: Arc::new(AtomicBool::new(false)),
+            core_online: Arc::new(AtomicBool::new(true)),
+            browser_connected: Arc::new(AtomicBool::new(true)),
+        };
+
+        let mut batched = Vec::new();
+        let mut shutting_down = false;
+        let resolved_env = EventEnvelope {
+            sequence: 55,
+            event: CoreEvent::HandoffResolved {
+                handoff_id: "h-ext-cancel".into(),
+                task_id: Some("task-1080".into()),
+            },
+        };
+        assert!(super::route_event_loop_envelope(
+            resolved_env.clone(),
+            &state,
+            &mut batched,
+            &mut shutting_down,
+            |cb| {
+                cb(confirm.clone_strong());
+                true
+            }
+        ));
+        assert!(!shutting_down);
+        assert!(state.pending.lock().unwrap().is_empty());
+        assert!(!state.quick_failed.lock().unwrap().contains("h-ext-cancel"));
+        assert!(state
+            .known_task_variants
+            .lock()
+            .unwrap()
+            .contains_key("task-1080"));
+        assert_eq!(
+            batched.len(),
+            1,
+            "HandoffResolved must be forwarded in batched for Workbench"
+        );
+        assert!(matches!(
+            batched[0].event,
+            CoreEvent::HandoffResolved { ref handoff_id, .. } if handoff_id == "h-ext-cancel"
+        ));
+
+        // Applying forwarded batch to Workbench closes open TaskEditorWindow; duplicate delivery is a safe no-op.
+        workbench.apply(&batched[0]);
+        workbench.apply(&resolved_env);
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn non_hud_settings_changed_during_hud_in_flight_reloads_when_hud_write_settles_ok() {
+        use std::{
+            cell::RefCell,
+            sync::{mpsc, Mutex},
+        };
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let progress = super::ProgressWindow::new().unwrap();
+        let presenter_settings = Mutex::new(super::PresenterSettings {
+            download_dir: r"D:\OldDir".into(),
+            ..Default::default()
+        });
+        let runtime_settings = RefCell::new(super::PresenterRuntimeSettings::default());
+        let open_folder = std::cell::Cell::new(false);
+        let gen = std::cell::Cell::new(0u64);
+        let settled_gen = std::cell::Cell::new(0u64);
+        let baseline = RefCell::new(super::HudSettingsBaseline::default());
+        let pending_reload = std::cell::Cell::new(false);
+        let (job_tx, _job_rx) = mpsc::channel();
+        let (reload_tx, reload_rx) = mpsc::channel();
+
+        // 1. Start HUD speed limit write -> hud_in_flight becomes true (gen=1, settled=0).
+        let op = super::HudSettingsWriteOp::SpeedLimit {
+            enabled: true,
+            kib: 1024,
+            values: super::build_speed_limit_settings(true, 1024),
+        };
+        super::stage_hud_settings_write(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &job_tx,
+            &reload_tx,
+            op.clone(),
+            "已限速 1 MB/s".into(),
+            "限速保存失败",
+        );
+        assert!(settled_gen.get() < gen.get());
+
+        // 2. Non-HUD SettingsChanged arrives while hud_in_flight is true, and its Settings response
+        //    comes back before gen=1 settles: presenter_settings skips update and latches pending_reload!
+        super::handle_settings_changed_event(true, &pending_reload, &reload_tx);
+        assert!(pending_reload.get());
+        assert!(reload_rx.try_recv().is_ok());
+
+        let external_resp = settings_response(r"E:\NewBrowserDir");
+        let runtime_updated = super::handle_settings_response(
+            &external_resp,
+            true,
+            &pending_reload,
+            &presenter_settings,
+            &runtime_settings,
+        );
+        assert!(runtime_updated.is_some());
+        assert_eq!(
+            presenter_settings.lock().unwrap().download_dir,
+            r"D:\OldDir",
+            "presenter_settings waits while HUD write is in flight"
+        );
+        assert!(pending_reload.get());
+
+        // 3. HUD write settles with Ok(()) -> pending_reload immediately triggers a fresh reload!
+        super::apply_hud_settings_result(
+            &progress,
+            &presenter_settings,
+            &open_folder,
+            &gen,
+            &settled_gen,
+            &baseline,
+            &pending_reload,
+            &reload_tx,
+            super::HudSettingsResult {
+                gen: 1,
+                op,
+                success_text: "已限速 1 MB/s".into(),
+                error_prefix: "限速保存失败",
+                result: Ok(()),
+            },
+        );
+        assert!(!pending_reload.get());
+        assert!(
+            reload_rx.try_recv().is_ok(),
+            "settling HUD write with Ok(()) must trigger deferred settings reload"
+        );
+
+        // 4. Subsequent Settings response (with hud_in_flight == false) updates presenter_settings!
+        let _ = super::handle_settings_response(
+            &external_resp,
+            false,
+            &pending_reload,
+            &presenter_settings,
+            &runtime_settings,
+        );
+        assert_eq!(
+            presenter_settings.lock().unwrap().download_dir,
+            r"E:\NewBrowserDir"
+        );
+    }
+
+    #[test]
+    fn core_resync_respects_workbench_visible_without_popping_progress_hud_over_workbench() {
+        use hls_client::TaskSnapshot;
+        use slint::ComponentHandle;
+        use std::sync::{atomic::AtomicU64, Mutex};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let progress = super::ProgressWindow::new().unwrap();
+        let workbench = crate::workbench::Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        workbench.window.show().unwrap();
+        assert!(workbench.window.window().is_visible());
+
+        let active_task = TaskSnapshot {
+            task_id: "resync-active-1".into(),
+            filename: "course.mp4".into(),
+            status: "downloading".into(),
+            downloaded_bytes: 1024,
+            total_bytes: Some(4096),
+            speed_bytes_per_sec: 512,
+            ..Default::default()
+        };
+        let active_hud = Mutex::new(super::ActiveTaskHud::default());
+        let rendered_hud_task = Mutex::new(None);
+        let hud_action_gen = AtomicU64::new(0);
+        let base_runtime = super::PresenterRuntimeSettings {
+            show_progress: true,
+            ..Default::default()
+        };
+
+        // While Workbench is visible, resync reconciles HUD state without showing ProgressWindow!
+        super::resync_progress_hud(
+            &progress.as_weak(),
+            base_runtime,
+            Some(&workbench),
+            std::slice::from_ref(&active_task),
+            r"D:\Downloads",
+            &active_hud,
+            &rendered_hud_task,
+            &hud_action_gen,
+            None,
+        );
+        assert_eq!(progress.get_filename().as_str(), "course.mp4");
+        assert!(
+            !progress.window().is_visible(),
+            "on_core_resynced must not pop ProgressWindow on top of visible Workbench"
+        );
+        workbench.window.hide().unwrap();
     }
 }

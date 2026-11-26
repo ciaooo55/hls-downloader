@@ -7,34 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 fn is_reserved_dos_component(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or("").trim();
-    matches!(
-        stem.to_ascii_uppercase().as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM0"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT0"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
+    hls_client::request_validation::reserved_dos_device_name(name)
 }
 
 fn validate_untrusted_dir_syntax(requested: &str) -> Result<(), String> {
@@ -326,12 +299,26 @@ pub fn typed_output_path(
             "zip"
         }
     } else if !detected.is_empty() {
-        if (detected == "mp4" && matches!(current.as_str(), "m4v" | "m4a" | "m4b"))
-            || (detected == "jpg" && current == "jpeg")
-            || (detected == "ogg" && matches!(current.as_str(), "oga" | "ogv" | "opus"))
-            || (detected == "ts" && matches!(current.as_str(), "m2ts" | "mts"))
-        {
+        let detected_subtype = |ext: &str| {
+            (detected == "mp4"
+                && matches!(
+                    ext,
+                    "m4v" | "m4a" | "m4b" | "m4r" | "m4p" | "f4v" | "f4a" | "3g2"
+                ))
+                || (detected == "m4a" && matches!(ext, "m4b" | "m4r"))
+                || (detected == "mkv" && matches!(ext, "mka" | "mks" | "mk3d"))
+                || (detected == "webm" && ext == "weba")
+                || (detected == "gz" && matches!(ext, "gz" | "tgz" | "taz" | "svgz" | "crate"))
+                || (detected == "7z" && ext == "cb7")
+                || (detected == "rar" && ext == "cbr")
+                || (detected == "jpg" && ext == "jpeg")
+                || (detected == "ogg" && matches!(ext, "oga" | "ogv" | "opus"))
+                || (detected == "ts" && matches!(ext, "m2ts" | "mts"))
+        };
+        if detected_subtype(&current) {
             current.as_str()
+        } else if detected_subtype(&server_ext) {
+            server_ext.as_str()
         } else {
             detected
         }
@@ -350,10 +337,74 @@ pub fn typed_output_path(
         ""
     };
     Ok(if extension.is_empty() {
-        requested.to_path_buf()
+        let needs_clamp = requested
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name.encode_utf16().count() > 255);
+        if needs_clamp {
+            let stem = requested
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("download");
+            let ext_suffix = requested
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| format!(".{value}"))
+                .unwrap_or_default();
+            requested.with_file_name(clamp_ntfs_filename_with_suffix(stem, &ext_suffix))
+        } else {
+            requested.to_path_buf()
+        }
     } else {
-        requested.with_extension(extension)
+        let stem = requested
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("download");
+        let suffix = format!(".{extension}");
+        requested.with_file_name(clamp_ntfs_filename_with_suffix(stem, &suffix))
     })
+}
+
+fn clamp_ntfs_filename_with_suffix(stem: &str, suffix: &str) -> String {
+    const MAX_UTF16_UNITS: usize = 255;
+    let suffix_units = suffix.encode_utf16().count();
+    let budget = MAX_UTF16_UNITS.saturating_sub(suffix_units);
+    let clamp_stem = |raw_stem: &str, stem_budget: usize| -> String {
+        let mut used = 0usize;
+        let mut out = String::with_capacity(raw_stem.len());
+        for ch in raw_stem.chars() {
+            let width = ch.len_utf16();
+            if used + width > stem_budget {
+                break;
+            }
+            used += width;
+            out.push(ch);
+        }
+        let trimmed = out.trim_end_matches([' ', '.']);
+        if trimmed.is_empty() && stem_budget > 0 {
+            let mut fallback = String::new();
+            let mut fb_used = 0usize;
+            for ch in "download".chars() {
+                if fb_used + ch.len_utf16() > stem_budget {
+                    break;
+                }
+                fb_used += ch.len_utf16();
+                fallback.push(ch);
+            }
+            fallback
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let clamped_stem = clamp_stem(stem, budget);
+    let candidate = format!("{clamped_stem}{suffix}");
+    if is_reserved_dos_component(&candidate) {
+        let prefixed = format!("_{clamped_stem}");
+        let safe_stem = clamp_stem(&prefixed, budget);
+        format!("{safe_stem}{suffix}")
+    } else {
+        candidate
+    }
 }
 
 fn looks_like_mpeg_ts(head: &[u8]) -> bool {
@@ -511,14 +562,24 @@ pub fn normalize_policy(value: &str) -> &'static str {
 }
 
 pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> {
+    choose_output_path_inner(path, policy).map(|(dest, _)| dest)
+}
+
+fn choose_output_path_inner(path: &Path, policy: &str) -> Result<(PathBuf, bool), String> {
     let dest = path.to_path_buf();
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("create output directory: {error}"))?;
     }
     let policy = normalize_policy(policy);
-    let existing = fs::symlink_metadata(&dest).ok();
+    let existing = match fs::symlink_metadata(&dest) {
+        Ok(meta) => Some(meta),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!("inspect output path {}: {error}", dest.display()));
+        }
+    };
     let Some(meta) = existing else {
-        return Ok(dest);
+        return Ok((dest, policy == "overwrite"));
     };
     if meta.file_type().is_symlink() {
         return Err(format!(
@@ -531,7 +592,7 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
         return Err(format!("target already exists: {}", dest.display()));
     }
     if policy == "overwrite" || (policy == "skip" && size == 0) {
-        return Ok(dest);
+        return Ok((dest, true));
     }
     let stem = dest
         .file_stem()
@@ -544,9 +605,19 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
         .unwrap_or_default();
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
     for index in 1..10_000 {
-        let candidate = parent.join(format!("{stem}_{index}{ext}"));
-        if fs::symlink_metadata(&candidate).is_err() {
-            return Ok(candidate);
+        let suffix = format!("_{index}{ext}");
+        let candidate = parent.join(clamp_ntfs_filename_with_suffix(stem, &suffix));
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((candidate, false));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "inspect output path {}: {error}",
+                    candidate.display()
+                ));
+            }
         }
     }
     Err(format!(
@@ -555,7 +626,34 @@ pub fn choose_output_path(path: &Path, policy: &str) -> Result<PathBuf, String> 
     ))
 }
 
+fn is_already_exists_error(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::AlreadyExists
+        || matches!(error.raw_os_error(), Some(80 | 183))
+}
+
+fn is_cross_device_error(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::CrossesDevices || matches!(error.raw_os_error(), Some(17))
+}
+
+enum PublishPayloadError {
+    AlreadyExists,
+    Other(String),
+}
+
 pub(crate) fn stage_copy_and_replace(source: &Path, dest: &Path) -> Result<(), String> {
+    stage_copy_and_replace_mode(source, dest, true).map_err(|err| match err {
+        PublishPayloadError::AlreadyExists => {
+            format!("target already exists: {}", dest.display())
+        }
+        PublishPayloadError::Other(msg) => msg,
+    })
+}
+
+fn stage_copy_and_replace_mode(
+    source: &Path,
+    dest: &Path,
+    allow_overwrite: bool,
+) -> Result<(), PublishPayloadError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
@@ -564,41 +662,72 @@ pub(crate) fn stage_copy_and_replace(source: &Path, dest: &Path) -> Result<(), S
         std::process::id(),
         NEXT_STAGE.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut reader =
-        fs::File::open(source).map_err(|error| format!("publish completed output: {error}"))?;
+    let mut reader = fs::File::open(source).map_err(|error| {
+        PublishPayloadError::Other(format!("publish completed output: {error}"))
+    })?;
     let mut writer = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&staging)
-        .map_err(|error| format!("create output staging file: {error}"))?;
+        .map_err(|error| {
+            PublishPayloadError::Other(format!("create output staging file: {error}"))
+        })?;
     let result = (|| -> std::io::Result<()> {
         std::io::copy(&mut reader, &mut writer)?;
         writer.sync_all()?;
         drop(writer);
-        crate::atomic_replace::replace_file(&staging, dest)
+        if allow_overwrite {
+            crate::atomic_replace::replace_file(&staging, dest)
+        } else {
+            crate::atomic_replace::move_file_exclusive(&staging, dest)
+        }
     })();
     if let Err(error) = result {
         let _ = fs::remove_file(&staging);
-        return Err(format!("publish completed output: {error}"));
+        if !allow_overwrite && is_already_exists_error(&error) {
+            return Err(PublishPayloadError::AlreadyExists);
+        }
+        return Err(PublishPayloadError::Other(format!(
+            "publish completed output: {error}"
+        )));
     }
     Ok(())
 }
 
-fn publish_payload(source: &Path, dest: &Path, keep_temp: bool) -> Result<(), String> {
+fn publish_payload(
+    source: &Path,
+    dest: &Path,
+    keep_temp: bool,
+    allow_overwrite: bool,
+) -> Result<(), PublishPayloadError> {
     if keep_temp {
         // Keeping temporary files must have the same meaning on same-volume and
         // cross-volume work directories. Stage into a sibling temp file, sync,
-        // and atomically replace so partial copies are never exposed.
-        return stage_copy_and_replace(source, dest);
+        // and atomically replace/exclusively move so partial copies are never exposed.
+        return stage_copy_and_replace_mode(source, dest, allow_overwrite);
     }
 
-    if crate::atomic_replace::replace_file(source, dest).is_ok() {
-        return Ok(());
+    let move_res = if allow_overwrite {
+        crate::atomic_replace::replace_file(source, dest)
+    } else {
+        crate::atomic_replace::move_file_exclusive(source, dest)
+    };
+    match move_res {
+        Ok(()) => return Ok(()),
+        Err(error) if !allow_overwrite && is_already_exists_error(&error) => {
+            return Err(PublishPayloadError::AlreadyExists);
+        }
+        Err(error) if !is_cross_device_error(&error) => {
+            return Err(PublishPayloadError::Other(format!(
+                "publish completed output: {error}"
+            )));
+        }
+        Err(_) => {}
     }
 
     // Cross-volume publication cannot use rename. Stage-copy into dest's
-    // directory, sync, atomically replace, then remove the working payload.
-    stage_copy_and_replace(source, dest)?;
+    // directory, sync, atomically replace/exclusively move, then remove the working payload.
+    stage_copy_and_replace_mode(source, dest, allow_overwrite)?;
     if let Err(error) = fs::remove_file(source) {
         let _ = writeln!(
             std::io::stderr(),
@@ -623,28 +752,56 @@ pub fn publish_file(
         .lock()
         .map_err(|_| "output publication lock poisoned".to_string())?;
 
-    let dest = choose_output_path(dest, policy)?;
-    if let Ok(meta) = fs::symlink_metadata(&dest) {
-        if meta.file_type().is_symlink() {
-            return Err(format!(
-                "refusing to publish to symlink: {}",
-                dest.display()
-            ));
+    let normalized_policy = normalize_policy(policy);
+    for _ in 0..64 {
+        let (chosen, allow_overwrite) = choose_output_path_inner(dest, normalized_policy)?;
+        match fs::symlink_metadata(&chosen) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(format!(
+                        "refusing to publish to symlink: {}",
+                        chosen.display()
+                    ));
+                }
+                if !meta.is_file() {
+                    return Err(format!("target is not a file: {}", chosen.display()));
+                }
+                if !allow_overwrite {
+                    if normalized_policy == "rename" {
+                        continue;
+                    }
+                    return Err(format!("target already exists: {}", chosen.display()));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("inspect output path {}: {error}", chosen.display()));
+            }
         }
-        if !meta.is_file() {
-            return Err(format!("target is not a file: {}", dest.display()));
+
+        match publish_payload(source, &chosen, keep_temp, allow_overwrite) {
+            Ok(()) => {
+                if !keep_temp {
+                    if let Some(parent) = source.parent() {
+                        let _ = fs::remove_file(parent.join("control"));
+                        let _ = fs::remove_file(parent.join("progress.json"));
+                    }
+                }
+                return Ok(chosen);
+            }
+            Err(PublishPayloadError::AlreadyExists) => {
+                if normalized_policy == "rename" {
+                    continue;
+                }
+                return Err(format!("target already exists: {}", chosen.display()));
+            }
+            Err(PublishPayloadError::Other(err)) => return Err(err),
         }
     }
-
-    publish_payload(source, &dest, keep_temp)?;
-
-    if !keep_temp {
-        if let Some(parent) = source.parent() {
-            let _ = fs::remove_file(parent.join("control"));
-            let _ = fs::remove_file(parent.join("progress.json"));
-        }
-    }
-    Ok(dest)
+    Err(format!(
+        "cannot allocate unique output name: {}",
+        dest.display()
+    ))
 }
 
 #[cfg(test)]
@@ -1021,6 +1178,180 @@ mod tests {
             resolved_mp3.extension().and_then(|e| e.to_str()),
             Some("mp3")
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn constrain_untrusted_download_dir_rejects_extended_dos_device_names() {
+        let dir = test_dir("dos-devices");
+        fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        for reserved in [
+            "CONIN$",
+            "conout$",
+            "CLOCK$",
+            "COM\u{00b9}",
+            "COM\u{00b2}",
+            "COM\u{00b3}",
+            "LPT\u{00b9}",
+            "LPT\u{00b2}",
+            "lpt\u{00b3}",
+            "CONIN$.log",
+            "nested/CLOCK$/sub",
+            "nested/COM\u{00b9}.txt",
+        ] {
+            let err = constrain_untrusted_download_dir(reserved, &root).unwrap_err();
+            assert!(
+                err.contains("不支持的路径名"),
+                "expected {reserved} to be rejected, got: {err}"
+            );
+        }
+        assert!(constrain_untrusted_download_dir("normal_subdir/media", &root).is_ok());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typed_output_path_preserves_outer_container_subtype_extensions() {
+        let dir = test_dir("container-subtypes");
+        fs::create_dir_all(&dir).unwrap();
+
+        let gz_payload = dir.join("gz.downloading");
+        fs::write(&gz_payload, b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03test").unwrap();
+        for ext in ["gz", "tgz", "taz", "svgz", "crate"] {
+            let requested = dir.join(format!("pkg.{ext}"));
+            let resolved =
+                typed_output_path(&gz_payload, &requested, "application/gzip", "").unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for gzip payload");
+        }
+        assert_eq!(
+            typed_output_path(
+                &gz_payload,
+                &dir.join("download.bin"),
+                "application/octet-stream",
+                ""
+            )
+            .unwrap()
+            .extension()
+            .and_then(|e| e.to_str()),
+            Some("gz")
+        );
+
+        let mkv_payload = dir.join("mkv.downloading");
+        fs::write(&mkv_payload, b"\x1a\x45\xdf\xa3\x93\x42\x82\x88matroska").unwrap();
+        for ext in ["mkv", "mka", "mks", "mk3d"] {
+            let requested = dir.join(format!("track.{ext}"));
+            let resolved =
+                typed_output_path(&mkv_payload, &requested, "application/octet-stream", "")
+                    .unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for mkv payload");
+        }
+
+        let webm_payload = dir.join("webm.downloading");
+        fs::write(&webm_payload, b"\x1a\x45\xdf\xa3\x93\x42\x82\x84webm").unwrap();
+        for ext in ["webm", "weba"] {
+            let requested = dir.join(format!("audio.{ext}"));
+            let resolved =
+                typed_output_path(&webm_payload, &requested, "application/octet-stream", "")
+                    .unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for webm payload");
+        }
+
+        let mp4_payload = dir.join("mp4.downloading");
+        fs::write(&mp4_payload, b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00").unwrap();
+        for ext in [
+            "mp4", "m4v", "m4a", "m4b", "m4r", "m4p", "f4v", "f4a", "3g2",
+        ] {
+            let requested = dir.join(format!("media.{ext}"));
+            let resolved =
+                typed_output_path(&mp4_payload, &requested, "application/octet-stream", "")
+                    .unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for mp4 payload");
+        }
+
+        let sevenz_payload = dir.join("7z.downloading");
+        fs::write(&sevenz_payload, b"7z\xbc\xaf\x27\x1c\x00\x04archive").unwrap();
+        for ext in ["7z", "cb7"] {
+            let requested = dir.join(format!("comic.{ext}"));
+            let resolved =
+                typed_output_path(&sevenz_payload, &requested, "application/octet-stream", "")
+                    .unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for 7z payload");
+        }
+
+        let rar_payload = dir.join("rar.downloading");
+        fs::write(&rar_payload, b"Rar!\x1a\x07\x01\x00archive").unwrap();
+        for ext in ["rar", "cbr"] {
+            let requested = dir.join(format!("issue.{ext}"));
+            let resolved =
+                typed_output_path(&rar_payload, &requested, "application/octet-stream", "")
+                    .unwrap();
+            assert_eq!(resolved, requested, "must preserve .{ext} for rar payload");
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ntfs_utf16_clamping_and_exclusive_rename_skip_publish_guards() {
+        let dir = test_dir("g5-1-g5-2-ntfs-and-exclusive");
+        fs::create_dir_all(&dir).unwrap();
+
+        // 1. G5-1: `typed_output_path` clamps non-BMP / near-255 names to <= 255 UTF-16 code units.
+        let docx_payload = dir.join("docx.downloading");
+        fs::write(&docx_payload, b"PK\x03\x04\x14\x00\x00\x00\x08\x00body").unwrap();
+        // 126 emojis = 252 UTF-16 code units; swapping `.b` -> `.docx` (+5 units = 257) must clamp stem.
+        let emoji_stem = "🎬".repeat(126);
+        let requested_long = dir.join(format!("{emoji_stem}.b"));
+        let typed = typed_output_path(
+            &docx_payload,
+            &requested_long,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "",
+        )
+        .unwrap();
+        let typed_name = typed.file_name().unwrap().to_str().unwrap();
+        assert!(
+            typed_name.ends_with(".docx"),
+            "must keep .docx extension: {typed_name}"
+        );
+        assert!(
+            typed_name.encode_utf16().count() <= 255,
+            "typed filename exceeded 255 UTF-16 units: {}",
+            typed_name.encode_utf16().count()
+        );
+
+        // 2. G5-1: `choose_output_path` clamps `_{index}{ext}` within 255 UTF-16 code units.
+        let max_mp4_name = format!("{}.mp4", "a".repeat(251));
+        assert_eq!(max_mp4_name.encode_utf16().count(), 255);
+        let max_mp4_path = dir.join(&max_mp4_name);
+        fs::write(&max_mp4_path, b"existing").unwrap();
+        let renamed_long = choose_output_path(&max_mp4_path, "rename").unwrap();
+        let renamed_name = renamed_long.file_name().unwrap().to_str().unwrap();
+        assert!(
+            renamed_name.ends_with("_1.mp4"),
+            "expected _1.mp4 suffix: {renamed_name}"
+        );
+        assert!(
+            renamed_name.encode_utf16().count() <= 255,
+            "renamed filename exceeded 255 UTF-16 units: {}",
+            renamed_name.encode_utf16().count()
+        );
+
+        // 3. G5-2: `publish_file` under `"skip"` or `"rename"` never overwrites an existing file.
+        let existing = dir.join("protected.bin");
+        fs::write(&existing, b"original").unwrap();
+        let src_skip = dir.join("src-skip.downloading");
+        fs::write(&src_skip, b"replacement").unwrap();
+        let skip_err = publish_file(&src_skip, &existing, "skip", false).unwrap_err();
+        assert!(skip_err.contains("target already exists"), "{skip_err}");
+        assert_eq!(fs::read(&existing).unwrap(), b"original");
+        assert!(src_skip.exists());
+
+        let renamed_pub = publish_file(&src_skip, &existing, "rename", false).unwrap();
+        assert_eq!(renamed_pub.file_name().unwrap(), "protected_1.bin");
+        assert_eq!(fs::read(&existing).unwrap(), b"original");
+        assert_eq!(fs::read(&renamed_pub).unwrap(), b"replacement");
 
         let _ = fs::remove_dir_all(dir);
     }

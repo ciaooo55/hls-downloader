@@ -154,14 +154,14 @@ pub fn probe_with_harvest_context(
         variants = crate::media::representation_choices(&manifest);
         variants.extend(crate::media::dash_audio_choices(&manifest));
     } else if kind == ResourceKind::File && is_http_resource_url(url) {
-        if let Ok((status, body, final_url)) = crate::http_engine::fetch_manifest_bytes(
+        match crate::http_engine::fetch_manifest_bytes(
             url,
             headers,
             proxy,
             true,
             crate::media::MAX_MANIFEST_BYTES,
         ) {
-            if status == 200 || status == 206 {
+            Ok((status, body, final_url)) if status == 200 || status == 206 => {
                 let text = String::from_utf8_lossy(&body);
                 if text.contains("#EXTM3U") {
                     if let Ok(playlist) = crate::media::parse_playlist(&text, &final_url) {
@@ -182,6 +182,24 @@ pub fn probe_with_harvest_context(
                 }
                 if kind == ResourceKind::File && looks_html(&text) {
                     harvest = crate::harvest_html(&text, &final_url);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let msg = error.to_string();
+                let lower = msg.to_ascii_lowercase();
+                if msg.contains("允许的域名")
+                    || msg.contains("代理")
+                    || lower.contains("private network")
+                    || lower.contains("permitted network")
+                    || lower.contains("punycode")
+                    || lower.contains("disallowed")
+                    || lower.contains("redirect")
+                    || lower.contains("local host")
+                    || lower.contains("not configured")
+                    || lower.contains("proxy")
+                {
+                    return Err(msg);
                 }
             }
         }

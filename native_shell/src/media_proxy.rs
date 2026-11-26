@@ -62,9 +62,42 @@ impl Routes {
     }
 }
 
+fn is_always_forbidden_media_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 0
+        }
+        std::net::IpAddr::V6(v6) => v6.to_ipv4().map_or_else(
+            || v6.is_unicast_link_local() || v6.is_unspecified() || v6.is_multicast(),
+            |v4| is_always_forbidden_media_ip(std::net::IpAddr::V4(v4)),
+        ),
+    }
+}
+
+fn is_loopback_media_host(host: &str) -> bool {
+    let trimmed = host.trim_end_matches('.').trim_matches(['[', ']']);
+    if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback(),
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+            }
+        };
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower == "localhost" || lower.ends_with(".localhost")
+}
+
 pub(crate) struct MediaProxy {
     spec: TaskSpec,
     replay: String,
+    network_scope: crate::http_engine::NetworkScope,
+    network_policy: Option<crate::net_policy::NetworkPolicyContext>,
+    root_is_loopback: bool,
     pub canceled: Arc<AtomicBool>,
     routes: Mutex<Routes>,
 }
@@ -74,15 +107,72 @@ impl MediaProxy {
         if !spec.request_method.is_empty() && !spec.request_method.eq_ignore_ascii_case("GET") {
             return Err("此媒体使用非 GET 请求，请先下载后投屏".into());
         }
-        if crate::http_engine::http_origin(&spec.url).is_none() {
+        if !crate::http_engine::http_fetch_url_allowed(&spec.url)
+            || crate::http_engine::http_origin(&spec.url).is_none()
+        {
             return Err("媒体地址无效".into());
         }
+        let (root_host, _) = crate::net_policy::url_host_port(&spec.url);
+        if root_host.is_empty()
+            || root_host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(is_always_forbidden_media_ip)
+        {
+            return Err("媒体地址无效".into());
+        }
+        let root_is_loopback = is_loopback_media_host(&root_host);
+        let network_policy = crate::net_policy::current_network_policy();
+        let network_scope = {
+            let _clear = crate::http_engine::set_media_network_scope(None);
+            crate::http_engine::entry_network_scope(&spec.url, &spec.proxy)
+        };
         Ok(Self {
             replay: crate::credentials::bind_replay_source_url(&replay, &spec.url),
             spec,
+            network_scope,
+            network_policy,
+            root_is_loopback,
             canceled: Arc::new(AtomicBool::new(false)),
             routes: Mutex::new(Routes::default()),
         })
+    }
+
+    fn public_only(&self) -> bool {
+        matches!(self.network_scope, crate::http_engine::NetworkScope::Public)
+    }
+
+    fn validate_sub_url(&self, url: &str) -> Result<(), String> {
+        if url.len() > 16 * 1024
+            || !crate::http_engine::http_fetch_url_allowed(url)
+            || crate::http_engine::http_origin(url).is_none()
+        {
+            return Err("清单包含无效媒体地址".into());
+        }
+        if let Some(policy) = &self.network_policy {
+            if !crate::net_policy::url_allowed(url, &policy.allowed_hosts) {
+                return Err("清单地址不在允许的域名范围内".into());
+            }
+        }
+        if !self.spec.origin_boundary.is_empty()
+            && crate::http_engine::http_origin(url).as_deref()
+                != Some(self.spec.origin_boundary.as_str())
+        {
+            return Err("清单地址超出允许的源站范围".into());
+        }
+        crate::http_engine::validate_media_target(self.public_only(), url)?;
+        let (host, _) = crate::net_policy::url_host_port(url);
+        if host.is_empty() {
+            return Err("清单包含无效媒体地址".into());
+        }
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if is_always_forbidden_media_ip(ip) {
+                return Err("清单不能引用链路本地或未指定地址".into());
+            }
+        }
+        if !self.root_is_loopback && is_loopback_media_host(&host) {
+            return Err("非本机回环媒体源不能引用本机回环地址".into());
+        }
+        Ok(())
     }
 
     pub fn cast_name(&self) -> &str {
@@ -115,9 +205,7 @@ impl MediaProxy {
     }
 
     fn route_literal(&self, prefix: &str, url: String) -> Result<String, String> {
-        if url.len() > 16 * 1024 || crate::http_engine::http_origin(&url).is_none() {
-            return Err("清单包含无效媒体地址".into());
-        }
+        self.validate_sub_url(&url)?;
         let id = self
             .routes
             .lock()
@@ -127,9 +215,11 @@ impl MediaProxy {
     }
 
     fn route_template(&self, prefix: &str, url: String) -> Result<String, String> {
-        if url.len() > 16 * 1024 || crate::http_engine::http_origin(&url).is_none() {
+        let (host, _) = crate::net_policy::url_host_port(&url);
+        if host.contains('$') {
             return Err("清单包含无效媒体地址".into());
         }
+        self.validate_sub_url(&url)?;
         let variables = template_variables(&url)?;
         let id = self
             .routes
@@ -211,6 +301,15 @@ impl MediaProxy {
         let Some(request_url) = hls_reload_url(&url, query, kind == Some("hls")) else {
             return status(&stream, 400);
         };
+        if !crate::http_engine::http_fetch_url_allowed(&request_url) {
+            return status(&stream, 400);
+        }
+        if (url != self.spec.url || request_url != self.spec.url)
+            && (self.validate_sub_url(&url).is_err()
+                || self.validate_sub_url(&request_url).is_err())
+        {
+            return status(&stream, 403);
+        }
         let range = request
             .lines()
             .filter_map(|line| line.split_once(':'))
@@ -237,114 +336,118 @@ impl MediaProxy {
         let peer = Arc::new(stream);
         let mut stream = peer.as_ref();
         let mut started = false;
-        let result = crate::http_engine::with_media_response(
-            &spec,
-            &self.replay,
-            &request_url,
-            method,
-            range,
-            &self.canceled,
-            Arc::clone(&peer),
-            |mut response| {
-                if !(200..300).contains(&response.status) {
-                    started = true;
-                    return status(
-                        stream,
-                        if (400..600).contains(&response.status) {
-                            response.status
-                        } else {
-                            502
-                        },
-                    );
-                }
-                let mut first = Vec::new();
-                if method != "HEAD" {
-                    (&mut response)
-                        .take(4096)
-                        .read_to_end(&mut first)
-                        .map_err(|e| e.to_string())?;
-                }
-                let kind = manifest_kind(&response.final_url, &response.content_type, &first);
-                if let Some(kind) = kind {
-                    if method == "HEAD" {
+        let _network =
+            crate::http_engine::set_media_network_scope(Some(self.network_scope.clone()));
+        let result = crate::net_policy::with_network_policy(self.network_policy.clone(), || {
+            crate::http_engine::with_media_response(
+                &spec,
+                &self.replay,
+                &request_url,
+                method,
+                range,
+                &self.canceled,
+                Arc::clone(&peer),
+                |mut response| {
+                    if !(200..300).contains(&response.status) {
                         started = true;
-                        return write_head(stream, 200, mime(kind), None, None, false);
+                        return status(
+                            stream,
+                            if (400..600).contains(&response.status) {
+                                response.status
+                            } else {
+                                502
+                            },
+                        );
                     }
-                    if response.status != 200 {
-                        return Err("清单未返回完整正文".into());
+                    let mut first = Vec::new();
+                    if method != "HEAD" {
+                        (&mut response)
+                            .take(4096)
+                            .read_to_end(&mut first)
+                            .map_err(|e| e.to_string())?;
                     }
-                    let limit = crate::media::MAX_MANIFEST_BYTES;
-                    if response.content_length.is_some_and(|n| n > limit) {
-                        return Err("投屏清单超过读取上限".into());
-                    }
-                    (&mut response)
-                        .take(limit + 1 - first.len() as u64)
-                        .read_to_end(&mut first)
-                        .map_err(|e| e.to_string())?;
-                    if first.len() as u64 > limit {
-                        return Err("投屏清单超过读取上限".into());
-                    }
-                    if response
-                        .content_length
-                        .is_some_and(|n| n != first.len() as u64)
-                    {
-                        return Err("投屏清单正文不完整".into());
-                    }
-                    let text = std::str::from_utf8(&first).map_err(|_| "投屏清单不是 UTF-8")?;
-                    let mut route_bytes = 0;
-                    let mut register = |url: String, is_template: bool| {
-                        route_bytes += url.len();
-                        if route_bytes > MAX_ROUTE_BYTES / 2 {
-                            return Err("投屏清单地址总长度超限".into());
+                    let kind = manifest_kind(&response.final_url, &response.content_type, &first);
+                    if let Some(kind) = kind {
+                        if method == "HEAD" {
+                            started = true;
+                            return write_head(stream, 200, mime(kind), None, None, false);
                         }
-                        if is_template {
-                            self.route_template(prefix, url)
+                        if response.status != 200 {
+                            return Err("清单未返回完整正文".into());
+                        }
+                        let limit = crate::media::MAX_MANIFEST_BYTES;
+                        if response.content_length.is_some_and(|n| n > limit) {
+                            return Err("投屏清单超过读取上限".into());
+                        }
+                        (&mut response)
+                            .take(limit + 1 - first.len() as u64)
+                            .read_to_end(&mut first)
+                            .map_err(|e| e.to_string())?;
+                        if first.len() as u64 > limit {
+                            return Err("投屏清单超过读取上限".into());
+                        }
+                        if response
+                            .content_length
+                            .is_some_and(|n| n != first.len() as u64)
+                        {
+                            return Err("投屏清单正文不完整".into());
+                        }
+                        let text = std::str::from_utf8(&first).map_err(|_| "投屏清单不是 UTF-8")?;
+                        let mut route_bytes = 0;
+                        let mut register = |url: String, is_template: bool| {
+                            route_bytes += url.len();
+                            if route_bytes > MAX_ROUTE_BYTES / 2 {
+                                return Err("投屏清单地址总长度超限".into());
+                            }
+                            if is_template {
+                                self.route_template(prefix, url)
+                            } else {
+                                self.route_literal(prefix, url)
+                            }
+                        };
+                        let rewritten = if kind == "hls" {
+                            rewrite_hls(text, &response.final_url, |url| register(url, false))?
                         } else {
-                            self.route_literal(prefix, url)
-                        }
-                    };
-                    let rewritten = if kind == "hls" {
-                        rewrite_hls(text, &response.final_url, |url| register(url, false))?
-                    } else {
-                        rewrite_dash(text, &response.final_url, &mut register)?
-                    };
+                            rewrite_dash(text, &response.final_url, &mut register)?
+                        };
+                        started = true;
+                        write_head(
+                            stream,
+                            200,
+                            mime(kind),
+                            Some(rewritten.len() as u64),
+                            None,
+                            false,
+                        )?;
+                        return stream
+                            .write_all(rewritten.as_bytes())
+                            .map_err(|e| e.to_string());
+                    }
                     started = true;
                     write_head(
                         stream,
-                        200,
-                        mime(kind),
-                        Some(rewritten.len() as u64),
-                        None,
-                        false,
+                        response.status,
+                        &response.content_type,
+                        response.content_length,
+                        response.content_range.as_deref(),
+                        response.accept_ranges,
                     )?;
-                    return stream
-                        .write_all(rewritten.as_bytes())
-                        .map_err(|e| e.to_string());
-                }
-                started = true;
-                write_head(
-                    stream,
-                    response.status,
-                    &response.content_type,
-                    response.content_length,
-                    response.content_range.as_deref(),
-                    response.accept_ranges,
-                )?;
-                if method == "HEAD" {
-                    return Ok(());
-                }
-                stream.write_all(&first).map_err(|e| e.to_string())?;
-                let mut buffer = [0u8; 64 * 1024];
-                loop {
-                    let n = response.read(&mut buffer).map_err(|e| e.to_string())?;
-                    if n == 0 {
-                        break;
+                    if method == "HEAD" {
+                        return Ok(());
                     }
-                    stream.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            },
-        );
+                    stream.write_all(&first).map_err(|e| e.to_string())?;
+                    let mut buffer = [0u8; 64 * 1024];
+                    loop {
+                        let n = response.read(&mut buffer).map_err(|e| e.to_string())?;
+                        if n == 0 {
+                            break;
+                        }
+                        stream.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                },
+            )
+        });
         if result.is_err() && !started {
             return status(stream, 502);
         }
@@ -1650,5 +1753,170 @@ mod tests {
         let logs = upstream.requests.lock().unwrap();
         assert!(logs[1].starts_with("GET /seg-009.m4s "));
         assert!(logs.iter().all(|req| req.contains("Cookie: dash=private")));
+    }
+
+    #[test]
+    fn public_cast_manifest_blocks_ssrf_subroutes_and_redirects_while_preserving_lan_mounts() {
+        let secret = Upstream::start(|_| reply("text/plain", "secret-internal-metadata"));
+        let secret_url = secret.url("/latest/meta-data/");
+
+        // 1. Public cast root rejects loopback, link-local, RFC1918, non-HTTP, and host templates.
+        let public_proxy = MediaProxy::new(
+            TaskSpec {
+                url: "https://public-cast.example/master.m3u8".into(),
+                ..Default::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+        for forbidden in [
+            secret_url.as_str(),
+            "http://127.0.0.1:8080/private.ts",
+            "http://localhost:8080/private.ts",
+            "http://[::1]:8080/private.ts",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://192.168.1.1/router.ts",
+            "http://10.0.0.1/internal.ts",
+            "http://0.0.0.0/zero.ts",
+            "javascript:alert(1)",
+            "file:///C:/Windows/win.ini",
+        ] {
+            let hls = format!("#EXTM3U\n#EXTINF:4,\n{forbidden}\n");
+            assert!(
+                rewrite_hls(&hls, "https://public-cast.example/master.m3u8", |url| {
+                    public_proxy.route_literal("/media/pub", url)
+                })
+                .is_err(),
+                "expected public rewrite to reject {forbidden}"
+            );
+        }
+        assert!(public_proxy
+            .route_template("/media/pub", "http://127.0.0.$Number$/seg.m4s".into())
+            .is_err());
+
+        // Even if a private route ID existed in the table, `serve` itself refuses to connect.
+        let injected_id = public_proxy
+            .routes
+            .lock()
+            .unwrap()
+            .register(secret_url.clone(), false);
+        let probe_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let probe_addr = probe_listener.local_addr().unwrap();
+        let client_thread = thread::spawn(move || {
+            let mut client = TcpStream::connect(probe_addr).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            client
+                .write_all(
+                    format!("GET /media/pub/r/{injected_id} HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                        .as_bytes(),
+                )
+                .unwrap();
+            let mut resp = Vec::new();
+            client.read_to_end(&mut resp).unwrap();
+            String::from_utf8(resp).unwrap()
+        });
+        let (accepted, _) = probe_listener.accept().unwrap();
+        let req_head = {
+            let mut clone = accepted.try_clone().unwrap();
+            read_headers(&mut clone)
+        };
+        public_proxy
+            .serve(
+                accepted,
+                &req_head,
+                &format!("r/{injected_id}"),
+                "/media/pub",
+            )
+            .unwrap();
+        let raw_resp = client_thread.join().unwrap();
+        assert!(raw_resp.starts_with("HTTP/1.1 403"), "{raw_resp}");
+        assert!(secret.requests.lock().unwrap().is_empty());
+
+        // 2. End-to-end through MediaServer with a public root (via local mock HTTP proxy):
+        //    both inline private child URLs and 302 redirects from public child -> 127.0.0.1 fail closed.
+        let secret_for_proxy = secret_url.clone();
+        let forward_proxy = Upstream::start(move |req| {
+            if req.contains("/inline.m3u8") {
+                reply(
+                    "application/vnd.apple.mpegurl",
+                    &format!("#EXTM3U\n#EXTINF:4,\n{secret_for_proxy}\n#EXT-X-ENDLIST\n"),
+                )
+            } else if req.contains("/redir.m3u8") {
+                reply(
+                    "application/vnd.apple.mpegurl",
+                    "#EXTM3U\n#EXTINF:4,\nhttp://203.0.113.20/seg.ts\n#EXT-X-ENDLIST\n",
+                )
+            } else if req.contains("/seg.ts") {
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {secret_for_proxy}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            } else {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+            }
+        });
+        let server = MediaServer::start_local().unwrap();
+        server
+            .mount_proxy(
+                "pub-inline",
+                TaskSpec {
+                    url: "http://203.0.113.20/inline.m3u8".into(),
+                    proxy: format!("http://{}", forward_proxy.address),
+                    ..Default::default()
+                },
+                String::new(),
+            )
+            .unwrap();
+        let (inline_head, _) = request(&server, "GET", "/media/pub-inline/index.m3u8", "");
+        assert!(inline_head.starts_with("HTTP/1.1 502"), "{inline_head}");
+
+        server
+            .mount_proxy(
+                "pub-redir",
+                TaskSpec {
+                    url: "http://203.0.113.20/redir.m3u8".into(),
+                    proxy: format!("http://{}", forward_proxy.address),
+                    ..Default::default()
+                },
+                String::new(),
+            )
+            .unwrap();
+        let (redir_manifest_head, redir_manifest) =
+            request(&server, "GET", "/media/pub-redir/index.m3u8", "");
+        assert!(
+            redir_manifest_head.starts_with("HTTP/1.1 200"),
+            "{redir_manifest_head}"
+        );
+        let seg_route = redir_manifest
+            .lines()
+            .find(|line| line.starts_with("/media/pub-redir/r/"))
+            .unwrap();
+        let (seg_head, seg_body) = request(&server, "GET", seg_route, "");
+        assert!(seg_head.starts_with("HTTP/1.1 502"), "{seg_head}");
+        assert!(seg_body.is_empty());
+        assert!(secret.requests.lock().unwrap().is_empty());
+
+        // 3. Legitimate LAN cast root allows LAN peers, while still blocking link-local & host loopback.
+        let lan_proxy = MediaProxy::new(
+            TaskSpec {
+                url: "http://192.168.10.20:8080/live.m3u8".into(),
+                ..Default::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+        assert!(lan_proxy
+            .route_literal("/media/lan", "http://192.168.10.21:8080/seg1.ts".into())
+            .is_ok());
+        assert!(lan_proxy
+            .route_literal(
+                "/media/lan",
+                "http://169.254.169.254/latest/meta-data/".into()
+            )
+            .is_err());
+        assert!(lan_proxy
+            .route_literal("/media/lan", "http://127.0.0.1:8080/local-admin".into())
+            .is_err());
     }
 }

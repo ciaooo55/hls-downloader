@@ -28,7 +28,7 @@ struct PendingPresenterQueue {
 
 pub(crate) enum QuickHandoffPolicy {
     Disabled,
-    Prepared(Box<TaskSpec>),
+    Prepared(Box<TaskSpec>, String),
     StoreFallback,
 }
 
@@ -280,7 +280,7 @@ impl PersistentCore {
     fn default_quick_spec_from_store(
         &self,
         offer: &crate::ResourceOffer,
-    ) -> Result<Option<TaskSpec>, String> {
+    ) -> Result<Option<(TaskSpec, String)>, String> {
         if !self
             .store
             .setting_bool("browser_quick_download_enabled", false)?
@@ -437,8 +437,8 @@ impl PersistentCore {
                 headers.insert(header_name.into(), val);
             }
         }
-        let proxy = if local_source_path.is_some() {
-            String::new()
+        let (proxy, explicit_proxy) = if local_source_path.is_some() {
+            (String::new(), String::new())
         } else {
             let mut rule_proxy = String::new();
             if let Some(rule) = matched_rule {
@@ -458,19 +458,29 @@ impl PersistentCore {
             let proxy_mode = self.store.setting_string("proxy_mode", "system")?;
             let proxy_url = self.store.setting_string("proxy_url", "")?;
             let proxy_bypass = self.store.setting_string("proxy_bypass", "")?;
-            let effective = crate::net_policy::effective_proxy(
-                &proxy_mode,
-                &proxy_url,
-                &proxy_bypass,
-                offer.url.trim(),
-                &rule_proxy,
-            );
+            let is_torrent = offer.resource_kind == crate::ResourceKind::Torrent
+                || crate::classify_url(offer.url.trim()) == crate::ResourceKind::Torrent;
+            let effective = if is_torrent
+                && rule_proxy.trim().is_empty()
+                && proxy_mode.trim().eq_ignore_ascii_case("manual")
+                && !proxy_url.trim().is_empty()
+            {
+                proxy_url.trim().to_string()
+            } else {
+                crate::net_policy::effective_proxy(
+                    &proxy_mode,
+                    &proxy_url,
+                    &proxy_bypass,
+                    offer.url.trim(),
+                    &rule_proxy,
+                )
+            };
             if !crate::net_policy::proxy_route_sentinel(&effective)
                 && !crate::download_worker::proxy_url_allowed(&effective)
             {
                 return Ok(None);
             }
-            effective
+            (effective, rule_proxy)
         };
         let mut credential_ref = offer.credential_ref.clone();
         if credential_ref.is_none() {
@@ -485,44 +495,47 @@ impl PersistentCore {
         if credential_ref.is_none() && is_http_url && self.store.default_cookie_configured()? {
             credential_ref = Some(crate::store::DEFAULT_COOKIE_CREDENTIAL_REF.into());
         }
-        Ok(Some(TaskSpec {
-            url: offer.url.trim().to_string(),
-            resource_kind: offer.resource_kind,
-            local_source_path,
-            title: if offer.title.trim().is_empty() {
-                filename.clone()
-            } else {
-                offer.title.clone()
+        Ok(Some((
+            TaskSpec {
+                url: offer.url.trim().to_string(),
+                resource_kind: offer.resource_kind,
+                local_source_path,
+                title: if offer.title.trim().is_empty() {
+                    filename.clone()
+                } else {
+                    offer.title.clone()
+                },
+                filename,
+                download_dir,
+                work_dir,
+                queue_id: crate::DEFAULT_QUEUE_ID.into(),
+                allow_duplicate,
+                request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
+                mime_type: offer.mime_type.clone(),
+                concurrency,
+                speed_limit_kib,
+                proxy,
+                headers,
+                credential_ref,
+                replay_context_ref: offer.replay_context_ref.clone(),
+                expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                    .then_some(offer.size),
+                preferred_bandwidth: offer.preferred_bandwidth,
+                preferred_height: offer.preferred_height,
+                preferred_variant_id: offer.preferred_variant_id.clone(),
+                source_page_url: offer.source_page_url.clone(),
+                audio_url: offer.audio_url.trim().to_string(),
+                resource_key: if offer.local_source_path.is_some() {
+                    String::new()
+                } else if offer.resource_key.trim().is_empty() {
+                    crate::http_engine::canonical_url_key(&offer.url)
+                } else {
+                    offer.resource_key.clone()
+                },
+                ..Default::default()
             },
-            filename,
-            download_dir,
-            work_dir,
-            queue_id: crate::DEFAULT_QUEUE_ID.into(),
-            allow_duplicate,
-            request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
-            mime_type: offer.mime_type.clone(),
-            concurrency,
-            speed_limit_kib,
-            proxy,
-            headers,
-            credential_ref,
-            replay_context_ref: offer.replay_context_ref.clone(),
-            expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
-                .then_some(offer.size),
-            preferred_bandwidth: offer.preferred_bandwidth,
-            preferred_height: offer.preferred_height,
-            preferred_variant_id: offer.preferred_variant_id.clone(),
-            source_page_url: offer.source_page_url.clone(),
-            audio_url: offer.audio_url.trim().to_string(),
-            resource_key: if offer.local_source_path.is_some() {
-                String::new()
-            } else if offer.resource_key.trim().is_empty() {
-                crate::http_engine::canonical_url_key(&offer.url)
-            } else {
-                offer.resource_key.clone()
-            },
-            ..Default::default()
-        }))
+            explicit_proxy,
+        )))
     }
 
     pub(crate) fn has_quick_handoff_duplicate_conflict(
@@ -697,13 +710,13 @@ impl PersistentCore {
             return Err("交接编号已属于另一请求".into());
         }
         let resolved_quick_spec = match quick_policy {
-            QuickHandoffPolicy::Prepared(spec) => Some(*spec),
+            QuickHandoffPolicy::Prepared(spec, explicit_proxy) => Some((*spec, explicit_proxy)),
             QuickHandoffPolicy::Disabled => None,
             QuickHandoffPolicy::StoreFallback => {
                 self.default_quick_spec_from_store(&original.offer)?
             }
         };
-        if let Some(spec) = resolved_quick_spec {
+        if let Some((spec, explicit_proxy)) = resolved_quick_spec {
             if crate::download_worker::validate_filename(&spec.filename).is_ok()
                 && !self.has_quick_handoff_duplicate_conflict(&original.offer, &spec)
             {
@@ -739,6 +752,8 @@ impl PersistentCore {
                         self.runtime = before;
                         return Err(error);
                     }
+                    self.store
+                        .set_task_explicit_proxy(&task_id, &explicit_proxy)?;
                     self.update_batch_disrupted_against(&before, &events);
                     self.committed(&events);
                     return Ok((encoded_accepted, Some(task_id)));
@@ -1148,7 +1163,8 @@ impl PersistentCore {
                 crate::CoreEvent::TaskUpdated { snapshot }
                 | crate::CoreEvent::TaskProgress { snapshot } => {
                     let prev = before.snapshot(&snapshot.task_id);
-                    if prev.is_some_and(|p| p.queue_id != snapshot.queue_id) {
+                    let queue_changed = prev.is_some_and(|p| p.queue_id != snapshot.queue_id);
+                    if queue_changed {
                         self.clear_task_from_disrupted(&snapshot.task_id);
                     }
                     if Self::is_disrupted_task_status(&snapshot.status) {
@@ -1163,7 +1179,9 @@ impl PersistentCore {
                     } else if Self::is_live_task_status(&snapshot.status) {
                         let was_live = prev.is_some_and(|p| Self::is_live_task_status(&p.status));
                         self.clear_task_from_disrupted(&snapshot.task_id);
-                        if !was_live && !before.queue_has_live_work(&snapshot.queue_id) {
+                        if (!was_live || queue_changed)
+                            && !before.queue_has_live_work(&snapshot.queue_id)
+                        {
                             self.batch_disrupted.remove(&snapshot.queue_id);
                         }
                     }
@@ -1328,6 +1346,18 @@ impl PersistentCore {
 
     pub fn task_spec(&self, task_id: &str) -> Option<&TaskSpec> {
         self.runtime.task_spec(task_id)
+    }
+
+    pub(crate) fn set_task_explicit_proxy(
+        &mut self,
+        task_id: &str,
+        explicit_proxy: &str,
+    ) -> Result<(), String> {
+        self.store.set_task_explicit_proxy(task_id, explicit_proxy)
+    }
+
+    pub(crate) fn task_explicit_proxy(&self, task_id: &str) -> Result<Option<String>, String> {
+        self.store.task_explicit_proxy(task_id)
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
@@ -2995,6 +3025,89 @@ mod tests {
         assert!(handle.join().unwrap() > 0);
         drop(core);
         remove_db(&path);
+    }
+
+    #[test]
+    fn cross_queue_assign_of_live_task_into_idle_queue_clears_stale_batch_disrupted() {
+        let mut core = PersistentCore::in_memory().unwrap();
+        // 1. Create and fail a task in `night` so `batch_disrupted["night"]` is populated
+        // and `night` subsequently has zero live work.
+        let mut night_failed = test_spec();
+        night_failed.queue_id = "night".into();
+        night_failed.url = "https://example.test/night-fail.bin".into();
+        core.handle(CoreCommand::CreateTask { spec: night_failed })
+            .unwrap();
+        core.report_failure(
+            "task-1",
+            crate::TaskFailure {
+                code: "HTTP_500".into(),
+                message: "HTTP 500".into(),
+                stage: "transfer".into(),
+                url: "https://example.test/night-fail.bin".into(),
+                hint: String::new(),
+                http_status: Some(500),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+        assert!(core
+            .batch_disrupted_for_queue("night")
+            .is_some_and(|ids| ids.contains("task-1")));
+
+        // 2. Create a live (`queued`) task in `default`, then move it to idle `night` via `AssignQueue`.
+        let mut moving = test_spec();
+        moving.queue_id = "default".into();
+        moving.url = "https://example.test/moving-live.bin".into();
+        core.handle(CoreCommand::CreateTask { spec: moving })
+            .unwrap();
+        assert_eq!(core.snapshot("task-2").unwrap().status, "queued");
+
+        core.handle(CoreCommand::AssignQueue {
+            task_ids: vec!["task-2".into()],
+            queue_id: "night".into(),
+        })
+        .unwrap();
+        assert!(
+            core.batch_disrupted_for_queue("night").is_none(),
+            "moving live work into an idle queue must start a fresh batch and clear stale batch_disrupted"
+        );
+
+        // 3. Also verify `assign_queue_and_set_settings` (e.g. orphan migration on queue deletion)
+        // clears stale `batch_disrupted` on an idle `default` queue.
+        let mut default_failed = test_spec();
+        default_failed.queue_id = "default".into();
+        default_failed.url = "https://example.test/default-fail.bin".into();
+        core.handle(CoreCommand::CreateTask {
+            spec: default_failed,
+        })
+        .unwrap();
+        core.report_failure(
+            "task-3",
+            crate::TaskFailure {
+                code: "HTTP_502".into(),
+                message: "HTTP 502".into(),
+                stage: "transfer".into(),
+                url: "https://example.test/default-fail.bin".into(),
+                hint: String::new(),
+                http_status: Some(502),
+                attempt: 1,
+            },
+        )
+        .unwrap();
+        assert!(core
+            .batch_disrupted_for_queue("default")
+            .is_some_and(|ids| ids.contains("task-3")));
+
+        core.assign_queue_and_set_settings(
+            vec!["task-2".into()],
+            "default".into(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            core.batch_disrupted_for_queue("default").is_none(),
+            "assign_queue_and_set_settings moving live task into idle default queue must clear stale batch_disrupted"
+        );
     }
 
     fn test_spec() -> TaskSpec {

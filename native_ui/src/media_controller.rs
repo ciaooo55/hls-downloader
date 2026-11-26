@@ -96,22 +96,19 @@ impl MediaController {
         let (thumbnails, jobs) = mpsc::sync_channel::<(u64, String, f64)>(1);
         let weak = main.as_weak();
         std::thread::spawn(move || {
-            let mut client = None;
+            let mut client = ThumbnailClient::default();
             while let Ok((request_id, task_id, seconds)) = jobs.recv() {
-                let result = (|| {
-                    let active = match client.as_mut() {
-                        Some(existing) => existing,
-                        None => client.insert(CoreIpcClient::connect()?),
-                    };
-                    active.request(&CorePipeRequest::PlayerThumbnail {
-                        request_id,
-                        task_id,
-                        seconds: Some(seconds),
-                    })
-                })();
-                if result.is_err() {
-                    client = None;
-                }
+                let request = CorePipeRequest::PlayerThumbnail {
+                    request_id,
+                    task_id,
+                    seconds: Some(seconds),
+                };
+                let result = client.request_with(
+                    Instant::now(),
+                    &request,
+                    CoreIpcClient::connect,
+                    |active, req| active.request(req),
+                );
                 let response = result.unwrap_or_else(|message| CorePipeResponse::Error {
                     request_id: Some(request_id),
                     code: "thumbnail_connection".into(),
@@ -899,4 +896,174 @@ fn thumbnail(encoded: &str) -> Result<slint::Image, String> {
         image.height(),
     );
     Ok(slint::Image::from_rgba8(buffer))
+}
+
+const THUMBNAIL_CLIENT_IDLE_REFRESH: Duration = Duration::from_secs(90);
+
+struct ThumbnailClient<C> {
+    inner: Option<(C, Instant)>,
+}
+
+impl<C> Default for ThumbnailClient<C> {
+    fn default() -> Self {
+        Self { inner: None }
+    }
+}
+
+impl<C> ThumbnailClient<C> {
+    fn request_with(
+        &mut self,
+        now: Instant,
+        request: &CorePipeRequest,
+        mut connect: impl FnMut() -> Result<C, String>,
+        mut send: impl FnMut(&mut C, &CorePipeRequest) -> Result<CorePipeResponse, String>,
+    ) -> Result<CorePipeResponse, String> {
+        if self.inner.as_ref().is_some_and(|(_, last_used)| {
+            now.saturating_duration_since(*last_used) >= THUMBNAIL_CLIENT_IDLE_REFRESH
+        }) {
+            self.inner = None;
+        }
+        let (mut active, used_cached) = match self.inner.take() {
+            Some((existing, _)) => (existing, true),
+            None => (connect()?, false),
+        };
+        match send(&mut active, request) {
+            Ok(response) => {
+                self.inner = Some((active, Instant::now().max(now)));
+                Ok(response)
+            }
+            Err(error) if !used_cached => Err(error),
+            Err(_) => {
+                let mut fresh = connect()?;
+                let response = send(&mut fresh, request)?;
+                self.inner = Some((fresh, Instant::now().max(now)));
+                Ok(response)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_client_proactively_refreshes_idle_pipe_and_retries_broken_cached_pipe_once() {
+        let t0 = Instant::now();
+        let req = CorePipeRequest::PlayerThumbnail {
+            request_id: 7,
+            task_id: "task-1".into(),
+            seconds: Some(12.0),
+        };
+        let thumb_ok = || CorePipeResponse::PlayerThumbnail {
+            request_id: 7,
+            jpeg_base64: String::new(),
+        };
+
+        let mut client = ThumbnailClient::<usize>::default();
+        let mut connects = 0usize;
+
+        // Brand-new connection failure does not retry a second time.
+        let err = client.request_with(
+            t0,
+            &req,
+            || {
+                connects += 1;
+                Ok(connects)
+            },
+            |_, _| Err("broken on fresh".into()),
+        );
+        assert!(err.is_err());
+        assert_eq!(connects, 1);
+        assert!(client.inner.is_none());
+
+        // Succeeds and caches conn 2.
+        client
+            .request_with(
+                t0,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    assert_eq!(*conn, 2);
+                    Ok(thumb_ok())
+                },
+            )
+            .unwrap();
+        assert_eq!(connects, 2);
+
+        // Cached pipe breaks before idle threshold: reconnects once to conn 3 and succeeds.
+        let t1 = t0 + Duration::from_secs(30);
+        let mut seen = Vec::new();
+        client
+            .request_with(
+                t1,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    seen.push(*conn);
+                    if *conn == 2 {
+                        Err("Core pipe closed".into())
+                    } else {
+                        Ok(thumb_ok())
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(seen, vec![2, 3]);
+        assert_eq!(connects, 3);
+
+        // Cached pipe breaks AND retry also fails: drops client and surfaces error.
+        let t2 = t1 + Duration::from_secs(10);
+        let both_fail = client.request_with(
+            t2,
+            &req,
+            || {
+                connects += 1;
+                Ok(connects)
+            },
+            |_, _| Err("Core offline".into()),
+        );
+        assert!(both_fail.is_err());
+        assert_eq!(connects, 4);
+        assert!(client.inner.is_none());
+
+        // Establish conn 5, pause > 90s, verify proactive refresh connects conn 6 without touching conn 5.
+        client
+            .request_with(
+                t2,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |_, _| Ok(thumb_ok()),
+            )
+            .unwrap();
+        assert_eq!(connects, 5);
+
+        let t3 = t2 + Duration::from_secs(90);
+        let mut after_idle_seen = Vec::new();
+        client
+            .request_with(
+                t3,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    after_idle_seen.push(*conn);
+                    Ok(thumb_ok())
+                },
+            )
+            .unwrap();
+        assert_eq!(connects, 6);
+        assert_eq!(after_idle_seen, vec![6]);
+    }
 }

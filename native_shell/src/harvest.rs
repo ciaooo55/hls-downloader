@@ -43,10 +43,15 @@ pub fn harvest_html_filtered(html: &str, base: &str, min_bytes: u64) -> Vec<Harv
     links
 }
 
+const MAX_HARVEST_URLS: usize = 512;
+const MAX_CANDIDATE_SCANS: usize = 4096;
+
 fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
     let mut urls = Vec::new();
     let mut rest = html;
+    let mut href_scans = 0usize;
     while let Some(index) = find_href(rest) {
+        href_scans += 1;
         let after = rest[index + 5..].trim_start();
         let (value, remaining) = match after.chars().next() {
             Some(quote @ ('"' | '\'')) => {
@@ -72,25 +77,29 @@ fn extract_urls(html: &str, base: &str) -> Vec<(String, u64)> {
         if let Some(url) = resolve(base, value) {
             urls.push((url, tag_size));
         }
-        if urls.len() >= 512 {
+        if urls.len() >= MAX_HARVEST_URLS || href_scans >= MAX_CANDIDATE_SCANS {
             break;
         }
     }
-    let mut search = html;
-    while let Some(index) = find_abs(search) {
-        let slice = &search[index..];
-        let end = slice
-            .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '<' | '"' | '\'' | ')'))
-            .unwrap_or(slice.len());
-        if end <= 2048 {
-            let raw = slice[..end].trim_end_matches(['.', ',', ';']);
-            if let Some(url) = resolve(base, raw) {
-                urls.push((url, 0));
+    if urls.len() < MAX_HARVEST_URLS {
+        let mut search = html;
+        let mut abs_scans = 0usize;
+        while let Some(index) = find_abs(search) {
+            abs_scans += 1;
+            let slice = &search[index..];
+            let end = slice
+                .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '<' | '"' | '\'' | ')'))
+                .unwrap_or(slice.len());
+            if end <= 2048 {
+                let raw = slice[..end].trim_end_matches(['.', ',', ';']);
+                if let Some(url) = resolve(base, raw) {
+                    urls.push((url, 0));
+                }
             }
-        }
-        search = &slice[end.max(1)..];
-        if urls.len() >= 512 {
-            break;
+            search = &slice[end.max(1)..];
+            if urls.len() >= MAX_HARVEST_URLS || abs_scans >= MAX_CANDIDATE_SCANS {
+                break;
+            }
         }
     }
     urls
@@ -130,13 +139,35 @@ fn size_hint_from_url(url: &str) -> u64 {
 }
 
 fn find_abs(text: &str) -> Option<usize> {
-    let lower = text.to_ascii_lowercase();
-    [
-        "https://", "http://", "ftp://", "ftps://", "sftp://", "magnet:?",
-    ]
-    .into_iter()
-    .filter_map(|needle| lower.find(needle))
-    .min()
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while let Some(rel) = bytes[cursor..].iter().position(|&b| b == b':') {
+        let pos = cursor + rel;
+        if bytes.get(pos..pos + 3) == Some(b"://") {
+            if pos >= 5 && bytes[pos - 5..pos].eq_ignore_ascii_case(b"https") {
+                return Some(pos - 5);
+            }
+            if pos >= 4 {
+                let four = &bytes[pos - 4..pos];
+                if four.eq_ignore_ascii_case(b"http")
+                    || four.eq_ignore_ascii_case(b"ftps")
+                    || four.eq_ignore_ascii_case(b"sftp")
+                {
+                    return Some(pos - 4);
+                }
+            }
+            if pos >= 3 && bytes[pos - 3..pos].eq_ignore_ascii_case(b"ftp") {
+                return Some(pos - 3);
+            }
+        } else if bytes.get(pos..pos + 2) == Some(b":?")
+            && pos >= 6
+            && bytes[pos - 6..pos].eq_ignore_ascii_case(b"magnet")
+        {
+            return Some(pos - 6);
+        }
+        cursor = pos + 1;
+    }
+    None
 }
 
 pub(crate) fn resolve(base: &str, reference: &str) -> Option<String> {
@@ -457,5 +488,52 @@ mod tests {
         assert!(links
             .iter()
             .any(|item| item.url == "https://cdn.test/a.zip"));
+    }
+
+    #[test]
+    fn adversarial_8mib_malformed_candidates_finish_quickly_with_bounded_scans() {
+        use std::time::{Duration, Instant};
+
+        let adversarial_abs = "http://&#1; ".repeat(700_000);
+        assert!(adversarial_abs.len() > 8 * 1024 * 1024);
+        let started = Instant::now();
+        let abs_links = harvest_html(&adversarial_abs, "https://site.test/page");
+        assert!(abs_links.is_empty());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "8 MiB malformed absolute candidates took {:?}",
+            started.elapsed()
+        );
+
+        let adversarial_href = "href=\"&#1;\" ".repeat(700_000);
+        assert!(adversarial_href.len() > 8 * 1024 * 1024);
+        let started = Instant::now();
+        let href_links = harvest_html(&adversarial_href, "https://site.test/page");
+        assert!(href_links.is_empty());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "8 MiB malformed href candidates took {:?}",
+            started.elapsed()
+        );
+
+        let mut large_valid = "plain text without schemes ".repeat(320_000);
+        large_valid.push_str(
+            " HTTPS://cdn.test/video.mp4 FTPS://cdn.test/archive.7z SFTP://cdn.test/manual.pdf FTP://cdn.test/image.iso MAGNET:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567 ",
+        );
+        assert!(large_valid.len() > 8 * 1024 * 1024);
+        let started = Instant::now();
+        let extracted = harvest_html(&large_valid, "https://site.test/page");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "8 MiB valid tail scan took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(extracted.len(), 5);
+
+        let capped = format!(
+            "{}https://cdn.test/unreachable.mp4",
+            "http://&#1; ".repeat(MAX_CANDIDATE_SCANS + 200)
+        );
+        assert!(harvest_html(&capped, "https://site.test/page").is_empty());
     }
 }

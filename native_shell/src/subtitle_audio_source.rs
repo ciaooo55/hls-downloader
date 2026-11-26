@@ -250,27 +250,15 @@ fn ffmpeg_protocol_whitelist(use_http_proxy: bool) -> &'static str {
     }
 }
 
-pub(crate) fn decode_with_proxy(
+fn build_ffmpeg_decode_command(
+    ffmpeg: &std::path::Path,
     source: &Value,
+    url: &str,
     position: f64,
     seconds: f64,
-    proxy: &str,
-    proxy_bypass: &str,
-    cancelled: impl Fn() -> bool,
-) -> Result<Value, String> {
-    validate(source)?;
-    let url = source["url"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or("音轨地址必须是 HTTP/HTTPS")?;
-    let (http_proxy, no_proxy) = resolve_ffmpeg_proxy(url, proxy, proxy_bypass, || {
-        if cancelled() {
-            Err("音轨预取已取消或超时，请检查媒体链接和网络".into())
-        } else {
-            Ok(())
-        }
-    })?;
-    let ffmpeg = crate::media::locate_ffmpeg().ok_or("找不到音轨解码组件，请修复桌面端安装")?;
+    http_proxy: Option<&str>,
+    no_proxy: &str,
+) -> Result<Command, String> {
     let mut command = Command::new(ffmpeg);
     for key in [
         "http_proxy",
@@ -284,9 +272,7 @@ pub(crate) fn decode_with_proxy(
     ] {
         command.env_remove(key);
     }
-    command
-        .env("no_proxy", &no_proxy)
-        .env("NO_PROXY", &no_proxy);
+    command.env("no_proxy", no_proxy).env("NO_PROXY", no_proxy);
     command.args([
         "-hide_banner",
         "-loglevel",
@@ -297,8 +283,10 @@ pub(crate) fn decode_with_proxy(
         "-rw_timeout",
         "10000000",
     ]);
-    if let Some(ref proxy_url) = http_proxy {
-        command.args(["-http_proxy", proxy_url]);
+    if let Some(proxy_url) = http_proxy {
+        // Supply proxy URL via environment variables only (`http_proxy` / `no_proxy` are
+        // read natively by FFmpeg's `http` and `tls` protocols). Never pass `-http_proxy`
+        // on argv, which would expose DPAPI-decrypted proxy credentials in process listings.
         command
             .env("http_proxy", proxy_url)
             .env("https_proxy", proxy_url)
@@ -380,6 +368,39 @@ pub(crate) fn decode_with_proxy(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
+    Ok(command)
+}
+
+pub(crate) fn decode_with_proxy(
+    source: &Value,
+    position: f64,
+    seconds: f64,
+    proxy: &str,
+    proxy_bypass: &str,
+    cancelled: impl Fn() -> bool,
+) -> Result<Value, String> {
+    validate(source)?;
+    let url = source["url"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or("音轨地址必须是 HTTP/HTTPS")?;
+    let (http_proxy, no_proxy) = resolve_ffmpeg_proxy(url, proxy, proxy_bypass, || {
+        if cancelled() {
+            Err("音轨预取已取消或超时，请检查媒体链接和网络".into())
+        } else {
+            Ok(())
+        }
+    })?;
+    let ffmpeg = crate::media::locate_ffmpeg().ok_or("找不到音轨解码组件，请修复桌面端安装")?;
+    let mut command = build_ffmpeg_decode_command(
+        &ffmpeg,
+        source,
+        url,
+        position,
+        seconds,
+        http_proxy.as_deref(),
+        &no_proxy,
+    )?;
     let mut child = command.spawn().map_err(|_| "无法启动音轨解码组件")?;
     crate::job_object::assign_child(&child);
     let stdout = child.stdout.take().ok_or("音轨解码管道不可用")?;
@@ -577,5 +598,105 @@ mod tests {
             ffmpeg_protocol_whitelist(true),
             "http,https,httpproxy,tcp,tls,crypto"
         );
+    }
+
+    #[test]
+    fn ffmpeg_decode_command_passes_proxy_via_env_only_without_leaking_credentials_in_argv() {
+        let source = json!({
+            "url": "https://cdn.example/live/index.m3u8",
+            "resource_kind": "hls",
+            "audio_index": 1
+        });
+        let (proxy_url, no_proxy) = resolve_ffmpeg_proxy(
+            "https://cdn.example/live/index.m3u8",
+            "HTTP://proxy_user:SecretPass#99@127.0.0.1:8080",
+            "*.intranet.local",
+            || Ok(()),
+        )
+        .unwrap();
+        let command = build_ffmpeg_decode_command(
+            std::path::Path::new("ffmpeg"),
+            &source,
+            "https://cdn.example/live/index.m3u8",
+            10.0,
+            4.0,
+            proxy_url.as_deref(),
+            &no_proxy,
+        )
+        .unwrap();
+
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !args.iter().any(|arg| arg == "-http_proxy"),
+            "proxy flag must not appear on argv: {args:?}"
+        );
+        assert!(
+            args.iter().all(|arg| {
+                !arg.contains("SecretPass#99")
+                    && !arg.contains("proxy_user")
+                    && !arg.contains("127.0.0.1:8080")
+            }),
+            "proxy credentials or endpoint leaked into argv: {args:?}"
+        );
+        let wl_pos = args
+            .iter()
+            .position(|arg| arg == "-protocol_whitelist")
+            .unwrap();
+        assert_eq!(args[wl_pos + 1], "http,https,httpproxy,tcp,tls,crypto");
+
+        let envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|val| val.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(
+            envs.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("http_proxy")
+                    && v.as_deref() == Some("http://proxy_user:SecretPass#99@127.0.0.1:8080")
+            }),
+            "expected http_proxy env to carry proxy URL: {envs:?}"
+        );
+        assert!(
+            envs.iter().any(|(k, v)| {
+                k.eq_ignore_ascii_case("no_proxy")
+                    && v.as_deref().is_some_and(|np| np.contains("intranet.local"))
+            }),
+            "expected no_proxy env: {envs:?}"
+        );
+        assert!(
+            envs.iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("all_proxy") && v.is_none()),
+            "expected all_proxy env removed: {envs:?}"
+        );
+
+        let direct_cmd = build_ffmpeg_decode_command(
+            std::path::Path::new("ffmpeg"),
+            &source,
+            "https://cdn.example/live/index.m3u8",
+            0.0,
+            2.0,
+            None,
+            &no_proxy,
+        )
+        .unwrap();
+        let direct_args: Vec<String> = direct_cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let direct_wl = direct_args
+            .iter()
+            .position(|arg| arg == "-protocol_whitelist")
+            .unwrap();
+        assert_eq!(direct_args[direct_wl + 1], "http,https,tcp,tls,crypto");
+        assert!(direct_cmd
+            .get_envs()
+            .any(|(k, v)| k.to_string_lossy().eq_ignore_ascii_case("http_proxy") && v.is_none()));
     }
 }
