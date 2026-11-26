@@ -317,11 +317,72 @@ struct Session {
     offset: f64,
 }
 
-fn request(client: &mut CoreIpcClient, value: Value) -> Result<Value, String> {
-    match client.request(&CorePipeRequest::Subtitle {
-        request_id: 1,
-        request: value,
-    })? {
+const IDLE_CLIENT_REFRESH_AGE: Duration = Duration::from_secs(90);
+
+struct CachedSubtitleClient<C> {
+    inner: Option<(C, Instant)>,
+}
+
+impl<C> Default for CachedSubtitleClient<C> {
+    fn default() -> Self {
+        Self { inner: None }
+    }
+}
+
+impl<C> CachedSubtitleClient<C> {
+    fn clear(&mut self) {
+        self.inner = None;
+    }
+
+    fn is_connected(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    fn request_with(
+        &mut self,
+        now: Instant,
+        request: &CorePipeRequest,
+        mut connect: impl FnMut() -> Result<C, String>,
+        mut send: impl FnMut(&mut C, &CorePipeRequest) -> Result<CorePipeResponse, String>,
+    ) -> Result<CorePipeResponse, String> {
+        if self.inner.as_ref().is_some_and(|(_, last_used)| {
+            now.saturating_duration_since(*last_used) >= IDLE_CLIENT_REFRESH_AGE
+        }) {
+            self.inner = None;
+        }
+        let (mut active, used_cached) = match self.inner.take() {
+            Some((existing, _)) => (existing, true),
+            None => (connect()?, false),
+        };
+        match send(&mut active, request) {
+            Ok(response) => {
+                self.inner = Some((active, Instant::now().max(now)));
+                Ok(response)
+            }
+            Err(error) if !used_cached => Err(error),
+            Err(_) => {
+                let mut fresh = connect()?;
+                let response = send(&mut fresh, request)?;
+                self.inner = Some((fresh, Instant::now().max(now)));
+                Ok(response)
+            }
+        }
+    }
+}
+
+fn request(
+    client: &mut CachedSubtitleClient<CoreIpcClient>,
+    value: Value,
+) -> Result<Value, String> {
+    match client.request_with(
+        Instant::now(),
+        &CorePipeRequest::Subtitle {
+            request_id: 1,
+            request: value,
+        },
+        CoreIpcClient::connect,
+        |conn, req| conn.request(req),
+    )? {
         CorePipeResponse::Subtitle { result, .. } if result["ok"] == true => Ok(result),
         CorePipeResponse::Subtitle { result, .. } => Err(result["error"]
             .as_str()
@@ -341,7 +402,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
             .unwrap_or_default()
             .as_nanos()
     );
-    let mut client: Option<CoreIpcClient> = None;
+    let mut client = CachedSubtitleClient::default();
     let mut session: Option<Session> = None;
     let mut failed = None;
     loop {
@@ -359,11 +420,13 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
             || playback.generation == 0
             || session.as_ref().is_some_and(|s| s.revision != revision)
         {
-            if let (Some(s), Some(c)) = (session.take(), client.as_mut()) {
-                let _ = request(
-                    c,
-                    json!({"action":"stop", "session_id":s.id, "owner":owner}),
-                );
+            if let Some(s) = session.take() {
+                if client.is_connected() {
+                    let _ = request(
+                        &mut client,
+                        json!({"action":"stop", "session_id":s.id, "owner":owner}),
+                    );
+                }
             }
             if closed {
                 break;
@@ -375,14 +438,10 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
             && (session.is_some() || !playback.buffering)
         {
             let result = (|| -> Result<(), String> {
-                let client = match client.as_mut() {
-                    Some(existing) => existing,
-                    None => client.insert(CoreIpcClient::connect()?),
-                };
                 let session = match session.as_mut() {
                     Some(existing) => existing,
                     None => {
-                        let config = request(client, json!({"action":"configuration"}))?;
+                        let config = request(&mut client, json!({"action":"configuration"}))?;
                         if config["has_key"] != true {
                             return Err("请在设置 → 字幕翻译中配置 API Key".into());
                         }
@@ -391,7 +450,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                         let offset = preferences["offset"].as_f64().unwrap_or(0.0);
                         let id = format!("{owner}-{revision}");
                         request(
-                            client,
+                            &mut client,
                             json!({"action":"start", "session_id":id, "owner":owner,
                             "source":preferences["source"].as_str().unwrap_or("auto"),
                             "target":preferences["target"].as_str().unwrap_or("zh"),
@@ -418,7 +477,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                     }
                 };
                 let poll = request(
-                    client,
+                    &mut client,
                     json!({"action":"poll", "session_id":session.id, "owner":owner, "after_sequence":session.sequence}),
                 )?;
                 if matches!(
@@ -484,7 +543,7 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                     return Ok(());
                 }
                 let prepared = request(
-                    client,
+                    &mut client,
                     json!({"action":"prepare_audio", "session_id":session.id, "owner":owner,
                     "position":start, "duration":seconds, "epoch":revision}),
                 )?;
@@ -503,14 +562,14 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 drop(current);
                 for (index, chunk) in pcm.chunks(32_000).enumerate() {
                     request(
-                        client,
+                        &mut client,
                         json!({"action":"audio", "session_id":session.id, "owner":owner,
                         "audio":STANDARD.encode(chunk), "position":start + index as f64, "rate":1.0, "epoch":revision}),
                     )?;
                 }
                 let end = start + pcm.len() as f64 / 32_000.0;
                 request(
-                    client,
+                    &mut client,
                     json!({"action":"commit", "session_id":session.id, "owner":owner,
                     "start":start, "end":end, "epoch":revision}),
                 )?;
@@ -519,13 +578,15 @@ fn run(input: Arc<Mutex<Input>>, output: Arc<Mutex<Captions>>, wake: mpsc::Recei
                 Ok(())
             })();
             if let Err(error) = result {
-                if let (Some(s), Some(c)) = (session.take(), client.as_mut()) {
-                    let _ = request(
-                        c,
-                        json!({"action":"stop", "session_id":s.id, "owner":owner}),
-                    );
+                if let Some(s) = session.take() {
+                    if client.is_connected() {
+                        let _ = request(
+                            &mut client,
+                            json!({"action":"stop", "session_id":s.id, "owner":owner}),
+                        );
+                    }
                 }
-                client = None;
+                client.clear();
                 failed = Some(revision);
                 *output.lock().unwrap_or_else(|e| e.into_inner()) = Captions {
                     revision,
@@ -921,5 +982,117 @@ mod tests {
         subtitles.suspend();
         assert_eq!(subtitles.display(1.0), (String::new(), String::new()));
         drop(subtitles);
+    }
+
+    #[test]
+    fn cached_subtitle_client_refreshes_after_idle_and_retries_once_on_broken_cached_pipe() {
+        let t0 = Instant::now();
+        let req = CorePipeRequest::Subtitle {
+            request_id: 1,
+            request: json!({"action": "poll"}),
+        };
+        let ok_response = || CorePipeResponse::Subtitle {
+            request_id: 1,
+            result: json!({"ok": true}),
+        };
+
+        // 1. Transport error on a brand-new connection does NOT reconnect/retry.
+        let mut client = CachedSubtitleClient::<usize>::default();
+        let mut connects = 0usize;
+        let mut sends = Vec::new();
+        let first_err = client.request_with(
+            t0,
+            &req,
+            || {
+                connects += 1;
+                Ok(connects)
+            },
+            |conn, _| {
+                sends.push(*conn);
+                Err("initial pipe broken".into())
+            },
+        );
+        assert!(first_err.is_err());
+        assert_eq!(connects, 1);
+        assert_eq!(sends, vec![1]);
+        assert!(!client.is_connected());
+
+        // 2. Establish cached connection, reuse within < 90s, then recover transparently via
+        //    a single reconnect-and-retry when the cached pipe breaks.
+        client
+            .request_with(
+                t0,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    sends.push(*conn);
+                    Ok(ok_response())
+                },
+            )
+            .unwrap();
+        assert_eq!(connects, 2);
+
+        // Reuse at +45s (< 90s): no new connect.
+        let t1 = t0 + Duration::from_secs(45);
+        client
+            .request_with(
+                t1,
+                &req,
+                || unreachable!("must reuse cached client"),
+                |conn, _| {
+                    assert_eq!(*conn, 2);
+                    Ok(ok_response())
+                },
+            )
+            .unwrap();
+
+        // Cached pipe breaks at +60s (< 90s): reconnects once to conn 3 and succeeds!
+        let t2 = t0 + Duration::from_secs(60);
+        let mut attempt_on_t2 = 0;
+        let recovered = client
+            .request_with(
+                t2,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    attempt_on_t2 += 1;
+                    if *conn == 2 {
+                        Err("Core pipe closed".into())
+                    } else {
+                        assert_eq!(*conn, 3);
+                        Ok(ok_response())
+                    }
+                },
+            )
+            .unwrap();
+        assert!(matches!(recovered, CorePipeResponse::Subtitle { .. }));
+        assert_eq!(attempt_on_t2, 2);
+        assert_eq!(connects, 3);
+
+        // 3. Proactive idle refresh at >= 90s drops conn 3 before sending and opens conn 4 directly.
+        let t3 = t2 + Duration::from_secs(90);
+        let mut seen_after_idle = Vec::new();
+        client
+            .request_with(
+                t3,
+                &req,
+                || {
+                    connects += 1;
+                    Ok(connects)
+                },
+                |conn, _| {
+                    seen_after_idle.push(*conn);
+                    Ok(ok_response())
+                },
+            )
+            .unwrap();
+        assert_eq!(connects, 4);
+        assert_eq!(seen_after_idle, vec![4]);
     }
 }

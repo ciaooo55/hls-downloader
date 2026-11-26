@@ -281,64 +281,105 @@ impl SettingsEditor {
         Ok(())
     }
 
+    fn build_field(&self, key: &str, label: &str) -> Option<SettingField> {
+        let value = self.dirty.get(key).or_else(|| self.values.get(key))?;
+        let options = choice_options(key);
+        let choices: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
+        let choice_index = if options.is_empty() {
+            -1
+        } else {
+            let current = value.as_str().unwrap_or_default();
+            options
+                .iter()
+                .position(|(code, opt_label)| *code == current || *opt_label == current)
+                .unwrap_or(0) as i32
+        };
+        let kind = if value.is_boolean() {
+            "bool"
+        } else if value.is_number() {
+            "number"
+        } else if !choices.is_empty() {
+            "choice"
+        } else if key.ends_with("_dir")
+            || key.starts_with("category_dir_")
+            || key == "torrent_watch"
+        {
+            "directory"
+        } else {
+            "text"
+        };
+        Some(SettingField {
+            key: key.into(),
+            label: label.into(),
+            value: self
+                .invalid
+                .get(key)
+                .map(|(draft, _)| draft.clone())
+                .unwrap_or_else(|| {
+                    value
+                        .as_str()
+                        .map(|code| choice_label(key, code).to_owned())
+                        .unwrap_or_else(|| value.to_string())
+                })
+                .into(),
+            checked: value.as_bool().unwrap_or(false),
+            kind: kind.into(),
+            choices: ModelRc::new(VecModel::from(
+                choices
+                    .iter()
+                    .map(|choice| (*choice).into())
+                    .collect::<Vec<_>>(),
+            )),
+            choice_index,
+        })
+    }
+
     pub fn render(&self, group: &str) {
+        if self.window.get_selected_group().as_str() != group {
+            self.window.set_selected_group(group.into());
+        }
         let fields = FIELDS
             .iter()
             .filter(|(category, _, _)| *category == group)
-            .filter_map(|(_, key, label)| {
-                let value = self.dirty.get(*key).or_else(|| self.values.get(*key))?;
-                let options = choice_options(key);
-                let choices: Vec<&str> = options.iter().map(|(_, label)| *label).collect();
-                let choice_index = if options.is_empty() {
-                    -1
-                } else {
-                    let current = value.as_str().unwrap_or_default();
-                    options
-                        .iter()
-                        .position(|(code, opt_label)| *code == current || *opt_label == current)
-                        .unwrap_or(0) as i32
-                };
-                let kind = if value.is_boolean() {
-                    "bool"
-                } else if value.is_number() {
-                    "number"
-                } else if !choices.is_empty() {
-                    "choice"
-                } else if key.ends_with("_dir")
-                    || key.starts_with("category_dir_")
-                    || *key == "torrent_watch"
-                {
-                    "directory"
-                } else {
-                    "text"
-                };
-                Some(SettingField {
-                    key: (*key).into(),
-                    label: (*label).into(),
-                    value: self
-                        .invalid
-                        .get(*key)
-                        .map(|(draft, _)| draft.clone())
-                        .unwrap_or_else(|| {
-                            value
-                                .as_str()
-                                .map(|code| choice_label(key, code).to_owned())
-                                .unwrap_or_else(|| value.to_string())
-                        })
-                        .into(),
-                    checked: value.as_bool().unwrap_or(false),
-                    kind: kind.into(),
-                    choices: ModelRc::new(VecModel::from(
-                        choices
-                            .iter()
-                            .map(|choice| (*choice).into())
-                            .collect::<Vec<_>>(),
-                    )),
-                    choice_index,
-                })
-            })
+            .filter_map(|(_, key, label)| self.build_field(key, label))
             .collect::<Vec<_>>();
         self.window.set_fields(ModelRc::new(VecModel::from(fields)));
+    }
+
+    fn sync_clean_fields(&self, group: &str) {
+        let expected: Vec<(&str, &str)> = FIELDS
+            .iter()
+            .filter(|(category, _, _)| *category == group)
+            .filter(|(_, key, _)| self.dirty.contains_key(*key) || self.values.contains_key(*key))
+            .map(|(_, key, label)| (*key, *label))
+            .collect();
+        let fields = self.window.get_fields();
+        let layout_matches = fields.row_count() == expected.len()
+            && (0..expected.len()).all(|idx| {
+                fields
+                    .row_data(idx)
+                    .is_some_and(|row| row.key.as_str() == expected[idx].0)
+            });
+        if !layout_matches {
+            self.render(group);
+            return;
+        }
+        for (idx, (key, label)) in expected.into_iter().enumerate() {
+            if self.dirty.contains_key(key) || self.invalid.contains_key(key) {
+                continue;
+            }
+            if let Some(updated) = self.build_field(key, label) {
+                let changed = fields.row_data(idx).is_none_or(|current| {
+                    current.value != updated.value
+                        || current.checked != updated.checked
+                        || current.choice_index != updated.choice_index
+                        || current.kind != updated.kind
+                });
+                if changed {
+                    fields.set_row_data(idx, updated);
+                }
+            }
+        }
     }
 
     fn render_rules(&self) {
@@ -418,19 +459,18 @@ impl SettingsEditor {
     }
 
     pub fn receive_settings(&mut self, response: &CorePipeResponse, saved: bool) {
-        let values = settings_values(response);
-        let refresh_proxy = values.get("proxy_url") != self.values.get("proxy_url")
-            && self.window.get_selected_group() == "网络"
-            && !self.dirty.contains_key("proxy_url")
-            && !self.invalid.contains_key("proxy_url");
-        self.values = values;
+        let mut values = settings_values(response);
         let mode = crate::theme::ThemeMode::from_response(Some(response));
-        self.values.insert("theme_mode".into(), mode.code().into());
+        values.insert("theme_mode".into(), mode.code().into());
+        self.values = values;
         crate::native_window::apply_dialog_theme(&self.window, mode.is_dark());
         if saved {
             self.dirty.clear();
             self.invalid.clear();
             self.rules_changed = false;
+        } else {
+            self.dirty
+                .retain(|key, dirty_value| self.values.get(key) != Some(dirty_value));
         }
         if !self.rules_changed {
             match crate::site_rules::SiteRuleDraft::parse(
@@ -446,9 +486,33 @@ impl SettingsEditor {
                 Err(error) => self.rules_error = Some(error),
             }
             self.render_rules();
+        } else {
+            let saved_rules = crate::site_rules::SiteRuleDraft::parse(
+                self.values
+                    .get("site_rules")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            for (index, rule) in self.rules.iter_mut().enumerate() {
+                let has_cred = saved_rules.iter().any(|saved_rule| {
+                    crate::site_rules::host_identity(&saved_rule.row.host)
+                        == crate::site_rules::host_identity(&rule.row.host)
+                        && saved_rule.row.has_credential
+                });
+                if rule.row.has_credential != has_cred {
+                    rule.row.has_credential = has_cred;
+                    self.window
+                        .get_site_rules()
+                        .set_row_data(index, rule.row.clone());
+                }
+            }
         }
-        if saved || refresh_proxy {
-            self.render(&self.window.get_selected_group());
+        let selected_group = self.window.get_selected_group().to_string();
+        if saved || (!self.has_unsaved_changes() && !self.has_validation_errors()) {
+            self.render(&selected_group);
+        } else {
+            self.sync_clean_fields(&selected_group);
         }
     }
 
@@ -802,5 +866,168 @@ mod tests {
         let theme = find_choice(&editor, "theme_mode");
         assert_eq!(theme.choice_index, 2);
         assert_eq!(theme.value.as_str(), "深色");
+    }
+
+    #[test]
+    fn external_settings_update_rerenders_clean_controls_and_preserves_unsaved_edits() {
+        use slint::Model;
+        crate::offscreen::OffscreenPlatform::init_test();
+        let parent = crate::WorkbenchWindow::new().unwrap();
+        let initial: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "quick_download_enabled": false,
+            "clipboard_watch": true,
+            "hls_remux_ts_to_mp4": true,
+            "av_scan_enabled": false,
+            "schedule_enabled": false,
+            "schedule_start": "00:00",
+            "schedule_end": "06:00",
+            "default_concurrency": 8,
+            "auto_retry_max": 3,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 0,
+            "download_dir": "D:\\Downloads",
+            "category_dir_media": "D:\\Media",
+            "category_dir_archive": "D:\\Archives",
+            "existing_file_policy": "rename",
+            "theme_mode": "dark"
+        }))
+        .unwrap();
+        let mut editor = SettingsEditor::new(&initial, &parent).unwrap();
+        let find_field = |ed: &SettingsEditor, key: &str| {
+            let fields = ed.window.get_fields();
+            (0..fields.row_count())
+                .filter_map(|i| fields.row_data(i))
+                .find(|f| f.key.as_str() == key)
+                .unwrap()
+        };
+
+        // 1. Clean editor on "下载": external HUD speed limit change re-renders controls immediately
+        //    and keeps dirty state clean (without inverting subsequent edits).
+        editor.render("下载");
+        assert_eq!(editor.window.get_selected_group().as_str(), "下载");
+        assert!(!find_field(&editor, "speed_limit_enabled").checked);
+        assert_eq!(find_field(&editor, "speed_limit_kib").value.as_str(), "0");
+
+        let external_hud: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 2,
+            "takeover_enabled": false,
+            "takeover_minimum_bytes": 0,
+            "quick_download_enabled": false,
+            "clipboard_watch": true,
+            "hls_remux_ts_to_mp4": true,
+            "av_scan_enabled": false,
+            "schedule_enabled": false,
+            "schedule_start": "00:00",
+            "schedule_end": "06:00",
+            "default_concurrency": 8,
+            "auto_retry_max": 3,
+            "legal_accepted": true,
+            "speed_limit_enabled": true,
+            "speed_limit_kib": 1024,
+            "download_dir": "E:\\UpdatedDownloads",
+            "category_dir_media": "D:\\Media",
+            "category_dir_archive": "D:\\Archives",
+            "existing_file_policy": "skip",
+            "theme_mode": "light"
+        }))
+        .unwrap();
+        editor.receive_settings(&external_hud, false);
+        assert!(!editor.has_unsaved_changes());
+        assert!(find_field(&editor, "speed_limit_enabled").checked);
+        assert_eq!(
+            find_field(&editor, "speed_limit_kib").value.as_str(),
+            "1024"
+        );
+        assert_eq!(
+            find_field(&editor, "existing_file_policy").value.as_str(),
+            "跳过下载"
+        );
+        assert_eq!(find_field(&editor, "existing_file_policy").choice_index, 2);
+
+        // Toggling speed_limit_enabled off from the synced UI properly marks dirty = false!
+        editor.edit("speed_limit_enabled", "false").unwrap();
+        assert!(editor.has_unsaved_changes());
+        editor.edit("speed_limit_enabled", "true").unwrap();
+        assert!(!editor.has_unsaved_changes());
+
+        // 2. Dirty editor: user stages default_concurrency=16, speed_limit_kib=2048, and
+        //    category_dir_media="F:\\MyMedia", plus an invalid schedule_start draft.
+        editor.edit("default_concurrency", "16").unwrap();
+        editor.edit("speed_limit_kib", "2048").unwrap();
+        editor.edit("category_dir_media", "F:\\MyMedia").unwrap();
+        editor.render("计划");
+        assert!(editor.edit("schedule_start", "25:99").is_err());
+        assert!(editor.has_unsaved_changes());
+        assert!(editor.has_validation_errors());
+
+        // External change updates schedule_end ("06:00" -> "07:30"), category_dir_archive
+        // ("D:\\Archives" -> "G:\\ExtArchives"), auto_retry_max (3 -> 5), and speed_limit_kib (1024 -> 512).
+        let external_while_dirty: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 3,
+            "takeover_enabled": false,
+            "takeover_minimum_bytes": 0,
+            "quick_download_enabled": false,
+            "clipboard_watch": true,
+            "hls_remux_ts_to_mp4": true,
+            "av_scan_enabled": false,
+            "schedule_enabled": false,
+            "schedule_start": "01:00",
+            "schedule_end": "07:30",
+            "default_concurrency": 8,
+            "auto_retry_max": 5,
+            "legal_accepted": true,
+            "speed_limit_enabled": true,
+            "speed_limit_kib": 512,
+            "download_dir": "E:\\UpdatedDownloads",
+            "category_dir_media": "D:\\Media",
+            "category_dir_archive": "G:\\ExtArchives",
+            "existing_file_policy": "skip",
+            "theme_mode": "light"
+        }))
+        .unwrap();
+        editor.receive_settings(&external_while_dirty, false);
+
+        // Invalid draft on "计划" is preserved while non-conflicting schedule_end updates in place!
+        assert_eq!(
+            find_field(&editor, "schedule_start").value.as_str(),
+            "25:99"
+        );
+        assert_eq!(find_field(&editor, "schedule_end").value.as_str(), "07:30");
+        assert!(editor.has_validation_errors());
+
+        // Fix invalid schedule_start back to Core's new baseline ("01:00") -> clears error without marking schedule_start dirty!
+        editor.edit("schedule_start", "01:00").unwrap();
+        assert!(!editor.has_validation_errors());
+
+        // Switch to "下载": user's dirty edits (16, 2048) stay intact while external auto_retry_max=5 is shown!
+        editor.render("下载");
+        assert_eq!(
+            find_field(&editor, "default_concurrency").value.as_str(),
+            "16"
+        );
+        assert_eq!(
+            find_field(&editor, "speed_limit_kib").value.as_str(),
+            "2048"
+        );
+        assert_eq!(find_field(&editor, "auto_retry_max").value.as_str(), "5");
+
+        // Saving merges non-conflicting category_dir_archive ("G:\\ExtArchives") with dirty category_dir_media ("F:\\MyMedia")!
+        let changes = editor.storage_changes().unwrap();
+        assert_eq!(changes["default_concurrency"], Value::from(16));
+        assert_eq!(changes["download_speed_limit_kib"], Value::from(2048));
+        assert_eq!(changes["browser_category_dirs"]["media"], "F:\\MyMedia");
+        assert_eq!(
+            changes["browser_category_dirs"]["archive"],
+            "G:\\ExtArchives"
+        );
+        assert!(!changes.contains_key("auto_retry_failed_max"));
+        assert!(!changes.contains_key("download_speed_schedule_start"));
     }
 }

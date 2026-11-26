@@ -29,6 +29,11 @@ struct QueueSave {
     assignment: Option<(Vec<String>, String)>,
 }
 
+struct SubmittingHandoff {
+    handoff_id: String,
+    abandoned: bool,
+}
+
 pub struct Workbench {
     pub window: WorkbenchWindow,
     state: Rc<RefCell<TaskList>>,
@@ -45,6 +50,7 @@ pub struct Workbench {
     editor_variants: RefCell<Vec<StreamVariant>>,
     editor_queues: RefCell<Vec<hls_client::QueueProfile>>,
     editor_handoff: RefCell<Option<hls_client::ResourceOffer>>,
+    editor_submitting_handoffs: RefCell<HashMap<u64, SubmittingHandoff>>,
     details: RefCell<Option<(String, DetailsWindow)>>,
     details_full_log: Cell<bool>,
     settings: RefCell<Option<SettingsEditor>>,
@@ -270,6 +276,7 @@ impl Workbench {
             editor_variants: RefCell::new(Vec::new()),
             editor_queues: RefCell::new(crate::queue_editor::ordered_profiles(&[])),
             editor_handoff: RefCell::new(None),
+            editor_submitting_handoffs: RefCell::new(HashMap::new()),
             details: RefCell::new(None),
             details_full_log: Cell::new(false),
             settings: RefCell::new(None),
@@ -841,6 +848,9 @@ impl Workbench {
                 });
             }
             CoreEvent::HandoffResolved { handoff_id, .. } => {
+                self.editor_submitting_handoffs
+                    .borrow_mut()
+                    .retain(|_, entry| &entry.handoff_id != handoff_id);
                 let matched = self
                     .editor_handoff
                     .borrow()
@@ -852,6 +862,7 @@ impl Workbench {
                         if editor.window().is_visible() && editor.get_mode().as_str() == "new" {
                             editor.set_cookie("".into());
                             editor.set_headers("".into());
+                            editor.set_busy(false);
                             let _ = editor.hide();
                         }
                     }
@@ -1917,6 +1928,31 @@ impl Workbench {
                 for event in &events {
                     self.apply(event);
                 }
+                let accepted_handoff = events.iter().any(|event| {
+                    matches!(
+                        event.event,
+                        CoreEvent::TaskCreated { .. }
+                            | CoreEvent::TaskUpdated { .. }
+                            | CoreEvent::HandoffResolved { .. }
+                    )
+                }) && !events.iter().any(|event| {
+                    matches!(
+                        event.event,
+                        CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
+                    )
+                });
+                if let Some(submitting) = self
+                    .editor_submitting_handoffs
+                    .borrow_mut()
+                    .remove(&request_id)
+                {
+                    if !accepted_handoff && submitting.abandoned {
+                        self.send(CoreCommand::RejectHandoff {
+                            handoff_id: submitting.handoff_id,
+                            suppress_site_kind: false,
+                        });
+                    }
+                }
                 if request_id == self.editor_id.get() {
                     if let Some(editor) = self.editor.borrow().as_ref() {
                         editor.set_busy(false);
@@ -1974,19 +2010,7 @@ impl Workbench {
                                 _ => {}
                             }
                         }
-                        if events.iter().any(|event| {
-                            matches!(
-                                event.event,
-                                CoreEvent::TaskCreated { .. }
-                                    | CoreEvent::TaskUpdated { .. }
-                                    | CoreEvent::HandoffResolved { .. }
-                            )
-                        }) && !events.iter().any(|event| {
-                            matches!(
-                                event.event,
-                                CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
-                            )
-                        }) {
+                        if accepted_handoff {
                             self.editor_handoff.borrow_mut().take();
                             editor.set_cookie("".into());
                             editor.set_headers("".into());
@@ -2101,6 +2125,7 @@ impl Workbench {
                     }
                 } else if let Some(editor) = self.settings.borrow_mut().as_mut() {
                     editor.receive_settings(&response, false);
+                    sync_settings_edit_status(editor);
                 }
                 *self.settings_response.borrow_mut() = Some(response.clone());
                 if let Some(editor) = self.editor.borrow().as_ref() {
@@ -2158,6 +2183,18 @@ impl Workbench {
                     self.sync_speed_limit_pill(rollback_enabled, rollback_kib);
                 }
                 self.show_notice("error", message.clone());
+                if let Some(req_id) = request_id {
+                    if let Some(submitting) =
+                        self.editor_submitting_handoffs.borrow_mut().remove(&req_id)
+                    {
+                        if submitting.abandoned {
+                            self.send(CoreCommand::RejectHandoff {
+                                handoff_id: submitting.handoff_id,
+                                suppress_site_kind: false,
+                            });
+                        }
+                    }
+                }
                 if request_id == Some(self.editor_id.get()) {
                     if let Some(editor) = self.editor.borrow().as_ref() {
                         editor.set_busy(false);
@@ -2208,7 +2245,17 @@ impl Workbench {
 
     fn reject_pending_editor_handoff(&self) {
         if let Some(offer) = self.editor_handoff.borrow_mut().take() {
-            if !offer.handoff_id.is_empty() {
+            if offer.handoff_id.is_empty() {
+                return;
+            }
+            let mut in_flight = false;
+            for entry in self.editor_submitting_handoffs.borrow_mut().values_mut() {
+                if entry.handoff_id == offer.handoff_id {
+                    entry.abandoned = true;
+                    in_flight = true;
+                }
+            }
+            if !in_flight {
                 self.send(CoreCommand::RejectHandoff {
                     handoff_id: offer.handoff_id,
                     suppress_site_kind: false,
@@ -2497,8 +2544,18 @@ impl Workbench {
                         &self.editor_commands.borrow(),
                         WorkbenchJob::Batch(request_id, commands),
                     );
-                    if ok && matches!(mode.as_str(), "curl" | "batch") {
-                        self.editor_handoff.borrow_mut().take();
+                    if ok {
+                        if matches!(mode.as_str(), "curl" | "batch") {
+                            self.editor_handoff.borrow_mut().take();
+                        } else if let Some(offer) = pending_handoff {
+                            self.editor_submitting_handoffs.borrow_mut().insert(
+                                request_id,
+                                SubmittingHandoff {
+                                    handoff_id: offer.handoff_id,
+                                    abandoned: false,
+                                },
+                            );
+                        }
                     }
                     ok
                 };
@@ -5845,6 +5902,145 @@ mod file_selection_tests {
                     if matches!(*req, CorePipeRequest::Command { command: CoreCommand::RejectHandoff { .. }, .. })
             ))
         );
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn closing_editor_during_inflight_accept_handoff_never_races_reject_and_cleans_up_on_failure() {
+        use hls_client::{
+            CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, ResourceKind,
+            ResourceOffer, TaskSnapshot,
+        };
+        use slint::ComponentHandle;
+        use std::sync::mpsc;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel(16);
+        let (editor_tx, editor_rx) = mpsc::sync_channel(16);
+        *workbench.commands.borrow_mut() = cmd_tx;
+        *workbench.editor_commands.borrow_mut() = editor_tx;
+
+        // 1. AcceptHandoff in flight + user clicks "关闭" ("close"), then AcceptHandoff succeeds:
+        //    ZERO RejectHandoff may be sent on `commands`!
+        let offer_ok = ResourceOffer {
+            handoff_id: "handoff-inflight-ok".into(),
+            url: "https://cdn.example.test/lecture-1.mp4".into(),
+            resource_kind: ResourceKind::File,
+            filename: "lecture-1.mp4".into(),
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer_ok, "lecture-1.mp4", "D:/Media", "default");
+        let req_ok = workbench.editor_id.get();
+        workbench.editor_action("create");
+        let _terms = editor_rx.try_recv().expect("legal_terms_accepted");
+        let _accept = editor_rx.try_recv().expect("AcceptHandoff batch");
+
+        // Close while busy/in-flight -> must NOT enqueue concurrent RejectHandoff!
+        workbench.editor_action("close");
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "closing editor while AcceptHandoff is in flight must not dispatch concurrent RejectHandoff"
+        );
+        assert!(!workbench
+            .editor
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .window()
+            .is_visible());
+
+        // AcceptHandoff finishes successfully -> still zero RejectHandoff!
+        workbench.response(CorePipeResponse::Events {
+            request_id: req_ok,
+            events: vec![EventEnvelope {
+                sequence: 30,
+                event: CoreEvent::TaskCreated {
+                    snapshot: TaskSnapshot {
+                        task_id: "task-inflight-ok".into(),
+                        ..Default::default()
+                    },
+                },
+            }],
+        });
+        assert!(cmd_rx.try_recv().is_err());
+
+        // 2. AcceptHandoff in flight + user closes editor, then AcceptHandoff FAILS (DuplicateOffered):
+        //    RejectHandoff is dispatched deterministically AFTER AcceptHandoff settles so the handoff is not orphaned!
+        let offer_fail = ResourceOffer {
+            handoff_id: "handoff-inflight-fail".into(),
+            url: "https://cdn.example.test/lecture-2.mp4".into(),
+            resource_kind: ResourceKind::File,
+            filename: "lecture-2.mp4".into(),
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer_fail, "lecture-2.mp4", "D:/Media", "default");
+        let req_fail = workbench.editor_id.get();
+        workbench.editor_action("create");
+        let _terms2 = editor_rx.try_recv().unwrap();
+        let _accept2 = editor_rx.try_recv().unwrap();
+
+        // User closes window while AcceptHandoff is still in flight -> no race yet!
+        workbench.editor_action("close");
+        assert!(cmd_rx.try_recv().is_err());
+
+        // AcceptHandoff returns DuplicateOffered failure -> deterministic post-settlement RejectHandoff!
+        workbench.response(CorePipeResponse::Events {
+            request_id: req_fail,
+            events: vec![EventEnvelope {
+                sequence: 31,
+                event: CoreEvent::DuplicateOffered {
+                    task_id: "task-dup".into(),
+                    action: "open".into(),
+                    output_missing: false,
+                    message: "重复任务".into(),
+                },
+            }],
+        });
+        match cmd_rx
+            .try_recv()
+            .expect("post-failure cleanup RejectHandoff dispatched")
+        {
+            WorkbenchJob::Request(req) => assert!(matches!(
+                *req,
+                CorePipeRequest::Command {
+                    command: CoreCommand::RejectHandoff {
+                        ref handoff_id,
+                        suppress_site_kind: false,
+                    },
+                    ..
+                } if handoff_id == "handoff-inflight-fail"
+            )),
+            _ => panic!("expected RejectHandoff request"),
+        }
+
+        // 3. ProbeUrl in flight (NOT AcceptHandoff) + user closes editor -> immediately rejects handoff!
+        let offer_probe = ResourceOffer {
+            handoff_id: "handoff-probe-only".into(),
+            url: "https://cdn.example.test/master.m3u8".into(),
+            resource_kind: ResourceKind::Hls,
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer_probe, "stream.mp4", "D:/Media", "default");
+        workbench.editor_action("probe");
+        let _probe = editor_rx.try_recv().expect("ProbeUrl job");
+        workbench.editor_action("close");
+        match cmd_rx
+            .try_recv()
+            .expect("closing during ProbeUrl must reject unaccepted handoff immediately")
+        {
+            WorkbenchJob::Request(req) => assert!(matches!(
+                *req,
+                CorePipeRequest::Command {
+                    command: CoreCommand::RejectHandoff {
+                        ref handoff_id,
+                        suppress_site_kind: false,
+                    },
+                    ..
+                } if handoff_id == "handoff-probe-only"
+            )),
+            _ => panic!("expected RejectHandoff request"),
+        }
         workbench.window.hide().unwrap();
     }
 }
