@@ -122,6 +122,29 @@ pub fn merge_with_ffmpeg(task_dir: &Path, output: &Path, control: &Path) -> Resu
     merge_with_ffmpeg_opts(task_dir, output, control, true)
 }
 
+fn merge_output_args(faststart: bool) -> &'static [&'static str] {
+    if faststart {
+        &[
+            "-map",
+            "0:v?",
+            "-map",
+            "0:a?",
+            "-dn",
+            "-sn",
+            "-c",
+            "copy",
+            "-strict",
+            "-2",
+            "-movflags",
+            "+faststart",
+        ]
+    } else {
+        &[
+            "-map", "0:v?", "-map", "0:a?", "-dn", "-sn", "-c", "copy", "-strict", "-2",
+        ]
+    }
+}
+
 pub(crate) fn merge_with_ffmpeg_opts(
     task_dir: &Path,
     output: &Path,
@@ -146,10 +169,10 @@ pub(crate) fn merge_with_ffmpeg_opts(
     ]);
     // 清单由本程序生成，仅引用已下载的本地分片；站点后缀可能是 jpeg/bin。
     hls_input_options(&mut command);
-    command.arg("-i").arg(&input).args(["-c", "copy"]);
-    if faststart {
-        command.args(["-movflags", "+faststart"]);
-    }
+    command
+        .arg("-i")
+        .arg(&input)
+        .args(merge_output_args(faststart));
     run_ffmpeg_to_output(
         &mut command,
         output,
@@ -452,6 +475,7 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1148,5 +1172,86 @@ mod tests {
             assert_eq!(&bytes[4..8], b"ftyp");
         }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn merge_with_ffmpeg_opts_maps_av_and_drops_data_and_subtitle_streams() {
+        assert_eq!(
+            merge_output_args(false),
+            ["-map", "0:v?", "-map", "0:a?", "-dn", "-sn", "-c", "copy", "-strict", "-2",]
+        );
+        assert_eq!(
+            merge_output_args(true),
+            [
+                "-map",
+                "0:v?",
+                "-map",
+                "0:a?",
+                "-dn",
+                "-sn",
+                "-c",
+                "copy",
+                "-strict",
+                "-2",
+                "-movflags",
+                "+faststart",
+            ]
+        );
+
+        let Some(ffmpeg) = locate_ffmpeg() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "hls-merge-resilient-map-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let seg = root.join("segments/000000.mp4");
+        let built = Command::new(&ffmpeg)
+            .args([
+                "-y",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=64x48:d=0.4:r=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
+                "-t",
+                "0.4",
+                "-c:v",
+                "mpeg4",
+                "-c:a",
+                "flac",
+                "-strict",
+                "-2",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&seg)
+            .status()
+            .is_ok_and(|s| s.success());
+        if built {
+            fs::write(
+                root.join("local.m3u8"),
+                "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:1\n#EXT-X-MAP:URI=\"segments/000000.mp4\"\n#EXTINF:0.4,\nsegments/000000.mp4\n#EXT-X-ENDLIST\n",
+            )
+            .unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let output = root.join("merged.mp4");
+            merge_with_ffmpeg_opts(&root, &output, &control, true).unwrap();
+            let bytes = fs::read(&output).unwrap();
+            assert_eq!(&bytes[4..8], b"ftyp");
+        }
+        let _ = fs::remove_dir_all(root);
     }
 }

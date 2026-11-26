@@ -87,22 +87,131 @@ fn valid_url_scheme(scheme: &str) -> bool {
         && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
 }
 
-fn host_key(url: &str) -> String {
-    let trimmed = url.trim();
-    let rest = if let Some((scheme, after)) = trimmed.split_once("://") {
-        if !valid_url_scheme(scheme) {
-            return String::new();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedUrlAuthority<'a> {
+    pub scheme: String,
+    pub userinfo: Option<&'a str>,
+    pub raw_hostport: &'a str,
+    pub host: String,
+    pub ipv6: bool,
+    pub port: Option<u16>,
+}
+
+impl ParsedUrlAuthority<'_> {
+    pub(crate) fn bracketed_host(&self) -> String {
+        if self.ipv6 {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
         }
-        after
-    } else if trimmed.contains(':') {
+    }
+
+    pub(crate) fn hostport(&self) -> String {
+        match (self.ipv6, self.port) {
+            (true, Some(port)) => format!("[{}]:{port}", self.host),
+            (true, None) => format!("[{}]", self.host),
+            (false, Some(port)) => format!("{}:{port}", self.host),
+            (false, None) => self.host.clone(),
+        }
+    }
+}
+
+fn parse_nonzero_port(raw: &str) -> Option<u16> {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<u16>().ok().filter(|&port| port != 0)
+}
+
+pub(crate) fn parse_url_authority(url: &str) -> Option<ParsedUrlAuthority<'_>> {
+    let trimmed = url.trim_matches([' ', '\t']);
+    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    let (raw_scheme, rest) = trimmed.split_once("://")?;
+    if !valid_url_scheme(raw_scheme) {
+        return None;
+    }
+    let scheme = raw_scheme.to_ascii_lowercase();
+    let (userinfo, raw_hostport, hostport) = if matches!(scheme.as_str(), "ftp" | "ftps" | "sftp") {
+        let authority = rest.split('/').next().unwrap_or("");
+        let (userinfo, raw_hostport) = match authority.rfind('@') {
+            Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+            None => (None, authority),
+        };
+        let stripped = raw_hostport.split(['?', '#']).next().unwrap_or("");
+        (userinfo, raw_hostport, stripped)
+    } else {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let (userinfo, raw_hostport) = match authority.rfind('@') {
+            Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+            None => (None, authority),
+        };
+        (userinfo, raw_hostport, raw_hostport)
+    };
+    if hostport.is_empty() || hostport.chars().any(char::is_whitespace) {
+        return None;
+    }
+    if let Some(after_bracket) = hostport.strip_prefix('[') {
+        let (ipv6_str, tail) = after_bracket.split_once(']')?;
+        let ip = ipv6_str.parse::<std::net::Ipv6Addr>().ok()?;
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(parse_nonzero_port(tail.strip_prefix(':')?)?)
+        };
+        return Some(ParsedUrlAuthority {
+            scheme,
+            userinfo,
+            raw_hostport,
+            host: ip.to_string(),
+            ipv6: true,
+            port,
+        });
+    }
+    let (raw_host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
+        if h.contains(':') {
+            return None;
+        }
+        (h, Some(parse_nonzero_port(p)?))
+    } else {
+        (hostport, None)
+    };
+    let host = raw_host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|ch| matches!(ch, '@' | '?' | '#' | '/' | '\\' | '[' | ']' | ':'))
+    {
+        return None;
+    }
+    Some(ParsedUrlAuthority {
+        scheme,
+        userinfo,
+        raw_hostport,
+        host,
+        ipv6: false,
+        port,
+    })
+}
+
+fn host_key(url: &str) -> String {
+    if let Some(auth) = parse_url_authority(url) {
+        return auth.hostport();
+    }
+    let trimmed = url.trim();
+    if trimmed.contains(':') || trimmed.chars().any(char::is_control) {
         // Non-authority URI schemes such as `magnet:?...` have no host authority.
         return String::new();
-    } else {
-        trimmed
-    };
-    rest.split(['/', '?', '#'])
+    }
+    trimmed
+        .split(['/', '?', '#'])
         .next()
         .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
         .to_ascii_lowercase()
 }
 
@@ -149,25 +258,34 @@ pub fn url_allowed(url: &str, patterns: &str) -> bool {
         })
 }
 
-fn url_host_port(url: &str) -> (String, Option<u16>) {
-    let authority = host_key(url);
-    let authority = authority.rsplit('@').next().unwrap_or(&authority);
-    if let Some(rest) = authority.strip_prefix('[') {
-        if let Some((host, tail)) = rest.split_once(']') {
-            return (
-                host.trim_end_matches('.').to_ascii_lowercase(),
-                tail.strip_prefix(':').and_then(|value| value.parse().ok()),
-            );
-        }
+pub(crate) fn url_host(url: &str) -> String {
+    url_host_port(url).0
+}
+
+pub(crate) fn url_host_port(url: &str) -> (String, Option<u16>) {
+    if let Some(auth) = parse_url_authority(url) {
+        return (auth.host, auth.port);
     }
-    if authority.matches(':').count() == 1 {
-        if let Some((host, port)) = authority.rsplit_once(':') {
-            if let Ok(port) = port.parse::<u16>() {
-                return (host.trim_end_matches('.').to_ascii_lowercase(), Some(port));
-            }
-        }
+    let trimmed = url.trim();
+    if trimmed.contains(':') || trimmed.chars().any(char::is_control) {
+        return (String::new(), None);
     }
-    (authority.trim_end_matches('.').to_ascii_lowercase(), None)
+    let host = trimmed
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host
+        .chars()
+        .any(|ch| matches!(ch, '@' | '?' | '#' | '[' | ']'))
+    {
+        return (String::new(), None);
+    }
+    (host, None)
 }
 
 fn pattern_host_port(raw: &str) -> (String, Option<u16>) {
@@ -860,9 +978,13 @@ pub fn host_bypassed(host: &str, bypass: &str) -> bool {
 
 pub const DIRECT_PROXY_SENTINEL: &str = "hls-downloader://direct-proxy";
 pub const SYSTEM_PROXY_SENTINEL: &str = "hls-downloader://system-proxy";
+pub const INVALID_MANUAL_PROXY: &str = "__invalid_manual_proxy__";
 
 pub fn proxy_route_sentinel(proxy: &str) -> bool {
-    matches!(proxy.trim(), DIRECT_PROXY_SENTINEL | SYSTEM_PROXY_SENTINEL)
+    matches!(
+        proxy.trim(),
+        DIRECT_PROXY_SENTINEL | SYSTEM_PROXY_SENTINEL | INVALID_MANUAL_PROXY
+    )
 }
 
 pub fn effective_proxy(
@@ -872,11 +994,20 @@ pub fn effective_proxy(
     url: &str,
     spec_proxy: &str,
 ) -> String {
-    let (host, _) = url_host_port(url);
+    let spec_proxy = spec_proxy.trim();
+    if spec_proxy == INVALID_MANUAL_PROXY {
+        return INVALID_MANUAL_PROXY.to_string();
+    }
+    if mode.trim().eq_ignore_ascii_case("manual")
+        && spec_proxy.is_empty()
+        && configured.trim().is_empty()
+    {
+        return INVALID_MANUAL_PROXY.to_string();
+    }
+    let host = url_host(url);
     if host_bypassed(&host, bypass) {
         return DIRECT_PROXY_SENTINEL.into();
     }
-    let spec_proxy = spec_proxy.trim();
     if proxy_route_sentinel(spec_proxy) || !spec_proxy.is_empty() {
         return spec_proxy.to_string();
     }
@@ -1516,5 +1647,87 @@ mod tests {
             assert!(throttle_or_quota_active());
         });
         clear_scoped_limit(&scope);
+    }
+
+    #[test]
+    fn parse_url_authority_handles_scheme_specific_delimiters_and_ipv6() {
+        let ftp = parse_url_authority("ftp://alice:p?ss#1@Files.Example.Test.:2121/pub/a.bin")
+            .expect("ftp authority");
+        assert_eq!(ftp.scheme, "ftp");
+        assert_eq!(ftp.userinfo, Some("alice:p?ss#1"));
+        assert_eq!(ftp.host, "files.example.test");
+        assert_eq!(ftp.port, Some(2121));
+        assert!(url_allowed(
+            "ftp://alice:p?ss#1@files.example.test:2121/pub/a.bin",
+            "files.example.test:2121"
+        ));
+        assert!(!url_allowed(
+            "ftp://alice:p?ss#1@files.example.test:2121/pub/a.bin",
+            "alice"
+        ));
+
+        let sftp_v6 = parse_url_authority("sftp://bob:sec#ret?x@[2001:DB8::1]:2222?ignored=1#frag")
+            .expect("sftp ipv6 authority");
+        assert_eq!(sftp_v6.host, "2001:db8::1");
+        assert!(sftp_v6.ipv6);
+        assert_eq!(sftp_v6.port, Some(2222));
+        assert_eq!(sftp_v6.bracketed_host(), "[2001:db8::1]");
+        assert_eq!(sftp_v6.hostport(), "[2001:db8::1]:2222");
+
+        // HTTP/HTTPS/WS/WSS split authority at ['/', '?', '#'] BEFORE '@', so '@evil' in query cannot spoof host.
+        let http =
+            parse_url_authority("https://real.example.test/path?redirect=https://@spoof.test")
+                .expect("http authority");
+        assert_eq!(http.host, "real.example.test");
+        let http_q = parse_url_authority("https://real.example.test?@spoof.test")
+            .expect("http query authority");
+        assert_eq!(http_q.host, "real.example.test");
+
+        for invalid in [
+            "",
+            "magnet:?xt=urn:btih:123",
+            "https:///missing-host",
+            "ftp://user@/missing-host",
+            "http://[bad-ipv6]/a",
+            "http://host:0/a",
+            "http://host:99999/a",
+            "https://evil\0host.test/a",
+        ] {
+            assert!(parse_url_authority(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn manual_proxy_without_url_returns_fail_closed_sentinel_even_when_bypassed() {
+        assert!(proxy_route_sentinel(INVALID_MANUAL_PROXY));
+        assert_eq!(
+            effective_proxy("manual", "", "", "https://cdn.test/a", ""),
+            INVALID_MANUAL_PROXY
+        );
+        assert_eq!(
+            effective_proxy("MANUAL", "   ", "cdn.test,*", "https://cdn.test/a", ""),
+            INVALID_MANUAL_PROXY
+        );
+        // Explicit per-task proxy is still honored in manual mode (and subject to bypass).
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "",
+                "",
+                "https://cdn.test/a",
+                "http://127.0.0.1:7890"
+            ),
+            "http://127.0.0.1:7890"
+        );
+        assert_eq!(
+            effective_proxy(
+                "manual",
+                "",
+                "cdn.test",
+                "https://cdn.test/a",
+                "http://127.0.0.1:7890"
+            ),
+            DIRECT_PROXY_SENTINEL
+        );
     }
 }

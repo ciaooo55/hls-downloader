@@ -46,7 +46,9 @@ impl CoreServer {
                 }
             }
         })));
-        server.restore_install_result();
+        if hls_client::update_install::has_pending_install_result() {
+            server.presenter_bridge.mark_install_result_pending();
+        }
         Ok(server)
     }
 
@@ -131,6 +133,10 @@ impl CoreServer {
         self.presenter_bridge.has_subscribers()
     }
 
+    pub fn has_ui_subscribers(&self) -> bool {
+        self.presenter_bridge.has_ui_subscribers()
+    }
+
     pub fn set_presenter_waker(&self, waker: Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>) {
         self.presenter_bridge.set_waker(waker);
     }
@@ -170,18 +176,44 @@ impl CoreServer {
         );
     }
 
-    fn restore_install_result(&self) {
-        if let Ok(Some(result)) = crate::updater::take_install_result() {
-            let _ = self.coordinator.lock().and_then(|mut core| {
-                core.emit(CoreEvent::UpdateInstallResult {
-                    latest: result.version,
-                    status: result.status,
-                    exit_code: result.exit_code,
-                    message: result.message,
-                    install_log: result.install_log,
-                })
-            });
+    pub fn shutdown_and_flush(&self) {
+        let already_stopped = self.stop.load(Ordering::Acquire);
+        if !already_stopped {
+            let _ = self
+                .coordinator
+                .lock()
+                .and_then(|mut core| core.emit(CoreEvent::Shutdown));
         }
+        let _ = self
+            .coordinator
+            .lock()
+            .and_then(|mut core| core.flush_for_shutdown());
+        self.shutdown();
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn queue_install_result(&self, result: hls_client::update_install::InstallResult) {
+        self.presenter_bridge
+            .queue_install_result(CoreEvent::UpdateInstallResult {
+                latest: result.version,
+                status: result.status,
+                exit_code: result.exit_code,
+                message: result.message,
+                install_log: result.install_log,
+            });
+    }
+
+    #[cfg(test)]
+    fn trigger_update_install_shutdown_for_test(&self) {
+        spawn_update_install_shutdown(
+            self.coordinator.clone(),
+            Arc::clone(&self.presenter_bridge),
+            Arc::clone(&self.notify),
+            Arc::clone(&self.stop),
+            Arc::clone(&self.stop_signal),
+            #[cfg(windows)]
+            Arc::clone(&self.pipe_stops),
+        );
     }
 
     #[cfg(windows)]
@@ -224,6 +256,11 @@ impl CoreServer {
         #[cfg(windows)]
         let pipe_worker = self.start_named_pipe_listener(crate::v7_pipe_name())?;
         if !crate::tcp_loopback_enabled() {
+            if self.presenter_bridge.has_install_result_pending()
+                && !self.presenter_bridge.has_ui_subscribers()
+            {
+                self.presenter_bridge.wake(PresenterWakeMode::Workbench);
+            }
             #[cfg(windows)]
             {
                 let stop = self.stop_handle();
@@ -262,6 +299,11 @@ impl CoreServer {
         let addr = listener
             .local_addr()
             .map_err(|error| format!("Core local addr: {error}"))?;
+        if self.presenter_bridge.has_install_result_pending()
+            && !self.presenter_bridge.has_ui_subscribers()
+        {
+            self.presenter_bridge.wake(PresenterWakeMode::Workbench);
+        }
         #[cfg(windows)]
         {
             let tcp_worker = self.serve(listener);
@@ -595,22 +637,20 @@ fn dispatch(
             match coordinator.dispatch(command) {
                 Ok(mut events) => {
                     if should_shutdown {
-                        if let Err(message) = coordinator
-                            .lock()
-                            .and_then(|mut core| core.flush_for_shutdown())
-                        {
-                            return CorePipeResponse::Error {
-                                request_id: Some(request_id),
-                                code: "shutdown_flush_failed".into(),
-                                message,
-                            };
-                        }
                         let had_subscribers = presenter_bridge.has_subscribers();
-                        if let Ok(shutdown_events) = coordinator
-                            .lock()
-                            .and_then(|mut core| core.emit(CoreEvent::Shutdown))
-                        {
-                            events.extend(shutdown_events);
+                        match coordinator.lock().and_then(|mut core| {
+                            let shutdown_events = core.emit(CoreEvent::Shutdown)?;
+                            core.flush_for_shutdown()?;
+                            Ok(shutdown_events)
+                        }) {
+                            Ok(shutdown_events) => events.extend(shutdown_events),
+                            Err(message) => {
+                                return CorePipeResponse::Error {
+                                    request_id: Some(request_id),
+                                    code: "shutdown_flush_failed".into(),
+                                    message,
+                                };
+                            }
                         }
                         if had_subscribers {
                             // Give attached presenters a brief flush window to receive
@@ -628,21 +668,15 @@ fn dispatch(
                         .iter()
                         .any(|item| matches!(item.event, CoreEvent::UpdateInstallStarted { .. }))
                     {
-                        let stop = Arc::clone(stop);
-                        let stop_signal = Arc::clone(stop_signal);
-                        let notify = Arc::clone(notify);
-                        #[cfg(windows)]
-                        let pipe_stops = Arc::clone(pipe_stops);
-                        thread::spawn(move || {
-                            thread::sleep(Duration::from_millis(500));
-                            stop_event_waiters(
-                                &notify,
-                                &stop,
-                                &stop_signal,
-                                #[cfg(windows)]
-                                &pipe_stops,
-                            );
-                        });
+                        spawn_update_install_shutdown(
+                            coordinator.clone(),
+                            Arc::clone(presenter_bridge),
+                            Arc::clone(notify),
+                            Arc::clone(stop),
+                            Arc::clone(stop_signal),
+                            #[cfg(windows)]
+                            Arc::clone(pipe_stops),
+                        );
                     }
                     // Subscribers receive every committed update through event batches or a snapshot.
                     // A bulk acknowledgement must still fit the protocol frame.
@@ -1081,6 +1115,40 @@ fn stop_event_waiters(
     signal_pipe_stops(pipe_stops);
 }
 
+fn spawn_update_install_shutdown(
+    coordinator: CoreCoordinator,
+    presenter_bridge: Arc<PresenterBridge>,
+    notify: Arc<(Mutex<u64>, Condvar)>,
+    stop: Arc<AtomicBool>,
+    stop_signal: Arc<(Mutex<bool>, Condvar)>,
+    #[cfg(windows)] pipe_stops: Arc<Mutex<Vec<crate::NamedPipeStopHandle>>>,
+) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(120));
+        let had_ui = presenter_bridge.has_ui_subscribers();
+        let _ = coordinator
+            .lock()
+            .and_then(|mut core| core.emit(CoreEvent::Shutdown));
+        if had_ui {
+            let deadline = std::time::Instant::now() + Duration::from_millis(350);
+            while presenter_bridge.has_ui_subscribers() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let _ = coordinator
+            .lock()
+            .and_then(|mut core| core.flush_for_shutdown());
+        stop_event_waiters(
+            &notify,
+            &stop,
+            &stop_signal,
+            #[cfg(windows)]
+            &pipe_stops,
+        );
+    });
+}
+
 fn flush_pending_presenter_events(
     coordinator: &CoreCoordinator,
     presenter_bridge: &PresenterBridge,
@@ -1104,7 +1172,7 @@ fn deliver_clipboard_offer(
     if urls.is_empty() {
         return;
     }
-    if presenter_bridge.has_subscribers() {
+    if presenter_bridge.has_ui_subscribers() {
         let _ = coordinator
             .lock()
             .and_then(|mut core| core.emit(CoreEvent::ClipboardOffer { urls }));
@@ -1123,7 +1191,7 @@ fn wait_events(
     after_sequence: u64,
     timeout_ms: u64,
 ) -> Result<hls_protocol::EventBatch, String> {
-    let _subscriber = presenter_bridge.enter_subscriber();
+    let _subscriber = presenter_bridge.enter_subscriber(flush_ui_queue);
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.clamp(1, 60_000));
     loop {
         if flush_ui_queue {
@@ -1804,6 +1872,7 @@ mod tests {
                 trusted_ui: true,
                 start_paused: false,
                 queue_id: String::new(),
+                spec_override: None,
             })
             .unwrap();
         let receipt = retry.request(&admission("late")).unwrap();
@@ -1899,6 +1968,7 @@ mod tests {
             trusted_ui: true,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         })
         .unwrap();
         let rows = host.load_handoffs().unwrap();
@@ -2204,5 +2274,267 @@ mod tests {
             "NamedPipeStopHandle should wake ConnectNamedPipe promptly, took {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn get_task_is_read_only_and_preserves_sequence_and_sqlite_data_version() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-get-task-readonly-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("epoch")
+                .as_nanos()
+        ));
+        let database = root.join("data.db");
+        let server = CoreServer::open_path(&database).expect("open server");
+        server
+            .coordinator()
+            .set_setting("legal_terms_accepted", Value::Bool(true))
+            .expect("accept legal");
+        server
+            .coordinator()
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: "https://cdn.example.test/read-only.bin".into(),
+                    filename: "read-only.bin".into(),
+                    start_paused: true,
+                    ..Default::default()
+                },
+            })
+            .expect("create paused task");
+
+        let observer = rusqlite::Connection::open(&database).expect("open observer");
+        let data_version = || {
+            observer
+                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .expect("read data_version")
+        };
+        let base_seq = server.coordinator().latest_sequence().expect("base seq");
+        let base_ver = data_version();
+
+        let found = server
+            .coordinator()
+            .dispatch(CoreCommand::GetTask {
+                task_id: "task-1".into(),
+            })
+            .expect("GetTask existing");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].sequence, base_seq);
+        assert!(matches!(found[0].event, CoreEvent::TaskUpdated { .. }));
+
+        let missing = server
+            .coordinator()
+            .dispatch(CoreCommand::GetTask {
+                task_id: "sftp://alice:secret@example.test/missing".into(),
+            })
+            .expect("GetTask missing");
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].sequence, base_seq);
+        match &missing[0].event {
+            CoreEvent::Error { code, message } => {
+                assert_eq!(code, "task_not_found");
+                assert!(!message.contains("secret"));
+            }
+            other => panic!("expected task_not_found error, got {other:?}"),
+        }
+
+        assert_eq!(
+            server.coordinator().latest_sequence().expect("after seq"),
+            base_seq,
+            "GetTask must not advance runtime sequence"
+        );
+        assert_eq!(data_version(), base_ver, "GetTask must not write to SQLite");
+        drop(observer);
+        server.shutdown_and_flush();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn non_ui_wait_event_batch_does_not_suppress_ui_wake_or_steal_install_result() {
+        let server = CoreServer::in_memory().expect("in_memory server");
+        let woke_modes = Arc::new(Mutex::new(Vec::new()));
+        {
+            let woke_modes = Arc::clone(&woke_modes);
+            server.set_presenter_waker(Some(Arc::new(move |mode| {
+                if let Ok(mut list) = woke_modes.lock() {
+                    list.push(mode);
+                }
+            })));
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let worker = server.serve(listener);
+
+        let mut host_sub = CoreIpcClient::connect_addr(addr).expect("connect host subscriber");
+        let seq = server.coordinator().latest_sequence().expect("initial seq");
+        let host_wait = thread::spawn(move || {
+            host_sub.request(&CorePipeRequest::WaitEventBatch {
+                request_id: 1,
+                after_sequence: seq,
+                timeout_ms: 400,
+            })
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !server.has_event_subscribers() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(server.has_event_subscribers());
+        assert!(
+            !server.has_ui_subscribers(),
+            "WaitEventBatch must not register as a UI subscriber"
+        );
+
+        server.queue_install_result(hls_client::update_install::InstallResult {
+            version: "10.1.0".into(),
+            status: "installed".into(),
+            exit_code: 0,
+            message: "升级成功".into(),
+            install_log: String::new(),
+        });
+        deliver_clipboard_offer(
+            server.coordinator(),
+            &server.presenter_bridge,
+            vec!["https://cdn.example.test/video.mp4".into()],
+        );
+
+        let host_resp = host_wait
+            .join()
+            .expect("join host wait")
+            .expect("host WaitEventBatch reply");
+        match host_resp {
+            CorePipeResponse::EventBatch { batch, .. } => {
+                assert!(
+                    batch.events.is_empty(),
+                    "non-UI WaitEventBatch must not steal queued UI events: {batch:?}"
+                );
+            }
+            other => panic!("unexpected WaitEventBatch reply: {other:?}"),
+        }
+        assert_eq!(
+            woke_modes.lock().expect("lock woke_modes").as_slice(),
+            &[PresenterWakeMode::BackgroundToast],
+            "clipboard offer must wake presenter when only non-UI subscriber is attached"
+        );
+
+        // Now a real UI presenter connects, takes Snapshot, then calls WaitEvents (flush_ui_queue=true).
+        let mut ui = CoreIpcClient::connect_addr(addr).expect("connect ui");
+        let snap_seq = match ui
+            .request(&CorePipeRequest::Snapshot { request_id: 2 })
+            .expect("ui snapshot")
+        {
+            CorePipeResponse::Snapshot {
+                latest_sequence, ..
+            } => latest_sequence,
+            other => panic!("expected Snapshot, got {other:?}"),
+        };
+        let ui_events = match ui
+            .request(&CorePipeRequest::WaitEvents {
+                request_id: 3,
+                after_sequence: snap_seq,
+                timeout_ms: 1_000,
+            })
+            .expect("ui WaitEvents")
+        {
+            CorePipeResponse::Events { events, .. } => events,
+            other => panic!("expected Events, got {other:?}"),
+        };
+        assert!(
+            ui_events.iter().any(|env| matches!(
+                &env.event,
+                CoreEvent::UpdateInstallResult {
+                    latest,
+                    status,
+                    ..
+                } if latest == "10.1.0" && status == "installed"
+            )),
+            "UI WaitEvents must receive deferred UpdateInstallResult after Snapshot: {ui_events:?}"
+        );
+        assert!(
+            ui_events.iter().any(
+                |env| matches!(&env.event, CoreEvent::ClipboardOffer { urls } if urls.len() == 1)
+            ),
+            "UI WaitEvents must receive queued ClipboardOffer: {ui_events:?}"
+        );
+
+        server.shutdown();
+        assert!(worker.join().expect("join server").is_ok());
+    }
+
+    #[test]
+    fn shutdown_and_update_install_started_deliver_shutdown_to_ui_and_flush_checkpoint() {
+        for via_install_update in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "hls-v7-shutdown-order-{}-{via_install_update}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("epoch")
+                    .as_nanos()
+            ));
+            let database = root.join("data.db");
+            let server = CoreServer::open_path(&database).expect("open server");
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+            let addr = listener.local_addr().expect("local addr");
+            let worker = server.serve(listener);
+
+            let mut ui_sub = CoreIpcClient::connect_addr(addr).expect("connect ui subscriber");
+            let initial_seq = server.coordinator().latest_sequence().expect("initial seq");
+            let ui_thread = thread::spawn(move || {
+                ui_sub.request(&CorePipeRequest::WaitEvents {
+                    request_id: 10,
+                    after_sequence: initial_seq,
+                    timeout_ms: 5_000,
+                })
+            });
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !server.has_ui_subscribers() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(server.has_ui_subscribers());
+
+            if via_install_update {
+                server.trigger_update_install_shutdown_for_test();
+            } else {
+                let mut ctl = CoreIpcClient::connect_addr(addr).expect("connect ctl");
+                ctl.command(CoreCommand::Shutdown)
+                    .expect("send Shutdown command");
+            }
+
+            let shutdown_seq = match ui_thread
+                .join()
+                .expect("join ui_thread")
+                .expect("WaitEvents response")
+            {
+                CorePipeResponse::Events { events, .. } => events
+                    .iter()
+                    .find_map(|env| {
+                        matches!(env.event, CoreEvent::Shutdown).then_some(env.sequence)
+                    })
+                    .expect("UI subscriber must receive CoreEvent::Shutdown"),
+                other => panic!("expected Events with Shutdown, got {other:?}"),
+            };
+
+            assert!(
+                server.wait_until_stopped(Duration::from_secs(2)),
+                "CoreServer must stop promptly (via_install_update={via_install_update})"
+            );
+            assert!(worker.join().expect("join server worker").is_ok());
+            drop(server);
+
+            let reopened = crate::CoreStore::open(&database).expect("reopen store");
+            let persisted_seq = reopened
+                .latest_sequence()
+                .expect("read persisted checkpoint");
+            assert!(
+                persisted_seq >= shutdown_seq,
+                "flush_for_shutdown must persist checkpoint >= Shutdown sequence ({persisted_seq} < {shutdown_seq})"
+            );
+            drop(reopened);
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }

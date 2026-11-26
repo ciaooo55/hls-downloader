@@ -646,4 +646,61 @@ describe('nativeDisconnectError codes', () => {
     expect(nativeDisconnectError('Native host has exited.').code).toBe('host_disconnected')
     expect(nativeDisconnectError('')).toBeInstanceOf(NativeHostError)
   })
+
+  it('treats transport_error, non-shutdown core_unreachable, and Core TCP/stream errors as transient while preserving user_shutdown', async () => {
+    // 1. Non-shutdown `core_unreachable` triggers retry and disconnects stale port.
+    const first = new FakePort(), second = new FakePort()
+    const connect = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const bridge = new NativeBridge(connect)
+    const req1 = bridge.request({ op: 'offer_local_file', resource: { client_request_id: 'loc-1' } }, 30_000, 1)
+    first.onMessage.emit({
+      ok: false,
+      code: 'core_unreachable',
+      error: '下载引擎未启动或无响应，请重试',
+      __request_id: first.posted[0].__request_id,
+    })
+    expect(first.disconnect).toHaveBeenCalledOnce()
+    expect(second.posted).toHaveLength(1)
+    second.onMessage.emit({
+      ok: true,
+      handoff: { id: 'recovered-local' },
+      __request_id: second.posted[0].__request_id,
+    })
+    await expect(req1).resolves.toMatchObject({ ok: true, handoff: { id: 'recovered-local' } })
+
+    // 2. Explicit `transport_error: true` and `Core TCP ...` retry and preserve `transport_error: true` on exhaustion.
+    const third = new FakePort(), fourth = new FakePort()
+    connect.mockReturnValueOnce(third).mockReturnValueOnce(fourth)
+    const req2 = bridge.request({ op: 'offer', resource: { client_request_id: 'off-1' } }, 30_000, 1)
+    second.onMessage.emit({
+      ok: false,
+      transport_error: true,
+      error: '桌面端未返回确认结果',
+      __request_id: second.posted[1].__request_id,
+    })
+    expect(second.disconnect).toHaveBeenCalledOnce()
+    third.onMessage.emit({
+      ok: false,
+      error: 'Core TCP connect timeout',
+      __request_id: third.posted[0].__request_id,
+    })
+    await expect(req2).resolves.toMatchObject({ ok: false, transport_error: true })
+    expect(third.disconnect).toHaveBeenCalledOnce()
+
+    // 3. `user_shutdown` with `code: 'core_unreachable'` is NOT treated as transient transport failure.
+    const req3 = bridge.request({ op: 'ping', interactive: true }, 30_000, 1)
+    fourth.onMessage.emit({
+      ok: false,
+      code: 'core_unreachable',
+      error_code: 'user_shutdown',
+      user_shutdown: true,
+      error: '已退出',
+      __request_id: fourth.posted[0].__request_id,
+    })
+    const shutdownReply = await req3
+    expect(shutdownReply).toMatchObject({ ok: false, code: 'core_unreachable', user_shutdown: true })
+    expect(shutdownReply.transport_error).toBeUndefined()
+    expect(fourth.disconnect).not.toHaveBeenCalled()
+    bridge.close()
+  })
 })

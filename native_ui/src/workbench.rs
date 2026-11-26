@@ -25,6 +25,7 @@ enum WorkbenchJob {
 
 struct QueueSave {
     request_id: u64,
+    saved_profiles: Vec<hls_client::QueueProfile>,
     assignment: Option<(Vec<String>, String)>,
 }
 
@@ -35,20 +36,22 @@ pub struct Workbench {
     navigation: Rc<VecModel<NavigationRow>>,
     positions: RefCell<HashMap<String, usize>>,
     commands: RefCell<mpsc::SyncSender<WorkbenchJob>>,
-    editor_commands: mpsc::SyncSender<WorkbenchJob>,
+    editor_commands: RefCell<mpsc::SyncSender<WorkbenchJob>>,
     resource_commands: mpsc::SyncSender<WorkbenchJob>,
     system_commands: mpsc::SyncSender<WorkbenchJob>,
     next_id: Cell<u64>,
-    editor: RefCell<Option<TaskEditorWindow>>,
+    editor: Rc<RefCell<Option<TaskEditorWindow>>>,
     editor_id: Cell<u64>,
     editor_variants: RefCell<Vec<StreamVariant>>,
     editor_queues: RefCell<Vec<hls_client::QueueProfile>>,
+    editor_handoff: RefCell<Option<hls_client::ResourceOffer>>,
     details: RefCell<Option<(String, DetailsWindow)>>,
     details_full_log: Cell<bool>,
     settings: RefCell<Option<SettingsEditor>>,
     settings_response: RefCell<Option<CorePipeResponse>>,
     settings_open_id: Cell<Option<u64>>,
     settings_save_id: Cell<Option<u64>>,
+    speed_limit_toggle: RefCell<Option<(u64, u64, bool, u64)>>,
     queues: RefCell<Option<QueueEditor>>,
     queues_open_id: Cell<Option<u64>>,
     queue_save: RefCell<Option<QueueSave>>,
@@ -190,93 +193,15 @@ impl Workbench {
         let mut client = None;
         let mut last_request = std::time::Instant::now();
         Self::spawn_job_worker(capacity, move |job| {
-            // Core closes idle command pipes after 120 s. Reconnect before sending,
-            // rather than retrying a mutation after its receipt becomes uncertain.
-            if last_request.elapsed() >= std::time::Duration::from_secs(60) {
-                client = None;
-            }
-            let failure_id = match &job {
-                WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
-                WorkbenchJob::Request(request) => request.request_id(),
-            };
-            let result = (|| {
-                let client = match client.as_mut() {
-                    Some(existing) => existing,
-                    None => client.insert(CoreIpcClient::connect()?),
-                };
-                match job {
-                    WorkbenchJob::Request(request) => client.request(&request),
-                    WorkbenchJob::Snapshot(request_id) => client.snapshot_state_with_browser().map(
-                        |(tasks, latest_sequence, browser_connected)| CorePipeResponse::Snapshot {
-                            request_id,
-                            tasks,
-                            latest_sequence,
-                            browser_connected,
-                        },
-                    ),
-                    WorkbenchJob::Batch(request_id, commands) => {
-                        let mut events = Vec::new();
-                        for (index, command) in commands.into_iter().enumerate() {
-                            match client.request(&CorePipeRequest::Command {
-                                request_id,
-                                command,
-                            }) {
-                                Ok(CorePipeResponse::Events { events: result, .. }) => {
-                                    events.extend(result)
-                                }
-                                Ok(CorePipeResponse::Error { message, .. }) => {
-                                    events.push(EventEnvelope {
-                                        sequence: 0,
-                                        event: CoreEvent::Error {
-                                            code: "batch_item_failed".into(),
-                                            message: format!("第 {} 项：{message}", index + 1),
-                                        },
-                                    })
-                                }
-                                Ok(_) => {
-                                    events.push(EventEnvelope {
-                                        sequence: 0,
-                                        event: CoreEvent::Error {
-                                            code: "batch_interrupted".into(),
-                                            message: format!(
-                                                "第 {} 项响应不兼容，后续项目未提交",
-                                                index + 1
-                                            ),
-                                        },
-                                    });
-                                    break;
-                                }
-                                Err(error) => {
-                                    // Never replay the remaining batch after transport failure.
-                                    events.push(EventEnvelope {
-                                        sequence: 0,
-                                        event: CoreEvent::Error {
-                                            code: "batch_interrupted".into(),
-                                            message: format!(
-                                                "第 {} 项未能确认接收，后续项目未提交：{error}",
-                                                index + 1
-                                            ),
-                                        },
-                                    });
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(CorePipeResponse::Events { request_id, events })
-                    }
-                }
-            })();
-            last_request = std::time::Instant::now();
-            // A lost reply must not repeat a mutation. The event stream
-            // restores its committed state; the next action reconnects.
-            if result.is_err() {
-                client = None;
-            }
-            let response = result.unwrap_or_else(|message| CorePipeResponse::Error {
-                request_id: failure_id,
-                code: "ui_connection".into(),
-                message,
-            });
+            let response = execute_workbench_job(
+                &mut client,
+                &mut last_request,
+                std::time::Instant::now(),
+                job,
+                CoreIpcClient::connect,
+                |client, request| client.request(request),
+                |client| client.snapshot_state_with_browser(),
+            );
             let Ok(json) = serde_json::to_string(&response) else {
                 return true;
             };
@@ -336,20 +261,22 @@ impl Workbench {
             navigation,
             positions: RefCell::new(HashMap::new()),
             commands: RefCell::new(commands),
-            editor_commands,
+            editor_commands: RefCell::new(editor_commands),
             resource_commands,
             system_commands,
             next_id: Cell::new(1),
-            editor: RefCell::new(None),
+            editor: Rc::new(RefCell::new(None)),
             editor_id: Cell::new(0),
             editor_variants: RefCell::new(Vec::new()),
             editor_queues: RefCell::new(crate::queue_editor::ordered_profiles(&[])),
+            editor_handoff: RefCell::new(None),
             details: RefCell::new(None),
             details_full_log: Cell::new(false),
             settings: RefCell::new(None),
             settings_response: RefCell::new(None),
             settings_open_id: Cell::new(None),
             settings_save_id: Cell::new(None),
+            speed_limit_toggle: RefCell::new(None),
             exports: RefCell::new(HashMap::new()),
             queues: RefCell::new(None),
             queues_open_id: Cell::new(None),
@@ -700,6 +627,7 @@ impl Workbench {
         #[cfg(windows)]
         {
             let weak = self.window.as_weak();
+            let editor_slot = Rc::clone(&self.editor);
             let _ = slint::spawn_local(async move {
                 let Some(ui) = weak.upgrade() else {
                     report_ui_ready(launch_id, "main_failed");
@@ -720,6 +648,11 @@ impl Workbench {
                 }
                 native_window::set_cloaked(ui.window(), false);
                 native_window::activate(ui.window());
+                if let Some(editor) = editor_slot.borrow().as_ref() {
+                    if editor.window().is_visible() {
+                        native_window::activate(editor.window());
+                    }
+                }
                 // Windows can refuse foreground activation. The receipt confirms
                 // the window is visible and can be reached from the taskbar.
                 report_ui_ready(launch_id, "main");
@@ -880,7 +813,15 @@ impl Workbench {
                     }
                 }
             }
-            CoreEvent::Toast { message, .. } => {
+            CoreEvent::Toast { level, message } => {
+                if level == "power_action_cleared"
+                    || matches!(
+                        message.as_str(),
+                        "已取消完成后电源动作" | "已执行完成后电源动作" | "没有待执行的电源动作"
+                    )
+                {
+                    self.window.set_power_action_pending(false);
+                }
                 let tone = infer_toast_tone(message);
                 self.show_notice(tone, message.clone());
                 if let Some((_, details)) = self.details.borrow().as_ref() {
@@ -899,8 +840,37 @@ impl Workbench {
                     request_id: self.id(),
                 });
             }
+            CoreEvent::HandoffResolved { handoff_id, .. } => {
+                let matched = self
+                    .editor_handoff
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|offer| &offer.handoff_id == handoff_id);
+                if matched {
+                    self.editor_handoff.borrow_mut().take();
+                    if let Some(editor) = self.editor.borrow().as_ref() {
+                        if editor.window().is_visible() && editor.get_mode().as_str() == "new" {
+                            editor.set_cookie("".into());
+                            editor.set_headers("".into());
+                            let _ = editor.hide();
+                        }
+                    }
+                }
+            }
             CoreEvent::UiShow { surface } if surface == "main" => {
-                let _ = self.show();
+                if self.window.window().is_visible()
+                    && self
+                        .editor
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|editor| editor.window().is_visible())
+                {
+                    if let Some(editor) = self.editor.borrow().as_ref() {
+                        native_window::activate(editor.window());
+                    }
+                } else {
+                    let _ = self.show();
+                }
             }
             CoreEvent::UiShow { surface } if surface == "new_download" => {
                 let _ = self.show();
@@ -946,6 +916,7 @@ impl Workbench {
     ) {
         let _ = self.show();
         self.open_editor_with_prefill("new", false);
+        *self.editor_handoff.borrow_mut() = Some(offer.clone());
         if let Some(editor) = self.editor.borrow().as_ref() {
             editor.set_url(offer.url.clone().into());
             if !filename.trim().is_empty() {
@@ -958,6 +929,37 @@ impl Workbench {
             let method = offer.request_method.trim().to_ascii_uppercase();
             if matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "HEAD") {
                 editor.set_method(method.into());
+            }
+            if offer.preferred_height > 0
+                || offer.preferred_bandwidth > 0
+                || !offer.preferred_variant_id.trim().is_empty()
+            {
+                let variant_label = if !offer.preferred_variant_id.trim().is_empty() {
+                    offer.preferred_variant_id.trim().to_owned()
+                } else if offer.preferred_height > 0 {
+                    format!("{}p", offer.preferred_height)
+                } else {
+                    "已选流轨道".into()
+                };
+                let variant = StreamVariant {
+                    label: variant_label.clone(),
+                    bandwidth: offer.preferred_bandwidth,
+                    height: offer.preferred_height,
+                    kind: "handoff".into(),
+                    name: offer.preferred_variant_id.trim().to_owned(),
+                };
+                let mut display_parts = vec![variant_label.clone()];
+                if variant.height > 0 && variant_label != format!("{}p", variant.height) {
+                    display_parts.push(format!("{}p", variant.height));
+                }
+                if variant.bandwidth > 0 {
+                    display_parts.push(format!("{} bit/s", variant.bandwidth));
+                }
+                *self.editor_variants.borrow_mut() = vec![variant];
+                editor.set_variants(ModelRc::new(VecModel::from(vec![display_parts
+                    .join(" · ")
+                    .into()])));
+                editor.set_variant_index(0);
             }
             self.sync_editor_queues(editor, Some(queue_id));
             let has_advanced = editor.get_has_advanced_values();
@@ -1478,11 +1480,17 @@ impl Workbench {
                 let current_kib = self.window.get_speed_limit_kib().max(0) as u64;
                 let (next_enabled, effective_kib, values) =
                     toggle_speed_limit_values(current_enabled, current_kib);
-                self.sync_speed_limit_pill(next_enabled, effective_kib);
-                self.request(CorePipeRequest::StoreSettings {
-                    request_id: self.id(),
-                    values,
-                });
+                let request_id = self.id();
+                if self.request(CorePipeRequest::StoreSettings { request_id, values }) {
+                    let (first_id, base_enabled, base_kib) = self
+                        .speed_limit_toggle
+                        .borrow()
+                        .map(|(first, _, enabled, kib)| (first, enabled, kib))
+                        .unwrap_or((request_id, current_enabled, current_kib));
+                    *self.speed_limit_toggle.borrow_mut() =
+                        Some((first_id, request_id, base_enabled, base_kib));
+                    self.sync_speed_limit_pill(next_enabled, effective_kib);
+                }
             }
             "task:copy_url" => {
                 let urls: Vec<String> = {
@@ -1899,7 +1907,13 @@ impl Workbench {
         }
         match response {
             CorePipeResponse::Events { request_id, events } => {
-                self.set_engine_online(true);
+                let has_connection_error = events.iter().any(|envelope| {
+                    matches!(
+                        &envelope.event,
+                        CoreEvent::Error { code, .. } if code == "ui_connection"
+                    )
+                });
+                self.set_engine_online(!has_connection_error);
                 for event in &events {
                     self.apply(event);
                 }
@@ -1934,9 +1948,21 @@ impl Workbench {
                                             .collect::<Vec<_>>(),
                                     )));
                                 }
-                                CoreEvent::TaskCreated { .. } => {
+                                CoreEvent::TaskCreated { .. } | CoreEvent::TaskUpdated { .. } => {
                                     editor.set_result_tone("success".into());
                                     editor.set_result("任务已交给下载引擎".into())
+                                }
+                                CoreEvent::DuplicateOffered { message, .. } => {
+                                    editor.set_result_tone("warning".into());
+                                    editor.set_result(
+                                        format!(
+                                            "{message}；可勾选“允许重复下载”或修改文件名后重试"
+                                        )
+                                        .into(),
+                                    );
+                                    if editor.window().is_visible() {
+                                        editor.set_advanced_expanded(true);
+                                    }
                                 }
                                 CoreEvent::Error { message, .. } => {
                                     editor.set_result_tone("error".into());
@@ -1948,16 +1974,20 @@ impl Workbench {
                                 _ => {}
                             }
                         }
-                        if events
-                            .iter()
-                            .any(|event| matches!(event.event, CoreEvent::TaskCreated { .. }))
-                            && !events.iter().any(|event| {
-                                matches!(
-                                    event.event,
-                                    CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
-                                )
-                            })
-                        {
+                        if events.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                CoreEvent::TaskCreated { .. }
+                                    | CoreEvent::TaskUpdated { .. }
+                                    | CoreEvent::HandoffResolved { .. }
+                            )
+                        }) && !events.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                CoreEvent::Error { .. } | CoreEvent::DuplicateOffered { .. }
+                            )
+                        }) {
+                            self.editor_handoff.borrow_mut().take();
                             editor.set_cookie("".into());
                             editor.set_headers("".into());
                             if editor.get_mode().as_str() == "curl" {
@@ -2004,11 +2034,31 @@ impl Workbench {
                     ..
                 } = &response
                 {
+                    let speed_toggle_settled = {
+                        let mut pending_toggle = self.speed_limit_toggle.borrow_mut();
+                        match &mut *pending_toggle {
+                            Some((_, latest_id, _, _)) if *latest_id == request_id => {
+                                *pending_toggle = None;
+                                true
+                            }
+                            Some((first_id, latest_id, base_enabled, base_kib))
+                                if request_id >= *first_id && request_id < *latest_id =>
+                            {
+                                *base_enabled = *speed_limit_enabled;
+                                *base_kib = *speed_limit_kib;
+                                false
+                            }
+                            Some(_) => false,
+                            None => true,
+                        }
+                    };
                     self.apply_appearance(
                         crate::theme::ThemeMode::from_response(Some(&response)).is_dark(),
                         *reduce_motion || hls_client::os_reduce_motion(),
                     );
-                    self.sync_speed_limit_pill(*speed_limit_enabled, *speed_limit_kib);
+                    if speed_toggle_settled {
+                        self.sync_speed_limit_pill(*speed_limit_enabled, *speed_limit_kib);
+                    }
                     let changed = self.state.borrow().sort != *task_sort;
                     if changed {
                         self.state.borrow_mut().sort = task_sort.clone();
@@ -2028,7 +2078,10 @@ impl Workbench {
                     }
                 };
                 if let Some(save) = completed_queue_save {
-                    if let Some(editor) = self.queues.borrow().as_ref() {
+                    if let Some(editor) = self.queues.borrow_mut().as_mut() {
+                        if let CorePipeResponse::Settings { queue_profiles, .. } = &response {
+                            editor.receive_saved_profiles(queue_profiles.clone());
+                        }
                         editor.window.set_busy(false);
                         editor.window.set_status_tone("success".into());
                         editor.window.set_status("队列已保存".into());
@@ -2091,6 +2144,19 @@ impl Workbench {
                 if code == "ui_connection" {
                     self.set_engine_online(false);
                 }
+                if let Some((_, _, rollback_enabled, rollback_kib)) = {
+                    let mut pending_toggle = self.speed_limit_toggle.borrow_mut();
+                    if pending_toggle
+                        .as_ref()
+                        .is_some_and(|(_, latest_id, _, _)| Some(*latest_id) == request_id)
+                    {
+                        pending_toggle.take()
+                    } else {
+                        None
+                    }
+                } {
+                    self.sync_speed_limit_pill(rollback_enabled, rollback_kib);
+                }
                 self.show_notice("error", message.clone());
                 if request_id == Some(self.editor_id.get()) {
                     if let Some(editor) = self.editor.borrow().as_ref() {
@@ -2134,11 +2200,23 @@ impl Workbench {
         }
     }
 
+    fn reject_pending_editor_handoff(&self) {
+        if let Some(offer) = self.editor_handoff.borrow_mut().take() {
+            if !offer.handoff_id.is_empty() {
+                self.send(CoreCommand::RejectHandoff {
+                    handoff_id: offer.handoff_id,
+                    suppress_site_kind: false,
+                });
+            }
+        }
+    }
+
     fn open_editor(self: &Rc<Self>, action: &str) {
         self.open_editor_with_prefill(action, action == "new");
     }
 
     fn open_editor_with_prefill(self: &Rc<Self>, action: &str, allow_passive_clipboard: bool) {
+        self.reject_pending_editor_handoff();
         if let Some(previous) = self.editor.borrow().as_ref() {
             let _ = previous.hide();
         }
@@ -2198,8 +2276,12 @@ impl Workbench {
                 }
             }
         });
+        let weak = Rc::downgrade(self);
         let editor_weak = editor.as_weak();
         editor.window().on_close_requested(move || {
+            if let Some(this) = weak.upgrade() {
+                this.reject_pending_editor_handoff();
+            }
             if let Some(editor) = editor_weak.upgrade() {
                 editor.set_cookie("".into());
                 editor.set_headers("".into());
@@ -2271,6 +2353,7 @@ impl Workbench {
         }
         match action {
             "close" => {
+                self.reject_pending_editor_handoff();
                 let _ = editor.hide();
                 editor.set_cookie("".into());
                 editor.set_headers("".into());
@@ -2279,7 +2362,11 @@ impl Workbench {
                 }
             }
             "probe" | "create" => {
-                let result = editor_spec(editor, &self.editor_variants.borrow());
+                let result = editor_spec(
+                    editor,
+                    &self.editor_variants.borrow(),
+                    self.editor_handoff.borrow().as_ref(),
+                );
                 let spec = match result {
                     Ok(spec) => spec,
                     Err(error) => {
@@ -2315,15 +2402,31 @@ impl Workbench {
                         },
                     };
                     self.enqueue(
-                        &self.editor_commands,
+                        &self.editor_commands.borrow(),
                         WorkbenchJob::Request(Box::new(request)),
                     )
                 } else {
-                    let commands = match editor.get_mode().as_str() {
-                        "curl" => vec![CoreCommand::ImportCurl {
-                            command: editor.get_url().to_string(),
-                            options: spec,
-                        }],
+                    let pending_handoff = self
+                        .editor_handoff
+                        .borrow()
+                        .clone()
+                        .filter(|offer| !offer.handoff_id.is_empty());
+                    let mode = editor.get_mode().to_string();
+                    let commands = match mode.as_str() {
+                        "curl" => {
+                            let mut cmds = Vec::new();
+                            if let Some(ref offer) = pending_handoff {
+                                cmds.push(CoreCommand::RejectHandoff {
+                                    handoff_id: offer.handoff_id.clone(),
+                                    suppress_site_kind: false,
+                                });
+                            }
+                            cmds.push(CoreCommand::ImportCurl {
+                                command: editor.get_url().to_string(),
+                                options: spec,
+                            });
+                            cmds
+                        }
                         "batch" => {
                             let expansion = crate::wildcard::expand_batch(
                                 &editor.get_url(),
@@ -2340,18 +2443,39 @@ impl Workbench {
                                 editor.set_result(warning.into());
                                 return;
                             }
-                            expansion
-                                .urls
-                                .into_iter()
-                                .map(|url| CoreCommand::CreateTask {
+                            let mut cmds = Vec::with_capacity(expansion.urls.len() + 1);
+                            if let Some(ref offer) = pending_handoff {
+                                cmds.push(CoreCommand::RejectHandoff {
+                                    handoff_id: offer.handoff_id.clone(),
+                                    suppress_site_kind: false,
+                                });
+                            }
+                            cmds.extend(expansion.urls.into_iter().map(|url| {
+                                CoreCommand::CreateTask {
                                     spec: TaskSpec {
                                         url,
                                         ..spec.clone()
                                     },
-                                })
-                                .collect()
+                                }
+                            }));
+                            cmds
                         }
-                        _ => vec![CoreCommand::CreateTask { spec }],
+                        _ => {
+                            if let Some(ref offer) = pending_handoff {
+                                vec![CoreCommand::AcceptHandoff {
+                                    handoff_id: offer.handoff_id.clone(),
+                                    filename: spec.filename.clone(),
+                                    download_dir: spec.download_dir.clone(),
+                                    allow_duplicate: spec.allow_duplicate,
+                                    trusted_ui: true,
+                                    start_paused: spec.start_paused,
+                                    queue_id: spec.queue_id.clone(),
+                                    spec_override: Some(Box::new(spec)),
+                                }]
+                            } else {
+                                vec![CoreCommand::CreateTask { spec }]
+                            }
+                        }
                     };
                     let accept_terms = CorePipeRequest::Command {
                         request_id: self.id(),
@@ -2360,13 +2484,17 @@ impl Workbench {
                             value: true.into(),
                         },
                     };
-                    self.enqueue(
-                        &self.editor_commands,
+                    let ok = self.enqueue(
+                        &self.editor_commands.borrow(),
                         WorkbenchJob::Request(Box::new(accept_terms)),
                     ) && self.enqueue(
-                        &self.editor_commands,
+                        &self.editor_commands.borrow(),
                         WorkbenchJob::Batch(request_id, commands),
-                    )
+                    );
+                    if ok && matches!(mode.as_str(), "curl" | "batch") {
+                        self.editor_handoff.borrow_mut().take();
+                    }
+                    ok
                 };
                 editor.set_busy(submitted);
                 if !submitted {
@@ -2642,16 +2770,25 @@ impl Workbench {
     }
 
     fn open_queues(self: &Rc<Self>) {
-        let profiles = match self.settings_response.borrow().as_ref() {
-            Some(CorePipeResponse::Settings { queue_profiles, .. }) => queue_profiles.clone(),
-            _ => {
-                let request_id = self.id();
-                if self.request(CorePipeRequest::LoadSettings { request_id }) {
-                    self.queues_open_id.set(Some(request_id));
-                } else {
-                    self.queues_open_id.set(None);
+        let in_flight_profiles = self
+            .queue_save
+            .borrow()
+            .as_ref()
+            .map(|in_flight| in_flight.saved_profiles.clone());
+        let profiles = if let Some(saved) = in_flight_profiles.clone() {
+            saved
+        } else {
+            match self.settings_response.borrow().as_ref() {
+                Some(CorePipeResponse::Settings { queue_profiles, .. }) => queue_profiles.clone(),
+                _ => {
+                    let request_id = self.id();
+                    if self.request(CorePipeRequest::LoadSettings { request_id }) {
+                        self.queues_open_id.set(Some(request_id));
+                    } else {
+                        self.queues_open_id.set(None);
+                    }
+                    return;
                 }
-                return;
             }
         };
         self.queues_open_id.set(None);
@@ -2665,6 +2802,9 @@ impl Workbench {
         ) else {
             return;
         };
+        if in_flight_profiles.is_some() {
+            editor.window.set_busy(true);
+        }
         let weak = Rc::downgrade(self);
         editor.window.on_select_profile(move |index| {
             if let Some(this) = weak.upgrade() {
@@ -2699,7 +2839,7 @@ impl Workbench {
             if matches!(action.as_str(), "save" | "assign") {
                 match editor.values() {
                     Ok((profiles, queue_id)) => {
-                        let Ok(encoded_profiles) = serde_json::to_value(profiles) else {
+                        let Ok(encoded_profiles) = serde_json::to_value(&profiles) else {
                             editor.window.set_status_tone("error".into());
                             editor.window.set_status("无法序列化队列配置".into());
                             return;
@@ -2721,6 +2861,7 @@ impl Workbench {
                         }) {
                             *this.queue_save.borrow_mut() = Some(QueueSave {
                                 request_id: id,
+                                saved_profiles: profiles,
                                 assignment,
                             });
                             editor.window.set_busy(true);
@@ -3556,9 +3697,171 @@ struct EditorValidationError {
     advanced: bool,
 }
 
+fn execute_workbench_job<C>(
+    client: &mut Option<C>,
+    last_request: &mut std::time::Instant,
+    now: std::time::Instant,
+    job: WorkbenchJob,
+    mut connect: impl FnMut() -> Result<C, String>,
+    mut send: impl FnMut(&mut C, &CorePipeRequest) -> Result<CorePipeResponse, String>,
+    mut snapshot: impl FnMut(&mut C) -> Result<(Vec<TaskSnapshot>, u64, bool), String>,
+) -> CorePipeResponse {
+    // Core closes idle command pipes after 120 s. Reconnect before sending,
+    // rather than retrying a mutation after its receipt becomes uncertain.
+    if now.saturating_duration_since(*last_request) >= std::time::Duration::from_secs(60) {
+        *client = None;
+    }
+    let failure_id = match &job {
+        WorkbenchJob::Snapshot(id) | WorkbenchJob::Batch(id, _) => Some(*id),
+        WorkbenchJob::Request(request) => request.request_id(),
+    };
+    let mut transport_broken = false;
+    let result = (|| {
+        let client = match client.as_mut() {
+            Some(existing) => existing,
+            None => client.insert(connect().inspect_err(|_| {
+                transport_broken = true;
+            })?),
+        };
+        match job {
+            WorkbenchJob::Request(request) => send(client, &request).inspect_err(|_| {
+                transport_broken = true;
+            }),
+            WorkbenchJob::Snapshot(request_id) => snapshot(client)
+                .map(
+                    |(tasks, latest_sequence, browser_connected)| CorePipeResponse::Snapshot {
+                        request_id,
+                        tasks,
+                        latest_sequence,
+                        browser_connected,
+                    },
+                )
+                .inspect_err(|_| {
+                    transport_broken = true;
+                }),
+            WorkbenchJob::Batch(request_id, commands) => {
+                let mut events = Vec::new();
+                for (index, command) in commands.into_iter().enumerate() {
+                    match send(
+                        client,
+                        &CorePipeRequest::Command {
+                            request_id,
+                            command,
+                        },
+                    ) {
+                        Ok(CorePipeResponse::Events { events: result, .. }) => {
+                            events.extend(result);
+                        }
+                        Ok(CorePipeResponse::Error { message, .. }) => {
+                            events.push(EventEnvelope {
+                                sequence: 0,
+                                event: CoreEvent::Error {
+                                    code: "batch_item_failed".into(),
+                                    message: format!("第 {} 项：{message}", index + 1),
+                                },
+                            });
+                        }
+                        Ok(_) => {
+                            transport_broken = true;
+                            let message = format!("第 {} 项响应不兼容，后续项目未提交", index + 1);
+                            if index == 0 {
+                                return Err(message);
+                            }
+                            events.push(EventEnvelope {
+                                sequence: 0,
+                                event: CoreEvent::Error {
+                                    code: "ui_connection".into(),
+                                    message,
+                                },
+                            });
+                            break;
+                        }
+                        Err(error) => {
+                            // Never replay the remaining batch after transport failure.
+                            transport_broken = true;
+                            let message =
+                                format!("第 {} 项未能确认接收，后续项目未提交：{error}", index + 1);
+                            if index == 0 {
+                                return Err(message);
+                            }
+                            events.push(EventEnvelope {
+                                sequence: 0,
+                                event: CoreEvent::Error {
+                                    code: "ui_connection".into(),
+                                    message,
+                                },
+                            });
+                            break;
+                        }
+                    }
+                }
+                Ok(CorePipeResponse::Events { request_id, events })
+            }
+        }
+    })();
+    // A lost reply must not repeat a mutation. Reset the dead pipe without
+    // refreshing the idle timer so the next action reconnects immediately.
+    if transport_broken || result.is_err() {
+        *client = None;
+    } else {
+        *last_request = now;
+    }
+    result.unwrap_or_else(|message| CorePipeResponse::Error {
+        request_id: failure_id,
+        code: "ui_connection".into(),
+        message,
+    })
+}
+
+fn http_origin(raw: &str) -> Option<(String, String, u16)> {
+    let trimmed = raw.trim();
+    let (scheme_raw, rest) = trimmed.split_once("://")?;
+    let scheme = scheme_raw.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" => 80u16,
+        "https" => 443u16,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority).trim();
+    if host_port.is_empty() {
+        return None;
+    }
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let (ipv6, tail) = after_bracket.split_once(']')?;
+        if ipv6.is_empty() {
+            return None;
+        }
+        let port = if tail.is_empty() {
+            default_port
+        } else {
+            let port_str = tail.strip_prefix(':')?;
+            port_str.parse::<u16>().ok().filter(|&p| p > 0)?
+        };
+        (format!("[{}]", ipv6.to_ascii_lowercase()), port)
+    } else if let Some((h, port_str)) = host_port.rsplit_once(':') {
+        if h.is_empty() || h.contains(':') {
+            return None;
+        }
+        let port = port_str.parse::<u16>().ok().filter(|&p| p > 0)?;
+        (h.to_ascii_lowercase(), port)
+    } else {
+        (host_port.to_ascii_lowercase(), default_port)
+    };
+    Some((scheme, host, port))
+}
+
+fn same_http_origin(left: &str, right: &str) -> bool {
+    match (http_origin(left), http_origin(right)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 fn editor_spec(
     editor: &TaskEditorWindow,
     variants: &[StreamVariant],
+    handoff: Option<&hls_client::ResourceOffer>,
 ) -> Result<TaskSpec, EditorValidationError> {
     let url = editor.get_url().trim().to_owned();
     if url.is_empty() {
@@ -3599,8 +3902,10 @@ fn editor_spec(
     if !editor.get_cookie().trim().is_empty() {
         headers.insert("Cookie".into(), editor.get_cookie().trim().to_owned());
     }
-    let variant = variants.get(editor.get_variant_index().max(0) as usize);
-    Ok(TaskSpec {
+    let probed_variant = variants
+        .get(editor.get_variant_index().max(0) as usize)
+        .filter(|value| value.kind != "handoff");
+    let mut spec = TaskSpec {
         url,
         resource_kind: kind,
         filename: editor.get_filename().trim().into(),
@@ -3620,8 +3925,11 @@ fn editor_spec(
             .map(str::to_owned)
             .collect(),
         proxy: editor.get_proxy().trim().into(),
-        preferred_bandwidth: variant.map_or(0, |value| value.bandwidth),
-        preferred_height: variant.map_or(0, |value| value.height),
+        preferred_bandwidth: probed_variant.map_or(0, |value| value.bandwidth),
+        preferred_height: probed_variant.map_or(0, |value| value.height),
+        preferred_variant_id: probed_variant
+            .map(|value| value.name.trim().to_owned())
+            .unwrap_or_default(),
         preferred_audio: editor.get_audio().into(),
         scheduled_start_at: editor.get_start_at().trim().into(),
         scheduled_stop_at: editor.get_stop_at().trim().into(),
@@ -3637,7 +3945,39 @@ fn editor_spec(
         allow_duplicate: editor.get_allow_duplicate(),
         start_paused: editor.get_start_paused(),
         ..Default::default()
-    })
+    };
+    if editor.get_mode().as_str() == "new" {
+        if let Some(offer) = handoff {
+            spec.source_page_url = offer.source_page_url.clone();
+            if same_http_origin(&spec.url, &offer.url) {
+                spec.credential_ref = offer.credential_ref.clone();
+                spec.replay_context_ref = offer.replay_context_ref.clone();
+            }
+            if spec.url.trim() == offer.url.trim() {
+                spec.audio_url = offer.audio_url.clone();
+                spec.mime_type = offer.mime_type.clone();
+                spec.resource_key = offer.resource_key.clone();
+                spec.expected_size =
+                    (offer.audio_url.trim().is_empty() && offer.size > 0).then_some(offer.size);
+                match probed_variant {
+                    None => {
+                        spec.preferred_variant_id = offer.preferred_variant_id.clone();
+                        spec.preferred_height = offer.preferred_height;
+                        spec.preferred_bandwidth = offer.preferred_bandwidth;
+                    }
+                    Some(probed) => {
+                        if spec.preferred_variant_id.is_empty()
+                            && probed.height == offer.preferred_height
+                            && probed.bandwidth == offer.preferred_bandwidth
+                        {
+                            spec.preferred_variant_id = offer.preferred_variant_id.clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(spec)
 }
 
 fn row(task: &TaskSnapshot, selected: bool) -> TaskRow {
@@ -3953,12 +4293,12 @@ mod file_selection_tests {
     fn editor_spec_marks_header_validation_failures_as_advanced() {
         crate::offscreen::OffscreenPlatform::init_test();
         let editor = TaskEditorWindow::new().unwrap();
-        let missing_url = editor_spec(&editor, &[]).unwrap_err();
+        let missing_url = editor_spec(&editor, &[], None).unwrap_err();
         assert!(!missing_url.advanced);
 
         editor.set_url("https://cdn.example.test/video.mp4".into());
         editor.set_headers("MalformedHeaderWithoutColon".into());
-        let bad_header = editor_spec(&editor, &[]).unwrap_err();
+        let bad_header = editor_spec(&editor, &[], None).unwrap_err();
         assert!(bad_header.advanced);
     }
 
@@ -4082,7 +4422,7 @@ mod file_selection_tests {
             editor.invoke_queue_selected(0);
             assert_eq!(editor.get_queue_id().as_str(), "vip");
             editor.set_url("https://cdn.example.test/video.mp4".into());
-            assert_eq!(editor_spec(editor, &[]).unwrap().queue_id, "vip");
+            assert_eq!(editor_spec(editor, &[], None).unwrap().queue_id, "vip");
         }
 
         // Single URL clipboard offer -> "new" mode.
@@ -4800,6 +5140,700 @@ mod file_selection_tests {
         );
 
         let _ = settings_window.hide();
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn batch_pipe_disconnect_resets_client_sets_offline_and_reconnects_automatically() {
+        use std::time::{Duration, Instant};
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+
+        let t0 = Instant::now();
+        let mut client: Option<usize> = Some(1);
+        let mut last_request = t0;
+        let mut next_conn = 2usize;
+
+        // 1. Failure at index 0 returns CorePipeResponse::Error(ui_connection), drops client,
+        // and does NOT refresh last_request.
+        let t1 = t0 + Duration::from_secs(10);
+        let first_item_failed = execute_workbench_job(
+            &mut client,
+            &mut last_request,
+            t1,
+            WorkbenchJob::Batch(
+                41,
+                vec![
+                    CoreCommand::TaskAction {
+                        task_id: "t-1".into(),
+                        action: "pause".into(),
+                    },
+                    CoreCommand::TaskAction {
+                        task_id: "t-2".into(),
+                        action: "pause".into(),
+                    },
+                ],
+            ),
+            || {
+                let id = next_conn;
+                next_conn += 1;
+                Ok(id)
+            },
+            |_, _| Err("管道已断开".into()),
+            |_| unreachable!(),
+        );
+        assert!(
+            client.is_none(),
+            "dead pipe must be cleared on index 0 failure"
+        );
+        assert_eq!(
+            last_request, t0,
+            "failed batch must not refresh idle timer on dead pipe"
+        );
+        assert!(matches!(
+            first_item_failed,
+            CorePipeResponse::Error {
+                request_id: Some(41),
+                ref code,
+                ref message,
+            } if code == "ui_connection" && message.contains("管道已断开")
+        ));
+        workbench.response(first_item_failed);
+        assert!(!workbench.window.get_engine_online());
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+
+        // 2. Next batch automatically reconnects; simulate disconnect mid-batch (index 1 > 0).
+        let t2 = t0 + Duration::from_secs(15);
+        let mut seen_conns = Vec::new();
+        let mid_batch_failed = execute_workbench_job(
+            &mut client,
+            &mut last_request,
+            t2,
+            WorkbenchJob::Batch(
+                42,
+                vec![
+                    CoreCommand::TaskAction {
+                        task_id: "t-1".into(),
+                        action: "resume".into(),
+                    },
+                    CoreCommand::TaskAction {
+                        task_id: "t-2".into(),
+                        action: "resume".into(),
+                    },
+                    CoreCommand::TaskAction {
+                        task_id: "t-3".into(),
+                        action: "resume".into(),
+                    },
+                ],
+            ),
+            || {
+                let id = next_conn;
+                next_conn += 1;
+                Ok(id)
+            },
+            |conn, req| {
+                seen_conns.push(*conn);
+                match req {
+                    CorePipeRequest::Command {
+                        command: CoreCommand::TaskAction { task_id, .. },
+                        ..
+                    } if task_id == "t-1" => Ok(CorePipeResponse::Events {
+                        request_id: 42,
+                        events: vec![EventEnvelope {
+                            sequence: 5,
+                            event: CoreEvent::Toast {
+                                level: "info".into(),
+                                message: "已继续".into(),
+                            },
+                        }],
+                    }),
+                    _ => Err("写入中途断开".into()),
+                }
+            },
+            |_| unreachable!(),
+        );
+        assert_eq!(
+            seen_conns,
+            vec![2, 2],
+            "reconnected to conn 2 and stopped at item 2"
+        );
+        assert!(
+            client.is_none(),
+            "mid-batch failure must drop dead pipe immediately"
+        );
+        assert_eq!(
+            last_request, t0,
+            "mid-batch failure must not refresh last_request"
+        );
+
+        // Restore online first to verify mid-batch Events(ui_connection) flips it back offline!
+        workbench.set_engine_online(true);
+        workbench.response(mid_batch_failed);
+        assert!(
+            !workbench.window.get_engine_online(),
+            "Events containing CoreEvent::Error(ui_connection) must mark engine offline"
+        );
+        assert_eq!(workbench.window.get_notice_tone().as_str(), "error");
+        assert!(workbench.window.get_notice().contains("写入中途断开"));
+
+        // 3. Subsequent batch reconnects cleanly onto conn 3 and restores online state.
+        let t3 = t0 + Duration::from_secs(20);
+        let recovered = execute_workbench_job(
+            &mut client,
+            &mut last_request,
+            t3,
+            WorkbenchJob::Batch(
+                43,
+                vec![CoreCommand::TaskAction {
+                    task_id: "t-2".into(),
+                    action: "resume".into(),
+                }],
+            ),
+            || {
+                let id = next_conn;
+                next_conn += 1;
+                Ok(id)
+            },
+            |conn, _| {
+                assert_eq!(*conn, 3);
+                Ok(CorePipeResponse::Events {
+                    request_id: 43,
+                    events: Vec::new(),
+                })
+            },
+            |_| unreachable!(),
+        );
+        assert_eq!(client, Some(3));
+        assert_eq!(last_request, t3);
+        workbench.response(recovered);
+        assert!(workbench.window.get_engine_online());
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn handoff_editor_preserves_offer_context_submits_accept_handoff_and_rejects_when_abandoned() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel(16);
+        let (editor_tx, editor_rx) = mpsc::sync_channel(16);
+        *workbench.commands.borrow_mut() = cmd_tx;
+        *workbench.editor_commands.borrow_mut() = editor_tx;
+
+        let offer = hls_client::ResourceOffer {
+            handoff_id: "handoff-m8-2".into(),
+            url: "https://cdn.example.test/videos/720p.m3u8?sig=1".into(),
+            resource_kind: ResourceKind::Hls,
+            source_page_url: "https://watch.example.test/course/42".into(),
+            credential_ref: Some("cred-sec-1".into()),
+            replay_context_ref: Some("replay-ctx-1".into()),
+            request_method: "GET".into(),
+            mime_type: "application/vnd.apple.mpegurl".into(),
+            size: 104_857_600,
+            preferred_bandwidth: 3_200_000,
+            preferred_height: 720,
+            preferred_variant_id: "v720".into(),
+            audio_url: String::new(),
+            resource_key: "rk-course-42".into(),
+            ..Default::default()
+        };
+
+        workbench.open_editor_from_offer(&offer, "course-42.mp4", "D:/Media", "default");
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert_eq!(editor.get_variants().row_count(), 1);
+            assert_eq!(editor.get_variant_index(), 0);
+
+            // Exact URL preserves full stream/resource metadata + credentials + variant.
+            let exact_spec = editor_spec(
+                editor,
+                &workbench.editor_variants.borrow(),
+                workbench.editor_handoff.borrow().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(exact_spec.source_page_url, offer.source_page_url);
+            assert_eq!(exact_spec.credential_ref.as_deref(), Some("cred-sec-1"));
+            assert_eq!(
+                exact_spec.replay_context_ref.as_deref(),
+                Some("replay-ctx-1")
+            );
+            assert_eq!(exact_spec.mime_type, "application/vnd.apple.mpegurl");
+            assert_eq!(exact_spec.resource_key, "rk-course-42");
+            assert_eq!(exact_spec.expected_size, Some(104_857_600));
+            assert_eq!(exact_spec.preferred_variant_id, "v720");
+            assert_eq!(exact_spec.preferred_height, 720);
+            assert_eq!(exact_spec.preferred_bandwidth, 3_200_000);
+
+            // Same HTTP(S) origin with explicit default port 443 and changed path keeps credentials,
+            // while dropping exact-URL-only stream metadata.
+            editor.set_url("HTTPS://CDN.EXAMPLE.TEST:443/videos/1080p.m3u8?sig=2".into());
+            let same_origin_spec = editor_spec(
+                editor,
+                &workbench.editor_variants.borrow(),
+                workbench.editor_handoff.borrow().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(same_origin_spec.source_page_url, offer.source_page_url);
+            assert_eq!(
+                same_origin_spec.credential_ref.as_deref(),
+                Some("cred-sec-1")
+            );
+            assert_eq!(
+                same_origin_spec.replay_context_ref.as_deref(),
+                Some("replay-ctx-1")
+            );
+            assert!(same_origin_spec.resource_key.is_empty());
+            assert_eq!(same_origin_spec.expected_size, None);
+            assert_eq!(same_origin_spec.preferred_height, 0);
+
+            // Cross-origin URL must NEVER inherit browser credentials/replay context.
+            editor.set_url("https://mirror.other.example/videos/1080p.m3u8".into());
+            let cross_origin_spec = editor_spec(
+                editor,
+                &workbench.editor_variants.borrow(),
+                workbench.editor_handoff.borrow().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(cross_origin_spec.source_page_url, offer.source_page_url);
+            assert_eq!(cross_origin_spec.credential_ref, None);
+            assert_eq!(cross_origin_spec.replay_context_ref, None);
+
+            // Restore exact URL, tweak concurrency & start_paused, and submit "create".
+            editor.set_url(offer.url.clone().into());
+            editor.set_concurrency(8);
+            editor.set_start_paused(true);
+        }
+        workbench.editor_action("create");
+
+        // Legal terms request + Batch([AcceptHandoff { spec_override: Some(...) }]).
+        let _terms = editor_rx.try_recv().expect("legal_terms_accepted");
+        let batch_job = editor_rx.try_recv().expect("AcceptHandoff batch");
+        match batch_job {
+            WorkbenchJob::Batch(req_id, mut cmds) => {
+                assert_eq!(req_id, workbench.editor_id.get());
+                assert_eq!(cmds.len(), 1);
+                match cmds.remove(0) {
+                    CoreCommand::AcceptHandoff {
+                        handoff_id,
+                        filename,
+                        download_dir,
+                        trusted_ui,
+                        start_paused,
+                        spec_override,
+                        ..
+                    } => {
+                        assert_eq!(handoff_id, "handoff-m8-2");
+                        assert_eq!(filename, "course-42.mp4");
+                        assert_eq!(download_dir, "D:/Media");
+                        assert!(trusted_ui);
+                        assert!(start_paused);
+                        let spec = spec_override.expect("spec_override populated");
+                        assert_eq!(spec.concurrency, 8);
+                        assert_eq!(spec.credential_ref.as_deref(), Some("cred-sec-1"));
+                        assert_eq!(spec.preferred_variant_id, "v720");
+                    }
+                    other => panic!("expected AcceptHandoff, got {other:?}"),
+                }
+            }
+            _ => panic!("expected WorkbenchJob::Batch"),
+        }
+
+        // TaskCreated clears editor_handoff so closing/hiding does NOT send RejectHandoff.
+        let created_id = workbench.editor_id.get();
+        workbench.response(CorePipeResponse::Events {
+            request_id: created_id,
+            events: vec![EventEnvelope {
+                sequence: 10,
+                event: CoreEvent::TaskCreated {
+                    snapshot: TaskSnapshot {
+                        task_id: "task-m8-2".into(),
+                        ..Default::default()
+                    },
+                },
+            }],
+        });
+        assert!(workbench.editor_handoff.borrow().is_none());
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "accepted handoff must not emit RejectHandoff on hide"
+        );
+
+        // Abandoning an unaccepted handoff via "close" sends RejectHandoff once.
+        let mut abandoned = offer.clone();
+        abandoned.handoff_id = "handoff-abandoned".into();
+        abandoned.audio_url = "https://cdn.example.test/videos/audio.m4s".into();
+        workbench.open_editor_from_offer(&abandoned, "dash.mp4", "D:/Media", "default");
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            let dash_spec = editor_spec(
+                editor,
+                &workbench.editor_variants.borrow(),
+                workbench.editor_handoff.borrow().as_ref(),
+            )
+            .unwrap();
+            assert_eq!(dash_spec.audio_url, abandoned.audio_url);
+            assert_eq!(
+                dash_spec.expected_size, None,
+                "separate audio_url must not pin video-only size as expected_size"
+            );
+        }
+        workbench.editor_action("close");
+        match cmd_rx
+            .try_recv()
+            .expect("RejectHandoff sent on editor close")
+        {
+            WorkbenchJob::Request(req) => assert!(matches!(
+                *req,
+                CorePipeRequest::Command {
+                    command: CoreCommand::RejectHandoff {
+                        ref handoff_id,
+                        suppress_site_kind: false,
+                    },
+                    ..
+                } if handoff_id == "handoff-abandoned"
+            )),
+            _ => panic!("expected RejectHandoff command"),
+        }
+
+        // Switching mode to "batch" and submitting "create" prepends RejectHandoff cleanly.
+        let mut superseded = offer;
+        superseded.handoff_id = "handoff-superseded".into();
+        workbench.open_editor_from_offer(&superseded, "ep.mp4", "D:/Media", "default");
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            editor.set_mode("batch".into());
+            editor.set_url("https://cdn.example.test/ep_[1-2].mp4".into());
+        }
+        workbench.editor_action("create");
+        let _terms2 = editor_rx.try_recv().unwrap();
+        match editor_rx.try_recv().unwrap() {
+            WorkbenchJob::Batch(_, cmds) => {
+                assert_eq!(cmds.len(), 3);
+                assert!(matches!(
+                    &cmds[0],
+                    CoreCommand::RejectHandoff {
+                        handoff_id,
+                        suppress_site_kind: false,
+                    } if handoff_id == "handoff-superseded"
+                ));
+                assert!(matches!(&cmds[1], CoreCommand::CreateTask { .. }));
+                assert!(matches!(&cmds[2], CoreCommand::CreateTask { .. }));
+            }
+            _ => panic!("expected batch with prepended RejectHandoff"),
+        }
+        assert!(workbench.editor_handoff.borrow().is_none());
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn speed_limit_toggle_rolls_back_on_error_queue_save_syncs_and_power_toast_clears_banner() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+
+        // Seed initial settings (speed limit off, 512 KiB/s; default queue only).
+        let initial_settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 512,
+            "download_dir": "D:/Downloads",
+            "queue_profiles": [
+                {"id": "default", "name": "默认队列", "priority": 0}
+            ]
+        }))
+        .unwrap();
+        workbench.response(initial_settings);
+        assert!(!workbench.window.get_speed_limit_enabled());
+        assert_eq!(
+            workbench.window.get_speed_limit_label().as_str(),
+            "限速：关"
+        );
+
+        // 1. Full/closed command channel must NOT flip optimistic speed limit pill.
+        let (closed_tx, closed_rx) = mpsc::sync_channel(1);
+        drop(closed_rx);
+        *workbench.commands.borrow_mut() = closed_tx;
+        workbench.action("toggle_speed_limit");
+        assert!(!workbench.window.get_speed_limit_enabled());
+        assert_eq!(
+            workbench.window.get_speed_limit_label().as_str(),
+            "限速：关"
+        );
+
+        // 2. Enqueued toggle flips pill optimistically, ignores older unrelated Settings,
+        // and rolls back cleanly if StoreSettings fails.
+        let (live_tx, live_rx) = mpsc::sync_channel(16);
+        *workbench.commands.borrow_mut() = live_tx;
+        workbench.action("toggle_speed_limit");
+        assert!(workbench.window.get_speed_limit_enabled());
+        assert_eq!(
+            workbench.window.get_speed_limit_label().as_str(),
+            "限速 512 KB/s"
+        );
+        let toggle_req_id = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected StoreSettings"),
+        };
+
+        // Older background LoadSettings arrives before toggle_req_id: must NOT clobber pill!
+        let stale_settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": toggle_req_id - 1,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 512,
+            "download_dir": "D:/Downloads"
+        }))
+        .unwrap();
+        workbench.response(stale_settings);
+        assert!(workbench.window.get_speed_limit_enabled());
+
+        // StoreSettings fails -> rolls pill back to disabled (512 KiB/s).
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(toggle_req_id),
+            code: "ui_connection".into(),
+            message: "保存限速失败".into(),
+        });
+        assert!(!workbench.window.get_speed_limit_enabled());
+        assert_eq!(
+            workbench.window.get_speed_limit_label().as_str(),
+            "限速：关"
+        );
+        assert_eq!(workbench.window.get_speed_limit_kib(), 512);
+
+        // 3. QueueEditor mid-save reopen preserves in-flight profiles + busy state, and
+        // completed save refreshes live QueueEditor profiles via receive_saved_profiles.
+        workbench.open_queues();
+        let queue_win = workbench
+            .queues
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .window
+            .clone_strong();
+        queue_win.invoke_action("add".into());
+        queue_win.set_queue_name("夜间队列".into());
+        queue_win.invoke_action("save".into());
+        assert!(queue_win.get_busy());
+        let save_req_id = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected queue StoreSettings"),
+        };
+
+        // Reopen queues while save is still in flight -> keeps "夜间队列" & busy=true!
+        workbench.open_queues();
+        {
+            let reopened = workbench.queues.borrow();
+            let reopened = reopened.as_ref().unwrap();
+            assert!(reopened.window.get_busy());
+            let names: Vec<String> = reopened
+                .window
+                .get_profiles()
+                .iter()
+                .map(String::from)
+                .collect();
+            assert_eq!(names, vec!["默认队列", "夜间队列"]);
+        }
+
+        // Core returns canonicalized Settings for save_req_id -> live QueueEditor updates!
+        let saved_settings: CorePipeResponse = serde_json::from_value(serde_json::json!({
+            "type": "settings",
+            "request_id": save_req_id,
+            "takeover_enabled": true,
+            "takeover_minimum_bytes": 0,
+            "legal_accepted": true,
+            "speed_limit_enabled": false,
+            "speed_limit_kib": 512,
+            "download_dir": "D:/Downloads",
+            "queue_profiles": [
+                {"id": "default", "name": "默认队列", "priority": 0},
+                {"id": "night", "name": "夜间低速队列", "priority": 5}
+            ]
+        }))
+        .unwrap();
+        workbench.response(saved_settings);
+        {
+            let synced = workbench.queues.borrow();
+            let synced = synced.as_ref().unwrap();
+            assert!(!synced.window.get_busy());
+            assert_eq!(synced.window.get_status().as_str(), "队列已保存");
+            let names: Vec<String> = synced
+                .window
+                .get_profiles()
+                .iter()
+                .map(String::from)
+                .collect();
+            assert_eq!(names, vec!["默认队列", "夜间低速队列"]);
+            let _ = synced.window.hide();
+        }
+
+        // 4. PowerActionPending + cancellation Toast clears Workbench power banner.
+        workbench.apply(&EventEnvelope {
+            sequence: 20,
+            event: CoreEvent::PowerActionPending {
+                action: "shutdown".into(),
+                title: "队列已完成".into(),
+                delay_seconds: 60,
+            },
+        });
+        assert!(workbench.window.get_power_action_pending());
+        workbench.apply(&EventEnvelope {
+            sequence: 21,
+            event: CoreEvent::Toast {
+                level: "info".into(),
+                message: "已取消完成后电源动作".into(),
+            },
+        });
+        assert!(!workbench.window.get_power_action_pending());
+
+        // 5. UpdateInstallResult routes into SystemTools and opens the Updates surface.
+        assert!(!workbench.system.borrow().as_ref().unwrap().keeps_ui_alive());
+        workbench.apply(&EventEnvelope {
+            sequence: 22,
+            event: CoreEvent::UpdateInstallResult {
+                latest: "10.2.0".into(),
+                status: "failed".into(),
+                exit_code: 1,
+                message: "安装失败".into(),
+                install_log: r"C:\Temp\install.log".into(),
+            },
+        });
+        assert!(workbench.system.borrow().as_ref().unwrap().keeps_ui_alive());
+        workbench.window.hide().unwrap();
+    }
+
+    #[test]
+    fn handoff_editor_duplicate_retry_reused_task_close_and_rapid_speed_limit_toggle_baseline() {
+        use hls_client::{
+            CoreCommand, CoreEvent, CorePipeRequest, CorePipeResponse, EventEnvelope, ResourceKind,
+            ResourceOffer, TaskSnapshot,
+        };
+        use slint::ComponentHandle;
+        use std::sync::mpsc;
+
+        crate::offscreen::OffscreenPlatform::init_test();
+        let workbench = Workbench::new(Vec::new(), 1, false, true, true).unwrap();
+        let (live_tx, live_rx) = mpsc::sync_channel(16);
+        let (editor_tx, editor_rx) = mpsc::sync_channel(16);
+        *workbench.commands.borrow_mut() = live_tx;
+        *workbench.editor_commands.borrow_mut() = editor_tx;
+
+        // 1. BUG-T5-3: Rapid double toggle where BOTH requests fail rolls back to original confirmed baseline (false, 0).
+        workbench.sync_speed_limit_pill(false, 0);
+        workbench.action("toggle_speed_limit");
+        let req1 = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected req1"),
+        };
+        assert!(workbench.window.get_speed_limit_enabled());
+        assert_eq!(workbench.window.get_speed_limit_kib(), 1024);
+
+        // Second click while req1 is still in flight -> optimistic UI flips to (false, 1024), baseline stays (false, 0)!
+        workbench.action("toggle_speed_limit");
+        let req2 = match live_rx.try_recv().unwrap() {
+            WorkbenchJob::Request(req) => req.request_id().unwrap(),
+            _ => panic!("expected req2"),
+        };
+        assert!(!workbench.window.get_speed_limit_enabled());
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(req1),
+            code: "store_failed".into(),
+            message: "第一次保存失败".into(),
+        });
+        workbench.response(CorePipeResponse::Error {
+            request_id: Some(req2),
+            code: "store_failed".into(),
+            message: "第二次保存失败".into(),
+        });
+        assert!(!workbench.window.get_speed_limit_enabled());
+        assert_eq!(workbench.window.get_speed_limit_kib(), 0);
+
+        // 2. BUG-T5-1: Handoff in TaskEditorWindow encountering `DuplicateOffered` stays open with offer intact;
+        //    subsequent `TaskUpdated` + `HandoffResolved` closes editor without sending `RejectHandoff`.
+        let offer = ResourceOffer {
+            handoff_id: "handoff-dup-editor".into(),
+            url: "https://cdn.example.test/archive.zip".into(),
+            resource_kind: ResourceKind::File,
+            filename: "archive.zip".into(),
+            ..Default::default()
+        };
+        workbench.open_editor_from_offer(&offer, "archive.zip", "D:/Downloads", "default");
+        let editor_req_id = workbench.editor_id.get();
+        workbench.editor_action("create");
+        let _terms = editor_rx.try_recv().unwrap();
+        let _batch1 = editor_rx.try_recv().unwrap();
+
+        workbench.response(CorePipeResponse::Events {
+            request_id: editor_req_id,
+            events: vec![EventEnvelope {
+                sequence: 10,
+                event: CoreEvent::DuplicateOffered {
+                    task_id: "task-existing".into(),
+                    action: "open".into(),
+                    output_missing: false,
+                    message: "已有相同链接任务".into(),
+                },
+            }],
+        });
+        assert!(
+            workbench.editor_handoff.borrow().is_some(),
+            "DuplicateOffered must preserve editor_handoff so user can tick allow_duplicate and retry"
+        );
+        {
+            let editor = workbench.editor.borrow();
+            let editor = editor.as_ref().unwrap();
+            assert!(editor.window().is_visible());
+            assert!(editor.get_result().as_str().contains("允许重复下载"));
+        }
+
+        // Now simulate reusing a paused task (`TaskUpdated` + `HandoffResolved`) -> editor closes and clears `editor_handoff`!
+        workbench.response(CorePipeResponse::Events {
+            request_id: editor_req_id,
+            events: vec![
+                EventEnvelope {
+                    sequence: 11,
+                    event: CoreEvent::TaskUpdated {
+                        snapshot: TaskSnapshot {
+                            task_id: "task-existing".into(),
+                            status: "downloading".into(),
+                            ..Default::default()
+                        },
+                    },
+                },
+                EventEnvelope {
+                    sequence: 12,
+                    event: CoreEvent::HandoffResolved {
+                        handoff_id: "handoff-dup-editor".into(),
+                        task_id: Some("task-existing".into()),
+                    },
+                },
+            ],
+        });
+        assert!(workbench.editor_handoff.borrow().is_none());
+        assert!(!workbench
+            .editor
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .window()
+            .is_visible());
+        // Closing editor afterwards must NOT emit `RejectHandoff`!
+        workbench.editor_action("close");
+        assert!(
+            !std::iter::from_fn(|| live_rx.try_recv().ok()).any(|job| matches!(
+                job,
+                WorkbenchJob::Request(req)
+                    if matches!(*req, CorePipeRequest::Command { command: CoreCommand::RejectHandoff { .. }, .. })
+            ))
+        );
         workbench.window.hide().unwrap();
     }
 }

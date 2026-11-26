@@ -57,7 +57,7 @@ pub(crate) fn decode_proxy_userinfo(user: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
-pub(super) fn proxy_password_key(url: &str) -> Option<String> {
+pub(crate) fn proxy_password_key(url: &str) -> Option<String> {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -65,6 +65,113 @@ pub(super) fn proxy_password_key(url: &str) -> Option<String> {
     let user = userinfo.split(':').next()?;
     proxy_scheme(&scheme.to_ascii_lowercase())
         .then(|| url_password_key(&format!("{scheme}://{user}@{endpoint}")))
+}
+
+pub(crate) fn transfer_url_password_key(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "ftp" | "ftps" | "sftp"
+    ) {
+        return None;
+    }
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let at = authority.rfind('@')?;
+    let user = authority[..at].split(':').next()?;
+    let endpoint = &authority[at + 1..];
+    Some(url_password_key(&format!("{scheme}://{user}@{endpoint}")))
+}
+
+fn collect_embedded_url_password_keys(
+    text: &str,
+    include_http_proxy: bool,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    if !text.contains('@') {
+        return;
+    }
+    if let Some(key) = transfer_url_password_key(text) {
+        out.insert(key);
+    }
+    if include_http_proxy || text.trim_start().to_ascii_lowercase().starts_with("socks") {
+        if let Some(key) = proxy_password_key(text) {
+            out.insert(key);
+        }
+    }
+    let lower = text.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(rel) = lower[cursor..].find("://") {
+        let sep = cursor + rel;
+        let start = lower[..sep]
+            .char_indices()
+            .rfind(|(_, ch)| !ch.is_ascii_alphanumeric())
+            .map_or(0, |(idx, ch)| idx + ch.len_utf8());
+        let scheme = &lower[start..sep];
+        let is_transfer = matches!(scheme, "ftp" | "ftps" | "sftp");
+        let is_proxy = proxy_scheme(scheme) && (include_http_proxy || scheme.starts_with("socks"));
+        let auth_start = sep + 3;
+        if is_transfer || is_proxy {
+            let end = text[auth_start..]
+                .find(|ch: char| {
+                    ch == '/'
+                        || ch.is_whitespace()
+                        || matches!(ch, '?' | '#' | '"' | '\'' | '<' | '>')
+                })
+                .map_or(text.len(), |off| auth_start + off);
+            let candidate = &text[start..end];
+            if is_transfer {
+                if let Some(key) = transfer_url_password_key(candidate) {
+                    out.insert(key);
+                }
+            }
+            if is_proxy {
+                if let Some(key) = proxy_password_key(candidate) {
+                    out.insert(key);
+                }
+            }
+            cursor = end.max(auth_start);
+        } else {
+            cursor = auth_start;
+        }
+    }
+}
+
+pub(crate) fn collect_referenced_url_password_keys(
+    value: &serde_json::Value,
+    include_http_proxy: bool,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Ok(nested) = serde_json::from_str::<serde_json::Value>(text) {
+                if nested.is_object() || nested.is_array() {
+                    collect_referenced_url_password_keys(&nested, include_http_proxy, out);
+                    return;
+                }
+            }
+            collect_embedded_url_password_keys(text, include_http_proxy, out);
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_referenced_url_password_keys(item, include_http_proxy, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                collect_embedded_url_password_keys(key, include_http_proxy, out);
+                if matches!(key.as_str(), "credential_ref" | "replay_context_ref") {
+                    if let Some(cred) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                        out.insert(cred.to_string());
+                    }
+                }
+                let field_proxy =
+                    include_http_proxy || matches!(key.as_str(), "proxy" | "proxy_url");
+                collect_referenced_url_password_keys(item, field_proxy, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn redact_urls<T: Serialize + DeserializeOwned>(value: T) -> Result<T, String> {
@@ -76,11 +183,16 @@ impl CoreStore {
         let key = url_password_key(authority);
         #[cfg(windows)]
         {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(i64::MAX as u128) as i64;
             let encoded = serde_json::to_string(password).map_err(|e| e.to_string())?;
             let blob = crate::credentials::CredentialVault.protect(&encoded)?;
             self.connection.execute(
-                "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms) VALUES (?1, ?2, 'url_password', 0) ON CONFLICT(credential_ref) DO UPDATE SET protected_blob=excluded.protected_blob",
-                rusqlite::params![key, blob],
+                "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms) VALUES (?1, ?2, 'url_password', ?3) ON CONFLICT(credential_ref) DO UPDATE SET protected_blob=excluded.protected_blob, created_at_ms=excluded.created_at_ms",
+                rusqlite::params![key, blob, now],
             ).map_err(|e| e.to_string())?;
         }
         #[cfg(not(windows))]

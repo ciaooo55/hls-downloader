@@ -4503,6 +4503,7 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             trusted_ui: false,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         })
         .is_err());
     let events = coordinator
@@ -4514,6 +4515,7 @@ fn coordinator_accept_handoff_creates_task_and_rejects_escaped_dir() {
             trusted_ui: false,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         })
         .unwrap();
     assert!(events
@@ -4558,6 +4560,7 @@ fn only_explicit_desktop_copy_bypasses_handoff_deduplication() {
                 trusted_ui,
                 start_paused: false,
                 queue_id: String::new(),
+                spec_override: None,
             })
             .unwrap();
         let copy = events.iter().find_map(|event| match &event.event {
@@ -4614,6 +4617,7 @@ fn coordinator_accept_handoff_carries_local_source_into_task_spec() {
             trusted_ui: false,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         })
         .unwrap();
     let task_id = events
@@ -7029,6 +7033,7 @@ fn audit_accept_handoff(
         allow_duplicate: false,
         start_paused: false,
         queue_id: String::new(),
+        spec_override: None,
     })
 }
 
@@ -7916,6 +7921,7 @@ fn accept_handoff_honors_start_paused_and_custom_queue_id() {
             trusted_ui: true,
             start_paused: true,
             queue_id: "missing-queue".into(),
+            spec_override: None,
         })
         .is_err());
 
@@ -7928,6 +7934,7 @@ fn accept_handoff_honors_start_paused_and_custom_queue_id() {
             trusted_ui: true,
             start_paused: true,
             queue_id: "night-media".into(),
+            spec_override: None,
         })
         .unwrap();
     let created = events
@@ -7980,6 +7987,7 @@ fn handoff_accept_persists_source_page_url_into_spec_and_snapshot() {
             trusted_ui: true,
             start_paused: true,
             queue_id: String::new(),
+            spec_override: None,
         })
         .unwrap();
     let created = events
@@ -8019,6 +8027,7 @@ fn handoff_accept_persists_source_page_url_into_spec_and_snapshot() {
         trusted_ui: true,
         start_paused: true,
         queue_id: String::new(),
+        spec_override: None,
     });
     let runtime_created = runtime_events
         .iter()
@@ -8700,6 +8709,7 @@ fn dual_track_audio_url_downloads_both_streams_and_muxes_to_mp4() {
             trusted_ui: true,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         })
         .unwrap();
 
@@ -9482,4 +9492,1448 @@ fn armed_refresh_handles_utf8_leading_dots_multitenant_hosts_and_stream_mp4_file
         &renamed_file_task,
         &conflicting_ext_offer
     ));
+}
+
+#[test]
+fn worker_exit_respects_pause_and_cancel_without_false_failure_or_retry() {
+    for action in ["pause", "cancel"] {
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_srv = Arc::clone(&entered);
+        let release = Arc::new(AtomicBool::new(false));
+        let release_srv = Arc::clone(&release);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    line.clear();
+                }
+                stream = reader.into_inner();
+                entered_srv.store(true, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while !release_srv.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                let _ = stream.write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        let root = lifecycle_test_root(&format!("worker-exit-{action}"));
+        let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+        coordinator
+            .set_setting("legal_terms_accepted", serde_json::json!(true))
+            .expect("legal");
+        coordinator
+            .set_setting("proxy_mode", serde_json::json!("direct"))
+            .expect("proxy");
+        coordinator
+            .set_setting("auto_retry_failed_max", serde_json::json!(3))
+            .expect("auto_retry");
+        coordinator
+            .set_setting(
+                "download_dir",
+                serde_json::json!(root.to_string_lossy().into_owned()),
+            )
+            .expect("download_dir");
+
+        let events = coordinator
+            .dispatch(CoreCommand::CreateTask {
+                spec: TaskSpec {
+                    url: format!("http://{addr}/slow-503.bin"),
+                    filename: "slow-503.bin".into(),
+                    concurrency: 1,
+                    ..Default::default()
+                },
+            })
+            .expect("create task");
+        let task_id = events
+            .iter()
+            .find_map(|env| match &env.event {
+                CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+                _ => None,
+            })
+            .expect("task_id");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !entered.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(entered.load(Ordering::SeqCst), "worker should connect");
+
+        coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: task_id.clone(),
+                action: action.into(),
+            })
+            .expect("dispatch pause/cancel");
+        release.store(true, Ordering::SeqCst);
+        coordinator
+            .wait_for_worker_stop(&task_id)
+            .expect("wait worker stop");
+
+        let snap = coordinator
+            .lock()
+            .expect("lock")
+            .snapshot(&task_id)
+            .cloned()
+            .expect("snapshot");
+        let expected_status = if action == "pause" {
+            "paused"
+        } else {
+            "canceled"
+        };
+        assert_eq!(snap.status, expected_status);
+        assert!(
+            snap.error_code.is_none(),
+            "paused/canceled task must not record HTTP 503 failure: {snap:?}"
+        );
+        assert_eq!(snap.error_attempt, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // Terminal canceled/completed tasks in CoreRuntime ignore late failure or progress regression,
+    // while direct report_failure on a paused task remains permitted for test/diagnostic callers.
+    let mut runtime = crate::CoreRuntime::new();
+    runtime.handle(CoreCommand::CreateTask {
+        spec: TaskSpec {
+            url: "https://cdn.example.test/a.bin".into(),
+            filename: "a.bin".into(),
+            start_paused: true,
+            ..Default::default()
+        },
+    });
+    runtime.report_failure(
+        "task-1",
+        crate::TaskFailure {
+            code: "HTTP_410".into(),
+            message: "gone".into(),
+            http_status: Some(410),
+            attempt: 1,
+            ..Default::default()
+        },
+    );
+    assert_eq!(runtime.snapshot("task-1").expect("snap").status, "failed");
+
+    runtime.handle(CoreCommand::CreateTask {
+        spec: TaskSpec {
+            url: "https://cdn.example.test/b.bin".into(),
+            filename: "b.bin".into(),
+            ..Default::default()
+        },
+    });
+    runtime.handle(CoreCommand::TaskAction {
+        task_id: "task-2".into(),
+        action: "cancel".into(),
+    });
+    runtime.report_failure(
+        "task-2",
+        crate::TaskFailure {
+            code: "HTTP_503".into(),
+            message: "late error".into(),
+            attempt: 1,
+            ..Default::default()
+        },
+    );
+    runtime.handle(CoreCommand::UpdateProgress {
+        task_id: "task-2".into(),
+        downloaded_bytes: 50,
+        total_bytes: Some(100),
+        speed_bytes_per_sec: 0,
+        stage: "waiting".into(),
+        status: "paused".into(),
+    });
+    assert_eq!(runtime.snapshot("task-2").expect("snap").status, "canceled");
+    assert!(runtime
+        .snapshot("task-2")
+        .expect("snap")
+        .error_code
+        .is_none());
+}
+
+#[test]
+fn dual_track_sibling_failure_preserves_partial_files_and_pause_returns_paused() {
+    let video_payload = Arc::new(vec![b'V'; 64 * 1024]);
+    let video_for_fail = Arc::clone(&video_payload);
+
+    // Case 1: Audio returns 403 while video streams -> sibling_abort stops video,
+    // task must end `failed` (NOT `canceled`) and preserve partial `.part.m4s` + state dirs.
+    let v_listener = TcpListener::bind("127.0.0.1:0").expect("bind video");
+    let v_addr = v_listener.local_addr().expect("v_addr");
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = v_listener.accept() {
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            stream = reader.into_inner();
+            let header = format!(
+                "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                video_for_fail.len() - 1,
+                video_for_fail.len(),
+                video_for_fail.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&video_for_fail[..8192]);
+            let _ = stream.flush();
+            thread::sleep(Duration::from_millis(400));
+            let _ = stream.write_all(&video_for_fail[8192..]);
+        }
+    });
+
+    let a_listener = TcpListener::bind("127.0.0.1:0").expect("bind audio");
+    let a_addr = a_listener.local_addr().expect("a_addr");
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = a_listener.accept() {
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            stream = reader.into_inner();
+            thread::sleep(Duration::from_millis(80));
+            let _ = stream.write_all(
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+
+    let root = lifecycle_test_root("dual-track-sibling-fail");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .expect("proxy");
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .expect("download_dir");
+
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{v_addr}/video.m4s"),
+                audio_url: format!("http://{a_addr}/audio.m4s"),
+                filename: "episode.mp4".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .expect("create dual-track task");
+    let task_id = created
+        .iter()
+        .find_map(|env| match &env.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .expect("task_id");
+
+    let failed = wait_for_task_status(&coordinator, "failed");
+    assert_eq!(failed.task_id, task_id);
+    assert_eq!(failed.http_status, Some(403));
+    let task_dir = root.join(".hls-tasks").join(&task_id);
+    assert!(
+        task_dir.join("video_state").is_dir() || task_dir.join("video.part.m4s").exists(),
+        "sibling failure must preserve dual-track partial files/checkpoints"
+    );
+
+    // Case 2: Pause during dual-track transfer returns `paused` and preserves state dirs.
+    let v_entered = Arc::new(AtomicBool::new(false));
+    let v_entered_srv = Arc::clone(&v_entered);
+    let vp_listener = TcpListener::bind("127.0.0.1:0").expect("bind vp");
+    let vp_addr = vp_listener.local_addr().expect("vp_addr");
+    let video_for_pause = Arc::clone(&video_payload);
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = vp_listener.accept() {
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            stream = reader.into_inner();
+            let header = format!(
+                "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                video_for_pause.len() - 1,
+                video_for_pause.len(),
+                video_for_pause.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&video_for_pause[..4096]);
+            let _ = stream.flush();
+            v_entered_srv.store(true, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(800));
+        }
+    });
+
+    let created2 = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{vp_addr}/video2.m4s"),
+                audio_url: format!("http://{vp_addr}/audio2.m4s"),
+                filename: "episode2.mp4".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .expect("create dual-track pause task");
+    let task2_id = created2
+        .iter()
+        .find_map(|env| match &env.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .expect("task2_id");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !v_entered.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    coordinator
+        .dispatch(CoreCommand::TaskAction {
+            task_id: task2_id.clone(),
+            action: "pause".into(),
+        })
+        .expect("pause dual-track");
+    coordinator
+        .wait_for_worker_stop(&task2_id)
+        .expect("wait dual-track stop");
+
+    let snap2 = coordinator
+        .lock()
+        .expect("lock")
+        .snapshot(&task2_id)
+        .cloned()
+        .expect("snap2");
+    assert_eq!(snap2.status, "paused");
+    let task2_dir = root.join(".hls-tasks").join(&task2_id);
+    assert!(
+        task2_dir.join("video_state").is_dir(),
+        "paused dual-track task must preserve video_state dir"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn quick_handoff_policy_blocks_fallback_on_coordinator_rejection_and_enriches_store_fallback() {
+    // 1. Coordinator rejection (e.g. missing credential_ref in seal_spec_secrets when headers exist,
+    // or invalid ffmpeg_path) must map to QuickHandoffPolicy::Disabled, NOT StoreFallback!
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    coordinator
+        .set_setting("browser_quick_download_enabled", serde_json::json!(true))
+        .expect("quick");
+    coordinator
+        .lock()
+        .expect("lock")
+        .store_mut()
+        .set_setting("ffmpeg_path", serde_json::json!("not_ffmpeg.exe"))
+        .expect("bad ffmpeg in store");
+    coordinator.invalidate_settings_cache();
+    let handoff = serde_json::json!({
+        "id": "h-quick-reject",
+        "request_id": "req-quick-reject",
+        "offer": crate::ResourceOffer {
+            handoff_id: "h-quick-reject".into(),
+            url: "https://cdn.example.test/setup.zip".into(),
+            filename: "setup.zip".into(),
+            ..Default::default()
+        },
+        "filename": "setup.zip",
+        "title": "",
+        "mime_type": "",
+        "size": 1024,
+        "status": "pending",
+        "presentation": "queued",
+        "task_id": null,
+        "created_at_ms": 1
+    })
+    .to_string();
+    let admitted = coordinator.admit_handoff(&handoff).expect("admit");
+    let admitted_val: Value = serde_json::from_str(&admitted).expect("parse admitted");
+    assert_eq!(
+        admitted_val["status"], "pending",
+        "rejected coordinator quick handoff must stay pending instead of falling back to store"
+    );
+    assert!(coordinator.tasks().expect("tasks").is_empty());
+
+    // 2. Direct PersistentCore::admit_handoff (StoreFallback) honors site_rules, effective_proxy,
+    // default headers, and DEFAULT_COOKIE_CREDENTIAL_REF.
+    let root = lifecycle_test_root("quick-store-fallback");
+    let rule_dir = root.join("rule-out").to_string_lossy().into_owned();
+    let mut core = PersistentCore::in_memory().expect("in_memory");
+    core.store_mut()
+        .set_settings(&BTreeMap::from([
+            ("legal_terms_accepted".into(), serde_json::json!(true)),
+            (
+                "legal_terms_version".into(),
+                serde_json::json!(crate::LEGAL_TERMS_VERSION),
+            ),
+            (
+                "browser_quick_download_enabled".into(),
+                serde_json::json!(true),
+            ),
+            (
+                "download_dir".into(),
+                serde_json::json!(root.to_string_lossy()),
+            ),
+            (
+                "default_user_agent".into(),
+                serde_json::json!("GlobalUA/1.0"),
+            ),
+            (
+                "default_referer".into(),
+                serde_json::json!("https://global.example/ref"),
+            ),
+            (
+                "default_origin".into(),
+                serde_json::json!("https://global.example"),
+            ),
+            ("proxy_mode".into(), serde_json::json!("manual")),
+            (
+                "proxy_url".into(),
+                serde_json::json!("http://127.0.0.1:8888"),
+            ),
+            (
+                "site_rules".into(),
+                serde_json::json!(serde_json::json!([{
+                    "host": "vip.example.test",
+                    "download_dir": rule_dir,
+                    "concurrency": 6,
+                    "speed_limit_kib": 256,
+                    "user_agent": "RuleUA/2.0",
+                    "proxy_mode": "direct"
+                }])
+                .to_string()),
+            ),
+        ]))
+        .expect("set settings");
+    #[cfg(windows)]
+    {
+        let blob = CredentialVault
+            .protect(r#"{"cookie":"default=1"}"#)
+            .expect("protect default cookie");
+        core.store_mut()
+            .store_credential(DEFAULT_COOKIE_CREDENTIAL_REF, &blob, "default_cookie")
+            .expect("store default cookie");
+    }
+
+    let direct_handoff = serde_json::json!({
+        "id": "h-store-fallback",
+        "request_id": "req-store-fallback",
+        "offer": crate::ResourceOffer {
+            handoff_id: "h-store-fallback".into(),
+            url: "https://vip.example.test/pkg.bin".into(),
+            filename: "pkg.bin".into(),
+            ..Default::default()
+        },
+        "filename": "pkg.bin",
+        "title": "",
+        "mime_type": "",
+        "size": 2048,
+        "status": "pending",
+        "presentation": "queued",
+        "task_id": null,
+        "created_at_ms": 2
+    })
+    .to_string();
+    let fallback_json = core.admit_handoff(&direct_handoff).expect("direct admit");
+    let fallback_val: Value = serde_json::from_str(&fallback_json).expect("parse fallback");
+    assert_eq!(fallback_val["status"], "accepted");
+    let created_spec = core.task_spec("task-1").expect("task-1 spec");
+    assert_eq!(created_spec.download_dir, rule_dir);
+    assert_eq!(created_spec.concurrency, 6);
+    assert_eq!(created_spec.speed_limit_kib, 256);
+    assert_eq!(created_spec.proxy, crate::net_policy::DIRECT_PROXY_SENTINEL);
+    assert_eq!(
+        created_spec.headers.get("User-Agent").map(String::as_str),
+        Some("RuleUA/2.0")
+    );
+    assert_eq!(
+        created_spec.headers.get("Referer").map(String::as_str),
+        Some("https://global.example/ref")
+    );
+    assert_eq!(
+        created_spec.headers.get("Origin").map(String::as_str),
+        Some("https://global.example")
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        created_spec.credential_ref.as_deref(),
+        Some(DEFAULT_COOKIE_CREDENTIAL_REF)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn refresh_task_request_stops_active_worker_overwrites_scoped_cookie_and_resumes() {
+    let seen_cookies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen_srv = Arc::clone(&seen_cookies);
+    let first_connected = Arc::new(AtomicBool::new(false));
+    let first_srv = Arc::clone(&first_connected);
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream);
+            let mut req_line = String::new();
+            let _ = reader.read_line(&mut req_line);
+            let mut cookie_seen = String::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("cookie") {
+                        cookie_seen = v.trim().to_string();
+                    }
+                }
+                line.clear();
+            }
+            stream = reader.into_inner();
+            if req_line.contains("sig=old") {
+                first_srv.store(true, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(350));
+                let _ = stream.write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            } else {
+                if let Ok(mut list) = seen_srv.lock() {
+                    list.push(cookie_seen);
+                }
+                let payload = b"refreshed-ok";
+                let resp = format!(
+                    "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    payload.len() - 1,
+                    payload.len(),
+                    payload.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.write_all(payload);
+            }
+        }
+    });
+
+    let root = lifecycle_test_root("refresh-active-worker");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .expect("proxy");
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .expect("download_dir");
+
+    let origin = format!("http://{addr}");
+    let initial_replay = serde_json::json!({
+        "cookie": "sid=old-top",
+        "cookies": [{"name": "sid", "value": "old-arr"}],
+        "request_contexts": {
+            origin: {
+                "cookie": "sid=old-scoped",
+                "cookies": ["sid=old-scoped-arr"],
+                "request_headers": { "Cookie": "sid=old-hdr" }
+            }
+        }
+    })
+    .to_string();
+    let blob = if cfg!(windows) {
+        CredentialVault
+            .protect(&initial_replay)
+            .expect("protect replay")
+    } else {
+        initial_replay
+    };
+    coordinator
+        .store_credential("cred-old-scoped", &blob, "browser_replay")
+        .expect("store cred");
+
+    let created = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: format!("http://{addr}/video.bin?sig=old"),
+                filename: "video.bin".into(),
+                download_dir: root.to_string_lossy().into_owned(),
+                credential_ref: Some("cred-old-scoped".into()),
+                concurrency: 1,
+                ..Default::default()
+            },
+        })
+        .expect("create");
+    let task_id = created
+        .iter()
+        .find_map(|env| match &env.event {
+            CoreEvent::TaskCreated { snapshot } => Some(snapshot.task_id.clone()),
+            _ => None,
+        })
+        .expect("task_id");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !first_connected.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        coordinator.worker_is_active(&task_id).expect("active"),
+        "worker should still be active when RefreshTaskRequest arrives"
+    );
+
+    coordinator
+        .dispatch(CoreCommand::RefreshTaskRequest {
+            task_id: task_id.clone(),
+            url: format!("http://{addr}/video.bin?sig=fresh"),
+            cookie: "sid=fresh-cookie".into(),
+            auto_resume: true,
+        })
+        .expect("refresh active task");
+
+    let completed = wait_for_task_status(&coordinator, "completed");
+    assert_eq!(completed.task_id, task_id);
+    assert!(completed.error_code.is_none());
+    let cookies = seen_cookies.lock().expect("lock cookies").clone();
+    assert!(
+        cookies.iter().any(|c| c == "sid=fresh-cookie"),
+        "refreshed download must send overwritten Cookie instead of stale request_contexts cookie: {cookies:?}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(windows)]
+#[test]
+fn cleared_or_empty_default_cookie_deletes_row_and_allows_existing_tasks_to_start() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_default_cookie("sid=initial")
+        .expect("set cookie");
+    assert!(coordinator.default_cookie_configured().expect("configured"));
+
+    let spec = coordinator
+        .apply_defaults_to_spec(TaskSpec {
+            url: "https://cdn.example.test/item.bin".into(),
+            filename: "item.bin".into(),
+            ..Default::default()
+        })
+        .expect("apply defaults");
+    assert_eq!(
+        spec.credential_ref.as_deref(),
+        Some(DEFAULT_COOKIE_CREDENTIAL_REF)
+    );
+
+    // Clearing default cookie deletes the row rather than storing an empty string.
+    coordinator
+        .set_default_cookie("   ")
+        .expect("clear default cookie");
+    assert!(!coordinator.default_cookie_configured().expect("cleared"));
+    assert!(
+        coordinator
+            .load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)
+            .expect("load")
+            .is_none(),
+        "set_default_cookie(\"\") should remove settings:default-cookie row"
+    );
+
+    // Existing tasks referencing settings:default-cookie gracefully degrade to credential_ref = None.
+    let (hydrated, replay) =
+        hydrate_replay_headers(&coordinator.core(), spec.clone()).expect("hydrate missing default");
+    assert!(hydrated.credential_ref.is_none());
+    assert!(replay.is_empty());
+
+    let mut with_auth = spec.clone();
+    with_auth
+        .headers
+        .insert("Authorization".into(), "Bearer token-1".into());
+    let sealed = seal_spec_secrets(&coordinator, with_auth).expect("seal missing default");
+    assert!(sealed.credential_ref.is_some());
+
+    // Legacy empty string or blank JSON cookie row also degrades cleanly.
+    coordinator
+        .store_credential(DEFAULT_COOKIE_CREDENTIAL_REF, "", "default_cookie")
+        .expect("store legacy empty");
+    assert!(!coordinator.default_cookie_configured().expect("empty row"));
+    let (hydrated_legacy, _) =
+        hydrate_replay_headers(&coordinator.core(), spec).expect("hydrate legacy empty");
+    assert!(hydrated_legacy.credential_ref.is_none());
+}
+
+#[test]
+fn deleting_task_and_in_flight_handoff_guards_prevent_races_without_breaking_retry() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/guard.bin".into(),
+                filename: "guard.bin".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .expect("create paused");
+    coordinator
+        .lock()
+        .expect("lock")
+        .handle(CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 0,
+            total_bytes: Some(10),
+            speed_bytes_per_sec: 0,
+            stage: "waiting".into(),
+            status: "queued".into(),
+        })
+        .expect("mark queued");
+
+    {
+        let _deleting = coordinator
+            .enter_deleting_task("task-1")
+            .expect("enter deleting");
+        let err = coordinator
+            .dispatch(CoreCommand::TaskAction {
+                task_id: "task-1".into(),
+                action: "start".into(),
+            })
+            .expect_err("start while deleting must fail");
+        assert!(err.contains("删除中"), "{err}");
+        coordinator
+            .start_next_queued(false)
+            .expect("start_next_queued skips deleting task");
+        assert!(!coordinator.worker_is_active("task-1").expect("inactive"));
+    }
+    assert!(!coordinator
+        .is_task_deleting("task-1")
+        .expect("guard dropped"));
+
+    // Handoff concurrency guard rejects overlapping AcceptHandoff / RejectHandoff,
+    // and drops cleanly so subsequent retry succeeds.
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-guard".into(),
+                url: "https://cdn.example.test/h.bin".into(),
+                filename: "h.bin".into(),
+                ..Default::default()
+            },
+        })
+        .expect("offer");
+    {
+        let _in_flight = coordinator
+            .enter_in_flight_handoff("h-guard")
+            .expect("enter handoff");
+        let dup_accept = coordinator
+            .dispatch(CoreCommand::AcceptHandoff {
+                handoff_id: "h-guard".into(),
+                filename: "h.bin".into(),
+                download_dir: String::new(),
+                allow_duplicate: false,
+                trusted_ui: true,
+                start_paused: true,
+                queue_id: String::new(),
+                spec_override: None,
+            })
+            .expect_err("concurrent accept must fail");
+        assert!(dup_accept.contains("正在处理中"), "{dup_accept}");
+        let dup_reject = coordinator
+            .dispatch(CoreCommand::RejectHandoff {
+                handoff_id: "h-guard".into(),
+                suppress_site_kind: false,
+            })
+            .expect_err("concurrent reject must fail");
+        assert!(dup_reject.contains("正在处理中"), "{dup_reject}");
+    }
+    coordinator
+        .dispatch(CoreCommand::RejectHandoff {
+            handoff_id: "h-guard".into(),
+            suppress_site_kind: false,
+        })
+        .expect("reject after guard drop succeeds");
+}
+
+#[test]
+fn progress_clears_stale_error_fields_preserving_attempt_cap_until_manual_retry_or_completion() {
+    let mut runtime = crate::CoreRuntime::new();
+    runtime.handle(CoreCommand::CreateTask {
+        spec: TaskSpec {
+            url: "https://cdn.example.test/retry.bin".into(),
+            filename: "retry.bin".into(),
+            scheduled_start_at: "2999-01-01T00:00:00Z".into(),
+            ..Default::default()
+        },
+    });
+    runtime.report_failure(
+        "task-1",
+        crate::TaskFailure {
+            code: "HTTP_503".into(),
+            message: "HTTP 503".into(),
+            stage: "transfer".into(),
+            url: "https://cdn.example.test/retry.bin".into(),
+            hint: "retry later".into(),
+            http_status: Some(503),
+            attempt: 2,
+        },
+    );
+
+    // Auto-retry queues and restarts transfer: error banner fields clear, but error_attempt stays 2!
+    runtime.handle(CoreCommand::UpdateProgress {
+        task_id: "task-1".into(),
+        downloaded_bytes: 0,
+        total_bytes: Some(100),
+        speed_bytes_per_sec: 0,
+        stage: "waiting".into(),
+        status: "queued".into(),
+    });
+    let queued = runtime.snapshot("task-1").expect("queued snap");
+    assert!(queued.error_code.is_none());
+    assert!(queued.error_message.is_none());
+    assert!(queued.http_status.is_none());
+    assert_eq!(
+        queued.error_attempt, 2,
+        "queued progress must preserve error_attempt so auto-retry remains bounded"
+    );
+
+    runtime.handle(CoreCommand::UpdateProgress {
+        task_id: "task-1".into(),
+        downloaded_bytes: 10,
+        total_bytes: Some(100),
+        speed_bytes_per_sec: 10,
+        stage: "transfer".into(),
+        status: "downloading".into(),
+    });
+    assert_eq!(
+        runtime.snapshot("task-1").expect("dl snap").error_attempt,
+        2
+    );
+
+    // Failure again -> manual deferred retry resets error_attempt to 0!
+    runtime.report_failure(
+        "task-1",
+        crate::TaskFailure {
+            code: "HTTP_503".into(),
+            message: "HTTP 503".into(),
+            http_status: Some(503),
+            attempt: 3,
+            ..Default::default()
+        },
+    );
+    runtime.defer_start_action("task-1", "retry");
+    let deferred_snap = runtime.snapshot("task-1").expect("deferred snap");
+    assert_eq!(deferred_snap.status, "queued");
+    assert_eq!(deferred_snap.error_attempt, 0);
+    assert!(deferred_snap.error_code.is_none());
+
+    // Completion also resets error_attempt to 0.
+    runtime.report_failure(
+        "task-1",
+        crate::TaskFailure {
+            code: "HTTP_503".into(),
+            message: "HTTP 503".into(),
+            attempt: 1,
+            ..Default::default()
+        },
+    );
+    runtime.handle(CoreCommand::UpdateProgress {
+        task_id: "task-1".into(),
+        downloaded_bytes: 100,
+        total_bytes: Some(100),
+        speed_bytes_per_sec: 0,
+        stage: "finished".into(),
+        status: "completed".into(),
+    });
+    assert_eq!(
+        runtime
+            .snapshot("task-1")
+            .expect("completed snap")
+            .error_attempt,
+        0
+    );
+}
+
+#[test]
+fn batch_disrupted_tracks_only_fresh_transitions_and_power_action_toasts_use_cleared_level() {
+    let _ = crate::power_action::cancel();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    coordinator
+        .set_setting("completion_power_action", serde_json::json!("sleep"))
+        .expect("power action");
+
+    // Create historical failed task in batch 1.
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/old-fail.bin".into(),
+                filename: "old-fail.bin".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .expect("create task-1");
+    coordinator
+        .lock()
+        .expect("lock")
+        .report_failure(
+            "task-1",
+            crate::TaskFailure {
+                code: "HTTP_404".into(),
+                message: "not found".into(),
+                attempt: 1,
+                ..Default::default()
+            },
+        )
+        .expect("fail task-1");
+
+    // Start a new batch with task-2 (clears batch_disrupted for default queue),
+    // then touch task-1 metadata while it stays "failed": must NOT re-mark task-1 in batch_disrupted!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/new-ok.bin".into(),
+                filename: "new-ok.bin".into(),
+                ..Default::default()
+            },
+        })
+        .expect("create task-2");
+    coordinator
+        .lock()
+        .expect("lock")
+        .set_task_filename("task-1", "old-fail-renamed.bin".into())
+        .expect("rename failed task");
+    assert!(
+        coordinator
+            .lock()
+            .expect("lock")
+            .batch_disrupted_for_queue(crate::DEFAULT_QUEUE_ID)
+            .is_none_or(|set| !set.contains("task-1")),
+        "metadata update on already-failed task must not mark current batch disrupted"
+    );
+
+    // Attach a non-UI subscriber (`enter_subscriber(false)`), complete task-2, and verify
+    // `maybe_schedule_power` still wakes `BackgroundToast`!
+    let woke = Arc::new(AtomicBool::new(false));
+    let bridge = coordinator.lock().expect("lock").presenter_bridge();
+    {
+        let woke = Arc::clone(&woke);
+        bridge.set_waker(Some(Arc::new(move |mode| {
+            if mode == crate::core_service::PresenterWakeMode::BackgroundToast {
+                woke.store(true, Ordering::SeqCst);
+            }
+        })));
+    }
+    let _non_ui_sub = bridge.enter_subscriber(false);
+    coordinator
+        .lock()
+        .expect("lock")
+        .handle(CoreCommand::UpdateProgress {
+            task_id: "task-2".into(),
+            downloaded_bytes: 10,
+            total_bytes: Some(10),
+            speed_bytes_per_sec: 0,
+            stage: "finished".into(),
+            status: "completed".into(),
+        })
+        .expect("complete task-2");
+    let spec2 = coordinator
+        .lock()
+        .expect("lock")
+        .task_spec("task-2")
+        .cloned()
+        .expect("spec2");
+    maybe_schedule_power(&coordinator.core(), &spec2).expect("maybe_schedule_power");
+    assert!(
+        woke.load(Ordering::SeqCst),
+        "maybe_schedule_power must wake BackgroundToast when only non-UI subscriber is attached"
+    );
+
+    let cancel_events = coordinator
+        .dispatch(CoreCommand::CancelPowerAction)
+        .expect("cancel power action");
+    assert!(
+        cancel_events.iter().any(|env| matches!(
+            &env.event,
+            CoreEvent::Toast { level, .. } if level == "power_action_cleared"
+        )),
+        "CancelPowerAction must emit power_action_cleared toast level: {cancel_events:?}"
+    );
+    let confirm_events = coordinator
+        .dispatch(CoreCommand::ConfirmPowerAction)
+        .expect("confirm idle power action");
+    assert!(
+        confirm_events.iter().any(|env| matches!(
+            &env.event,
+            CoreEvent::Toast { level, .. } if level == "power_action_cleared"
+        )),
+        "ConfirmPowerAction must emit power_action_cleared toast level: {confirm_events:?}"
+    );
+}
+
+#[test]
+fn accept_handoff_spec_override_merges_fields_and_enforces_origin_and_url_boundaries() {
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .expect("legal");
+    let replay_plain = r#"{"cookie":"sid=origin-a"}"#;
+    let replay_blob = if cfg!(windows) {
+        CredentialVault.protect(replay_plain).expect("protect")
+    } else {
+        replay_plain.to_string()
+    };
+    coordinator
+        .store_credential("cred-origin-a", &replay_blob, "browser_replay")
+        .expect("store cred");
+
+    // 1. Same URL override keeps credential_ref, replay_context_ref, audio_url, and merges options.
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-ovr-same-url".into(),
+                url: "https://a.example.test/video.m4s".into(),
+                audio_url: "https://a.example.test/audio.m4s".into(),
+                credential_ref: Some("cred-origin-a".into()),
+                replay_context_ref: Some("replay-ctx-a".into()),
+                size: 4096,
+                filename: "video.m4s".into(),
+                ..Default::default()
+            },
+        })
+        .expect("offer 1");
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-ovr-same-url".into(),
+            filename: "episode.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: "https://a.example.test/video.m4s".into(),
+                concurrency: 12,
+                speed_limit_kib: 512,
+                checksum: Some(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .into(),
+                ),
+                scheduled_start_at: "23:30".into(),
+                headers: BTreeMap::from([("X-Custom".into(), "yes".into())]),
+                ..Default::default()
+            })),
+        })
+        .expect("accept 1");
+    let spec1 = coordinator
+        .lock()
+        .expect("lock")
+        .task_spec("task-1")
+        .cloned()
+        .expect("spec1");
+    assert_eq!(spec1.credential_ref.as_deref(), Some("cred-origin-a"));
+    assert_eq!(spec1.replay_context_ref.as_deref(), Some("replay-ctx-a"));
+    assert_eq!(spec1.audio_url, "https://a.example.test/audio.m4s");
+    assert_eq!(spec1.concurrency, 12);
+    assert_eq!(spec1.speed_limit_kib, 512);
+    assert_eq!(spec1.scheduled_start_at, "23:30");
+    assert_eq!(
+        spec1.headers.get("X-Custom").map(String::as_str),
+        Some("yes")
+    );
+
+    // 2. Same-origin different URL keeps credential_ref/replay_context_ref, clears audio_url/expected_size.
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-ovr-same-origin".into(),
+                url: "https://a.example.test/v1.mp4".into(),
+                audio_url: "https://a.example.test/a1.m4s".into(),
+                credential_ref: Some("cred-origin-a".into()),
+                replay_context_ref: Some("replay-ctx-a".into()),
+                size: 8192,
+                filename: "v1.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .expect("offer 2");
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-ovr-same-origin".into(),
+            filename: "v2.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: "https://a.example.test/v2-alt.mp4".into(),
+                ..Default::default()
+            })),
+        })
+        .expect("accept 2");
+    let spec2 = coordinator
+        .lock()
+        .expect("lock")
+        .task_spec("task-2")
+        .cloned()
+        .expect("spec2");
+    assert_eq!(spec2.url, "https://a.example.test/v2-alt.mp4");
+    assert_eq!(spec2.credential_ref.as_deref(), Some("cred-origin-a"));
+    assert_eq!(spec2.replay_context_ref.as_deref(), Some("replay-ctx-a"));
+    assert!(spec2.audio_url.is_empty());
+    assert!(spec2.expected_size.is_none());
+
+    // 3. Cross-origin URL drops offer.credential_ref & replay_context_ref so origin-a secrets never leak.
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-ovr-cross-origin".into(),
+                url: "https://a.example.test/v1.mp4".into(),
+                credential_ref: Some("cred-origin-a".into()),
+                replay_context_ref: Some("replay-ctx-a".into()),
+                size: 8192,
+                filename: "v1.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .expect("offer 3");
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-ovr-cross-origin".into(),
+            filename: "other.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: "https://b.example.test/other.mp4".into(),
+                ..Default::default()
+            })),
+        })
+        .expect("accept 3");
+    let spec3 = coordinator
+        .lock()
+        .expect("lock")
+        .task_spec("task-3")
+        .cloned()
+        .expect("spec3");
+    assert_eq!(spec3.url, "https://b.example.test/other.mp4");
+    assert!(spec3.credential_ref.is_none());
+    assert!(spec3.replay_context_ref.is_none());
+    assert!(spec3.expected_size.is_none());
+}
+
+#[test]
+fn accept_handoff_override_and_probe_preserve_explicit_headers_custom_dir_and_duplicate_retry() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local probe server");
+    let addr = listener.local_addr().expect("local addr");
+    let seen_requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen_clone = Arc::clone(&seen_requests);
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let count = stream.read(&mut buf).unwrap_or(0);
+            seen_clone
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf[..count]).into_owned());
+            let body =
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480\n480p.m3u8\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
+    let root = std::env::temp_dir().join(format!(
+        "hls-t1-t5-probe-override-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let default_dir = root.join("default-downloads");
+    let outside_dir = root.join("custom-outside-videos");
+    fs::create_dir_all(&default_dir).unwrap();
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().expect("in_memory"));
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(default_dir.to_string_lossy()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("direct"))
+        .unwrap();
+
+    let origin = format!("http://127.0.0.1:{}", addr.port());
+    let target_url = format!("{origin}/vod/master.m3u8");
+    let replay_json = serde_json::json!({
+        "cookie": "sid=old-cookie",
+        "request_contexts": {
+            &origin: {
+                "cookie": "sid=old-scoped-cookie",
+                "request_headers": {
+                    "Authorization": "Bearer old-token",
+                    "X-Custom-Static": "from-browser"
+                },
+                "url_contexts": {
+                    &target_url: {
+                        "request_headers": {
+                            "Authorization": "Bearer old-url-token"
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .to_string();
+    let blob = if cfg!(windows) {
+        crate::CredentialVault.protect(&replay_json).unwrap()
+    } else {
+        replay_json.clone()
+    };
+    coordinator
+        .store_credential("cred-browser-scoped", &blob, "browser_replay")
+        .unwrap();
+
+    // 1. BUG-T5-5: ProbeUrl with custom outside `download_dir` + explicit Cookie & Authorization succeeds and sends explicit headers!
+    let mut probe_headers = std::collections::BTreeMap::new();
+    probe_headers.insert("Cookie".into(), "sid=editor-fresh".into());
+    probe_headers.insert("Authorization".into(), "Bearer editor-fresh".into());
+    probe_headers.insert("X-Editor-Header".into(), "yes".into());
+    let probe_events = coordinator
+        .dispatch(CoreCommand::ProbeUrl {
+            url: target_url.clone(),
+            spec: Some(TaskSpec {
+                url: target_url.clone(),
+                download_dir: outside_dir.to_string_lossy().into_owned(),
+                filename: "movie.mp4".into(),
+                credential_ref: Some("cred-browser-scoped".into()),
+                headers: probe_headers.clone(),
+                ..Default::default()
+            }),
+        })
+        .expect("probe_command must not reject custom download_dir");
+    server.join().unwrap();
+    assert!(
+        probe_events
+            .iter()
+            .any(|ev| matches!(ev.event, CoreEvent::ProbeResult { .. })),
+        "probe_events={probe_events:?}"
+    );
+    let raw_req = seen_requests
+        .lock()
+        .unwrap()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let lower_req = raw_req.to_ascii_lowercase();
+    assert!(
+        lower_req.contains("cookie: sid=editor-fresh"),
+        "req={raw_req}"
+    );
+    assert!(
+        lower_req.contains("authorization: bearer editor-fresh"),
+        "req={raw_req}"
+    );
+    assert!(lower_req.contains("x-editor-header: yes"), "req={raw_req}");
+
+    // 2a. BUG-T1-1 & BUG-T5-1: Credential-free HLS handoff hitting a completed duplicate with editor `spec_override`
+    //     emits `DuplicateOffered` while keeping `pending_handoff` alive; retrying with `allow_duplicate: true` creates the task
+    //     and clears stale `offer.preferred_variant_id` in favor of the probed 480p variant!
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                filename: "existing.mp4".into(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    {
+        let mut core = coordinator.lock().unwrap();
+        let mut snap = core.snapshot("task-1").cloned().unwrap();
+        snap.status = "completed".into();
+        snap.output_path = default_dir
+            .join("existing.mp4")
+            .to_string_lossy()
+            .into_owned();
+        fs::write(&snap.output_path, b"done").unwrap();
+        let _ = core
+            .emit(CoreEvent::TaskUpdated { snapshot: snap })
+            .unwrap();
+    }
+
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-dup-then-allow".into(),
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_variant_id: "1080p.m3u8".into(),
+                preferred_height: 1080,
+                filename: "existing.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    let first_try = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-dup-then-allow".into(),
+            filename: "existing.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    assert!(first_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::DuplicateOffered { .. })));
+    assert!(!first_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::HandoffResolved { .. })));
+    assert!(coordinator
+        .lock()
+        .unwrap()
+        .pending_handoff("h-dup-then-allow")
+        .is_some());
+
+    let second_try = coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-dup-then-allow".into(),
+            filename: "existing-copy.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                preferred_height: 480,
+                preferred_bandwidth: 800_000,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    assert!(second_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::TaskCreated { .. })));
+    assert!(second_try
+        .iter()
+        .any(|ev| matches!(ev.event, CoreEvent::HandoffResolved { .. })));
+
+    let dup_copy_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-2")
+        .cloned()
+        .unwrap();
+    assert!(dup_copy_spec.preferred_variant_id.is_empty());
+    assert_eq!(dup_copy_spec.preferred_height, 480);
+
+    // 2b. BUG-T1-2: Authenticated browser handoff with `request_contexts[origin]` overrides both Cookie
+    //     and non-Cookie sensitive headers (`Authorization`) when sealed via `spec_override`!
+    coordinator
+        .dispatch(CoreCommand::OfferResource {
+            offer: crate::ResourceOffer {
+                handoff_id: "h-auth-override".into(),
+                url: target_url.clone(),
+                resource_kind: crate::ResourceKind::Hls,
+                credential_ref: Some("cred-browser-scoped".into()),
+                filename: "authed.mp4".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "h-auth-override".into(),
+            filename: "authed.mp4".into(),
+            download_dir: outside_dir.to_string_lossy().into_owned(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: String::new(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: target_url,
+                resource_kind: crate::ResourceKind::Hls,
+                headers: probe_headers,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    let created_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-3")
+        .cloned()
+        .unwrap();
+    let (hydrated_spec, _) = hydrate_replay_headers(&coordinator.core, created_spec).unwrap();
+    assert_eq!(
+        hydrated_spec
+            .headers
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer editor-fresh")
+    );
+    assert_eq!(
+        hydrated_spec.headers.get("Cookie").map(String::as_str),
+        Some("sid=editor-fresh")
+    );
+    let _ = fs::remove_dir_all(root);
 }

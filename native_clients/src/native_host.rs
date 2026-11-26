@@ -118,7 +118,7 @@ impl HostCore {
             .map_err(|error| format!("core:{error}"))?
             .last()
             .map_or(0, |envelope| envelope.sequence);
-        if !self.supports_command("workbench_launch_receipt") {
+        if !self.supports_command("workbench_launch_receipt")? {
             return self.open_workbench().map(|()| None);
         }
         #[cfg(test)]
@@ -132,15 +132,19 @@ impl HostCore {
         Ok(Some((launch_id, sequence)))
     }
 
-    fn supports_command(&mut self, name: &str) -> bool {
+    fn supports_command(&mut self, name: &str) -> Result<bool, String> {
         match self {
             #[cfg(test)]
-            Self::Local(_) => true,
-            Self::Remote(client) => matches!(
-                client.request(&crate::CorePipeRequest::Capabilities { request_id: 1 }),
-                Ok(crate::CorePipeResponse::Capabilities { commands, .. })
-                    if commands.iter().any(|command| command == name)
-            ),
+            Self::Local(_) => Ok(true),
+            Self::Remote(client) => match client
+                .request(&crate::CorePipeRequest::Capabilities { request_id: 1 })
+                .map_err(|error| format!("core:{error}"))?
+            {
+                crate::CorePipeResponse::Capabilities { commands, .. } => {
+                    Ok(commands.iter().any(|command| command == name))
+                }
+                _ => Ok(false),
+            },
         }
     }
 
@@ -826,6 +830,7 @@ impl NativeHostSession {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
+            spec_override: None,
         })?;
         self.handoff_status(&json!({"handoff_id": id}))
     }
@@ -1257,8 +1262,7 @@ pub fn run() -> i32 {
             &mut session,
             &message,
             |policy| {
-                let op = message.get("op").and_then(Value::as_str).unwrap_or("");
-                NativeHostSession::open_for_policy(policy, is_explicit_autostart_op(op))
+                NativeHostSession::open_for_policy(policy, is_explicit_autostart_message(&message))
             },
             |active, msg| active.dispatch(msg),
         );
@@ -1280,6 +1284,16 @@ fn is_explicit_autostart_op(op: &str) -> bool {
     matches!(op, "activate" | "offer" | "download" | "media_push")
 }
 
+fn is_explicit_autostart_message(message: &Value) -> bool {
+    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
+    is_explicit_autostart_op(op)
+        || (op == "offer_local_file"
+            && message
+                .get("explicit_user_action")
+                .and_then(Value::as_bool)
+                .unwrap_or(false))
+}
+
 fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectPolicy {
     // Explicit user-initiated launch/action operations may always cold-start
     // HLSDownloaderEngine (clearing any prior tray-quit marker on spawn).
@@ -1297,6 +1311,9 @@ fn autostart_policy_for_op(op: &str, user_shutdown_active: bool) -> CoreConnectP
 }
 
 fn core_connect_policy_with(message: &Value, user_shutdown_active: bool) -> CoreConnectPolicy {
+    if is_explicit_autostart_message(message) {
+        return CoreConnectPolicy::AllowAutostart;
+    }
     let op = message.get("op").and_then(Value::as_str).unwrap_or("");
     autostart_policy_for_op(op, user_shutdown_active)
 }
@@ -1400,9 +1417,8 @@ fn dispatch_session_message_inner<S>(
     mut open: impl FnMut(CoreConnectPolicy) -> Result<S, String>,
     mut dispatch: impl FnMut(&mut S, &Value) -> Result<Value, String>,
 ) -> Value {
-    let op = message.get("op").and_then(Value::as_str).unwrap_or("");
     let report_user_shutdown = |is_shutdown: &mut dyn FnMut() -> bool| -> bool {
-        !is_explicit_autostart_op(op) && is_shutdown()
+        !is_explicit_autostart_message(message) && is_shutdown()
     };
     for attempt in 0..2 {
         let active = match session.as_mut() {
@@ -1462,6 +1478,8 @@ fn core_unreachable_response_with(user_shutdown: bool) -> Value {
     if user_shutdown {
         response["error_code"] = json!("user_shutdown");
         response["user_shutdown"] = json!(true);
+    } else {
+        response["transport_error"] = json!(true);
     }
     response
 }
@@ -3519,6 +3537,7 @@ mod tests {
             |active, msg| active.dispatch(msg),
         );
         assert_eq!(crashed_resp["code"], "core_unreachable");
+        assert_eq!(crashed_resp["transport_error"], true);
         assert!(crashed_resp.get("error_code").is_none());
         assert!(crashed_resp.get("user_shutdown").is_none());
     }
@@ -3591,5 +3610,114 @@ mod tests {
         assert_eq!(dup["handoff"]["presentation"], "queued");
         assert_eq!(dup["handoff"]["presentation_queued"], true);
         assert!(dup["handoff"]["task_id"].is_null());
+    }
+
+    #[test]
+    fn supports_command_propagates_capabilities_transport_error_and_marks_non_shutdown_unreachable_as_transport_error(
+    ) {
+        // 1. `core_unreachable_response_with(false)` sets `transport_error: true`,
+        //    whereas `core_unreachable_response_with(true)` preserves `user_shutdown` shape.
+        let transient = core_unreachable_response_with(false);
+        assert_eq!(transient["code"], "core_unreachable");
+        assert_eq!(transient["transport_error"], true);
+        assert!(transient.get("user_shutdown").is_none());
+        assert!(transient.get("error_code").is_none());
+
+        let shutdown = core_unreachable_response_with(true);
+        assert_eq!(shutdown["code"], "core_unreachable");
+        assert_eq!(shutdown["user_shutdown"], true);
+        assert_eq!(shutdown["error_code"], "user_shutdown");
+        assert!(shutdown.get("transport_error").is_none());
+
+        // 2. If Core closes or desynchronizes right between `Ping` and `Capabilities`,
+        //    `supports_command` propagates `Err("core:...")` instead of swallowing it as `false`,
+        //    allowing `activate` + `dispatch_session_message` to drop the dead session and retry!
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let broken_server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let hello = hls_client::core_ipc::decode_message::<crate::CorePipeRequest>(&{
+                let mut hdr = [0u8; 4];
+                stream.read_exact(&mut hdr).unwrap();
+                let len = u32::from_le_bytes(hdr) as usize;
+                let mut buf = hdr.to_vec();
+                buf.resize(4 + len, 0);
+                stream.read_exact(&mut buf[4..]).unwrap();
+                buf
+            })
+            .unwrap();
+            assert!(matches!(hello, crate::CorePipeRequest::Hello { .. }));
+            let hello_reply =
+                hls_client::core_ipc::encode_message(&crate::CorePipeResponse::Hello {
+                    protocol: V7_PROTOCOL_NAME.into(),
+                    version: V7_PROTOCOL_VERSION,
+                    pid: 1,
+                })
+                .unwrap();
+            stream.write_all(&hello_reply).unwrap();
+
+            // Answer Ping, then drop connection right when Capabilities arrives!
+            let mut hdr = [0u8; 4];
+            stream.read_exact(&mut hdr).unwrap();
+            let len = u32::from_le_bytes(hdr) as usize;
+            let mut payload = vec![0u8; len];
+            stream.read_exact(&mut payload).unwrap();
+            let ping_reply =
+                hls_client::core_ipc::encode_message(&crate::CorePipeResponse::Events {
+                    request_id: 1,
+                    events: Vec::new(),
+                })
+                .unwrap();
+            stream.write_all(&ping_reply).unwrap();
+
+            let _ = stream.read_exact(&mut hdr);
+            drop(stream);
+        });
+
+        let client = CoreIpcClient::connect_addr(addr).unwrap();
+        let mut session = Some(NativeHostSession::from_backend(HostCore::Remote(client)));
+        let mut reconnected = 0usize;
+        let reply = dispatch_session_message_with_policy(
+            &mut session,
+            &json!({"op": "activate"}),
+            |msg| core_connect_policy_with(msg, false),
+            |policy| {
+                assert_eq!(policy, CoreConnectPolicy::AllowAutostart);
+                reconnected += 1;
+                NativeHostSession::in_memory()
+            },
+            |active, msg| active.dispatch(msg),
+        );
+        broken_server.join().unwrap();
+        assert_eq!(reply["ok"], true, "reply={reply}");
+        assert_eq!(reply["activated"], true);
+        assert_eq!(reply["stage"], "launching");
+        assert_eq!(
+            reconnected, 1,
+            "Capabilities transport failure must drop dead session and retry activate"
+        );
+    }
+
+    #[test]
+    fn explicit_offer_local_file_autostarts_core_despite_user_shutdown() {
+        let passive = json!({
+            "op": "offer_local_file",
+            "resource": { "url": "blob:https://site.test/passive" }
+        });
+        let explicit = json!({
+            "op": "offer_local_file",
+            "explicit_user_action": true,
+            "resource": { "url": "blob:https://site.test/forced" }
+        });
+        assert!(!is_explicit_autostart_message(&passive));
+        assert!(is_explicit_autostart_message(&explicit));
+        assert_eq!(
+            core_connect_policy_with(&passive, true),
+            CoreConnectPolicy::ExistingOnly
+        );
+        assert_eq!(
+            core_connect_policy_with(&explicit, true),
+            CoreConnectPolicy::AllowAutostart
+        );
     }
 }

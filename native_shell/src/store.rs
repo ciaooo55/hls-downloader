@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+pub(crate) const DEFAULT_COOKIE_CREDENTIAL_REF: &str = "settings:default-cookie";
+pub(crate) const SUBTITLE_API_KEY_CREDENTIAL_REF: &str = "subtitle:dashscope";
 
 pub struct CoreStore {
     pub(crate) connection: Connection,
@@ -625,7 +627,7 @@ impl CoreStore {
                         .as_millis()
                         .min(i64::MAX as u128) as i64;
                     transaction.execute(
-                        "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms)\n                         VALUES (?1, ?2, ?3, ?4)\n                         ON CONFLICT(credential_ref) DO UPDATE SET protected_blob = excluded.protected_blob, kind = excluded.kind",
+                        "INSERT INTO credentials(credential_ref, protected_blob, kind, created_at_ms)\n                         VALUES (?1, ?2, ?3, ?4)\n                         ON CONFLICT(credential_ref) DO UPDATE SET protected_blob = excluded.protected_blob, kind = excluded.kind, created_at_ms = excluded.created_at_ms",
                         params![credential_ref, protected_blob, kind, now],
                     ).map_err(|error| format!("store Core credential {credential_ref}: {error}"))?;
                 }
@@ -681,6 +683,244 @@ impl CoreStore {
             Some(CredentialWrite::Delete { credential_ref }),
             &BTreeMap::new(),
         )
+    }
+
+    pub fn default_cookie_configured(&self) -> Result<bool, String> {
+        let Some(blob) = self.load_credential(DEFAULT_COOKIE_CREDENTIAL_REF)? else {
+            return Ok(false);
+        };
+        if blob.trim().is_empty() {
+            return Ok(false);
+        }
+        let Ok(plain) = crate::credentials::CredentialVault.unprotect(&blob) else {
+            return Ok(false);
+        };
+        let trimmed = plain.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return Ok(false);
+        };
+        let has_cookie = value
+            .get("cookie")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|cookie| !cookie.trim().is_empty());
+        let has_headers = match value.get("request_headers") {
+            Some(serde_json::Value::Object(map)) => !map.is_empty(),
+            Some(serde_json::Value::String(raw)) => {
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw)
+                    .is_ok_and(|map| !map.is_empty())
+            }
+            _ => false,
+        };
+        Ok(has_cookie || has_headers)
+    }
+
+    pub fn gc_orphan_credentials(&mut self, min_age_ms: i64) -> Result<usize, String> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .min(i64::MAX as u128) as i64;
+        let cutoff_ms = now_ms.saturating_sub(min_age_ms.max(0));
+        let candidates: Vec<String> = {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT credential_ref, kind, created_at_ms FROM credentials")
+                .map_err(|e| format!("prepare credential GC scan: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(|e| format!("query credentials for GC: {e}"))?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (cred_ref, kind, created_at_ms) =
+                    row.map_err(|e| format!("read credential row for GC: {e}"))?;
+                if matches!(
+                    cred_ref.as_str(),
+                    DEFAULT_COOKIE_CREDENTIAL_REF | SUBTITLE_API_KEY_CREDENTIAL_REF
+                ) || matches!(kind.as_str(), "default_cookie" | "subtitle_api_key")
+                {
+                    continue;
+                }
+                if created_at_ms > cutoff_ms {
+                    continue;
+                }
+                out.push(cred_ref);
+            }
+            out
+        };
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut referenced = std::collections::BTreeSet::new();
+
+        // 1. Referenced by task_specs
+        {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT spec_json FROM task_specs")
+                .map_err(|e| format!("prepare task_specs GC scan: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("query task_specs for GC: {e}"))?;
+            for row in rows {
+                let json = row.map_err(|e| format!("read task_specs row for GC: {e}"))?;
+                if let Ok(spec) = serde_json::from_str::<TaskSpec>(&json) {
+                    if let Some(cred) = spec
+                        .credential_ref
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        referenced.insert(cred.to_string());
+                    }
+                    if let Some(replay) = spec
+                        .replay_context_ref
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        referenced.insert(replay.to_string());
+                    }
+                    if let Some(key) = crate::url_credentials::transfer_url_password_key(&spec.url)
+                    {
+                        referenced.insert(key);
+                    }
+                    if let Some(key) =
+                        crate::url_credentials::transfer_url_password_key(&spec.audio_url)
+                    {
+                        referenced.insert(key);
+                    }
+                    for mirror in &spec.mirrors {
+                        if let Some(key) = crate::url_credentials::transfer_url_password_key(mirror)
+                        {
+                            referenced.insert(key);
+                        }
+                    }
+                    if let Some(key) = crate::url_credentials::proxy_password_key(&spec.proxy) {
+                        referenced.insert(key);
+                    }
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                    crate::url_credentials::collect_referenced_url_password_keys(
+                        &val,
+                        false,
+                        &mut referenced,
+                    );
+                }
+            }
+        }
+
+        // 2. Referenced by pending handoffs (BrowserHandoff & MediaPushRequest)
+        {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT public_json FROM handoffs WHERE status = 'pending'")
+                .map_err(|e| format!("prepare handoffs GC scan: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("query handoffs for GC: {e}"))?;
+            for row in rows {
+                let json = row.map_err(|e| format!("read handoff row for GC: {e}"))?;
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                    crate::url_credentials::collect_referenced_url_password_keys(
+                        &val,
+                        false,
+                        &mut referenced,
+                    );
+                }
+            }
+        }
+
+        // 3. Referenced by settings (site_rules + all string/JSON values in settings)
+        {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT key, value_json FROM settings")
+                .map_err(|e| format!("prepare settings GC scan: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("query settings for GC: {e}"))?;
+            for row in rows {
+                let (key, raw_json) = row.map_err(|e| format!("read setting row for GC: {e}"))?;
+                if key == "site_rules" {
+                    let raw = serde_json::from_str::<String>(&raw_json)
+                        .unwrap_or_else(|_| raw_json.clone());
+                    for rule in crate::parse_site_rules(&raw) {
+                        if !rule.credential_ref.trim().is_empty() {
+                            referenced.insert(rule.credential_ref);
+                        }
+                        if let Some(pk) = crate::url_credentials::proxy_password_key(&rule.proxy) {
+                            referenced.insert(pk);
+                        }
+                    }
+                }
+                let val = serde_json::from_str::<serde_json::Value>(&raw_json)
+                    .unwrap_or(serde_json::Value::String(raw_json));
+                crate::url_credentials::collect_referenced_url_password_keys(
+                    &val,
+                    true,
+                    &mut referenced,
+                );
+            }
+        }
+
+        // 4. Referenced by crawl_projects
+        {
+            let mut stmt = self
+                .connection
+                .prepare("SELECT state_json FROM crawl_projects")
+                .map_err(|e| format!("prepare crawl_projects GC scan: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("query crawl_projects for GC: {e}"))?;
+            for row in rows {
+                let json = row.map_err(|e| format!("read crawl_projects row for GC: {e}"))?;
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
+                    crate::url_credentials::collect_referenced_url_password_keys(
+                        &val,
+                        false,
+                        &mut referenced,
+                    );
+                }
+            }
+        }
+
+        let to_delete: Vec<String> = candidates
+            .into_iter()
+            .filter(|cred_ref| !referenced.contains(cred_ref))
+            .collect();
+        if to_delete.is_empty() {
+            return Ok(0);
+        }
+
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|e| format!("begin credential GC transaction: {e}"))?;
+        let mut deleted = 0usize;
+        for cred_ref in &to_delete {
+            deleted += transaction
+                .execute(
+                    "DELETE FROM credentials WHERE credential_ref = ?1 AND created_at_ms <= ?2",
+                    params![cred_ref, cutoff_ms],
+                )
+                .map_err(|e| format!("delete orphan credential {cred_ref}: {e}"))?;
+        }
+        transaction
+            .commit()
+            .map_err(|e| format!("commit credential GC transaction: {e}"))?;
+        Ok(deleted)
     }
 
     pub fn save_handoff(
@@ -1016,7 +1256,7 @@ pub(crate) fn is_durable_event(event: &CoreEvent) -> bool {
     }
 }
 
-fn event_requires_store_write(event: &CoreEvent) -> bool {
+pub(crate) fn event_requires_store_write(event: &CoreEvent) -> bool {
     if is_durable_event(event) {
         return true;
     }
@@ -1979,6 +2219,321 @@ mod tests {
 
         drop(observer);
         drop(core);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transient_events_do_not_advance_reserved_sequence_and_next_volatile_progress_reserves_checkpoint(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-store-reserved-seq-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("epoch")
+                .as_nanos()
+        ));
+        let database = root.join("data.db");
+        let mut core = crate::PersistentCore::open(&database).expect("open core");
+        core.handle(crate::CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: "https://cdn.example.test/large.bin".into(),
+                filename: "large.bin".into(),
+                ..Default::default()
+            },
+        })
+        .expect("create task");
+        // Put task into downloading so subsequent same-stage UpdateProgress is volatile.
+        core.handle(crate::CoreCommand::UpdateProgress {
+            task_id: "task-1".into(),
+            downloaded_bytes: 100,
+            total_bytes: Some(1_000_000),
+            speed_bytes_per_sec: 100,
+            stage: "transfer".into(),
+            status: "downloading".into(),
+        })
+        .expect("initial downloading transition");
+
+        // Emit enough transient events to exceed any initial checkpoint without touching SQLite.
+        for idx in 0..300 {
+            core.emit(CoreEvent::Toast {
+                level: "info".into(),
+                message: format!("transient-{idx}"),
+            })
+            .expect("emit transient toast");
+        }
+        let seq_before_volatile = core.latest_sequence();
+        let observer = CoreStore::open(&database).expect("open observer store");
+        let persisted_before = observer
+            .latest_sequence()
+            .expect("read persisted seq before");
+        assert!(
+            persisted_before < seq_before_volatile,
+            "transient toasts should not advance persisted sequence ({persisted_before} vs {seq_before_volatile})"
+        );
+
+        let progress_events = core
+            .handle(crate::CoreCommand::UpdateProgress {
+                task_id: "task-1".into(),
+                downloaded_bytes: 200,
+                total_bytes: Some(1_000_000),
+                speed_bytes_per_sec: 200,
+                stage: "transfer".into(),
+                status: "downloading".into(),
+            })
+            .expect("volatile progress after transient burst");
+        let progress_seq = progress_events[0].sequence;
+        let persisted_after = observer
+            .latest_sequence()
+            .expect("read persisted seq after");
+        assert!(
+            persisted_after >= progress_seq,
+            "volatile progress must reserve SQLite checkpoint >= {progress_seq}, got {persisted_after}"
+        );
+
+        drop(observer);
+        drop(core);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gc_orphan_credentials_preserves_settings_young_rows_tasks_pending_handoffs_and_sweeps_aged_orphans(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "hls-v7-cred-gc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("epoch")
+                .as_nanos()
+        ));
+        let database = root.join("data.db");
+        let mut store = CoreStore::open(&database).expect("open store");
+
+        #[cfg(windows)]
+        {
+            let _ = store
+                .sanitize_urls(TaskSpec {
+                    url: "ftp://stamp:secret@stamp.example/file.bin".into(),
+                    ..Default::default()
+                })
+                .expect("sanitize ftp url");
+            let stamped_ms: i64 = store
+                .connection
+                .query_row(
+                    "SELECT created_at_ms FROM credentials WHERE kind = 'url_password' LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("query url_password created_at_ms");
+            assert!(
+                stamped_ms > 1_700_000_000_000,
+                "protect_url_password must stamp real epoch ms, got {stamped_ms}"
+            );
+            store
+                .connection
+                .execute("DELETE FROM credentials", [])
+                .expect("reset initial test credential");
+        }
+
+        let insert_aged = |store: &CoreStore, cred_ref: &str, kind: &str, created_at_ms: i64| {
+            store
+                .connection
+                .execute(
+                    "INSERT OR REPLACE INTO credentials(credential_ref, protected_blob, kind, created_at_ms) VALUES (?1, 'blob', ?2, ?3)",
+                    params![cred_ref, kind, created_at_ms],
+                )
+                .expect("insert test credential");
+        };
+
+        // 1. Protected system credential refs / kinds (aged).
+        insert_aged(
+            &store,
+            DEFAULT_COOKIE_CREDENTIAL_REF,
+            "default_cookie",
+            1_000,
+        );
+        insert_aged(
+            &store,
+            SUBTITLE_API_KEY_CREDENTIAL_REF,
+            "subtitle_api_key",
+            1_000,
+        );
+
+        // 2. Young orphan credential (must survive min_age_ms = 60_000).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("epoch")
+            .as_millis() as i64;
+        insert_aged(&store, "cred-young-orphan", "browser_replay", now_ms);
+
+        // 3. Task-referenced credentials + URL/mirror/proxy passwords (aged).
+        insert_aged(&store, "cred-task-main", "browser_replay", 1_000);
+        insert_aged(&store, "cred-task-replay", "browser_replay", 1_000);
+        let task_url = "ftp://alice@task.example/archive.zip";
+        let mirror_url = "sftp://bob@mirror.example/archive.zip";
+        let proxy_url = "http://puser@proxy.example:8080";
+        let task_pw_key = crate::url_credentials::transfer_url_password_key(
+            "ftp://alice:pw@task.example/archive.zip",
+        )
+        .expect("task pw key");
+        let mirror_pw_key = crate::url_credentials::transfer_url_password_key(
+            "sftp://bob:pw@mirror.example/archive.zip",
+        )
+        .expect("mirror pw key");
+        let proxy_pw_key =
+            crate::url_credentials::proxy_password_key("http://puser:pw@proxy.example:8080")
+                .expect("proxy pw key");
+        insert_aged(&store, &task_pw_key, "url_password", 1_000);
+        insert_aged(&store, &mirror_pw_key, "url_password", 1_000);
+        insert_aged(&store, &proxy_pw_key, "url_password", 1_000);
+
+        let mut runtime = crate::CoreRuntime::new();
+        let task_spec = TaskSpec {
+            url: task_url.into(),
+            resource_kind: crate::ResourceKind::Ftp,
+            filename: "archive.zip".into(),
+            credential_ref: Some("cred-task-main".into()),
+            replay_context_ref: Some("cred-task-replay".into()),
+            mirrors: vec![mirror_url.into()],
+            proxy: proxy_url.into(),
+            ..Default::default()
+        };
+        let created_events = runtime.handle(crate::CoreCommand::CreateTask {
+            spec: task_spec.clone(),
+        });
+        store
+            .apply_events_and_spec(&created_events, Some(&task_spec))
+            .expect("persist task spec");
+
+        // 4. Pending BrowserHandoff & pending MediaPushRequest vs rejected BrowserHandoff.
+        insert_aged(&store, "cred-handoff-pending", "browser_replay", 1_000);
+        insert_aged(&store, "cred-handoff-replay", "browser_replay", 1_000);
+        insert_aged(&store, "cred-handoff-rejected", "browser_replay", 1_000);
+        let push_pw_key = crate::url_credentials::transfer_url_password_key(
+            "ftp://cast:pw@push.example/video.mp4",
+        )
+        .expect("push pw key");
+        insert_aged(&store, &push_pw_key, "url_password", 1_000);
+
+        let pending_handoff = serde_json::json!({
+            "id": "h-pending",
+            "request_id": "",
+            "offer": {
+                "url": "https://cdn.example/v.mp4",
+                "resource_kind": "file",
+                "handoff_id": "h-pending",
+                "credential_ref": "cred-handoff-pending",
+                "replay_context_ref": "cred-handoff-replay"
+            },
+            "status": "pending",
+            "presentation": "queued",
+            "task_id": null,
+            "created_at_ms": 1
+        })
+        .to_string();
+        store
+            .save_handoff("h-pending", &pending_handoff, "pending", None, 1)
+            .expect("save pending handoff");
+
+        let pending_push = serde_json::json!({
+            "id": "push-pending",
+            "url": "ftp://cast@push.example/video.mp4",
+            "title": "Push",
+            "status": "pending",
+            "created_at_ms": 2
+        })
+        .to_string();
+        store
+            .save_handoff("push-pending", &pending_push, "pending", None, 2)
+            .expect("save pending media push");
+
+        let rejected_handoff = serde_json::json!({
+            "id": "h-rejected",
+            "request_id": "",
+            "offer": {
+                "url": "https://cdn.example/old.mp4",
+                "resource_kind": "file",
+                "handoff_id": "h-rejected",
+                "credential_ref": "cred-handoff-rejected"
+            },
+            "status": "rejected",
+            "presentation": "queued",
+            "task_id": null,
+            "created_at_ms": 3
+        })
+        .to_string();
+        store
+            .save_handoff("h-rejected", &rejected_handoff, "rejected", None, 3)
+            .expect("save rejected handoff");
+
+        // 5. Settings: site_rules credential_ref + proxy password + arbitrary setting URL password.
+        insert_aged(&store, "cred-site-rule", "site_rule", 1_000);
+        let rule_proxy_pw_key =
+            crate::url_credentials::proxy_password_key("https://srule:pw@rules.example:443")
+                .expect("rule proxy pw key");
+        let custom_setting_pw_key =
+            crate::url_credentials::transfer_url_password_key("ftp://suser:pw@set.example/item")
+                .expect("setting url pw key");
+        insert_aged(&store, &rule_proxy_pw_key, "url_password", 1_000);
+        insert_aged(&store, &custom_setting_pw_key, "url_password", 1_000);
+        let rules_json = serde_json::json!([{
+            "host": "rules.example",
+            "proxy_mode": "manual",
+            "proxy": "https://srule@rules.example:443",
+            "credential_ref": "cred-site-rule"
+        }])
+        .to_string();
+        store
+            .set_setting("site_rules", serde_json::Value::String(rules_json))
+            .expect("save site_rules");
+        store
+            .set_setting(
+                "custom_saved_url",
+                serde_json::Value::String("ftp://suser@set.example/item".into()),
+            )
+            .expect("save custom_saved_url");
+
+        // 6. Aged unreferenced orphan.
+        insert_aged(&store, "cred-aged-orphan", "browser_replay", 1_000);
+
+        let swept = store
+            .gc_orphan_credentials(60_000)
+            .expect("run credential GC");
+        assert_eq!(
+            swept, 2,
+            "only aged unreferenced & rejected-handoff credentials should be swept"
+        );
+
+        for gone in ["cred-aged-orphan", "cred-handoff-rejected"] {
+            assert!(
+                store.load_credential(gone).expect("load gone").is_none(),
+                "expected {gone} to be deleted"
+            );
+        }
+        for kept in [
+            DEFAULT_COOKIE_CREDENTIAL_REF,
+            SUBTITLE_API_KEY_CREDENTIAL_REF,
+            "cred-young-orphan",
+            "cred-task-main",
+            "cred-task-replay",
+            task_pw_key.as_str(),
+            mirror_pw_key.as_str(),
+            proxy_pw_key.as_str(),
+            "cred-handoff-pending",
+            "cred-handoff-replay",
+            push_pw_key.as_str(),
+            "cred-site-rule",
+            rule_proxy_pw_key.as_str(),
+            custom_setting_pw_key.as_str(),
+        ] {
+            assert!(
+                store.load_credential(kept).expect("load kept").is_some(),
+                "expected {kept} to be preserved by GC"
+            );
+        }
+
+        drop(store);
         let _ = fs::remove_dir_all(root);
     }
 }

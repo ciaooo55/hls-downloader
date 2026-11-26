@@ -22,10 +22,19 @@ struct PendingPresenterQueue {
     ui_shows: VecDeque<(String, Instant)>,
     clipboard_offers: VecDeque<(Vec<String>, Instant)>,
     undelivered_power_action: bool,
+    check_disk_install_result: bool,
+    queued_install_results: VecDeque<crate::CoreEvent>,
+}
+
+pub(crate) enum QuickHandoffPolicy {
+    Disabled,
+    Prepared(Box<TaskSpec>),
+    StoreFallback,
 }
 
 pub struct PresenterBridge {
     subscribers: AtomicUsize,
+    ui_subscribers: AtomicUsize,
     pending: Mutex<PendingPresenterQueue>,
     #[allow(clippy::type_complexity)]
     waker: Mutex<Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>>,
@@ -35,18 +44,29 @@ impl PresenterBridge {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             subscribers: AtomicUsize::new(0),
+            ui_subscribers: AtomicUsize::new(0),
             pending: Mutex::new(PendingPresenterQueue::default()),
             waker: Mutex::new(None),
         })
     }
 
-    pub(crate) fn enter_subscriber(self: &Arc<Self>) -> PresenterSubscriberGuard {
+    pub(crate) fn enter_subscriber(self: &Arc<Self>, is_ui: bool) -> PresenterSubscriberGuard {
         self.subscribers.fetch_add(1, Ordering::AcqRel);
-        PresenterSubscriberGuard(Arc::clone(self))
+        if is_ui {
+            self.ui_subscribers.fetch_add(1, Ordering::AcqRel);
+        }
+        PresenterSubscriberGuard {
+            bridge: Arc::clone(self),
+            is_ui,
+        }
     }
 
     pub(crate) fn has_subscribers(&self) -> bool {
         self.subscribers.load(Ordering::Acquire) > 0
+    }
+
+    pub(crate) fn has_ui_subscribers(&self) -> bool {
+        self.ui_subscribers.load(Ordering::Acquire) > 0
     }
 
     pub(crate) fn set_waker(&self, waker: Option<Arc<dyn Fn(PresenterWakeMode) + Send + Sync>>) {
@@ -99,41 +119,88 @@ impl PresenterBridge {
         }
     }
 
+    pub(crate) fn mark_install_result_pending(&self) {
+        if let Ok(mut guard) = self.pending.lock() {
+            guard.check_disk_install_result = true;
+        }
+    }
+
+    pub(crate) fn has_install_result_pending(&self) -> bool {
+        self.pending.lock().is_ok_and(|guard| {
+            guard.check_disk_install_result || !guard.queued_install_results.is_empty()
+        })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn queue_install_result(&self, event: crate::CoreEvent) {
+        if let Ok(mut guard) = self.pending.lock() {
+            guard.queued_install_results.push_back(event);
+        }
+    }
+
     pub(crate) fn take_ready_events(&self) -> Vec<crate::CoreEvent> {
         let now = Instant::now();
-        let Ok(mut guard) = self.pending.lock() else {
-            return Vec::new();
+        let (mut ready, check_disk) = {
+            let Ok(mut guard) = self.pending.lock() else {
+                return Vec::new();
+            };
+            let mut ready = Vec::new();
+            let check_disk = std::mem::replace(&mut guard.check_disk_install_result, false);
+            while let Some(event) = guard.queued_install_results.pop_front() {
+                ready.push(event);
+            }
+            if guard.undelivered_power_action {
+                guard.undelivered_power_action = false;
+                if let Some((action, title, delay_seconds)) = crate::power_action::pending_details()
+                {
+                    ready.push(crate::CoreEvent::PowerActionPending {
+                        action,
+                        title,
+                        delay_seconds,
+                    });
+                }
+            }
+            while let Some((urls, expires)) = guard.clipboard_offers.pop_front() {
+                if expires > now {
+                    ready.push(crate::CoreEvent::ClipboardOffer { urls });
+                }
+            }
+            while let Some((surface, expires)) = guard.ui_shows.pop_front() {
+                if expires > now {
+                    ready.push(crate::CoreEvent::UiShow { surface });
+                }
+            }
+            (ready, check_disk)
         };
-        let mut ready = Vec::new();
-        if guard.undelivered_power_action {
-            guard.undelivered_power_action = false;
-            if let Some((action, title, delay_seconds)) = crate::power_action::pending_details() {
-                ready.push(crate::CoreEvent::PowerActionPending {
-                    action,
-                    title,
-                    delay_seconds,
-                });
-            }
-        }
-        while let Some((urls, expires)) = guard.clipboard_offers.pop_front() {
-            if expires > now {
-                ready.push(crate::CoreEvent::ClipboardOffer { urls });
-            }
-        }
-        while let Some((surface, expires)) = guard.ui_shows.pop_front() {
-            if expires > now {
-                ready.push(crate::CoreEvent::UiShow { surface });
+        if check_disk {
+            if let Ok(Some(result)) = crate::updater::take_install_result() {
+                ready.insert(
+                    0,
+                    crate::CoreEvent::UpdateInstallResult {
+                        latest: result.version,
+                        status: result.status,
+                        exit_code: result.exit_code,
+                        message: result.message,
+                        install_log: result.install_log,
+                    },
+                );
             }
         }
         ready
     }
 }
 
-pub(crate) struct PresenterSubscriberGuard(Arc<PresenterBridge>);
+pub(crate) struct PresenterSubscriberGuard {
+    bridge: Arc<PresenterBridge>,
+    is_ui: bool,
+}
 
 impl Drop for PresenterSubscriberGuard {
     fn drop(&mut self) {
-        self.0.subscribers.fetch_sub(1, Ordering::AcqRel);
+        if self.is_ui {
+            self.bridge.ui_subscribers.fetch_sub(1, Ordering::AcqRel);
+        }
+        self.bridge.subscribers.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -261,8 +328,20 @@ impl PersistentCore {
         if crate::download_worker::validate_filename(&filename).is_err() {
             return Ok(None);
         }
+        let raw_rules = self.store.setting_string("site_rules", "")?;
+        let rules = crate::parse_site_rules(&raw_rules);
+        let matched_rule = if offer.local_source_path.is_none() {
+            crate::site_rules::matching_rule(&rules, offer.url.trim())
+        } else {
+            None
+        };
+        let rule_dir = matched_rule
+            .map(|r| r.download_dir.trim())
+            .filter(|d| !d.is_empty());
         let configured_dir = self.store.setting_string("download_dir", "")?;
-        let base_dir = if !configured_dir.trim().is_empty() {
+        let base_dir = if let Some(dir) = rule_dir {
+            dir.to_string()
+        } else if !configured_dir.trim().is_empty() {
             configured_dir
         } else {
             std::env::var("HLS_V7_DOWNLOAD_DIR")
@@ -274,6 +353,9 @@ impl PersistentCore {
                         .into_owned()
                 })
         };
+        if crate::output_path::reject_path_escape(&base_dir).is_err() {
+            return Ok(None);
+        }
         let auto_cat = self.store.setting_bool("auto_category_dirs", false)?;
         let cat_dirs = crate::category::parse_category_dirs(
             &self.store.setting_string("browser_category_dirs", "")?,
@@ -290,16 +372,26 @@ impl PersistentCore {
                 &cat_dirs,
             )
         };
+        if crate::output_path::reject_path_escape(&download_dir).is_err() {
+            return Ok(None);
+        }
         let temp_dir = self.store.setting_string("temp_dir", "")?;
         let work_dir = if temp_dir.trim().is_empty() {
             download_dir.clone()
         } else {
             temp_dir
         };
-        let concurrency = self
+        if crate::output_path::reject_path_escape(&work_dir).is_err() {
+            return Ok(None);
+        }
+        let default_concurrency = self
             .store
             .setting_u64("default_concurrency", 12)?
             .clamp(1, 64) as u32;
+        let concurrency = matched_rule
+            .filter(|r| r.concurrency > 0)
+            .map_or(default_concurrency, |r| r.concurrency.clamp(1, 64));
+        let speed_limit_kib = matched_rule.map_or(0, |r| r.speed_limit_kib);
         let allow_duplicate = self.store.setting_bool("allow_duplicate", false)?;
         let local_source_path = match offer.local_source_path.as_deref() {
             Some(local) => Some(
@@ -313,6 +405,86 @@ impl PersistentCore {
             ),
             None => None,
         };
+        let header_ok = |key: &str, value: &str| {
+            !key.is_empty()
+                && !key.contains(['\r', '\n', '\0', ':'])
+                && !value.chars().any(char::is_control)
+        };
+        let mut headers = BTreeMap::<String, String>::new();
+        if let Some(rule) = matched_rule {
+            if !rule.user_agent.trim().is_empty() && header_ok("User-Agent", &rule.user_agent) {
+                headers.insert("User-Agent".into(), rule.user_agent.clone());
+            }
+            if !rule.referer.trim().is_empty() && header_ok("Referer", &rule.referer) {
+                headers.insert("Referer".into(), rule.referer.clone());
+            }
+            if !rule.origin.trim().is_empty() && header_ok("Origin", &rule.origin) {
+                headers.insert("Origin".into(), rule.origin.clone());
+            }
+        }
+        for (setting_key, header_name) in [
+            ("default_user_agent", "User-Agent"),
+            ("default_referer", "Referer"),
+            ("default_origin", "Origin"),
+        ] {
+            let val = self.store.setting_string(setting_key, "")?;
+            if !val.trim().is_empty()
+                && header_ok(header_name, &val)
+                && !headers
+                    .keys()
+                    .any(|existing| existing.eq_ignore_ascii_case(header_name))
+            {
+                headers.insert(header_name.into(), val);
+            }
+        }
+        let proxy = if local_source_path.is_some() {
+            String::new()
+        } else {
+            let mut rule_proxy = String::new();
+            if let Some(rule) = matched_rule {
+                match rule.proxy_mode.as_str() {
+                    "direct" => rule_proxy = crate::net_policy::DIRECT_PROXY_SENTINEL.into(),
+                    "system" => rule_proxy = crate::net_policy::SYSTEM_PROXY_SENTINEL.into(),
+                    "manual" if !rule.proxy.trim().is_empty() => rule_proxy = rule.proxy.clone(),
+                    _ if !rule.proxy.trim().is_empty() => rule_proxy = rule.proxy.clone(),
+                    _ => {}
+                }
+            }
+            if !crate::net_policy::proxy_route_sentinel(&rule_proxy)
+                && !crate::download_worker::proxy_url_allowed(&rule_proxy)
+            {
+                return Ok(None);
+            }
+            let proxy_mode = self.store.setting_string("proxy_mode", "system")?;
+            let proxy_url = self.store.setting_string("proxy_url", "")?;
+            let proxy_bypass = self.store.setting_string("proxy_bypass", "")?;
+            let effective = crate::net_policy::effective_proxy(
+                &proxy_mode,
+                &proxy_url,
+                &proxy_bypass,
+                offer.url.trim(),
+                &rule_proxy,
+            );
+            if !crate::net_policy::proxy_route_sentinel(&effective)
+                && !crate::download_worker::proxy_url_allowed(&effective)
+            {
+                return Ok(None);
+            }
+            effective
+        };
+        let mut credential_ref = offer.credential_ref.clone();
+        if credential_ref.is_none() {
+            if let Some(rule) = matched_rule {
+                if !rule.credential_ref.trim().is_empty() {
+                    credential_ref = Some(rule.credential_ref.clone());
+                }
+            }
+        }
+        let lower_url = offer.url.trim_start().to_ascii_lowercase();
+        let is_http_url = lower_url.starts_with("http://") || lower_url.starts_with("https://");
+        if credential_ref.is_none() && is_http_url && self.store.default_cookie_configured()? {
+            credential_ref = Some(crate::store::DEFAULT_COOKIE_CREDENTIAL_REF.into());
+        }
         Ok(Some(TaskSpec {
             url: offer.url.trim().to_string(),
             resource_kind: offer.resource_kind,
@@ -330,7 +502,10 @@ impl PersistentCore {
             request_method: crate::http_engine::sanitize_http_method(&offer.request_method),
             mime_type: offer.mime_type.clone(),
             concurrency,
-            credential_ref: offer.credential_ref.clone(),
+            speed_limit_kib,
+            proxy,
+            headers,
+            credential_ref,
             replay_context_ref: offer.replay_context_ref.clone(),
             expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
                 .then_some(offer.size),
@@ -483,14 +658,14 @@ impl PersistentCore {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn admit_handoff(&mut self, encoded: &str) -> Result<String, String> {
-        self.admit_handoff_with_quick_spec(encoded, None)
+        self.admit_handoff_with_quick_spec(encoded, QuickHandoffPolicy::StoreFallback)
             .map(|(admitted, _)| admitted)
     }
 
     pub(crate) fn admit_handoff_with_quick_spec(
         &mut self,
         encoded: &str,
-        quick_spec: Option<TaskSpec>,
+        quick_policy: QuickHandoffPolicy,
     ) -> Result<(String, Option<String>), String> {
         let original: crate::contract::BrowserHandoff = serde_json::from_str(encoded)
             .map_err(|error| format!("decode browser handoff: {error}"))?;
@@ -521,9 +696,12 @@ impl PersistentCore {
         {
             return Err("交接编号已属于另一请求".into());
         }
-        let resolved_quick_spec = match quick_spec {
-            Some(spec) => Some(spec),
-            None => self.default_quick_spec_from_store(&original.offer)?,
+        let resolved_quick_spec = match quick_policy {
+            QuickHandoffPolicy::Prepared(spec) => Some(*spec),
+            QuickHandoffPolicy::Disabled => None,
+            QuickHandoffPolicy::StoreFallback => {
+                self.default_quick_spec_from_store(&original.offer)?
+            }
         };
         if let Some(spec) = resolved_quick_spec {
             if crate::download_worker::validate_filename(&spec.filename).is_ok()
@@ -596,6 +774,20 @@ impl PersistentCore {
         // The store takes the original accepted payload in the event transaction.
         let original = command;
         let command = redact_urls(original.clone())?;
+        if let CoreCommand::GetTask { task_id } = &command {
+            let event = if let Some(snapshot) = self.runtime.snapshot(task_id).cloned() {
+                crate::CoreEvent::TaskUpdated { snapshot }
+            } else {
+                crate::CoreEvent::Error {
+                    code: "task_not_found".into(),
+                    message: format!("unknown task {task_id}"),
+                }
+            };
+            return Ok(vec![EventEnvelope {
+                sequence: self.runtime.latest_sequence(),
+                event,
+            }]);
+        }
         if let CoreCommand::GetTaskLog { task_id } = &command {
             let mut lines = self.store.load_task_log(task_id, 500)?;
             if lines.is_empty() {
@@ -744,10 +936,12 @@ impl PersistentCore {
         let before = self.runtime.clone();
         let events = self.runtime.handle(command);
         let spec = events.iter().find_map(|envelope| match &envelope.event {
-            crate::CoreEvent::TaskCreated { snapshot } => self.runtime.task_spec(&snapshot.task_id),
+            crate::CoreEvent::TaskCreated { snapshot } => {
+                self.runtime.task_spec(&snapshot.task_id).cloned()
+            }
             _ => None,
         });
-        if let Some(spec) = spec {
+        if let Some(spec) = spec.as_ref() {
             if let Err(error) = crate::download_worker::validate_filename(&spec.filename) {
                 self.runtime = before;
                 return Err(error);
@@ -784,7 +978,23 @@ impl PersistentCore {
                 sequence: *sequence,
                 event: crate::CoreEvent::MediaPushRequested { request },
             }]),
-            _ => self.store.apply_events_and_spec(&events, spec),
+            (
+                CoreCommand::AcceptHandoff {
+                    spec_override: Some(override_spec),
+                    ..
+                },
+                events_slice,
+            ) if events_slice
+                .iter()
+                .any(|env| matches!(env.event, crate::CoreEvent::TaskCreated { .. })) =>
+            {
+                if let Err(error) = self.store.sanitize_urls(*override_spec) {
+                    self.runtime = before;
+                    return Err(error);
+                }
+                self.store.apply_events_and_spec(&events, spec.as_ref())
+            }
+            _ => self.store.apply_events_and_spec(&events, spec.as_ref()),
         };
         if let Err(error) = stored {
             self.runtime = before;
@@ -878,6 +1088,10 @@ impl PersistentCore {
         )
     }
 
+    fn is_disrupted_task_status(status: &str) -> bool {
+        matches!(status, "failed" | "canceled" | "cancelled")
+    }
+
     fn clear_task_from_disrupted(&mut self, task_id: &str) {
         self.batch_disrupted.retain(|_, tasks| {
             tasks.remove(task_id);
@@ -895,14 +1109,15 @@ impl PersistentCore {
             match &envelope.event {
                 crate::CoreEvent::TaskProgress { snapshot }
                 | crate::CoreEvent::TaskUpdated { snapshot } => {
-                    if matches!(
-                        snapshot.status.as_str(),
-                        "failed" | "canceled" | "cancelled"
-                    ) {
-                        self.batch_disrupted
-                            .entry(snapshot.queue_id.clone())
-                            .or_default()
-                            .insert(snapshot.task_id.clone());
+                    if Self::is_disrupted_task_status(&snapshot.status) {
+                        let was_disrupted = before_snapshot
+                            .is_some_and(|prev| Self::is_disrupted_task_status(&prev.status));
+                        if !was_disrupted {
+                            self.batch_disrupted
+                                .entry(snapshot.queue_id.clone())
+                                .or_default()
+                                .insert(snapshot.task_id.clone());
+                        }
                     } else if Self::is_live_task_status(&snapshot.status) {
                         let was_live = before_snapshot
                             .is_some_and(|prev| Self::is_live_task_status(&prev.status));
@@ -936,14 +1151,15 @@ impl PersistentCore {
                     if prev.is_some_and(|p| p.queue_id != snapshot.queue_id) {
                         self.clear_task_from_disrupted(&snapshot.task_id);
                     }
-                    if matches!(
-                        snapshot.status.as_str(),
-                        "failed" | "canceled" | "cancelled"
-                    ) {
-                        self.batch_disrupted
-                            .entry(snapshot.queue_id.clone())
-                            .or_default()
-                            .insert(snapshot.task_id.clone());
+                    if Self::is_disrupted_task_status(&snapshot.status) {
+                        let was_disrupted =
+                            prev.is_some_and(|p| Self::is_disrupted_task_status(&p.status));
+                        if !was_disrupted {
+                            self.batch_disrupted
+                                .entry(snapshot.queue_id.clone())
+                                .or_default()
+                                .insert(snapshot.task_id.clone());
+                        }
                     } else if Self::is_live_task_status(&snapshot.status) {
                         let was_live = prev.is_some_and(|p| Self::is_live_task_status(&p.status));
                         self.clear_task_from_disrupted(&snapshot.task_id);
@@ -1115,6 +1331,23 @@ impl PersistentCore {
     }
 
     pub fn replace_spec(&mut self, task_id: &str, spec: TaskSpec) -> Result<(), String> {
+        self.replace_spec_with_mode(task_id, spec, false)
+    }
+
+    pub fn replace_spec_clearing_error(
+        &mut self,
+        task_id: &str,
+        spec: TaskSpec,
+    ) -> Result<(), String> {
+        self.replace_spec_with_mode(task_id, spec, true)
+    }
+
+    fn replace_spec_with_mode(
+        &mut self,
+        task_id: &str,
+        spec: TaskSpec,
+        clear_error: bool,
+    ) -> Result<(), String> {
         crate::download_worker::validate_filename(&spec.filename)?;
         if self.runtime.snapshot(task_id).is_none() {
             return Err("任务不存在".into());
@@ -1122,14 +1355,30 @@ impl PersistentCore {
         let clean = redact_urls(spec.clone())?;
         let before = self.runtime.clone();
         let sequence = self.runtime.latest_sequence();
-        self.runtime.replace_spec(task_id, clean);
+        if clear_error {
+            self.runtime.replace_spec_clearing_error(task_id, clean);
+        } else {
+            self.runtime.replace_spec(task_id, clean);
+        }
         let events = self.runtime.events_after(sequence, 16);
         if let Err(error) = self.store.apply_events_and_spec(&events, Some(&spec)) {
             self.runtime = before;
             return Err(error);
         }
+        self.update_batch_disrupted_against(&before, &events);
         self.committed(&events);
         Ok(())
+    }
+
+    pub(crate) fn defer_start_action(
+        &mut self,
+        task_id: &str,
+        action: &str,
+    ) -> Result<Vec<EventEnvelope>, String> {
+        let before = self.runtime.clone();
+        let sequence = self.runtime.latest_sequence();
+        self.runtime.defer_start_action(task_id, action);
+        self.persist_runtime_events(before, sequence)
     }
 
     pub(crate) fn apply_armed_refresh(
@@ -1284,9 +1533,14 @@ impl PersistentCore {
                 _ => {}
             }
         }
-        if let Some(last) = events.last() {
-            // The store checkpoint is strictly monotonic; never regress reserved_sequence.
-            self.reserved_sequence = self.reserved_sequence.max(last.sequence);
+        if events
+            .iter()
+            .any(|envelope| crate::store::event_requires_store_write(&envelope.event))
+        {
+            if let Some(last) = events.last() {
+                // The store checkpoint is strictly monotonic; never regress reserved_sequence.
+                self.reserved_sequence = self.reserved_sequence.max(last.sequence);
+            }
         }
         self.notify_committed(events);
     }

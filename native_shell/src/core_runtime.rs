@@ -134,6 +134,7 @@ impl CoreRuntime {
                 download_dir,
                 start_paused,
                 queue_id,
+                spec_override,
                 ..
             } => self.accept_handoff(
                 &handoff_id,
@@ -141,6 +142,7 @@ impl CoreRuntime {
                 &download_dir,
                 start_paused,
                 &queue_id,
+                spec_override.map(|boxed| *boxed),
             ),
             CoreCommand::RejectHandoff {
                 handoff_id,
@@ -570,6 +572,7 @@ impl CoreRuntime {
         download_dir: &str,
         start_paused: bool,
         queue_id: &str,
+        spec_override: Option<TaskSpec>,
     ) {
         let Some(offer) = self.pending_handoffs.remove(handoff_id) else {
             self.publish(CoreEvent::Error {
@@ -578,6 +581,7 @@ impl CoreRuntime {
             });
             return;
         };
+        let offer_url = offer.url.clone();
         let filename = if filename.trim().is_empty() {
             if offer.filename.trim().is_empty() {
                 offer
@@ -596,14 +600,17 @@ impl CoreRuntime {
             filename.to_string()
         };
         let queue_id = queue_id.trim();
-        let resource_key = if offer.resource_key.trim().is_empty() {
+        let resource_key = if offer.local_source_path.is_some() {
+            String::new()
+        } else if offer.resource_key.trim().is_empty() {
             crate::http_engine::canonical_url_key(&offer.url)
         } else {
             offer.resource_key
         };
-        let spec = TaskSpec {
+        let mut spec = TaskSpec {
             url: offer.url,
             resource_kind: offer.resource_kind,
+            local_source_path: offer.local_source_path,
             title: if offer.title.trim().is_empty() {
                 filename.clone()
             } else {
@@ -621,7 +628,8 @@ impl CoreRuntime {
             request_method: offer.request_method,
             credential_ref: offer.credential_ref,
             replay_context_ref: offer.replay_context_ref,
-            expected_size: (offer.size > 0).then_some(offer.size),
+            expected_size: (offer.audio_url.trim().is_empty() && offer.size > 0)
+                .then_some(offer.size),
             preferred_bandwidth: offer.preferred_bandwidth,
             preferred_height: offer.preferred_height,
             preferred_variant_id: offer.preferred_variant_id.clone(),
@@ -630,6 +638,9 @@ impl CoreRuntime {
             resource_key,
             ..Default::default()
         };
+        if let Some(override_spec) = spec_override {
+            merge_handoff_spec_override(&mut spec, &offer_url, override_spec);
+        }
         let snapshot = self.create_task(spec);
         let task_id = snapshot.task_id.clone();
         self.publish(CoreEvent::TaskCreated { snapshot });
@@ -637,6 +648,47 @@ impl CoreRuntime {
             handoff_id: handoff_id.to_string(),
             task_id: Some(task_id),
         });
+    }
+
+    pub(crate) fn defer_start_action(&mut self, task_id: &str, action: &str) {
+        let updated = {
+            let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) else {
+                self.publish(CoreEvent::Error {
+                    code: "task_not_found".into(),
+                    message: format!("unknown task {task_id}"),
+                });
+                return;
+            };
+            if !matches!(action, "start" | "resume" | "retry")
+                || !legal_actions(snapshot).iter().any(|item| item == action)
+            {
+                self.publish(CoreEvent::Error {
+                    code: "illegal_task_action".into(),
+                    message: format!("任务当前状态不允许操作: {action}"),
+                });
+                return;
+            }
+            snapshot.status = "queued".into();
+            snapshot.stage = "waiting".into();
+            snapshot.speed_bytes_per_sec = 0;
+            snapshot.eta_seconds = None;
+            snapshot.error_code = None;
+            snapshot.error_message = None;
+            snapshot.error_stage.clear();
+            snapshot.error_url.clear();
+            snapshot.error_hint.clear();
+            snapshot.http_status = None;
+            snapshot.error_attempt = 0;
+            let line = format!(
+                "queued waiting {}/{}",
+                snapshot.downloaded_bytes,
+                snapshot.total_bytes.unwrap_or(0)
+            );
+            append_snapshot_log(snapshot, line);
+            snapshot.available_actions = legal_actions(snapshot);
+            snapshot.clone()
+        };
+        self.publish(CoreEvent::TaskUpdated { snapshot: updated });
     }
 
     fn reject_handoff(&mut self, handoff_id: &str) {
@@ -866,11 +918,15 @@ impl CoreRuntime {
                         .map(|paths| crate::progress_facts::ProgressFacts::gather(&paths, spec))
                 })
             });
-            let stale_active_progress =
-                matches!(
-                    snapshot.status.as_str(),
-                    "paused" | "canceled" | "failed" | "completed" | "done"
-                ) && matches!(status, "downloading" | "recording" | "merging" | "checking");
+            let stale_active_progress = match snapshot.status.as_str() {
+                "canceled" | "cancelled" => !matches!(status, "canceled" | "cancelled"),
+                "completed" | "done" => !matches!(status, "completed" | "done"),
+                "paused" | "failed" => matches!(
+                    status,
+                    "downloading" | "recording" | "merging" | "checking" | "parsing"
+                ),
+                _ => false,
+            };
             let effective_status = if stale_active_progress {
                 snapshot.status.clone()
             } else {
@@ -887,7 +943,11 @@ impl CoreRuntime {
                 speed_bytes_per_sec
             };
             snapshot.downloaded_bytes = if stale_active_progress {
-                snapshot.downloaded_bytes.max(downloaded_bytes)
+                if matches!(snapshot.status.as_str(), "canceled" | "cancelled") {
+                    snapshot.downloaded_bytes
+                } else {
+                    snapshot.downloaded_bytes.max(downloaded_bytes)
+                }
             } else {
                 downloaded_bytes
             };
@@ -901,6 +961,27 @@ impl CoreRuntime {
             }
             snapshot.stage = effective_stage.clone();
             snapshot.status = effective_status.clone();
+            if !stale_active_progress {
+                if matches!(
+                    effective_status.as_str(),
+                    "queued" | "downloading" | "recording" | "merging" | "checking" | "parsing"
+                ) {
+                    snapshot.error_code = None;
+                    snapshot.error_message = None;
+                    snapshot.error_stage.clear();
+                    snapshot.error_url.clear();
+                    snapshot.error_hint.clear();
+                    snapshot.http_status = None;
+                } else if matches!(effective_status.as_str(), "completed" | "done") {
+                    snapshot.error_code = None;
+                    snapshot.error_message = None;
+                    snapshot.error_stage.clear();
+                    snapshot.error_url.clear();
+                    snapshot.error_hint.clear();
+                    snapshot.http_status = None;
+                    snapshot.error_attempt = 0;
+                }
+            }
             if effective_status == "recording" {
                 snapshot.is_live = true;
             }
@@ -991,6 +1072,12 @@ impl CoreRuntime {
         let Some(snapshot) = self.tasks.get_mut(task_id).map(Arc::make_mut) else {
             return;
         };
+        if matches!(
+            snapshot.status.as_str(),
+            "canceled" | "cancelled" | "completed" | "done"
+        ) {
+            return;
+        }
         let failure_line = format!(
             "failed {} {} {}",
             failure.stage, failure.code, failure.message
@@ -1220,6 +1307,113 @@ fn pending_mirror_status(mirrors: &[String]) -> Vec<MirrorStatus> {
             ..MirrorStatus::default()
         })
         .collect()
+}
+
+pub(crate) fn merge_handoff_spec_override(
+    spec: &mut TaskSpec,
+    offer_url: &str,
+    override_spec: TaskSpec,
+) {
+    let offer_trimmed = offer_url.trim();
+    let override_trimmed = override_spec.url.trim();
+    let has_explicit_url = !override_trimmed.is_empty();
+    if has_explicit_url {
+        let same_url = override_trimmed == offer_trimmed;
+        let from_origin = crate::credentials::request_origin(offer_trimmed);
+        let to_origin = crate::credentials::request_origin(override_trimmed);
+        if from_origin.is_empty() || to_origin.is_empty() || from_origin != to_origin {
+            spec.headers
+                .retain(|key, _| !crate::download_worker::sensitive_header_name(key));
+            spec.credential_ref = None;
+            spec.replay_context_ref = None;
+            spec.body_path.clear();
+            spec.request_method = "GET".into();
+        }
+        if !same_url {
+            spec.audio_url.clear();
+            spec.expected_size = None;
+            spec.local_source_path = None;
+            spec.resource_key = crate::http_engine::canonical_url_key(override_trimmed);
+            spec.url = override_trimmed.to_string();
+            spec.preferred_bandwidth = override_spec.preferred_bandwidth;
+            spec.preferred_height = override_spec.preferred_height;
+            spec.preferred_variant_id = override_spec.preferred_variant_id;
+            spec.preferred_audio = override_spec.preferred_audio;
+        } else {
+            if override_spec.preferred_bandwidth > 0 {
+                spec.preferred_bandwidth = override_spec.preferred_bandwidth;
+            }
+            if override_spec.preferred_height > 0 {
+                spec.preferred_height = override_spec.preferred_height;
+            }
+            if !override_spec.preferred_variant_id.trim().is_empty() {
+                spec.preferred_variant_id = override_spec.preferred_variant_id;
+            } else if override_spec.preferred_bandwidth > 0 || override_spec.preferred_height > 0 {
+                spec.preferred_variant_id.clear();
+            }
+            if !override_spec.preferred_audio.trim().is_empty() {
+                spec.preferred_audio = override_spec.preferred_audio;
+            }
+        }
+        spec.resource_kind = override_spec.resource_kind;
+        if !override_spec.request_method.trim().is_empty() {
+            spec.request_method = override_spec.request_method;
+        }
+    } else {
+        if override_spec.resource_kind != ResourceKind::File {
+            spec.resource_kind = override_spec.resource_kind;
+        }
+        if !override_spec.request_method.trim().is_empty()
+            && !override_spec.request_method.eq_ignore_ascii_case("GET")
+        {
+            spec.request_method = override_spec.request_method;
+        }
+        if override_spec.preferred_bandwidth > 0 {
+            spec.preferred_bandwidth = override_spec.preferred_bandwidth;
+        }
+        if override_spec.preferred_height > 0 {
+            spec.preferred_height = override_spec.preferred_height;
+        }
+        if !override_spec.preferred_variant_id.trim().is_empty() {
+            spec.preferred_variant_id = override_spec.preferred_variant_id;
+        } else if override_spec.preferred_bandwidth > 0 || override_spec.preferred_height > 0 {
+            spec.preferred_variant_id.clear();
+        }
+        if !override_spec.preferred_audio.trim().is_empty() {
+            spec.preferred_audio = override_spec.preferred_audio;
+        }
+    }
+    for (k, v) in override_spec.headers {
+        spec.headers.insert(k, v);
+    }
+    if !override_spec.body_path.trim().is_empty() {
+        spec.body_path = override_spec.body_path;
+    }
+    if override_spec.concurrency > 0 {
+        spec.concurrency = override_spec.concurrency;
+    }
+    if override_spec.speed_limit_kib > 0 {
+        spec.speed_limit_kib = override_spec.speed_limit_kib;
+    }
+    if override_spec
+        .checksum
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        spec.checksum = override_spec.checksum;
+    }
+    if !override_spec.mirrors.is_empty() {
+        spec.mirrors = override_spec.mirrors;
+    }
+    if !override_spec.proxy.trim().is_empty() {
+        spec.proxy = override_spec.proxy;
+    }
+    if !override_spec.scheduled_start_at.trim().is_empty() {
+        spec.scheduled_start_at = override_spec.scheduled_start_at;
+    }
+    if !override_spec.scheduled_stop_at.trim().is_empty() {
+        spec.scheduled_stop_at = override_spec.scheduled_stop_at;
+    }
 }
 
 #[cfg(test)]
@@ -1884,6 +2078,7 @@ mod tests {
             trusted_ui: false,
             start_paused: false,
             queue_id: String::new(),
+            spec_override: None,
         });
         assert!(matches!(accepted[0].event, CoreEvent::TaskCreated { .. }));
         match &accepted[1].event {
@@ -1945,5 +2140,48 @@ mod tests {
         assert!(runtime.events_after(0, 10).len() <= 10);
         assert!(runtime.latest_sequence() >= 5000);
         assert!(runtime.events.len() <= 4096);
+    }
+
+    #[test]
+    fn merge_handoff_spec_override_clears_stale_variant_id_on_same_url_quality_change() {
+        let offer_url = "https://cdn.example.test/live/master.m3u8";
+        let mut base = TaskSpec {
+            url: offer_url.into(),
+            resource_kind: ResourceKind::Hls,
+            preferred_bandwidth: 5_000_000,
+            preferred_height: 1080,
+            preferred_variant_id: "1080p/index.m3u8".into(),
+            ..Default::default()
+        };
+        // Unprobed editor submission (bandwidth=0, height=0, variant_id="") keeps original offer variant.
+        merge_handoff_spec_override(
+            &mut base,
+            offer_url,
+            TaskSpec {
+                url: offer_url.into(),
+                resource_kind: ResourceKind::Hls,
+                ..Default::default()
+            },
+        );
+        assert_eq!(base.preferred_variant_id, "1080p/index.m3u8");
+        assert_eq!(base.preferred_height, 1080);
+
+        // Probed HLS variant selection on same URL emits empty `preferred_variant_id` with new height/bandwidth;
+        // stale `preferred_variant_id` must be cleared so `hls::select_variant_for` honors 480p.
+        merge_handoff_spec_override(
+            &mut base,
+            offer_url,
+            TaskSpec {
+                url: offer_url.into(),
+                resource_kind: ResourceKind::Hls,
+                preferred_bandwidth: 1_200_000,
+                preferred_height: 480,
+                preferred_variant_id: String::new(),
+                ..Default::default()
+            },
+        );
+        assert!(base.preferred_variant_id.is_empty());
+        assert_eq!(base.preferred_height, 480);
+        assert_eq!(base.preferred_bandwidth, 1_200_000);
     }
 }

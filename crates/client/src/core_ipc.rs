@@ -780,10 +780,14 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
             }
             OverlappedOutcome::Stopped => return Ok(None),
             OverlappedOutcome::TimedOut => {
-                return Err(format!(
-                    "Core pipe frame read timed out after {} ms",
-                    header_timeout_budget.as_millis()
-                ));
+                return if offset == 0 {
+                    Ok(None)
+                } else {
+                    Err(format!(
+                        "Core pipe frame read timed out after {} ms",
+                        header_timeout_budget.as_millis()
+                    ))
+                };
             }
             OverlappedOutcome::OsError(code) => {
                 let error = std::io::Error::from_raw_os_error(code as i32);
@@ -830,16 +834,29 @@ fn read_server_pipe_message<T: for<'de> Deserialize<'de>>(
 fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
     stream: &mut TcpStream,
 ) -> Result<Option<T>, String> {
+    read_server_tcp_message_with_timeouts(stream, V7_IDLE_READ_TIMEOUT, V7_FRAME_READ_TIMEOUT)
+}
+
+fn read_server_tcp_message_with_timeouts<T: for<'de> Deserialize<'de>>(
+    stream: &mut TcpStream,
+    idle_timeout: Duration,
+    frame_timeout: Duration,
+) -> Result<Option<T>, String> {
     let mut header = [0u8; 4];
-    let header_deadline = std::time::Instant::now() + V7_IDLE_READ_TIMEOUT;
+    let mut header_deadline = Instant::now() + idle_timeout;
+    let mut header_timeout_budget = idle_timeout;
     let mut header_offset = 0;
     while header_offset < header.len() {
-        let remaining = header_deadline.saturating_duration_since(std::time::Instant::now());
+        let remaining = header_deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(format!(
-                "Core stream header read timed out after {} ms",
-                V7_IDLE_READ_TIMEOUT.as_millis()
-            ));
+            return if header_offset == 0 {
+                Ok(None)
+            } else {
+                Err(format!(
+                    "Core stream header read timed out after {} ms",
+                    header_timeout_budget.as_millis()
+                ))
+            };
         }
         stream
             .set_read_timeout(Some(remaining))
@@ -847,8 +864,32 @@ fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
         match stream.read(&mut header[header_offset..]) {
             Ok(0) if header_offset == 0 => return Ok(None),
             Ok(0) => return Err("Core stream closed during frame header".into()),
-            Ok(read) => header_offset += read,
+            Ok(read) => {
+                if header_offset == 0 && read > 0 {
+                    let tightened = Instant::now() + frame_timeout;
+                    if tightened < header_deadline {
+                        header_deadline = tightened;
+                        header_timeout_budget = frame_timeout;
+                    }
+                }
+                header_offset += read;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return if header_offset == 0 {
+                    Ok(None)
+                } else {
+                    Err(format!(
+                        "Core stream header read timed out after {} ms",
+                        header_timeout_budget.as_millis()
+                    ))
+                };
+            }
             Err(error) => return Err(format!("Core stream read header: {error}")),
         }
     }
@@ -857,15 +898,15 @@ fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
         return Err("Core pipe frame too large".into());
     }
 
-    let deadline = std::time::Instant::now() + V7_FRAME_READ_TIMEOUT;
+    let deadline = Instant::now() + frame_timeout;
     let mut payload = vec![0u8; length];
     let mut offset = 0;
     while offset < length {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(format!(
                 "Core stream frame read timed out after {} ms",
-                V7_FRAME_READ_TIMEOUT.as_millis()
+                frame_timeout.as_millis()
             ));
         }
         stream
@@ -875,6 +916,17 @@ fn read_server_tcp_message<T: for<'de> Deserialize<'de>>(
             Ok(0) => return Err("Core stream closed during frame payload".into()),
             Ok(read) => offset += read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(format!(
+                    "Core stream frame read timed out after {} ms",
+                    frame_timeout.as_millis()
+                ));
+            }
             Err(error) => return Err(format!("Core stream read payload: {error}")),
         }
     }
@@ -1192,20 +1244,29 @@ impl NamedPipeServer {
             if let Some(ready) = ready {
                 let _ = ready.send(Err(error.clone()));
             }
-            return Err(if ready.is_some() {
+            return Err(if first_instance {
                 PipeAcceptError::StartupFailed(error)
             } else {
                 PipeAcceptError::Transient(error)
             });
         }
-        let handle = OwnedWinHandle::from_raw(raw_handle)
-            .map_err(|error| PipeAcceptError::Transient(format!("CreateNamedPipeW: {error}")))?;
+        let handle = OwnedWinHandle::from_raw(raw_handle).map_err(|error| {
+            let error = format!("CreateNamedPipeW: {error}");
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(error.clone()));
+            }
+            if first_instance {
+                PipeAcceptError::StartupFailed(error)
+            } else {
+                PipeAcceptError::Transient(error)
+            }
+        })?;
 
         connect_event.reset_event().map_err(|error| {
             if let Some(ready) = ready {
                 let _ = ready.send(Err(error.clone()));
             }
-            if ready.is_some() {
+            if first_instance {
                 PipeAcceptError::StartupFailed(error)
             } else {
                 PipeAcceptError::Transient(error)
@@ -1283,6 +1344,8 @@ impl NamedPipeServer {
                 let error = format!("ConnectNamedPipe failed: {other}");
                 if let Some(ready) = ready {
                     let _ = ready.send(Err(error.clone()));
+                }
+                if first_instance {
                     return Err(PipeAcceptError::StartupFailed(error));
                 }
                 Err(PipeAcceptError::Transient(error))
@@ -1449,9 +1512,34 @@ fn verify_pipe_server_owner(handle: windows_sys::Win32::Foundation::HANDLE) -> R
     Ok(())
 }
 
+fn validate_client_response(
+    prefix: &str,
+    request: &CorePipeRequest,
+    response: &CorePipeResponse,
+) -> Result<(), String> {
+    if let CorePipeResponse::Error { code, message, .. } = response {
+        if code == "protocol_violation" {
+            return Err(format!("{prefix} protocol_violation: {message}"));
+        }
+    }
+    if !matches!(request, CorePipeRequest::Hello { .. })
+        && matches!(response, CorePipeResponse::Hello { .. })
+    {
+        return Err(format!("{prefix} unexpected Hello response"));
+    }
+    if let (Some(req_id), Some(resp_id)) = (request.request_id(), response.request_id()) {
+        if req_id != resp_id {
+            return Err(format!(
+                "{prefix} response request_id mismatch: expected {req_id}, got {resp_id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub struct NamedPipeClient {
-    stream: OverlappedPipe,
+    stream: Option<OverlappedPipe>,
 }
 
 #[cfg(windows)]
@@ -1489,7 +1577,7 @@ impl NamedPipeClient {
                 let handle = OwnedWinHandle::from_raw(raw_handle)?;
                 verify_pipe_server_owner(handle.raw())?;
                 return Ok(Self {
-                    stream: OverlappedPipe::new(handle)?,
+                    stream: Some(OverlappedPipe::new(handle)?),
                 });
             }
             let mut error = std::io::Error::last_os_error();
@@ -1516,24 +1604,47 @@ impl NamedPipeClient {
         }
     }
 
-    fn into_stream(self) -> OverlappedPipe {
-        self.stream
+    fn into_stream(self) -> Result<OverlappedPipe, String> {
+        self.stream.ok_or_else(|| "Core pipe closed".into())
     }
 
     pub fn set_read_timeout(&mut self, timeout: Option<Duration>) {
-        self.stream.set_read_timeout(timeout);
+        if let Some(stream) = &mut self.stream {
+            stream.set_read_timeout(timeout);
+        }
     }
 
     pub fn set_write_timeout(&mut self, timeout: Option<Duration>) {
-        self.stream.set_write_timeout(timeout);
+        if let Some(stream) = &mut self.stream {
+            stream.set_write_timeout(timeout);
+        }
+    }
+
+    fn request_inner(
+        &mut self,
+        request: &CorePipeRequest,
+        write_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<CorePipeResponse, String> {
+        let mut stream = self
+            .stream
+            .take()
+            .ok_or_else(|| "Core pipe closed".to_string())?;
+        stream.write_message_timeout(request, write_timeout)?;
+        let response = stream
+            .read_message_timeout(read_timeout)?
+            .ok_or_else(|| "Core pipe closed".to_string())?;
+        validate_client_response("Core pipe", request, &response)?;
+        self.stream = Some(stream);
+        Ok(response)
     }
 
     pub fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
-        self.stream
-            .write_message_timeout(request, V7_FRAME_READ_TIMEOUT)?;
-        self.stream
-            .read_message_timeout(client_request_read_timeout(request))?
-            .ok_or_else(|| "Core pipe closed".into())
+        self.request_inner(
+            request,
+            V7_FRAME_READ_TIMEOUT,
+            client_request_read_timeout(request),
+        )
     }
 
     pub fn request_with_timeout(
@@ -1541,32 +1652,53 @@ impl NamedPipeClient {
         request: &CorePipeRequest,
         timeout: Duration,
     ) -> Result<CorePipeResponse, String> {
-        self.stream.write_message_timeout(request, timeout)?;
-        self.stream
-            .read_message_timeout(timeout)?
-            .ok_or_else(|| "Core pipe closed".into())
+        self.request_inner(request, timeout, timeout)
     }
 }
 
 #[cfg(windows)]
 impl Read for NamedPipeClient {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.read(buf)
+        let Some(stream) = &mut self.stream else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Core pipe closed",
+            ));
+        };
+        stream.read(buf)
     }
 }
 
 #[cfg(windows)]
 impl Write for NamedPipeClient {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stream.write(buf)
+        let Some(stream) = &mut self.stream else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Core pipe closed",
+            ));
+        };
+        stream.write(buf)
     }
 
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.stream.write_all(buf)
+        let Some(stream) = &mut self.stream else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Core pipe closed",
+            ));
+        };
+        stream.write_all(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.stream.flush()
+        let Some(stream) = &mut self.stream else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Core pipe closed",
+            ));
+        };
+        stream.flush()
     }
 }
 
@@ -1746,6 +1878,45 @@ fn handle_stream(
     }
 }
 
+#[cfg(test)]
+fn handle_stream_with_timeouts(
+    mut stream: TcpStream,
+    handler: &dyn Fn(CorePipeRequest) -> CorePipeResponse,
+    stop: &AtomicBool,
+    idle_timeout: Duration,
+    frame_timeout: Duration,
+) -> Result<(), String> {
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_write_timeout(Some(frame_timeout));
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match read_server_tcp_message_with_timeouts::<CorePipeRequest>(
+            &mut stream,
+            idle_timeout,
+            frame_timeout,
+        ) {
+            Ok(Some(request)) => {
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                dispatch_and_reply(&mut stream, request, handler, stop)?;
+            }
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                // 读不出下一帧（超长、半截帧头、载荷不是 CorePipeRequest、读超时）
+                // 时，以前是直接 return Err：连接一关，客户端只看到"对端没动静"，
+                // 分不清是对端崩了还是"我发的东西对端不认"。后者是协议违规，报出来
+                // 才定位得了。
+                report_protocol_violation(&mut stream, &error);
+                linger_close(&mut stream);
+                return Err(error);
+            }
+        }
+    }
+}
+
 pub struct CoreIpcClient {
     transport: IpcTransport,
 }
@@ -1754,6 +1925,7 @@ enum IpcTransport {
     Tcp(TcpStream),
     #[cfg(windows)]
     Pipe(OverlappedPipe),
+    Closed,
 }
 
 fn client_request_read_timeout(request: &CorePipeRequest) -> Duration {
@@ -1772,7 +1944,8 @@ impl IpcTransport {
         request: &CorePipeRequest,
         timeout: Option<Duration>,
     ) -> Result<CorePipeResponse, String> {
-        match self {
+        let mut active = std::mem::replace(self, Self::Closed);
+        let (prefix, response) = match &mut active {
             Self::Tcp(stream) => {
                 let write_timeout = timeout.unwrap_or(V7_FRAME_READ_TIMEOUT);
                 let read_timeout = timeout.unwrap_or_else(|| client_request_read_timeout(request));
@@ -1783,18 +1956,25 @@ impl IpcTransport {
                     .set_read_timeout(Some(read_timeout))
                     .map_err(|e| format!("Core stream read timeout: {e}"))?;
                 write_message(stream, request)?;
-                read_message(stream)?.ok_or_else(|| "Core IPC closed".into())
+                let response =
+                    read_message(stream)?.ok_or_else(|| "Core IPC closed".to_string())?;
+                ("Core IPC", response)
             }
             #[cfg(windows)]
             Self::Pipe(stream) => {
                 let write_timeout = timeout.unwrap_or(V7_FRAME_READ_TIMEOUT);
                 let read_timeout = timeout.unwrap_or_else(|| client_request_read_timeout(request));
                 stream.write_message_timeout(request, write_timeout)?;
-                stream
+                let response = stream
                     .read_message_timeout(read_timeout)?
-                    .ok_or_else(|| "Core pipe closed".into())
+                    .ok_or_else(|| "Core pipe closed".to_string())?;
+                ("Core pipe", response)
             }
-        }
+            Self::Closed => return Err("Core IPC closed".into()),
+        };
+        validate_client_response(prefix, request, &response)?;
+        *self = active;
+        Ok(response)
     }
 
     fn request(&mut self, request: &CorePipeRequest) -> Result<CorePipeResponse, String> {
@@ -1935,7 +2115,7 @@ impl CoreIpcClient {
         // CPU/I/O load never fails `Hello` due to only ~50ms remaining.
         let hello_timeout = hello_handshake_timeout(Duration::from_millis(u64::from(timeout_ms)));
         let mut client = Self {
-            transport: IpcTransport::Pipe(pipe.into_stream()),
+            transport: IpcTransport::Pipe(pipe.into_stream()?),
         };
         match client
             .transport
@@ -3521,5 +3701,308 @@ mod tests {
             message: String::new(),
         });
         assert!(server.serve_loop(stop, handler).is_err());
+    }
+
+    #[test]
+    fn tcp_server_closes_idle_connection_quietly_and_times_out_partial_header_on_frame_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let idle_timeout = Duration::from_millis(90);
+        let frame_timeout = Duration::from_millis(80);
+        let handler = |request: CorePipeRequest| match request {
+            CorePipeRequest::Hello { .. } => CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: 1,
+            },
+            other => CorePipeResponse::Error {
+                request_id: other.request_id(),
+                code: "unexpected".into(),
+                message: format!("{other:?}"),
+            },
+        };
+
+        // 1. Completely idle TCP connection (header_offset == 0) closes quietly with Ok(())
+        //    without sending protocol_violation or stalling in 2s linger_close.
+        let server_idle = {
+            let listener_clone = listener.try_clone().unwrap();
+            thread::spawn(move || {
+                let (stream, _) = listener_clone.accept().unwrap();
+                handle_stream_with_timeouts(
+                    stream,
+                    &handler,
+                    &AtomicBool::new(false),
+                    idle_timeout,
+                    frame_timeout,
+                )
+            })
+        };
+        let mut idle_client = TcpStream::connect(addr).unwrap();
+        idle_client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let idle_started = Instant::now();
+        assert!(
+            matches!(read_message::<CorePipeResponse>(&mut idle_client), Ok(None)),
+            "idle close at offset 0 must not emit protocol_violation"
+        );
+        assert!(
+            idle_started.elapsed() < Duration::from_millis(600),
+            "idle TCP close must not wait for 2s linger_close: {:?}",
+            idle_started.elapsed()
+        );
+        assert!(server_idle.join().unwrap().is_ok());
+
+        // 2. 2-byte partial TCP header tightens from 5s idle budget to 80ms frame budget
+        //    and emits protocol_violation.
+        let long_idle = Duration::from_secs(5);
+        let server_partial = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_stream_with_timeouts(
+                stream,
+                &handler,
+                &AtomicBool::new(false),
+                long_idle,
+                frame_timeout,
+            )
+        });
+        let mut partial_client = TcpStream::connect(addr).unwrap();
+        partial_client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let partial_started = Instant::now();
+        partial_client.write_all(&[8u8, 0u8]).unwrap();
+        match read_message::<CorePipeResponse>(&mut partial_client)
+            .expect("expected protocol_violation read")
+            .expect("expected protocol_violation frame")
+        {
+            CorePipeResponse::Error { code, message, .. } => {
+                assert_eq!(code, "protocol_violation");
+                assert!(message.contains("timed out"), "unexpected: {message}");
+            }
+            other => panic!("expected protocol_violation, got {other:?}"),
+        }
+        assert!(
+            partial_started.elapsed() < Duration::from_secs(1),
+            "partial TCP header must tighten to frame_timeout instead of 5s idle_timeout: {:?}",
+            partial_started.elapsed()
+        );
+        drop(partial_client);
+        assert!(server_partial.join().unwrap().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pipe_server_closes_idle_connection_at_offset_zero_without_protocol_violation_and_rejects_duplicate_first_instance(
+    ) {
+        let name = unique_test_pipe_name("idle-and-first-instance");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server = Arc::new(
+            NamedPipeServer::new(name.clone())
+                .with_timeouts(Duration::from_millis(90), Duration::from_millis(60)),
+        );
+        let stop_handle = server.stop_handle();
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_| CorePipeResponse::Hello {
+                protocol: V7_PROTOCOL_NAME.into(),
+                version: V7_PROTOCOL_VERSION,
+                pid: std::process::id(),
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_for_thread = Arc::clone(&server);
+        let server_stop = Arc::clone(&stop);
+        let server_handler = Arc::clone(&handler);
+        let worker = thread::spawn(move || {
+            server_for_thread.serve_loop_with_ready(server_stop, server_handler, ready_tx)
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+
+        // 1. Second NamedPipeServer::serve_loop (ready = None) on the same pipe name must
+        //    immediately fail StartupFailed instead of spinning every 40ms!
+        let conflict_started = Instant::now();
+        let conflict_stop = Arc::new(AtomicBool::new(false));
+        let conflict = NamedPipeServer::new(name.clone()).serve_loop(conflict_stop, handler);
+        assert!(conflict.is_err(), "duplicate pipe server must fail startup");
+        assert!(
+            conflict_started.elapsed() < Duration::from_millis(500),
+            "serve_loop must fail immediately on first_instance conflict"
+        );
+
+        // 2. Idle client at offset == 0 closes quietly (EOF, no protocol_violation frame) and frees slot.
+        let mut idle_client = NamedPipeClient::connect(&name, 2_000).unwrap();
+        idle_client.set_read_timeout(Some(Duration::from_secs(1)));
+        assert!(
+            matches!(read_message::<CorePipeResponse>(&mut idle_client), Ok(None)),
+            "idle pipe connection at offset 0 must close quietly without protocol_violation"
+        );
+        drop(idle_client);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while server.claimed_slots() > 1 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(server.claimed_slots(), 1);
+
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn ipc_clients_fail_closed_on_desync_protocol_violation_or_unexpected_hello() {
+        for scenario in [
+            "request_id_mismatch",
+            "unexpected_hello",
+            "protocol_violation",
+            "bad_json",
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                assert_eq!(
+                    read_message::<CorePipeRequest>(&mut stream).unwrap(),
+                    Some(hello_request())
+                );
+                write_message(
+                    &mut stream,
+                    &CorePipeResponse::Hello {
+                        protocol: V7_PROTOCOL_NAME.into(),
+                        version: V7_PROTOCOL_VERSION,
+                        pid: 1,
+                    },
+                )
+                .unwrap();
+
+                let _req = read_message::<CorePipeRequest>(&mut stream)
+                    .unwrap()
+                    .unwrap();
+                match scenario {
+                    "request_id_mismatch" => {
+                        write_message(
+                            &mut stream,
+                            &CorePipeResponse::Events {
+                                request_id: 999,
+                                events: Vec::new(),
+                            },
+                        )
+                        .unwrap();
+                    }
+                    "unexpected_hello" => {
+                        write_message(
+                            &mut stream,
+                            &CorePipeResponse::Hello {
+                                protocol: V7_PROTOCOL_NAME.into(),
+                                version: V7_PROTOCOL_VERSION,
+                                pid: 1,
+                            },
+                        )
+                        .unwrap();
+                    }
+                    "protocol_violation" => {
+                        write_message(
+                            &mut stream,
+                            &CorePipeResponse::Error {
+                                request_id: None,
+                                code: "protocol_violation".into(),
+                                message: "bad frame".into(),
+                            },
+                        )
+                        .unwrap();
+                    }
+                    "bad_json" => {
+                        let bad = b"{not-json";
+                        let mut raw = (bad.len() as u32).to_le_bytes().to_vec();
+                        raw.extend_from_slice(bad);
+                        stream.write_all(&raw).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                // Because the client must drop its underlying TcpStream immediately on failure,
+                // reading the next byte on the server must observe EOF promptly without hanging!
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                let mut probe = [0u8; 1];
+                let eof_or_reset = match stream.read(&mut probe) {
+                    Ok(0) => true,
+                    Err(e) => {
+                        e.kind() != std::io::ErrorKind::TimedOut
+                            && e.kind() != std::io::ErrorKind::WouldBlock
+                    }
+                    Ok(_) => false,
+                };
+                assert!(
+                    eof_or_reset,
+                    "client failed to close underlying socket immediately on {scenario}"
+                );
+            });
+
+            let mut client = CoreIpcClient::connect_addr(addr).unwrap();
+            let first_err = client
+                .request(&CorePipeRequest::Command {
+                    request_id: 7,
+                    command: CoreCommand::Ping,
+                })
+                .unwrap_err();
+            assert!(
+                first_err.starts_with("Core IPC ") || first_err.starts_with("Core pipe "),
+                "scenario={scenario} first_err={first_err}"
+            );
+            server.join().unwrap();
+
+            // Subsequent call on the poisoned client fails closed immediately.
+            let second_err = client
+                .request(&CorePipeRequest::Command {
+                    request_id: 8,
+                    command: CoreCommand::Ping,
+                })
+                .unwrap_err();
+            assert_eq!(second_err, "Core IPC closed");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_client_fails_closed_on_mismatched_request_id() {
+        let name = unique_test_pipe_name("client-fail-closed");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server = NamedPipeServer::new(name.clone());
+        let stop_handle = server.stop_handle();
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(|_| CorePipeResponse::Events {
+                request_id: 404,
+                events: Vec::new(),
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_stop = Arc::clone(&stop);
+        let worker =
+            thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+
+        let mut client = NamedPipeClient::connect(&name, 2_000).unwrap();
+        let err = client
+            .request(&CorePipeRequest::Command {
+                request_id: 1,
+                command: CoreCommand::Ping,
+            })
+            .unwrap_err();
+        assert!(err.contains("request_id mismatch"), "{err}");
+        let after = client
+            .request(&CorePipeRequest::Command {
+                request_id: 2,
+                command: CoreCommand::Ping,
+            })
+            .unwrap_err();
+        assert_eq!(after, "Core pipe closed");
+
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
     }
 }

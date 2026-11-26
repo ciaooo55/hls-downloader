@@ -636,6 +636,8 @@ pub enum CoreCommand {
         start_paused: bool,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         queue_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spec_override: Option<Box<TaskSpec>>,
     },
     RejectHandoff {
         handoff_id: String,
@@ -1421,5 +1423,60 @@ mod tests {
         };
         assert_eq!(format!("{command:?}"), "ImportCurl");
         assert!(serde_json::to_string(&command).unwrap().contains("private"));
+    }
+
+    #[test]
+    fn accept_handoff_spec_override_omits_when_none_and_roundtrips_when_some() {
+        let plain = CoreCommand::AcceptHandoff {
+            handoff_id: "h-1".into(),
+            filename: "video.mp4".into(),
+            download_dir: String::new(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: false,
+            queue_id: DEFAULT_QUEUE_ID.into(),
+            spec_override: None,
+        };
+        let encoded_plain = serde_json::to_value(&plain).expect("encode plain AcceptHandoff");
+        assert!(encoded_plain.get("spec_override").is_none());
+        let decoded_legacy: CoreCommand = serde_json::from_value(serde_json::json!({
+            "kind": "accept_handoff",
+            "handoff_id": "h-1",
+            "filename": "video.mp4",
+            "download_dir": "",
+            "trusted_ui": true,
+            "queue_id": "default"
+        }))
+        .expect("decode legacy AcceptHandoff without spec_override");
+        assert_eq!(decoded_legacy, plain);
+
+        let mut override_spec = TaskSpec {
+            url: "https://cdn.example.test/override.m3u8".into(),
+            resource_kind: ResourceKind::Hls,
+            concurrency: 8,
+            speed_limit_kib: 512,
+            preferred_height: 1080,
+            ..Default::default()
+        };
+        override_spec
+            .headers
+            .insert("Cookie".into(), "sid=secret-override".into());
+        let with_override = CoreCommand::AcceptHandoff {
+            handoff_id: "h-2".into(),
+            filename: "override.mp4".into(),
+            download_dir: "D:/Downloads".into(),
+            allow_duplicate: true,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: "night".into(),
+            spec_override: Some(Box::new(override_spec)),
+        };
+        assert_eq!(format!("{with_override:?}"), "AcceptHandoff");
+        assert!(!format!("{with_override:?}").contains("secret-override"));
+        let wire = serde_json::to_value(&with_override).expect("encode AcceptHandoff override");
+        assert_eq!(wire["spec_override"]["concurrency"], 8);
+        let restored: CoreCommand =
+            serde_json::from_value(wire).expect("decode AcceptHandoff override");
+        assert_eq!(restored, with_override);
     }
 }

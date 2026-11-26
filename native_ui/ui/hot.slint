@@ -518,8 +518,8 @@ export component ConfirmWindow inherits Window {
                         enabled: !root.busy;
                         clicked => { detail_scroll.viewport-y = 0px; root.command("toggle_details"); }
                     }
-                    if !root.compact: HotButton { label: "更多设置"; icon: "settings"; enabled: !root.busy; clicked => { root.command("more"); } }
-                    if root.compact: ConfirmIconButton { icon: "settings"; label: "更多设置"; enabled: !root.busy; clicked => { root.command("more"); } }
+                    if !root.compact && !root.is_local_payload: HotButton { label: "更多设置"; icon: "settings"; enabled: !root.busy; clicked => { root.command("more"); } }
+                    if root.compact && !root.is_local_payload: ConfirmIconButton { icon: "settings"; label: "更多设置"; enabled: !root.busy; clicked => { root.command("more"); } }
                     Rectangle { horizontal-stretch: 1; }
                     HotButton { label: "取消"; busy-label: "正在取消"; min-width: root.compact ? 56px : 64px; busy: root.busy && root.rejecting; enabled: !root.busy; clicked => { root.command("reject"); } }
                     HotButton { label: root.is_local_payload ? "暂存列表" : "稍后下载"; busy-label: "正在加入"; min-width: root.compact ? 72px : 78px; busy: root.busy && !root.rejecting && root.busy_action == "accept_paused"; enabled: !root.busy && root.filename != ""; clicked => { root.command("accept_paused"); } }
@@ -1183,7 +1183,16 @@ export component CompleteWindow inherits Window {
             Timer {
                 interval: 1s;
                 running: root.power_hint != "" && root.power_seconds > 0;
-                triggered => { root.power_seconds -= 1; }
+                triggered => {
+                    if root.power_seconds <= 1 {
+                        root.power_seconds = 0;
+                        root.power_hint = "";
+                        root.power_action_label = "";
+                        root.command("power_expired");
+                    } else {
+                        root.power_seconds -= 1;
+                    }
+                }
             }
             if root.action_text != "" : Text { text: root.action_text; color: Tokens.fail; font-size: 11px; wrap: word-wrap; }
             HorizontalLayout {

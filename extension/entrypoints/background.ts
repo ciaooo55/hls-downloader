@@ -67,6 +67,7 @@ interface LocalDownloadHandoff {
   importUrl?: string
   handoffId?: string
   intent?: DownloadClickIntent
+  explicitUserAction?: boolean
   retryAt?: number
   pollAttempts?: number
   waitPolls?: number
@@ -109,6 +110,7 @@ async function persistLocalDownloads(): Promise<void> {
 
 async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<void> {
   await hydrateLocalDownloads()
+  record.explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
   const [item] = await browser.downloads.search({ id: record.downloadId })
   record.sourceStartedAt = item?.startTime
   // 浏览器可在接收响应时按 MIME 调整文件名；完成后才固定导入路径。
@@ -121,7 +123,11 @@ async function queueLocalBrowserDownload(record: LocalDownloadHandoff): Promise<
   if (existing && existing.sourceKey !== record.sourceKey) {
     throw new Error('浏览器下载身份已变化，保留原文件并停止自动导入')
   }
-  if (!existing) localDownloadHandoffs.set(record.requestId, record)
+  if (existing) {
+    if (record.explicitUserAction) existing.explicitUserAction = true
+  } else {
+    localDownloadHandoffs.set(record.requestId, record)
+  }
   await persistLocalDownloads()
   void continueLocalDownloadHandoffs().catch(error => console.warn('HLS Downloader local file handoff failed', error))
 }
@@ -379,17 +385,28 @@ async function continueLocalDownloadHandoffs(immediateDownloadId?: number): Prom
           // 先固定完成文件的路径，丢回执后也不能把同 ID 的另一条路径当作原件删除。
           record.sourceFilename = item.filename
           await persistLocalDownloads()
-          const response = await native({ op: 'offer_local_file', resource: {
-            url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
-            mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
-            client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
-          } })
+          const explicitUserAction = Boolean(record.explicitUserAction || record.intent?.ctrlForce)
+          const response = await native({
+            op: 'offer_local_file',
+            ...(explicitUserAction ? { explicit_user_action: true } : {}),
+            resource: {
+              url, local_source_path: item.filename, filename: item.filename.split(/[\\/]/).pop(),
+              mime_type: item.mime, size, resource_kind: 'file', source_page_url: record.pageUrl,
+              client_request_id: record.requestId, evidence: ['browser_completed_local_file'],
+            },
+          })
           // A transport failure or empty success envelope is not a rejection:
           // Core may already own the import. Retain the original request ID
           // and source file, and retry at the recovery cadence rather than
           // repeatedly submitting the same import every second.
           const isUserShutdown = classifyEngineConnectionState(response) === 'user_shutdown'
-          if (!isUserShutdown && (response?.transport_error || response?.ok === true && !response.handoff?.id)) {
+          const isTransientTransportFailure = !isUserShutdown && Boolean(
+            response?.transport_error
+            || response?.code === 'core_unreachable'
+            || response?.error_code === 'core_unreachable'
+            || /^Core (?:pipe|IPC|stream|TCP) /i.test(String(response?.error ?? '')),
+          )
+          if (isTransientTransportFailure || (!isUserShutdown && response?.ok === true && !response.handoff?.id)) {
             record.retryAt = Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS
             await persistLocalDownloads()
             continue
@@ -1312,9 +1329,54 @@ function matchesResourceRequest({ kind, url }: MediaResource, requestUrl: string
   return resourceFingerprint({ kind, url }) === resourceFingerprint({ kind, url: requestUrl })
 }
 
-async function readyResourceChain(resource: MediaResource, explicitChain?: RequestChain): Promise<RequestChain | undefined> {
+function firstValidDownloadIdentity(...candidates: Array<number | undefined>): number | undefined {
+  return candidates.find((value): value is number => validDownloadIdentity(value))
+}
+
+function findBrowserDownloadChain(
+  download: DownloadLike,
+  now: number,
+  preferredTabId: number | undefined,
+  successfulOnly: boolean,
+): RequestChain | undefined {
+  const direct = requestChains.find(download, now, preferredTabId, successfulOnly, 'exact')
+  if (direct) return direct
+  if (validDownloadIdentity(preferredTabId) || validDownloadIdentity(download.tabId)) {
+    const unattributed = requestChains.find(
+      { ...download, tabId: undefined, frameId: undefined },
+      now,
+      undefined,
+      successfulOnly,
+      'exact',
+    )
+    if (unattributed && !validDownloadIdentity(unattributed.tabId)) return unattributed
+  }
+  return undefined
+}
+
+function markPreOfferError(error: unknown): Error {
+  const normalized = error instanceof Error ? error : new Error(errorText(error))
+  return Object.assign(normalized, { preOffer: true })
+}
+
+function isPreOfferError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { preOffer?: unknown }).preOffer === true)
+}
+
+async function readyResourceChain(
+  resource: MediaResource,
+  explicitChain?: RequestChain,
+  options: Pick<ResourceRequestOptions, 'allowUnverified'> = {},
+): Promise<RequestChain | undefined> {
   let chain = successfulChainForResource(resource, explicitChain)
   if (!usesShortLivedMediaSignature(resource)) return chain
+  const isChainSignatureUsable = (candidate: RequestChain | undefined): candidate is RequestChain =>
+    Boolean(candidate && isShortLivedMediaSignatureUsable({ ...resource, url: candidate.finalUrl }))
+  if ((options.allowUnverified || resource.kind === 'file') && isShortLivedMediaSignatureUsable(resource)) {
+    if (isChainSignatureUsable(chain)) return chain
+    if (isChainSignatureUsable(explicitChain)) return explicitChain
+    return undefined
+  }
   // A Performance/media-element observation may arrive before the browser has
   // received its signed response. Do not hand the desktop a raw s/e/_t URL in
   // that gap: wait briefly for the real request and use its latest signature.
@@ -1335,6 +1397,8 @@ interface ResourceRequestOptions {
   explicitUserAction?: boolean
   forceResend?: boolean
   resourceCookies?: ReplayCookie[]
+  tabId?: number
+  frameId?: number
 }
 
 async function resourceRequest(
@@ -1342,12 +1406,19 @@ async function resourceRequest(
   explicitChain?: RequestChain,
   options: ResourceRequestOptions = {},
 ) {
-  resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
+  const resolvedTabId = firstValidDownloadIdentity(resource.tabId, options.tabId, explicitChain?.tabId)
+  const resolvedFrameId = firstValidDownloadIdentity(resource.frameId, options.frameId, explicitChain?.frameId)
+  resource = {
+    ...resource,
+    url: canonicalMediaUrl(resource.url, resource.kind),
+    ...(resolvedTabId !== undefined ? { tabId: resolvedTabId } : {}),
+    ...(resolvedFrameId !== undefined ? { frameId: resolvedFrameId } : {}),
+  }
   const pageUrl = await topLevelPageUrl(resource.tabId ?? -1, resource.pageUrl || '')
   const requireSuccessfulRequest = resource.kind !== 'magnet'
   const findChain = () => {
     if (options.browserDownload) {
-      return requestChains.find(options.browserDownload, Date.now(), resource.tabId, requireSuccessfulRequest, 'exact')
+      return findBrowserDownloadChain(options.browserDownload, Date.now(), resource.tabId, requireSuccessfulRequest)
     }
     const found = resource.tabId !== undefined && resource.tabId >= 0
       ? requestChains.find({ url: resource.url, referrer: pageUrl, frameId: resource.frameId,
@@ -1357,7 +1428,7 @@ async function resourceRequest(
     return !resource.method || found?.method.toUpperCase() === resource.method.toUpperCase() ? found : undefined
   }
   let chain = !options.browserDownload && usesShortLivedMediaSignature(resource)
-    ? await readyResourceChain({ ...resource, pageUrl }, explicitChain)
+    ? await readyResourceChain({ ...resource, pageUrl }, explicitChain, { allowUnverified: options.allowUnverified })
     : explicitChain || findChain()
   // 点击前接管尚未发出 GET；同 URL 的旧 POST 不能成为这次链接点击的请求体。
   if (resource.method && chain?.method.toUpperCase() !== resource.method.toUpperCase()) chain = undefined
@@ -1375,7 +1446,11 @@ async function resourceRequest(
     }, Date.now(), resource.tabId !== undefined && resource.tabId >= 0 ? resource.tabId : undefined, requireSuccessfulRequest).kind === 'ambiguous'
   )
   const mustVerifyIdentity = hasResponseIdentity && (!alreadyObserved || isAmbiguousIdentity())
-  if (!chain && (!options.allowUnverified || mustVerifyIdentity) && resource.kind !== 'magnet') {
+  const skipChainPollForFreshSignedFile = !mustVerifyIdentity
+    && resource.kind === 'file'
+    && usesShortLivedMediaSignature(resource)
+    && isShortLivedMediaSignatureUsable(resource)
+  if (!chain && (!options.allowUnverified || mustVerifyIdentity) && !skipChainPollForFreshSignedFile && resource.kind !== 'magnet') {
     // A visible URL is not by itself a browser request. Replaying a page
     // controller or stale signed gateway without a successful response chain
     // is how HTML pages became download tasks. Close the short observation
@@ -1401,14 +1476,25 @@ async function resourcePayload(
   explicitChain?: RequestChain,
   options: ResourceRequestOptions = {},
 ) {
-  resource = { ...resource, url: canonicalMediaUrl(resource.url, resource.kind) }
+  const initialTabId = firstValidDownloadIdentity(resource.tabId, options.tabId, explicitChain?.tabId)
+  const initialFrameId = firstValidDownloadIdentity(resource.frameId, options.frameId, explicitChain?.frameId)
+  resource = {
+    ...resource,
+    url: canonicalMediaUrl(resource.url, resource.kind),
+    ...(initialTabId !== undefined ? { tabId: initialTabId } : {}),
+    ...(initialFrameId !== undefined ? { frameId: initialFrameId } : {}),
+  }
   const { chain, pageUrl } = await resourceRequest(resource, explicitChain, options)
-  const pageChain = resource.tabId !== undefined && resource.tabId >= 0
-    ? requestChains.pageContext(resource.tabId, pageUrl)
+  const effectiveTabId = firstValidDownloadIdentity(resource.tabId, options.tabId, chain?.tabId) ?? -1
+  const effectiveFrameId = firstValidDownloadIdentity(resource.frameId, options.frameId, chain?.frameId) ?? 0
+  const pageChain = effectiveTabId >= 0
+    ? requestChains.pageContext(effectiveTabId, pageUrl)
     : undefined
   if (chain) {
     const freshUrl = canonicalMediaUrl(chain.finalUrl, resource.kind)
-    if (matchesResourceRequest(resource, freshUrl)) {
+    if (matchesResourceRequest(resource, freshUrl)
+      && (!usesShortLivedMediaSignature(resource)
+        || isShortLivedMediaSignatureUsable({ ...resource, url: freshUrl }))) {
       // LL-HLS and signed files keep refreshing while the selection panel is
       // open. Always hand off the most recently successful browser request,
       // not a stale Performance/fetch observation rendered by the page.
@@ -1446,7 +1532,7 @@ async function resourcePayload(
   })()
   const requestContexts: Record<string, Record<string, unknown>> = {}
   let resourceCookie: string | undefined
-  if (resource.tabId !== undefined && resource.tabId >= 0) {
+  if (effectiveTabId >= 0) {
     const cookieSnapshots = new Map<string, Promise<ReplayCookie[]>>()
     const addRequestContext = async (requestUrl: string, requestHeaders: Record<string, string> | undefined) => {
       let origin = ''
@@ -1457,7 +1543,7 @@ async function resourcePayload(
       if (!snapshot) {
         snapshot = origin === new URL(resource.url).origin && options.resourceCookies !== undefined
           ? Promise.resolve(options.resourceCookies)
-          : cookieRecordsFor(requestUrl, pageUrl, resource.tabId, resource.frameId ?? 0, true)
+          : cookieRecordsFor(requestUrl, pageUrl, effectiveTabId, effectiveFrameId, true)
         cookieSnapshots.set(origin, snapshot)
       }
       const cookies = await snapshot
@@ -1500,8 +1586,8 @@ async function resourcePayload(
     for (const candidate of resource.playbackUrls || []) rememberOrigin(candidate)
     for (const candidate of resource.playbackPatterns || []) rememberOrigin(candidate)
     const contexts = resource.kind === 'hls' || resource.kind === 'dash' || Boolean(selectedAudioUrl)
-      ? requestChains.contextsForPage(resource.tabId, resource.pageUrl || pageUrl,
-        Date.now(), 32, chain?.frameId ?? resource.frameId, chain?.pageUrl)
+      ? requestChains.contextsForPage(effectiveTabId, resource.pageUrl || pageUrl,
+        Date.now(), 32, chain?.frameId ?? effectiveFrameId, chain?.pageUrl)
         .filter(context => {
           try {
             const origin = new URL(context.finalUrl).origin
@@ -1542,6 +1628,9 @@ async function resourcePayload(
       })
     }
   }
+  const explicitResourceCookie = options.resourceCookies !== undefined
+    ? cookieHeaderForUrl(options.resourceCookies, resource.url)
+    : undefined
   const replay = replayablePostRequest(chain)
   const extension = extensionIdentity()
   if (String(resource.method || '').toUpperCase() === 'POST' && !replay.request_body) {
@@ -1561,7 +1650,7 @@ async function resourcePayload(
     preferred_variant_id: resource.preferredVariantId || '',
     referer: sourceIdentity.referer || identity.referer,
     origin: sourceIdentity.origin || identity.origin,
-    cookie: resourceCookie ?? await cookiesFor(resource.url, pageUrl, resource.tabId, resource.frameId ?? 0),
+    cookie: resourceCookie ?? explicitResourceCookie ?? await cookiesFor(resource.url, pageUrl, effectiveTabId, effectiveFrameId),
     user_agent: sourceIdentity.userAgent || identity.userAgent,
     request_headers: replayableRequestHeaders(chain?.requestHeaders || resource.requestHeaders),
     request_contexts: requestContexts,
@@ -1581,7 +1670,16 @@ async function requestDownload(
   chain?: RequestChain,
   options: ResourceRequestOptions = {},
 ) {
-  if (validDownloadIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`)
+  const effectiveTabId = firstValidDownloadIdentity(resource.tabId, options.tabId, chain?.tabId)
+  const effectiveFrameId = firstValidDownloadIdentity(resource.frameId, options.frameId, chain?.frameId)
+  if (effectiveTabId !== undefined && resource.tabId !== effectiveTabId) {
+    resource = {
+      ...resource,
+      tabId: effectiveTabId,
+      ...(effectiveFrameId !== undefined ? { frameId: effectiveFrameId } : {}),
+    }
+  }
+  if (validDownloadIdentity(resource.tabId)) await browser.storage.session.remove(`download-error:${resource.tabId}`).catch(() => undefined)
   await hydrateHandoffTracker()
   const selectionKey = downloadSelectionKey(resource)
   const pending = !options.browserRequestId && [...trackedHandoffs.values()].find(item => item.tabId === resource.tabId
@@ -1653,7 +1751,7 @@ async function requestDownload(
       } catch (error) {
         // offer catches transport errors itself; a throw here precedes send.
         await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => current.filter(item => item.clientRequestId !== requestId))
-        throw error
+        throw markPreOfferError(error)
       }
     } else {
       try {
@@ -1676,7 +1774,7 @@ async function requestDownload(
           response = await offer(resource, chain, options, requestId)
         } catch (error) {
           await directOfferStore.update(DIRECT_OFFERS_STORAGE_KEY, current => current.filter(item => item.clientRequestId !== requestId))
-          throw error
+          throw markPreOfferError(error)
         }
       } else if (!response.handoff?.id) {
         // A read cannot exclude a delayed original offer. Only Core's atomic
@@ -2173,22 +2271,32 @@ async function interceptFirefoxDownload(details: any, chain: RequestChain | unde
   if (!early) return undefined
   const prepared = await early.promise
   if (!prepared || prepared.bypass) return undefined
+  const ctrlForce = Boolean(prepared.intent?.ctrlForce)
   let resourceCookies: ReplayCookie[] | undefined
   if (prepared.resource.kind === 'file' || prepared.resource.kind === 'media') {
     const config = await settings()
-    const accelerated = await evaluateAcceleratedBrowserDownload(prepared.resource, chain, config)
+    const accelerated = await evaluateAcceleratedBrowserDownload(
+      prepared.resource,
+      chain,
+      config,
+      undefined,
+      ctrlForce,
+    )
     // 取消一个已经成功的 GET 后，只有确认可分段续传、满足阈值且 Cookie 一致的响应
     // 才交给 Core 多线程加速；一次性或不可重放响应继续走 onCreated 本地导入。
     if (!accelerated.accelerate) return undefined
     resourceCookies = accelerated.resourceCookies
-  } else if (!await desktopReadyForNewHandoff()) {
+  } else if (!ctrlForce && !await desktopReadyForNewHandoff()) {
     early.promise = Promise.resolve({ resource: prepared.resource, bypass: true })
     return undefined
   }
   try {
     const response = await requestDownload(prepared.resource, chain, {
       desktopReady: true,
+      ...(ctrlForce ? { explicitUserAction: true } : {}),
       ...(resourceCookies !== undefined ? { resourceCookies } : {}),
+      tabId: firstValidDownloadIdentity(prepared.resource.tabId, Number(details.tabId)),
+      frameId: firstValidDownloadIdentity(prepared.resource.frameId, Number(details.frameId)),
       browserRequestId: early.requestId,
       browserDownload: {
         url: chain?.initialUrl || details.url,
@@ -2283,7 +2391,6 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
   let resourceCookies: ReplayCookie[]
   try {
     const config = await settings()
-    if (config.minimumBytes > 0) return browserFallback()
     // Extensionless exports need a same-origin download attribute. Ordinary
     // navigations get one lookup, without polling or waiting for a new click.
     intent = await waitForClickIntent(details.url, details.url, chain.pageUrl, chain,
@@ -2291,6 +2398,10 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
     // Pointerdown/click deduplication can leave a second navigation without a
     // fresh intent. Existing ownership still applies, including after reload.
     if (!intent) return browserFallback()
+    if (!intent.ctrlForce && config.minimumBytes > 0) {
+      await clickIntentStore.remember(intent)
+      return browserFallback()
+    }
     // Generic controls can match a later response; pre-request ownership needs
     // the exact link the user chose, before the server has identified a file.
     if (pageIdentity(intent.href) !== pageIdentity(details.url)
@@ -2329,10 +2440,21 @@ async function prepareFirefoxFileRequest(details: any, chain: RequestChain) {
   try {
     // requestDownload resolves an existing journal before checking readiness
     // for a new offer. An offline desktop cannot release an uncertain offer.
-    const response = await requestDownload(resource, chain, { resourceCookies })
+    const response = await requestDownload(resource, chain, {
+      allowUnverified: true,
+      resourceCookies,
+      tabId: chain.tabId,
+      frameId: chain.frameId,
+      ...(intent.ctrlForce ? { explicitUserAction: true } : {}),
+    })
     if (response?.ownership_uncertain) await reportDownloadError(resource.tabId, response.error)
     if (desktopAcceptedHandoff(response) || response?.ownership_uncertain) return { cancel: true }
   } catch (error) {
+    if (isPreOfferError(error)) {
+      await reportDownloadError(resource.tabId, error)
+      await clickIntentStore.remember({ ...intent, altBypass: true, at: Date.now() })
+      return undefined
+    }
     await reportDownloadError(resource.tabId, '无法确认下载交接，请检查主程序后重试')
     return { cancel: true }
   }
@@ -2583,7 +2705,7 @@ export default defineBackground(() => {
     let browserOwnedByHandoff = false
     try {
       const config = await settings()
-      let provisionalChain = requestChains.find(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId, false, 'exact')
+      let provisionalChain = findBrowserDownloadChain(originalRequest, Date.now(), blobSource?.tabId ?? downloadIdentity(item).tabId, false)
       // 优先使用浏览器来源或唯一请求链。Chrome 缺少来源时，也不能按时间猜标签页。
       const earlyTakeover = (provisionalChain
         ? earlyBrowserTakeovers.get(provisionalChain.requestId)
@@ -2593,11 +2715,27 @@ export default defineBackground(() => {
           downloadIdentity(item),
           earlyBrowserTakeovers.values(),
         )
+      let prefetchedIntent: DownloadClickIntent | undefined
       if (!config.enabled) {
         const forcedEarly = earlyTakeover ? await earlyTakeover.promise : null
         if (!forcedEarly?.intent?.ctrlForce) {
-          if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
-          return
+          const initialIdentity = downloadIdentity(item)
+          prefetchedIntent = await waitForClickIntent(
+            originalRequest.url,
+            (item as any).finalUrl || originalRequest.finalUrl || '',
+            originalRequest.referrer || provisionalChain?.pageUrl || '',
+            provisionalChain,
+            2,
+            false,
+            {
+              tabId: firstValidDownloadIdentity(blobSource?.tabId, initialIdentity.tabId),
+              frameId: firstValidDownloadIdentity(blobSource?.frameId, initialIdentity.frameId),
+            },
+          )
+          if (prefetchedIntent?.altBypass || !prefetchedIntent?.ctrlForce) {
+            if (earlyTakeover) earlyBrowserTakeovers.delete(earlyTakeover.requestId)
+            return
+          }
         }
       }
       // 原请求可跨过 Firefox 后台重载。按浏览器 requestId 恢复已有接管，
@@ -2624,11 +2762,24 @@ export default defineBackground(() => {
         }
         if (earlyResult || restored) {
           let acceleratedOptions: Pick<ResourceRequestOptions, 'desktopReady' | 'resourceCookies'> = {}
-          if (!restored && earlyResult && !earlyResult.offerAttempted) {
+          const itemIdentity = downloadIdentity(item)
+          const earlyTabId = firstValidDownloadIdentity(earlyResult?.resource.tabId, itemIdentity.tabId, provisionalChain?.tabId)
+          const earlyFrameId = firstValidDownloadIdentity(earlyResult?.resource.frameId, itemIdentity.frameId, provisionalChain?.frameId)
+          const enrichedEarlyResource = earlyResult
+            ? {
+              ...earlyResult.resource,
+              ...(earlyTabId !== undefined ? { tabId: earlyTabId } : {}),
+              ...(earlyFrameId !== undefined ? { frameId: earlyFrameId } : {}),
+              pageUrl: earlyResult.resource.pageUrl || provisionalChain?.pageUrl || requestHeader(provisionalChain, 'referer') || '',
+              requestHeaders: earlyResult.resource.requestHeaders ?? provisionalChain?.requestHeaders,
+            }
+            : undefined
+          if (!restored && earlyResult && enrichedEarlyResource && !earlyResult.offerAttempted) {
             const preservation = await preserveBrowserDownload(
-              item, earlyResult.resource, earlyResult.intent, provisionalChain, config,
+              item, enrichedEarlyResource, earlyResult.intent, provisionalChain, config,
             )
             if (preservation.preserved) return
+            if (preservation.resolvedChain) provisionalChain = preservation.resolvedChain
             acceleratedOptions = {
               ...(preservation.desktopReady ? { desktopReady: true } : {}),
               ...(preservation.resourceCookies !== undefined ? { resourceCookies: preservation.resourceCookies } : {}),
@@ -2637,18 +2788,31 @@ export default defineBackground(() => {
           const pauseResult = await pauseBrowserDownload(item)
           if (pauseResult === null) return
           paused = pauseResult
-          const earlyResource = earlyResult && !earlyResult.resource.filename && item.filename
-            ? { ...earlyResult.resource, filename: item.filename.split(/[\\/]/).pop() || '' }
-            : earlyResult?.resource
+          const resolvedEarlyTabId = firstValidDownloadIdentity(enrichedEarlyResource?.tabId, itemIdentity.tabId, provisionalChain?.tabId)
+          const resolvedEarlyFrameId = firstValidDownloadIdentity(enrichedEarlyResource?.frameId, itemIdentity.frameId, provisionalChain?.frameId)
+          const earlyResource = enrichedEarlyResource
+            ? {
+              ...enrichedEarlyResource,
+              ...(!enrichedEarlyResource.filename && item.filename
+                ? { filename: item.filename.split(/[\\/]/).pop() || '' }
+                : {}),
+              ...(resolvedEarlyTabId !== undefined ? { tabId: resolvedEarlyTabId } : {}),
+              ...(resolvedEarlyFrameId !== undefined ? { frameId: resolvedEarlyFrameId } : {}),
+              pageUrl: enrichedEarlyResource.pageUrl || provisionalChain?.pageUrl || requestHeader(provisionalChain, 'referer') || '',
+              requestHeaders: enrichedEarlyResource.requestHeaders ?? provisionalChain?.requestHeaders,
+            }
+            : undefined
           const response = earlyResource
             ? await requestDownload(earlyResource, provisionalChain, {
               ...acceleratedOptions,
               ...(earlyResult?.intent?.ctrlForce ? { explicitUserAction: true } : {}),
+              tabId: resolvedEarlyTabId,
+              frameId: resolvedEarlyFrameId,
               browserRequestId: earlyTakeover?.requestId, browserDownload: originalRequest,
             }) : undefined
           if (response?.ownership_uncertain) {
             browserOwnedByHandoff = true
-            await retainUncertainBrowserDownload(item, response, earlyResult?.resource.tabId)
+            await retainUncertainBrowserDownload(item, response, earlyResource?.tabId)
             return
           }
           if (!restored && !desktopAcceptedHandoff(response)) return
@@ -2657,7 +2821,7 @@ export default defineBackground(() => {
           browserOwnedByHandoff = true
           await completeBrowserTakeover(item, handoffId)
           if (earlyTakeover && earlyResult && response?.handoff?.id) {
-            const tracked = await trackHandoff(handoffId, earlyResult.resource.id, earlyResult.resource.tabId)
+            const tracked = await trackHandoff(handoffId, earlyResult.resource.id, earlyResource?.tabId ?? earlyResult.resource.tabId)
             tracked.browserRequestId = earlyTakeover.requestId
             await persistHandoffTracker()
           }
@@ -2689,7 +2853,7 @@ export default defineBackground(() => {
       if (!item.filename && !classified.filename) {
         actualBrowser = await refreshedDownload(item.id, item)
         if (!canContinueTakeover(actualBrowser.state, paused)) return
-        provisionalChain = requestChains.find(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId ?? downloadIdentity(actualBrowser).tabId, false, 'exact')
+        provisionalChain = findBrowserDownloadChain(downloadRequestItem(actualBrowser, blobSource), Date.now(), blobSource?.tabId ?? downloadIdentity(actualBrowser).tabId, false)
         classified = classifyBrowserItem(actualBrowser, provisionalChain)
       } else {
         const [current] = await browser.downloads.search({ id: item.id }).catch(() => [])
@@ -2698,7 +2862,7 @@ export default defineBackground(() => {
       }
       if (!classified.kind) return
       const browserIdentity = downloadIdentity(actualBrowser)
-      let intent = await waitForClickIntent(
+      let intent = prefetchedIntent ?? await waitForClickIntent(
         classified.actual.url,
         classified.actual.finalUrl,
         classified.actual.referrer || provisionalChain?.pageUrl || '',
@@ -2707,10 +2871,11 @@ export default defineBackground(() => {
         false,
         { tabId: browserIdentity.tabId, frameId: browserIdentity.frameId },
       )
+      if (intent?.altBypass) return
       // 新标签页下载的点击属于父标签页，不能覆盖已确认的请求来源。
       let chain = provisionalChain ?? (intent?.tabId === undefined
         ? undefined
-        : requestChains.find(classified.actual, Date.now(), downloadIdentity(actualBrowser).tabId ?? intent.tabId, false, 'exact'))
+        : findBrowserDownloadChain(classified.actual, Date.now(), downloadIdentity(actualBrowser).tabId ?? intent.tabId, false))
       if (chain && chain !== provisionalChain) {
         classified = classifyBrowserItem(actualBrowser, chain)
         if (!classified.kind) return
@@ -2719,13 +2884,15 @@ export default defineBackground(() => {
       const size = (actual.fileSize && actual.fileSize > 0 ? actual.fileSize : 0)
         || (actual.totalBytes && actual.totalBytes > 0 ? actual.totalBytes : 0)
         || trackedSize(chain)
+      const initialTabId = firstValidDownloadIdentity(chain?.tabId, blobSource?.tabId, browserIdentity.tabId)
+      const initialFrameId = firstValidDownloadIdentity(chain?.frameId, blobSource?.frameId, browserIdentity.frameId)
       const pageUrl = actual.referrer || chain?.pageUrl || requestHeader(chain, 'referer')
-      const sourcePageUrl = await topLevelPageUrl(chain?.tabId ?? blobSource?.tabId ?? -1, pageUrl)
-      const resource: MediaResource = {
+      const sourcePageUrl = await topLevelPageUrl(initialTabId ?? -1, pageUrl)
+      let resource: MediaResource = {
         id: resourceId(url), url, kind, mimeType, size, title: filename, filename,
         pageUrl: sourcePageUrl,
-        tabId: chain?.tabId ?? blobSource?.tabId,
-        frameId: chain?.frameId ?? blobSource?.frameId,
+        tabId: initialTabId,
+        frameId: initialFrameId,
         method: chain?.method,
         requestHeaders: chain?.requestHeaders,
         seenAt: Date.now(),
@@ -2747,14 +2914,32 @@ export default defineBackground(() => {
       if (preservation.preserved) return
       // DownloadItem 可能先于请求链到达。使用与 offer 相同的解析流程确认方法后
       // 才暂停，且把同一条链传入 offer，避免晚到的 POST 被当成 GET 路径重放。
-      chain = preservation.resolvedChain ?? (await resourceRequest(resource, chain, { browserDownload: classified.actual })).chain
-      if (!chain) return
+      const resolvedChain = preservation.resolvedChain ?? (await resourceRequest(resource, chain, {
+        browserDownload: classified.actual,
+        tabId: browserIdentity.tabId,
+        frameId: browserIdentity.frameId,
+      })).chain
+      if (!resolvedChain) return
+      chain = resolvedChain
+      const backfilledTabId = firstValidDownloadIdentity(resource.tabId, browserIdentity.tabId, resolvedChain.tabId)
+      const backfilledFrameId = firstValidDownloadIdentity(resource.frameId, browserIdentity.frameId, resolvedChain.frameId)
+      const backfilledPageUrl = resource.pageUrl
+        || await topLevelPageUrl(backfilledTabId ?? -1, resolvedChain.pageUrl || requestHeader(resolvedChain, 'referer') || '')
+      resource = {
+        ...resource,
+        ...(backfilledTabId !== undefined ? { tabId: backfilledTabId } : {}),
+        ...(backfilledFrameId !== undefined ? { frameId: backfilledFrameId } : {}),
+        ...(backfilledPageUrl ? { pageUrl: backfilledPageUrl } : {}),
+        method: resource.method ?? resolvedChain.method,
+        requestHeaders: resource.requestHeaders ?? resolvedChain.requestHeaders,
+      }
       if (chain.method.toUpperCase() === 'POST') {
         if (!intent?.ctrlForce && (await desktopHandoffReadiness()) === 'user_shutdown') return
         // 复用本地导入，复制成功前保留浏览器源文件。
         await queueLocalBrowserDownload({
           downloadId: item.id, requestId: `local-file:${crypto.randomUUID()}`,
           sourceKey: await localDownloadIntentUrl(item.url), pageUrl: resource.pageUrl || '', intent,
+          tabId: firstValidDownloadIdentity(resource.tabId, intent?.tabId, browserIdentity.tabId),
           importUrl: 'data:application/octet-stream,',
         })
         return
@@ -2768,6 +2953,8 @@ export default defineBackground(() => {
         desktopReady: true,
         ...(intent?.ctrlForce ? { explicitUserAction: true } : {}),
         ...(preservation.resourceCookies !== undefined ? { resourceCookies: preservation.resourceCookies } : {}),
+        tabId: backfilledTabId,
+        frameId: backfilledFrameId,
         browserRequestId: chain.requestId,
         browserDownload: classified.actual,
       })
@@ -2916,13 +3103,15 @@ export default defineBackground(() => {
         try {
           const response = await requestDownload(resource, undefined, {
             allowUnverified: true,
+            tabId,
+            frameId: sender.frameId ?? 0,
             ...(ctrlForce ? { explicitUserAction: true } : {}),
           })
           if (response?.ownership_uncertain) await reportDownloadError(tabId, response.error)
           return { ...response, browserFallback: !desktopAcceptedHandoff(response) && !response?.ownership_uncertain }
         } catch (error) {
           await reportDownloadError(tabId, error)
-          return { ok: false, browserFallback: false, error: errorText(error) }
+          return { ok: false, browserFallback: isPreOfferError(error), error: errorText(error) }
         }
       })().then(sendResponse, error => sendResponse({ ok: false, browserFallback: true, error: errorText(error) }))
       return true
@@ -3191,14 +3380,24 @@ export default defineBackground(() => {
       return true
     }
     if (message?.type === 'push-to-tv') {
-      const resource = { ...message.resource }
+      const resource = {
+        ...message.resource,
+        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url || '',
+        tabId: firstValidDownloadIdentity(message.resource.tabId, sender.tab?.id),
+        frameId: firstValidDownloadIdentity(message.resource.frameId, sender.frameId),
+      }
       void pushToTv(resource)
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: errorText(error) }))
       return true
     }
     if (message?.type === 'cast-to-device') {
-      const resource = { ...message.resource }
+      const resource = {
+        ...message.resource,
+        pageUrl: message.resource.pageUrl || sender.url || sender.tab?.url || '',
+        tabId: firstValidDownloadIdentity(message.resource.tabId, sender.tab?.id),
+        frameId: firstValidDownloadIdentity(message.resource.frameId, sender.frameId),
+      }
       void castToDevice(resource)
         .then(response => sendResponse(response))
         .catch(error => sendResponse({ ok: false, error: errorText(error) }))

@@ -137,33 +137,23 @@ fn valid_site_rule_host(host: &str) -> bool {
 }
 
 pub fn host_of(url: &str) -> String {
-    let rest = url.split_once("://").map(|(_, tail)| tail).unwrap_or(url);
-    let authority = rest
+    if let Some(auth) = crate::net_policy::parse_url_authority(url) {
+        return auth.bracketed_host();
+    }
+    let trimmed = url.trim();
+    if trimmed.contains("://") || trimmed.contains(':') || trimmed.chars().any(char::is_control) {
+        return String::new();
+    }
+    trimmed
         .split(['/', '?', '#'])
         .next()
         .unwrap_or("")
         .rsplit('@')
         .next()
         .unwrap_or("")
-        .trim();
-    let host = if let Some(bracketed) = authority.strip_prefix('[') {
-        bracketed
-            .split_once(']')
-            .map(|(address, _)| {
-                address
-                    .parse::<std::net::Ipv6Addr>()
-                    .map(|ip| format!("[{ip}]"))
-                    .unwrap_or_else(|_| format!("[{address}]"))
-            })
-            .unwrap_or_default()
-    } else {
-        authority
-            .split_once(':')
-            .map(|(host, _)| host)
-            .unwrap_or(authority)
-            .to_string()
-    };
-    host.trim().trim_end_matches('.').to_ascii_lowercase()
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
 }
 
 pub fn upsert_site_rule(rules: &mut Vec<SiteRule>, rule: SiteRule) {
@@ -266,6 +256,9 @@ pub fn validate_site_rules(raw: &str) -> Result<(), String> {
             "" | "direct" | "system" | "manual"
         ) {
             return Err("站点规则代理模式无效".into());
+        }
+        if rule.proxy_mode.trim().eq_ignore_ascii_case("manual") && rule.proxy.trim().is_empty() {
+            return Err("站点规则手动代理模式未配置代理服务器地址".into());
         }
         for (label, value, limit) in [
             ("代理地址", rule.proxy.as_str(), 2048usize),
@@ -427,6 +420,37 @@ mod tests {
         assert_eq!(
             credential_ref_for_host("A.Test"),
             credential_ref_for_host("a.test")
+        );
+        assert!(validate_site_rules(r#"[{"host":"a.test","proxy_mode":"manual"}]"#).is_err());
+        assert!(
+            validate_site_rules(r#"[{"host":"a.test","proxy_mode":"manual","proxy":"   "}]"#)
+                .is_err()
+        );
+        assert!(validate_site_rules(
+            r#"[{"host":"a.test","proxy_mode":"manual","proxy":"http://127.0.0.1:8080"}]"#
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn matches_ftp_and_sftp_hosts_when_userinfo_contains_query_or_fragment_chars() {
+        let rules = parse_site_rules(r#"[{"host":"files.example.test","concurrency":4}]"#);
+        assert_eq!(
+            host_of("ftp://alice:p?ss#1@Files.Example.Test:2121/pub/a.bin"),
+            "files.example.test"
+        );
+        assert_eq!(
+            host_of("sftp://bob:sec#ret?2@[2001:DB8::1]:2222/pub/a.bin"),
+            "[2001:db8::1]"
+        );
+        assert!(matching_rule(
+            &rules,
+            "ftp://alice:p?ss#1@sub.files.example.test/pub/a.bin"
+        )
+        .is_some());
+        assert_eq!(
+            host_of("https://real.example.test?next=@files.example.test"),
+            "real.example.test"
         );
     }
 }

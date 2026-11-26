@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playlist {
     document_url: String,
+    unfiltered_tail: Option<(u64, Option<u64>)>,
     pub is_master: bool,
     pub end_list: bool,
     pub media_sequence: u64,
@@ -94,6 +95,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     }
     let mut playlist = Playlist {
         document_url: base.into(),
+        unfiltered_tail: None,
         is_master: false,
         end_list: false,
         media_sequence: 0,
@@ -123,6 +125,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     let mut complete_segments = 0u64;
     let mut part_index = 0u64;
     let mut discontinuity = false;
+    let mut part_discontinuity = false;
     let mut pending_gap = false;
     let mut ad_cue_active = false;
     let mut pending_daterange_ad = false;
@@ -149,6 +152,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             playlist.end_list = true;
         } else if line == "#EXT-X-DISCONTINUITY" {
             discontinuity = true;
+            part_discontinuity = true;
         } else if line == "#EXT-X-GAP" {
             pending_gap = true;
         } else if line.starts_with("#EXT-X-CUE-IN") {
@@ -232,10 +236,6 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             if let Some(uri) = attr_str(attrs, "URI") {
                 let resolved = resolve(&uri)?;
                 if resolved.is_empty() {
-                    pending_daterange_ad = false;
-                    discontinuity = false;
-                    pending_gap = false;
-                    pending_range = None;
                     continue;
                 }
                 charge_segment(
@@ -260,7 +260,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                         .map(|value| parse_hls_duration(&value))
                         .transpose()?
                         .unwrap_or(0.0),
-                    discontinuity,
+                    discontinuity: std::mem::take(&mut part_discontinuity),
                     byterange: match attr_str(attrs, "BYTERANGE") {
                         Some(value) => Some(resolve_byterange(
                             parse_byterange(&value)?,
@@ -276,10 +276,6 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     is_ad: ad_cue_active || pending_daterange_ad || url_is_ad(&resolved),
                 });
                 part_index = part_index.saturating_add(1);
-                pending_daterange_ad = false;
-                discontinuity = false;
-                pending_gap = false;
-                pending_range = None;
             }
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MEDIA:") {
             let rendition = Rendition {
@@ -312,6 +308,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_duration = 0.0;
                 pending_range = None;
                 discontinuity = false;
+                part_discontinuity = false;
                 pending_gap = false;
                 continue;
             }
@@ -364,6 +361,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_daterange_ad = false;
                 pending_duration = 0.0;
                 discontinuity = false;
+                part_discontinuity = false;
                 pending_gap = false;
                 complete_segments = complete_segments.saturating_add(1);
                 part_index = 0;
@@ -804,11 +802,22 @@ fn download_hls_scoped(
         LiveSubSession::default()
     };
     loop {
-        if read_control(control) == "cancel" {
-            return Err("canceled".into());
-        }
-        if read_control(control) == "pause" {
-            return Err("paused".into());
+        match read_control(control).as_str() {
+            "cancel" => return Err("canceled".into()),
+            "pause" => {
+                if live {
+                    timeline.save(&state_path)?;
+                    write_timeline_playlist(
+                        task_dir,
+                        playlist.target_duration,
+                        &timeline.entries,
+                        false,
+                    )?;
+                }
+                return Err("paused".into());
+            }
+            "finish" if live => break,
+            _ => {}
         }
         if live && options.download_subtitles {
             live_subs.capture(headers, proxy, task_dir, control);
@@ -824,7 +833,7 @@ fn download_hls_scoped(
                 true
             });
         }
-        let prepared = prepare_segments(
+        let prepared = match prepare_segments(
             pending,
             headers,
             proxy,
@@ -835,7 +844,22 @@ fn download_hls_scoped(
             &mut timeline.next_slot,
             &mut key_cache,
             &mut map_cache,
-        )?;
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
+            Err(stop) if live && stop == "finish" => break,
+            Err(stop) if live && stop == "paused" => {
+                timeline.save(&state_path)?;
+                write_timeline_playlist(
+                    task_dir,
+                    playlist.target_duration,
+                    &timeline.entries,
+                    false,
+                )?;
+                return Err("paused".into());
+            }
+            Err(error) => return Err(error),
+        };
         let previewable = !live
             && !prepared
                 .iter()
@@ -1032,6 +1056,12 @@ fn download_hls_scoped(
                     &timeline.entries,
                     false,
                 )?;
+                if read_control(control) == "cancel" {
+                    return Err("canceled".into());
+                }
+                if error == "finish" {
+                    break;
+                }
             } else {
                 for item in prepared
                     .iter()
@@ -1048,6 +1078,9 @@ fn download_hls_scoped(
                         audio_vod.remember(item.slot, &item.identity, file_len(&item.path));
                     }
                     let _ = audio_vod.save(&audio_dir);
+                }
+                if read_control(control) == "cancel" {
+                    return Err("canceled".into());
                 }
             }
             return Err(error);
@@ -1105,24 +1138,88 @@ fn download_hls_scoped(
         if playlist.end_list || !live {
             break;
         }
-        if playlist.can_block_reload {
-            playlist = reload_playlist(&current, headers, proxy, &playlist)?;
+        let previous_tail = playlist_tail(&playlist);
+        let reloaded = if playlist.can_block_reload {
+            reload_playlist(&current, headers, proxy, &playlist, control)
         } else {
             let wait = if playlist.part_target > 0.0 {
                 playlist.part_target
             } else {
                 (playlist.target_duration / 2.0).max(0.2)
             };
-            wait_with_control(control, wait.min(6.0))?;
-            playlist = load_playlist(&current, headers, proxy)?;
-        }
+            wait_with_control(control, wait.min(6.0))
+                .and_then(|()| load_playlist(&current, headers, proxy))
+        };
+        playlist = match reloaded {
+            Ok(next) => next,
+            Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
+            Err(stop) if stop == "finish" => break,
+            Err(stop) if stop == "paused" || read_control(control) == "pause" => {
+                timeline.save(&state_path)?;
+                write_timeline_playlist(
+                    task_dir,
+                    playlist.target_duration,
+                    &timeline.entries,
+                    false,
+                )?;
+                return Err("paused".into());
+            }
+            Err(error) => return Err(error),
+        };
         apply_ad_policy(&mut playlist, options.skip_ads);
+        match read_control(control).as_str() {
+            "cancel" => return Err("canceled".into()),
+            "pause" => {
+                timeline.save(&state_path)?;
+                write_timeline_playlist(
+                    task_dir,
+                    playlist.target_duration,
+                    &timeline.entries,
+                    false,
+                )?;
+                return Err("paused".into());
+            }
+            "finish" => break,
+            _ => {}
+        }
         if playlist.end_list {
             continue;
         }
-        if read_control(control) != "run" {
-            break;
+        if playlist.can_block_reload
+            && pending_segments(&playlist, &timeline.entries).is_empty()
+            && tail_position(playlist_tail(&playlist)) <= tail_position(previous_tail)
+        {
+            let poll = if playlist.target_duration.is_finite() {
+                (playlist.target_duration / 2.0).clamp(0.2, 2.0)
+            } else {
+                0.5
+            };
+            match wait_with_control(control, poll) {
+                Ok(()) => {}
+                Err(_) if read_control(control) == "cancel" => return Err("canceled".into()),
+                Err(stop) if stop == "finish" => break,
+                Err(stop) if stop == "paused" || read_control(control) == "pause" => {
+                    timeline.save(&state_path)?;
+                    write_timeline_playlist(
+                        task_dir,
+                        playlist.target_duration,
+                        &timeline.entries,
+                        false,
+                    )?;
+                    return Err("paused".into());
+                }
+                Err(error) => return Err(error),
+            }
         }
+    }
+    if let Some(recorder) = live_audio.as_mut() {
+        audio_merged = recorder.finish()?;
+    }
+    if timeline.entries.is_empty() {
+        if live {
+            return Err("未录制到任何直播分片".into());
+        }
+        return Err("no segments to concatenate".into());
     }
     if playlist.end_list || !live {
         vod.save(task_dir)?;
@@ -1133,9 +1230,6 @@ fn download_hls_scoped(
         &timeline.entries,
         playlist.end_list || !live,
     )?;
-    if let Some(recorder) = live_audio.as_mut() {
-        audio_merged = recorder.finish()?;
-    }
     if has_external_audio && !live {
         for item in &audio_prepared {
             audio_vod.remember(item.slot, &item.identity, file_len(&item.path));
@@ -1490,38 +1584,74 @@ fn timeline_playlist(target_duration: f64, entries: &[TimelineEntry], complete: 
     text
 }
 
+fn check_live_control(control: &Path) -> Result<(), String> {
+    match read_control(control).as_str() {
+        "cancel" => Err("canceled".into()),
+        "pause" => Err("paused".into()),
+        "finish" => Err("finish".into()),
+        _ => Ok(()),
+    }
+}
+
 fn reload_playlist(
     url: &str,
     headers: &HashMap<String, String>,
     proxy: &str,
     previous: &Playlist,
+    control: &Path,
 ) -> Result<Playlist, String> {
+    check_live_control(control)?;
     let blocking_url = blocking_reload_url(url, previous);
-    match load_playlist(&blocking_url, headers, proxy) {
-        Ok(playlist) if !playlist.segments.is_empty() || playlist.end_list => Ok(playlist),
-        Ok(_) | Err(_) => load_playlist(url, headers, proxy),
+    let mut throttle = crate::net_policy::current_throttle_context().unwrap_or_default();
+    if throttle.control.as_os_str().is_empty() && !control.as_os_str().is_empty() {
+        throttle.control = control.to_path_buf();
     }
+    crate::net_policy::with_throttle_context(Some(throttle), || {
+        match load_playlist(&blocking_url, headers, proxy) {
+            Ok(playlist) => {
+                check_live_control(control)?;
+                if !playlist.segments.is_empty() || playlist.end_list {
+                    return Ok(playlist);
+                }
+            }
+            Err(error) if error == "paused" || error == "canceled" => {
+                if read_control(control) == "cancel" {
+                    return Err("canceled".into());
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                check_live_control(control)?;
+            }
+        }
+        check_live_control(control)?;
+        let playlist = load_playlist(url, headers, proxy)?;
+        check_live_control(control)?;
+        Ok(playlist)
+    })
+}
+
+fn playlist_tail(playlist: &Playlist) -> Option<(u64, Option<u64>)> {
+    playlist.unfiltered_tail.or_else(|| {
+        playlist
+            .segments
+            .last()
+            .map(|segment| (segment.media_sequence, segment.part_index))
+    })
+}
+
+fn tail_position(tail: Option<(u64, Option<u64>)>) -> Option<(u64, u64)> {
+    tail.map(|(seq, part)| (seq, part.unwrap_or(u64::MAX)))
 }
 
 fn blocking_reload_url(url: &str, previous: &Playlist) -> String {
-    let last = previous.segments.last();
-    let (msn, part) = match last.and_then(|segment| segment.part_index) {
-        Some(part) => (
-            last.map(|segment| segment.media_sequence)
-                .unwrap_or_else(|| {
-                    previous
-                        .media_sequence
-                        .saturating_add(previous.skipped_segments)
-                }),
-            Some(part.saturating_add(1)),
-        ),
+    let (msn, part) = match playlist_tail(previous) {
+        Some((seq, Some(part))) => (seq, Some(part.saturating_add(1))),
+        Some((seq, None)) => (seq.saturating_add(1), None),
         None => (
-            last.map(|segment| segment.media_sequence.saturating_add(1))
-                .unwrap_or_else(|| {
-                    previous
-                        .media_sequence
-                        .saturating_add(previous.skipped_segments)
-                }),
+            previous
+                .media_sequence
+                .saturating_add(previous.skipped_segments),
             None,
         ),
     };
@@ -1567,15 +1697,11 @@ fn wait_with_control(control: &Path, seconds: f64) -> Result<(), String> {
     let total = seconds.max(0.0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(total);
     while std::time::Instant::now() < deadline {
-        match read_control(control).as_str() {
-            "cancel" => return Err("canceled".into()),
-            "pause" => return Err("paused".into()),
-            _ => {}
-        }
+        check_live_control(control)?;
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
     }
-    Ok(())
+    check_live_control(control)
 }
 
 fn write_json_atomic(path: &Path, text: &str) -> Result<(), String> {
@@ -1664,19 +1790,15 @@ fn prepare_segments(
     let seg_dir = task_dir.join("segments");
     let mut prepared = Vec::new();
     for segment in segments {
+        match read_control(control).as_str() {
+            "cancel" => return Err("canceled".into()),
+            "pause" => return Err("paused".into()),
+            "finish" if live => return Err("finish".into()),
+            _ => {}
+        }
         let slot = *next_slot;
         *next_slot = next_slot.saturating_add(1);
         let identity = segment_identity(&segment);
-        let init_map_path = match &segment.init_map {
-            Some(init_map) => Some(ensure_init_map(
-                init_map, headers, proxy, &seg_dir, control, key_cache, map_cache,
-            )?),
-            None => None,
-        };
-        let key_bytes = match &segment.key {
-            Some(key) => Some(load_key(key, headers, proxy, key_cache)?),
-            None => None,
-        };
         let name = format!("{:06}.{}", slot, extension(&segment.uri));
         let output = seg_dir.join(name);
         let (path, needs_download) = if live {
@@ -1697,6 +1819,20 @@ fn prepare_segments(
                 }
                 None => (output, true),
             }
+        };
+        let init_map_path = match &segment.init_map {
+            Some(init_map) => Some(ensure_init_map(
+                init_map, headers, proxy, &seg_dir, control, key_cache, map_cache,
+            )?),
+            None => None,
+        };
+        let key_bytes = if needs_download {
+            match &segment.key {
+                Some(key) => Some(load_key(key, headers, proxy, control, key_cache)?),
+                None => None,
+            }
+        } else {
+            None
         };
         prepared.push(PreparedSegment {
             segment,
@@ -1866,7 +2002,12 @@ fn download_prepared_segments(
         );
     }
     if queue.is_empty() {
-        return (HashSet::new(), None);
+        match read_control(control).as_str() {
+            "cancel" => return (HashSet::new(), Some("canceled".into())),
+            "pause" => return (HashSet::new(), Some("paused".into())),
+            "finish" if durable.is_none() => return (HashSet::new(), Some("finish".into())),
+            _ => return (HashSet::new(), None),
+        }
     }
     let worker_count = concurrency.min(queue.len()).max(1);
     let queue = Arc::new(Mutex::new(queue));
@@ -1901,6 +2042,36 @@ fn download_prepared_segments(
                 let _network = set_media_network_scope(network_scope);
                 crate::net_policy::with_throttle_context(throttle, || {
                     crate::with_replay_json(&replay, || loop {
+                        match read_control(control).as_str() {
+                            "cancel" => {
+                                if let Ok(mut queue) = queue.lock() {
+                                    queue.clear();
+                                }
+                                if let Ok(mut errors) = errors.lock() {
+                                    errors.push("canceled".into());
+                                }
+                                break;
+                            }
+                            "pause" => {
+                                if let Ok(mut queue) = queue.lock() {
+                                    queue.clear();
+                                }
+                                if let Ok(mut errors) = errors.lock() {
+                                    errors.push("paused".into());
+                                }
+                                break;
+                            }
+                            "finish" if durable.is_none() => {
+                                if let Ok(mut queue) = queue.lock() {
+                                    queue.clear();
+                                }
+                                if let Ok(mut errors) = errors.lock() {
+                                    errors.push("finish".into());
+                                }
+                                break;
+                            }
+                            _ => {}
+                        }
                         let work = queue.lock().ok().and_then(|mut queue| {
                             if let Some(priority) =
                                 control.parent().and_then(super::preview::priority_file)
@@ -2010,7 +2181,22 @@ fn download_prepared_segments(
         .map(|guard| guard.clone())
         .unwrap_or_default();
     let errors = errors.lock().map(|guard| guard.clone()).unwrap_or_default();
-    let mut error = errors.first().cloned();
+    if read_control(control) == "cancel" || errors.iter().any(|err| err == "canceled") {
+        return (completed, Some("canceled".into()));
+    }
+    let mut error = errors
+        .iter()
+        .find(|err| *err != "paused" && *err != "finish")
+        .or_else(|| errors.iter().find(|err| *err == "paused"))
+        .or_else(|| errors.first())
+        .cloned();
+    if error.is_none() {
+        match read_control(control).as_str() {
+            "pause" => error = Some("paused".into()),
+            "finish" if durable.is_none() => error = Some("finish".into()),
+            _ => {}
+        }
+    }
     if error.is_none() {
         if let Some(missing) = prepared
             .iter()
@@ -2023,29 +2209,91 @@ fn download_prepared_segments(
     (completed, error)
 }
 
+fn is_retryable_key_status(status: u16) -> bool {
+    retryable_http_status(status) || (500..=599).contains(&status)
+}
+
+fn is_retryable_key_error(error: &EngineError) -> bool {
+    if matches!(
+        error,
+        EngineError::Pause | EngineError::Cancel | EngineError::RangeUnsupported(_)
+    ) {
+        return false;
+    }
+    let message = error.to_string();
+    if message.contains("exceeds")
+        || message.contains("长度")
+        || message.contains("private network")
+        || message.contains("blocked")
+    {
+        return false;
+    }
+    !extract_http_status(&message).is_some_and(|status| !is_retryable_key_status(status))
+}
+
 fn load_key(
     key: &MediaKey,
     headers: &HashMap<String, String>,
     proxy: &str,
+    control: &Path,
     cache: &mut HashMap<String, Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
-    let cache_key = format!("{}:{:?}", key.uri, key.iv);
+    let cache_key = key.uri.clone();
     if let Some(bytes) = cache.get(&cache_key) {
         return Ok(bytes.clone());
     }
-    let (status, bytes) =
-        fetch_hls_bytes_limited(&key.uri, headers, proxy, 16).map_err(|error| error.to_string())?;
-    if status != 200 && status != 206 {
-        return Err(format!("HLS key HTTP {status}"));
+    let mut attempt = 1u32;
+    loop {
+        if !control.as_os_str().is_empty() {
+            check_live_control(control)?;
+        }
+        match fetch_hls_bytes_limited(&key.uri, headers, proxy, 16) {
+            Ok((status, bytes)) if status == 200 || status == 206 => {
+                if bytes.len() != 16 {
+                    return Err(format!(
+                        "AES-128 key 长度必须为 16 字节，实际为 {}",
+                        bytes.len()
+                    ));
+                }
+                cache.insert(cache_key, bytes.clone());
+                return Ok(bytes);
+            }
+            Ok((status, _)) => {
+                let message = format!("HLS key HTTP {status}");
+                if !is_retryable_key_status(status) || attempt >= MAX_SEGMENT_ATTEMPTS {
+                    return Err(message);
+                }
+                if !control.as_os_str().is_empty() {
+                    wait_with_control(
+                        control,
+                        SEGMENT_RETRY_DELAY_MS as f64 * f64::from(attempt) / 1000.0,
+                    )?;
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        SEGMENT_RETRY_DELAY_MS * u64::from(attempt),
+                    ));
+                }
+                attempt += 1;
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if !is_retryable_key_error(&error) || attempt >= MAX_SEGMENT_ATTEMPTS {
+                    return Err(message);
+                }
+                if !control.as_os_str().is_empty() {
+                    wait_with_control(
+                        control,
+                        SEGMENT_RETRY_DELAY_MS as f64 * f64::from(attempt) / 1000.0,
+                    )?;
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        SEGMENT_RETRY_DELAY_MS * u64::from(attempt),
+                    ));
+                }
+                attempt += 1;
+            }
+        }
     }
-    if bytes.len() != 16 {
-        return Err(format!(
-            "AES-128 key 长度必须为 16 字节，实际为 {}",
-            bytes.len()
-        ));
-    }
-    cache.insert(cache_key, bytes.clone());
-    Ok(bytes)
 }
 
 fn ensure_init_map(
@@ -2066,7 +2314,7 @@ fn ensure_init_map(
     // 磁盘上的旧文件没有完成凭据，可能是上次写盘/解密失败留下的残片。
     // 仅 map_cache 中本次运行成功落盘的条目可以复用。
     let encryption = if let Some(key) = &init_map.key {
-        let key_bytes = load_key(key, headers, proxy, key_cache)?;
+        let key_bytes = load_key(key, headers, proxy, control, key_cache)?;
         let iv = key.iv.ok_or("AES-128 HLS MAP 缺少显式 IV")?;
         Some((key_bytes, iv))
     } else {
@@ -2157,21 +2405,31 @@ impl LiveAudioRecorder {
     }
 
     fn finish(&mut self) -> Result<Option<PathBuf>, String> {
-        let _ = fs::write(&self.control, "finish");
+        let _ = crate::task_control::set(&self.control, "finish")
+            .or_else(|_| fs::write(&self.control, "finish").map_err(|error| error.to_string()));
         let Some(handle) = self.handle.take() else {
             return Ok(None);
         };
-        handle
+        match handle
             .join()
             .map_err(|_| "HLS live audio worker panicked".to_string())?
-            .map(Some)
+        {
+            Ok(path) => Ok(Some(path)),
+            Err(error) if error == "未录制到任何直播分片" || error == "finish" => {
+                let _ = fs::remove_dir_all(self.control.with_file_name("audio"));
+                let _ = fs::remove_file(&self.control);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
 impl Drop for LiveAudioRecorder {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let _ = fs::write(&self.control, "cancel");
+            let _ = crate::task_control::set(&self.control, "cancel")
+                .or_else(|_| fs::write(&self.control, "cancel").map_err(|error| error.to_string()));
             let _ = handle.join();
         }
     }
@@ -2394,7 +2652,7 @@ fn capture_live_subtitle_track(
         let key = match segment
             .key
             .as_ref()
-            .map(|key| load_key(key, headers, proxy, &mut keys))
+            .map(|key| load_key(key, headers, proxy, control, &mut keys))
             .transpose()
         {
             Ok(key) => key,
@@ -2466,7 +2724,7 @@ fn download_vod_subtitle(
             let key = segment
                 .key
                 .as_ref()
-                .map(|key| load_key(key, headers, proxy, &mut keys))
+                .map(|key| load_key(key, headers, proxy, control, &mut keys))
                 .transpose()?;
             let path = cache.join(format!("{index:08}.vtt"));
             download_segment(
@@ -2927,6 +3185,12 @@ fn apply_ad_policy(playlist: &mut Playlist, enabled: bool) {
     if !enabled {
         return;
     }
+    if playlist.segments.iter().any(|segment| segment.is_ad) {
+        playlist.unfiltered_tail = playlist
+            .segments
+            .last()
+            .map(|segment| (segment.media_sequence, segment.part_index));
+    }
     let mut kept = Vec::new();
     let mut pending_gap = false;
     for mut segment in playlist.segments.drain(..) {
@@ -3115,6 +3379,7 @@ fn read_control(path: &Path) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     #[test]
     fn redirected_playlist_resolves_children_without_replaying_entry_credentials() {
@@ -3139,7 +3404,7 @@ mod tests {
             let key = segment.key.as_ref().unwrap();
             assert_eq!(key.uri, format!("{cdn}/vod/aes.key"));
             assert_eq!(
-                load_key(key, &headers, "", &mut HashMap::new()).unwrap(),
+                load_key(key, &headers, "", Path::new(""), &mut HashMap::new()).unwrap(),
                 b"0123456789abcdef"
             );
         });
@@ -3243,7 +3508,14 @@ mod tests {
             }
             let _ = reader.get_mut().write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 23\r\nConnection: close\r\n\r\n<html>missing key</html>");
         });
-        let error = load_key(&key, &HashMap::new(), "", &mut HashMap::new()).unwrap_err();
+        let error = load_key(
+            &key,
+            &HashMap::new(),
+            "",
+            Path::new(""),
+            &mut HashMap::new(),
+        )
+        .unwrap_err();
         server.join().unwrap();
         assert_eq!(error, "HLS key HTTP 404");
     }
@@ -3312,7 +3584,7 @@ mod tests {
             }),
         };
         let key = map.key.as_ref().unwrap();
-        let mut keys = HashMap::from([(format!("{}:{:?}", key.uri, key.iv), vec![0; 16])]);
+        let mut keys = HashMap::from([(key.uri.clone(), vec![0; 16])]);
         let mut maps = HashMap::new();
         let identity = init_map_identity(&map);
         let path = segments.join(format!("init-{}.mp4", &identity[..16]));
@@ -5366,5 +5638,479 @@ mod tests {
         let embedded_only_pl =
             parse_playlist(embedded_only, "https://cdn.example.test/master.m3u8").unwrap();
         assert!(audio_choices(&embedded_only_pl).is_empty());
+    }
+
+    #[test]
+    fn ll_hls_parts_do_not_consume_parent_discontinuity_daterange_gap_or_byterange() {
+        let m3u8 = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MEDIA-SEQUENCE:20\n",
+            "#EXT-X-PART-INF:PART-TARGET=0.5\n",
+            "#EXT-X-DISCONTINUITY\n",
+            "#EXT-X-DATERANGE:ID=\"ad-break\",SCTE35-OUT=0xFC3011\n",
+            "#EXT-X-GAP\n",
+            "#EXT-X-BYTERANGE:120@40\n",
+            "#EXT-X-PART:DURATION=0.5,URI=\"p0.m4s\"\n",
+            "#EXT-X-PART:DURATION=0.5,URI=\"p1.m4s\"\n",
+            "#EXTINF:1.0,\n",
+            "seg20.m4s\n",
+            "#EXTINF:1.0,\n",
+            "seg21.m4s\n",
+        );
+        let parsed = parse_playlist(m3u8, "https://cdn.test/live.m3u8").unwrap();
+        assert_eq!(parsed.segments.len(), 4);
+        let p0 = &parsed.segments[0];
+        let p1 = &parsed.segments[1];
+        let seg20 = &parsed.segments[2];
+        let seg21 = &parsed.segments[3];
+
+        assert!(p0.is_part && p0.discontinuity && p0.is_ad && p0.gap && p0.byterange.is_none());
+        assert!(p1.is_part && !p1.discontinuity && p1.is_ad && p1.gap && p1.byterange.is_none());
+        assert!(!seg20.is_part);
+        assert!(
+            seg20.discontinuity,
+            "parent segment must retain discontinuity"
+        );
+        assert!(
+            seg20.is_ad,
+            "parent segment must retain pending daterange ad"
+        );
+        assert!(seg20.gap, "parent segment must retain pending gap");
+        assert_eq!(seg20.byterange, Some((40, 120)));
+
+        assert!(!seg21.discontinuity && !seg21.is_ad && !seg21.gap && seg21.byterange.is_none());
+    }
+
+    #[test]
+    fn ll_hls_blocking_reload_uses_unfiltered_ad_tail_and_propagates_controls() {
+        let mut with_tail_ads = parse_playlist(
+            concat!(
+                "#EXTM3U\n",
+                "#EXT-X-MEDIA-SEQUENCE:10\n",
+                "#EXT-X-PART-INF:PART-TARGET=0.5\n",
+                "#EXTINF:1.0,\n",
+                "main10.m4s\n",
+                "#EXT-X-CUE-OUT:10\n",
+                "#EXT-X-PART:DURATION=0.5,URI=\"ad11.0.m4s\"\n",
+                "#EXT-X-PART:DURATION=0.5,URI=\"ad11.1.m4s\"\n",
+            ),
+            "https://cdn.test/live.m3u8",
+        )
+        .unwrap();
+        apply_ad_policy(&mut with_tail_ads, true);
+        assert_eq!(with_tail_ads.segments.len(), 1);
+        assert_eq!(
+            blocking_reload_url("https://cdn.test/live.m3u8", &with_tail_ads),
+            "https://cdn.test/live.m3u8?_HLS_msn=11&_HLS_part=2"
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-reload-control-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        for (word, expected) in [
+            ("pause", "paused"),
+            ("cancel", "canceled"),
+            ("finish", "finish"),
+        ] {
+            fs::write(&control, word).unwrap();
+            assert_eq!(
+                reload_playlist(
+                    "http://127.0.0.1:1/live.m3u8",
+                    &HashMap::new(),
+                    "",
+                    &with_tail_ads,
+                    &control
+                )
+                .unwrap_err(),
+                expected
+            );
+            assert_eq!(wait_with_control(&control, 5.0).unwrap_err(), expected);
+        }
+
+        // Server ignoring _HLS_msn and returning unchanged tail must sleep bounded poll interval instead of tight-spinning.
+        let spin_dir = root.join("spin");
+        fs::create_dir_all(&spin_dir).unwrap();
+        let spin_control = spin_dir.join("control");
+        fs::write(&spin_control, "run").unwrap();
+        let finish_ctrl = spin_control.clone();
+        let reload_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&reload_hits);
+        let spin_origin = super::super::harness::serve_dynamic(Arc::new(
+            move |path, _| match path {
+                "/live.m3u8" => {
+                    let n = server_hits.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n >= 3 {
+                        let _ = fs::write(&finish_ctrl, "finish");
+                    }
+                    Some(
+                    b"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES\n#EXT-X-MEDIA-SEQUENCE:5\n#EXTINF:1.0,\ns5.ts\n"
+                        .to_vec(),
+                )
+                }
+                "/s5.ts" => Some(b"SEG5".to_vec()),
+                _ => None,
+            },
+        ));
+        let started = Instant::now();
+        let out = download_hls_with(
+            &format!("{}/live.m3u8", spin_origin.base),
+            &HashMap::new(),
+            "",
+            &spin_dir,
+            &spin_control,
+            HlsDownloadOptions {
+                live: true,
+                download_subtitles: false,
+                remux_ts_to_mp4: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(350),
+            "unchanged LL-HLS reload tail must sleep bounded poll interval, elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(fs::read(&out).unwrap(), b"SEG5");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_hls_finish_publishes_recorded_segments_and_handles_empty_or_silent_audio() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-live-finish-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+
+        // 0 segments recorded when finish is already set -> clean Chinese error.
+        let empty_dir = root.join("empty");
+        fs::create_dir_all(&empty_dir).unwrap();
+        fs::write(&control, "finish").unwrap();
+        let empty_origin = super::super::harness::serve_files(HashMap::from([(
+            "/live.m3u8".into(),
+            b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\ns0.ts\n".to_vec(),
+        )]));
+        let err = download_hls_with(
+            &format!("{}/live.m3u8", empty_origin.base),
+            &HashMap::new(),
+            "",
+            &empty_dir,
+            &control,
+            HlsDownloadOptions {
+                live: true,
+                remux_ts_to_mp4: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, "未录制到任何直播分片");
+
+        // Live video + silent/unready external audio finishes cleanly when finish is requested.
+        let rec_dir = root.join("recorded");
+        fs::create_dir_all(&rec_dir).unwrap();
+        let rec_control = rec_dir.join("control");
+        fs::write(&rec_control, "run").unwrap();
+        let signal_control = rec_control.clone();
+        let origin = super::super::harness::serve_dynamic(Arc::new(move |path, hit| {
+            match path {
+            "/master.m3u8" => Some(
+                b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Audio\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO=\"a\"\nvideo.m3u8\n".to_vec(),
+            ),
+            "/video.m3u8" => {
+                if hit >= 2 {
+                    let _ = fs::write(&signal_control, "finish");
+                }
+                Some(b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\nv0.ts\n".to_vec())
+            }
+            "/audio.m3u8" => {
+                // Valid live audio playlist whose segments are still GAP / not yet available.
+                Some(b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-GAP\n#EXTINF:2,\na0.ts\n".to_vec())
+            }
+            "/v0.ts" => Some(b"LIVE-VIDEO-BYTES".to_vec()),
+            _ => None,
+        }
+        }));
+        let out = download_hls_with(
+            &format!("{}/master.m3u8", origin.base),
+            &HashMap::new(),
+            "",
+            &rec_dir,
+            &rec_control,
+            HlsDownloadOptions {
+                live: true,
+                download_subtitles: false,
+                remux_ts_to_mp4: false,
+                ..HlsDownloadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read(&out).unwrap(), b"LIVE-VIDEO-BYTES");
+        assert!(!rec_dir.join("audio").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn vod_cancel_overrides_paused_worker_error() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-vod-cancel-prio-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "pause").unwrap();
+        let control_for_server = control.clone();
+        let origin = super::super::harness::serve_dynamic(Arc::new(move |_, _| {
+            let _ = fs::write(&control_for_server, "cancel");
+            Some(b"DATA".to_vec())
+        }));
+        let seg = Segment {
+            uri: format!("{}/s0.ts", origin.base),
+            media_sequence: 0,
+            part_index: None,
+            key: None,
+            init_map: None,
+            gap: false,
+            duration: 2.0,
+            discontinuity: false,
+            byterange: None,
+            is_part: false,
+            is_ad: false,
+        };
+        let prepared = vec![PreparedSegment {
+            identity: segment_identity(&seg),
+            segment: seg,
+            slot: 0,
+            path: root.join("segments/000000.ts"),
+            init_map_path: None,
+            key_bytes: None,
+            needs_download: true,
+        }];
+        fs::write(&control, "cancel").unwrap();
+        let (_, err) = download_prepared_segments(
+            &prepared,
+            &[],
+            &HashMap::new(),
+            "",
+            &control,
+            1,
+            None,
+            &|_| {},
+            None,
+        );
+        assert_eq!(err.as_deref(), Some("canceled"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn aes_key_caches_by_uri_retries_transient_only_and_skips_completed_vod_segments() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                if attempt == 0 {
+                    stream
+                        .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy")
+                        .unwrap();
+                } else {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\n0123456789abcdef")
+                        .unwrap();
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-key-cache-resume-{}-{}",
+            std::process::id(),
+            addr.port()
+        ));
+        fs::create_dir_all(root.join("segments")).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let key_iv1 = MediaKey {
+            method: "AES-128".into(),
+            uri: format!("http://{addr}/aes.key"),
+            iv: Some([1; 16]),
+        };
+        let key_iv2 = MediaKey {
+            method: "AES-128".into(),
+            uri: format!("http://{addr}/aes.key"),
+            iv: Some([2; 16]),
+        };
+        let mut cache = HashMap::new();
+        let bytes1 = load_key(&key_iv1, &HashMap::new(), "", &control, &mut cache).unwrap();
+        let bytes2 = load_key(&key_iv2, &HashMap::new(), "", &control, &mut cache).unwrap();
+        server.join().unwrap();
+        assert_eq!(bytes1, b"0123456789abcdef");
+        assert_eq!(bytes2, b"0123456789abcdef");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "second IV must hit URI cache"
+        );
+
+        // Resumed VOD segment already on disk must not fetch an expired/dead key server.
+        let dead_key_seg = Segment {
+            uri: "https://cdn.test/seg0.ts".into(),
+            media_sequence: 0,
+            part_index: None,
+            key: Some(MediaKey {
+                method: "AES-128".into(),
+                uri: "http://127.0.0.1:1/expired.key".into(),
+                iv: Some([0; 16]),
+            }),
+            init_map: None,
+            gap: false,
+            duration: 2.0,
+            discontinuity: false,
+            byterange: None,
+            is_part: false,
+            is_ad: false,
+        };
+        let existing = root.join("segments/000000.ts");
+        fs::write(&existing, b"DECRYPTED").unwrap();
+        let mut vod = VodCheckpoint::load(&root);
+        vod.remember(0, &segment_identity(&dead_key_seg), 9);
+        let prepared = prepare_segments(
+            vec![dead_key_seg],
+            &HashMap::new(),
+            "",
+            &root,
+            &control,
+            false,
+            &vod,
+            &mut 0,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(prepared.len(), 1);
+        assert!(!prepared[0].needs_download);
+        assert!(prepared[0].key_bytes.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hls_key_and_segment_retry_backoff_propagate_finish_control() {
+        let root = std::env::temp_dir().join(format!(
+            "hls-finish-backoff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        let key_control = control.clone();
+        let key_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let key_addr = key_listener.local_addr().unwrap();
+        let key_server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = key_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = fs::write(&key_control, "finish");
+            }
+        });
+        let media_key = MediaKey {
+            method: "AES-128".into(),
+            uri: format!("http://127.0.0.1:{}/live.key", key_addr.port()),
+            iv: Some([0; 16]),
+        };
+        let key_err = load_key(
+            &media_key,
+            &HashMap::new(),
+            "",
+            &control,
+            &mut HashMap::new(),
+        )
+        .unwrap_err();
+        key_server.join().unwrap();
+        assert_eq!(key_err, "finish");
+
+        fs::write(&control, "run").unwrap();
+        let seg_control = control.clone();
+        let seg_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let seg_addr = seg_listener.local_addr().unwrap();
+        let seg_server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = seg_listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut buf);
+                let _ = std::io::Write::write_all(
+                    &mut stream,
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = fs::write(&seg_control, "finish");
+            }
+        });
+        let seg = Segment {
+            uri: format!("http://127.0.0.1:{}/seg0.ts", seg_addr.port()),
+            media_sequence: 0,
+            part_index: None,
+            key: None,
+            init_map: None,
+            gap: false,
+            duration: 2.0,
+            discontinuity: false,
+            byterange: None,
+            is_part: false,
+            is_ad: false,
+        };
+        let seg_err = download_segment(
+            &seg,
+            &HashMap::new(),
+            "",
+            &root.join("seg0.ts"),
+            &control,
+            None,
+            None,
+            0,
+            true,
+        )
+        .unwrap_err();
+        seg_server.join().unwrap();
+        assert_eq!(seg_err, "finish");
+        let _ = fs::remove_dir_all(root);
     }
 }

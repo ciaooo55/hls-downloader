@@ -28,24 +28,53 @@ unsafe extern "system" {
     fn InternetFreeProxyInfoList(list: *mut ProxyList);
 }
 
+/// Builds synthetic WinINet `InternetGetProxyForUrl` PAC probe URLs strictly
+/// from normalized scheme + userinfo-free `hostport` (`http://{hostport}/`,
+/// `https://{hostport}/`, or `ftp://{hostport}/`), never leaking raw URL
+/// credentials, paths, or query strings into PAC scripts.
+pub(super) fn pac_probe_urls(target_url: &str) -> Result<Vec<String>, String> {
+    if target_url.chars().any(char::is_control) {
+        return Err("目标地址无效".into());
+    }
+    let auth = crate::net_policy::parse_url_authority(target_url).ok_or("目标地址无效")?;
+    let hostport = auth.hostport();
+    let schemes: &[&str] = match auth.scheme.as_str() {
+        "http" | "ws" => &["http"],
+        "https" | "wss" | "sftp" => &["https"],
+        "ftp" => &["ftp"],
+        "ftps" => &["ftp", "https"],
+        _ => &[auth.scheme.as_str()],
+    };
+    Ok(schemes
+        .iter()
+        .map(|normalized| format!("{normalized}://{hostport}/"))
+        .collect())
+}
+
+// Retained for existing tests in `proxy_tunnel/tests.rs` (outside Track 2 file ownership);
+// production `lookup()` uses `pac_probe_urls()` which strips paths and query strings.
+#[cfg(test)]
 pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String> {
     if target_url.chars().any(char::is_control) {
         return Err("目标地址无效".into());
     }
-    let (scheme, rest) = target_url.split_once("://").ok_or("目标地址无效")?;
-    let scheme = scheme.trim().to_ascii_lowercase();
-    if scheme.is_empty() {
-        return Err("目标地址无效".into());
-    }
-    let without_fragment = rest.split_once('#').map_or(rest, |(head, _)| head);
-    let (authority, tail) = match without_fragment.find(['/', '?']) {
-        Some(pos) => (&without_fragment[..pos], &without_fragment[pos..]),
-        None => (without_fragment, ""),
+    let auth = crate::net_policy::parse_url_authority(target_url).ok_or("目标地址无效")?;
+    let (_, rest) = target_url.split_once("://").ok_or("目标地址无效")?;
+    let tail = if matches!(auth.scheme.as_str(), "ftp" | "ftps" | "sftp") {
+        if let Some(slash) = rest.find('/') {
+            let with_path = &rest[slash..];
+            with_path.split_once('#').map_or(with_path, |(h, _)| h)
+        } else {
+            let after_at = rest.rfind('@').map_or(rest, |at| &rest[at + 1..]);
+            let without_frag = after_at.split_once('#').map_or(after_at, |(h, _)| h);
+            without_frag.find('?').map_or("", |q| &without_frag[q..])
+        }
+    } else {
+        let without_fragment = rest.split_once('#').map_or(rest, |(head, _)| head);
+        without_fragment
+            .find(['/', '?'])
+            .map_or("", |pos| &without_fragment[pos..])
     };
-    let endpoint = authority.rsplit('@').next().unwrap_or(authority);
-    if endpoint.is_empty() {
-        return Err("目标地址无效".into());
-    }
     let suffix = if tail.is_empty() {
         "/".to_string()
     } else if tail.starts_with('/') {
@@ -53,10 +82,11 @@ pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String>
     } else {
         format!("/{tail}")
     };
-    let schemes: &[&str] = match scheme.as_str() {
+    let endpoint = auth.hostport();
+    let schemes: &[&str] = match auth.scheme.as_str() {
         "ftps" => &["ftp", "https"],
         "sftp" => &["https"],
-        _ => &[scheme.as_str()],
+        _ => &[auth.scheme.as_str()],
     };
     Ok(schemes
         .iter()
@@ -65,7 +95,7 @@ pub(super) fn lookup_candidates(target_url: &str) -> Result<Vec<String>, String>
 }
 
 pub(super) fn lookup(target_url: &str, allow_https: bool) -> Result<Option<String>, String> {
-    let candidates = lookup_candidates(target_url)?;
+    let candidates = pac_probe_urls(target_url)?;
     let mut first_error = None;
     let mut saw_direct = false;
     for candidate in &candidates {
@@ -178,4 +208,43 @@ fn route(entry: &ProxyInfo, allow_https: bool) -> Result<Option<String>, String>
         "{scheme}://{}",
         super::authority(host, entry.port)
     )))
+}
+
+#[cfg(test)]
+mod pac_probe_tests {
+    use super::pac_probe_urls;
+
+    #[test]
+    fn pac_probe_urls_never_leak_credentials_paths_or_queries() {
+        assert_eq!(
+            pac_probe_urls(
+                "https://alice:secret@CDN.Example.com:8443/private/video.mp4?token=abc#t=1"
+            )
+            .unwrap(),
+            vec!["https://cdn.example.com:8443/".to_string()]
+        );
+        assert_eq!(
+            pac_probe_urls("http://[2001:DB8::1]:8080/secret?sig=xyz").unwrap(),
+            vec!["http://[2001:db8::1]:8080/".to_string()]
+        );
+        assert_eq!(
+            pac_probe_urls("sftp://user:p?ss#1@nas.example.com:2222/secret/file.bin?x=1#frag")
+                .unwrap(),
+            vec!["https://nas.example.com:2222/".to_string()]
+        );
+        assert_eq!(
+            pac_probe_urls("ftps://u:p#2?3@files.example.com:990/dir/a.bin?b=2#top").unwrap(),
+            vec![
+                "ftp://files.example.com:990/".to_string(),
+                "https://files.example.com:990/".to_string(),
+            ]
+        );
+        assert_eq!(
+            pac_probe_urls("wss://stream.example.com/live?key=secret").unwrap(),
+            vec!["https://stream.example.com/".to_string()]
+        );
+        assert!(pac_probe_urls("not-a-url").is_err());
+        assert!(pac_probe_urls("sftp://user@/path").is_err());
+        assert!(pac_probe_urls("https://evil.example\0.good.example/a").is_err());
+    }
 }

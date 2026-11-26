@@ -440,6 +440,264 @@ fn canonical_header_name(name: &str) -> String {
     }
 }
 
+pub(crate) fn merge_protected_headers(
+    existing_headers: &mut serde_json::Map<String, serde_json::Value>,
+    protected_headers: serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, value) in protected_headers {
+        let stale: Vec<String> = existing_headers
+            .keys()
+            .filter(|existing| existing.eq_ignore_ascii_case(&key))
+            .cloned()
+            .collect();
+        for old_key in stale {
+            existing_headers.remove(&old_key);
+        }
+        existing_headers.insert(key, value);
+    }
+}
+
+fn update_cookie_in_json_headers(value: &mut serde_json::Value, cookie: &str) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let stale: Vec<String> = map
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("cookie"))
+                .cloned()
+                .collect();
+            let had_cookie = !stale.is_empty();
+            for key in stale {
+                map.remove(&key);
+            }
+            if had_cookie && !cookie.trim().is_empty() {
+                map.insert(
+                    "Cookie".into(),
+                    serde_json::Value::String(cookie.to_string()),
+                );
+            }
+        }
+        serde_json::Value::String(text) => {
+            if let Ok(mut parsed) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text)
+            {
+                let mut obj = serde_json::Value::Object(std::mem::take(&mut parsed));
+                update_cookie_in_json_headers(&mut obj, cookie);
+                *text = obj.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Update top-level and matching-origin replay context entries when a new `Cookie`
+/// header is sealed onto `spec`, preventing `apply_replay_json_for` from resurrecting
+/// stale `cookies` arrays or origin-scoped `cookie` values.
+pub(crate) fn overwrite_replay_cookie(
+    context: &mut serde_json::Map<String, serde_json::Value>,
+    target_url: &str,
+    cookie: &str,
+) {
+    let trimmed = cookie.trim();
+    context.remove("cookies");
+    if trimmed.is_empty() {
+        context.remove("cookie");
+    } else {
+        context.insert(
+            "cookie".into(),
+            serde_json::Value::String(trimmed.to_string()),
+        );
+    }
+    if let Some(headers) = context.get_mut("request_headers") {
+        update_cookie_in_json_headers(headers, trimmed);
+    }
+    let origin = request_origin(target_url);
+    if origin.is_empty() {
+        return;
+    }
+    let Some(contexts) = context
+        .get_mut("request_contexts")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for (key, scoped_val) in contexts.iter_mut() {
+        if key != &origin && !key.eq_ignore_ascii_case(&origin) && request_origin(key) != origin {
+            continue;
+        }
+        let Some(scoped) = scoped_val.as_object_mut() else {
+            continue;
+        };
+        scoped.remove("cookies");
+        scoped.insert(
+            "cookie".into(),
+            serde_json::Value::String(trimmed.to_string()),
+        );
+        if let Some(headers) = scoped.get_mut("request_headers") {
+            update_cookie_in_json_headers(headers, trimmed);
+        }
+        for sub_kind in ["path_contexts", "url_contexts"] {
+            if let Some(sub_map) = scoped
+                .get_mut(sub_kind)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for sub_ctx in sub_map.values_mut() {
+                    if let Some(headers) = sub_ctx
+                        .as_object_mut()
+                        .and_then(|obj| obj.get_mut("request_headers"))
+                    {
+                        update_cookie_in_json_headers(headers, trimmed);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn merge_headers_into_json_slot(
+    container: &mut serde_json::Map<String, serde_json::Value>,
+    updates: &serde_json::Map<String, serde_json::Value>,
+) {
+    if updates.is_empty() {
+        return;
+    }
+    match container.get_mut("request_headers") {
+        Some(serde_json::Value::Object(map)) => {
+            merge_protected_headers(map, updates.clone());
+        }
+        Some(serde_json::Value::String(text)) => {
+            if let Ok(mut parsed) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text)
+            {
+                merge_protected_headers(&mut parsed, updates.clone());
+                *text = serde_json::Value::Object(parsed).to_string();
+            }
+        }
+        _ => {
+            let mut map = serde_json::Map::new();
+            merge_protected_headers(&mut map, updates.clone());
+            container.insert("request_headers".into(), serde_json::Value::Object(map));
+        }
+    }
+}
+
+/// Synchronize explicit non-Cookie request headers onto matching-origin
+/// `request_contexts`, `path_contexts`, and `url_contexts` so `apply_replay_json_for`
+/// and redirect boundary helpers never discard or revert user-provided headers.
+pub(crate) fn overwrite_replay_headers(
+    context: &mut serde_json::Map<String, serde_json::Value>,
+    target_url: &str,
+    headers: &serde_json::Map<String, serde_json::Value>,
+) {
+    let non_cookie: serde_json::Map<String, serde_json::Value> = headers
+        .iter()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("cookie"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    if non_cookie.is_empty() {
+        return;
+    }
+    merge_headers_into_json_slot(context, &non_cookie);
+    for (field, header_name) in [
+        ("referer", "referer"),
+        ("origin", "origin"),
+        ("user_agent", "user-agent"),
+    ] {
+        if let Some((_, value)) = non_cookie
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(header_name))
+        {
+            context.insert(field.into(), value.clone());
+        }
+    }
+    let origin = request_origin(target_url);
+    if origin.is_empty() {
+        return;
+    }
+    let Some(contexts) = context
+        .get_mut("request_contexts")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for (key, scoped_val) in contexts.iter_mut() {
+        if key != &origin && !key.eq_ignore_ascii_case(&origin) && request_origin(key) != origin {
+            continue;
+        }
+        let Some(scoped) = scoped_val.as_object_mut() else {
+            continue;
+        };
+        merge_headers_into_json_slot(scoped, &non_cookie);
+        for (field, header_name) in [
+            ("referer", "referer"),
+            ("origin", "origin"),
+            ("user_agent", "user-agent"),
+        ] {
+            if let Some((_, value)) = non_cookie
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(header_name))
+            {
+                scoped.insert(field.into(), value.clone());
+            }
+        }
+        for sub_kind in ["path_contexts", "url_contexts"] {
+            if let Some(sub_map) = scoped
+                .get_mut(sub_kind)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for sub_ctx in sub_map.values_mut() {
+                    if let Some(sub_obj) = sub_ctx.as_object_mut() {
+                        merge_headers_into_json_slot(sub_obj, &non_cookie);
+                        for (field, header_name) in [
+                            ("referer", "referer"),
+                            ("origin", "origin"),
+                            ("user_agent", "user-agent"),
+                        ] {
+                            if let Some((_, value)) = non_cookie
+                                .iter()
+                                .find(|(key, _)| key.eq_ignore_ascii_case(header_name))
+                            {
+                                sub_obj.insert(field.into(), value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Apply explicit in-memory headers (such as unsaved `TaskEditorWindow` edits during
+/// read-only `ProbeUrl`) on top of an already-bound replay JSON without mutating SQLite.
+pub(crate) fn apply_explicit_headers_to_replay_json(
+    replay_json: &str,
+    target_url: &str,
+    explicit_headers: &std::collections::BTreeMap<String, String>,
+) -> String {
+    if replay_json.trim().is_empty() || explicit_headers.is_empty() {
+        return replay_json.to_string();
+    }
+    let Ok(mut context) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(replay_json)
+    else {
+        return replay_json.to_string();
+    };
+    if let Some((_, cookie)) = explicit_headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("cookie"))
+    {
+        overwrite_replay_cookie(&mut context, target_url, cookie);
+    }
+    let non_cookie: serde_json::Map<String, serde_json::Value> = explicit_headers
+        .iter()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("cookie"))
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    if !non_cookie.is_empty() {
+        overwrite_replay_headers(&mut context, target_url, &non_cookie);
+    }
+    serde_json::Value::Object(context).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,5 +1237,203 @@ mod tests {
             assert_eq!(scoped_replay_json(), "outer");
         });
         assert!(scoped_replay_json().is_empty());
+    }
+
+    #[test]
+    fn overwrite_replay_cookie_replaces_cookie_strips_cookies_array_and_scopes_to_origin() {
+        let mut context: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "cookie": "sid=stale-top",
+                "cookies": [{"name": "sid", "value": "stale-array"}],
+                "request_headers": {
+                    "cookie": "sid=stale-lower",
+                    "Authorization": "Bearer keep-token"
+                },
+                "request_contexts": {
+                    "https://cdn.test": {
+                        "cookie": "sid=stale-cdn",
+                        "cookies": ["sid=stale-cdn-array"],
+                        "request_headers": {
+                            "Cookie": "sid=stale-cdn-hdr",
+                            "X-Cdn-Flag": "keep"
+                        },
+                        "path_contexts": {
+                            "/vod/": {
+                                "cookie": "sid=stale-path",
+                                "cookies": ["sid=stale-path-array"],
+                                "request_headers": {
+                                    "cookie": "sid=stale-path-hdr",
+                                    "X-Path-Flag": "keep-path"
+                                }
+                            }
+                        }
+                    },
+                    "https://other.test": {
+                        "cookie": "other=untouched",
+                        "cookies": [{
+                            "name": "other",
+                            "value": "untouched",
+                            "domain": "other.test",
+                            "path": "/"
+                        }]
+                    }
+                }
+            }))
+            .expect("build replay map");
+
+        let mut existing_headers = match context.remove("request_headers") {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => panic!("expected request_headers object"),
+        };
+        let mut incoming = serde_json::Map::new();
+        incoming.insert(
+            "Cookie".into(),
+            serde_json::Value::String("sid=fresh".into()),
+        );
+        merge_protected_headers(&mut existing_headers, incoming);
+        assert_eq!(existing_headers.len(), 2);
+        assert!(existing_headers.get("cookie").is_none());
+        assert_eq!(
+            existing_headers.get("Cookie").and_then(|v| v.as_str()),
+            Some("sid=fresh")
+        );
+        context.insert(
+            "request_headers".into(),
+            serde_json::Value::Object(existing_headers),
+        );
+
+        overwrite_replay_cookie(&mut context, "https://cdn.test/vod/seg-01.m4s", "sid=fresh");
+        assert!(context.get("cookies").is_none());
+        assert_eq!(
+            context.get("cookie").and_then(|v| v.as_str()),
+            Some("sid=fresh")
+        );
+
+        let replay_json = serde_json::Value::Object(context).to_string();
+        let mut cdn_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut cdn_headers,
+            &replay_json,
+            "https://cdn.test/vod/seg-01.m4s",
+        );
+        assert_eq!(
+            cdn_headers.get("Cookie").map(String::as_str),
+            Some("sid=fresh")
+        );
+        assert_eq!(
+            cdn_headers.get("X-Path-Flag").map(String::as_str),
+            Some("keep-path")
+        );
+
+        let mut root_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut root_headers,
+            &replay_json,
+            "https://cdn.test/root/seg-01.m4s",
+        );
+        assert_eq!(
+            root_headers.get("Cookie").map(String::as_str),
+            Some("sid=fresh")
+        );
+        assert_eq!(
+            root_headers.get("X-Cdn-Flag").map(String::as_str),
+            Some("keep")
+        );
+
+        let mut other_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut other_headers,
+            &replay_json,
+            "https://other.test/media/seg.ts",
+        );
+        assert_eq!(
+            other_headers.get("Cookie").map(String::as_str),
+            Some("other=untouched")
+        );
+    }
+
+    #[test]
+    fn overwrite_replay_headers_updates_scoped_path_and_url_contexts_without_cross_origin_bleed() {
+        let mut context = serde_json::json!({
+            "request_headers": {
+                "authorization": "Bearer stale-top"
+            },
+            "request_contexts": {
+                "https://cdn.test": {
+                    "request_headers": {
+                        "Authorization": "Bearer stale-origin",
+                        "X-Keep": "origin-keep"
+                    },
+                    "path_contexts": {
+                        "/vod/": {
+                            "request_headers": {
+                                "Authorization": "Bearer stale-path",
+                                "X-Path-Keep": "path-keep"
+                            }
+                        }
+                    },
+                    "url_contexts": {
+                        "https://cdn.test/vod/master.m3u8": {
+                            "request_headers": {
+                                "authorization": "Bearer stale-url"
+                            }
+                        }
+                    }
+                },
+                "https://other.test": {
+                    "request_headers": {
+                        "Authorization": "Bearer other-origin"
+                    }
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let mut updates = serde_json::Map::new();
+        updates.insert(
+            "Authorization".into(),
+            serde_json::Value::String("Bearer fresh-override".into()),
+        );
+        updates.insert(
+            "X-Api-Key".into(),
+            serde_json::Value::String("key-2026".into()),
+        );
+        overwrite_replay_headers(&mut context, "https://cdn.test/vod/master.m3u8", &updates);
+
+        let replay_json = bind_replay_source_url(
+            &serde_json::Value::Object(context).to_string(),
+            "https://cdn.test/vod/master.m3u8",
+        );
+        for target in [
+            "https://cdn.test/vod/master.m3u8",
+            "https://cdn.test/vod/seg-01.ts",
+            "https://cdn.test/other/seg-01.ts",
+        ] {
+            let mut headers = std::collections::BTreeMap::new();
+            apply_replay_json_for(&mut headers, &replay_json, target);
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer fresh-override"),
+                "target={target}"
+            );
+            assert_eq!(
+                headers.get("X-Api-Key").map(String::as_str),
+                Some("key-2026"),
+                "target={target}"
+            );
+        }
+        let mut other_headers = std::collections::BTreeMap::new();
+        apply_replay_json_for(
+            &mut other_headers,
+            &replay_json,
+            "https://other.test/live/seg.ts",
+        );
+        assert_eq!(
+            other_headers.get("Authorization").map(String::as_str),
+            Some("Bearer other-origin")
+        );
+        assert!(!other_headers.contains_key("X-Api-Key"));
     }
 }
