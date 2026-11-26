@@ -3,7 +3,7 @@ import { browser } from 'wxt/browser'
 import { SubtitlePcm } from './subtitlePcm'
 import { captureSubtitleAudio, waitForSubtitleAudio } from './subtitleAudio'
 import { installSubtitleContent } from './subtitleContent'
-import { subtitleAllowed, subtitleReadyEnd, subtitleSettings, visibleSubtitle } from './subtitleSettings'
+import { resolveSubtitleAudioSource, subtitleAllowed, subtitleReadyEnd, subtitleSettings, visibleSubtitle } from './subtitleSettings'
 import { parseHlsManifest } from './hlsManifest'
 import { prefetchSubtitleAudio, subtitleWindowEnd } from './subtitlePrefetch'
 
@@ -40,6 +40,37 @@ describe('提前字幕的连续窗口和取消', () => {
     expect(subtitleReadyEnd([[20, 30], [0, 8]], 2)).toBe(8)
     expect(subtitleReadyEnd([[20, 30], [0, 8], [8, 20]], 2)).toBe(30)
     expect(subtitleReadyEnd([[0, 8]], 50)).toBe(50)
+    // Media element clock jitter slightly behind window start (e.g. 9.95s vs [10, 18]) still chains cleanly.
+    expect(subtitleReadyEnd([[10, 18], [18, 26]], 9.95)).toBe(26)
+    expect(subtitleReadyEnd([[10, 18], [19, 26]], 9.95)).toBe(18)
+  })
+
+  it('resolves language-free multi-codec audio renditions while failing closed on ambiguous multi-language tracks', () => {
+    const biliResource = {
+      url: 'https://upos.bilivideo.com/video.m4s',
+      audioUrl: 'https://upos.bilivideo.com/audio-192k.m4s',
+      audioTracks: [
+        { label: '音轨', language: '', url: 'https://upos.bilivideo.com/audio-192k.m4s', default: true },
+        { label: '音轨', language: '', url: 'https://upos.bilivideo.com/audio-flac.m4s', default: false },
+      ],
+    }
+    expect(resolveSubtitleAudioSource(biliResource, { audioIndex: -1, audioLanguage: '', audioLabel: '' })).toMatchObject({
+      url: 'https://upos.bilivideo.com/audio-192k.m4s',
+      audioUrl: undefined,
+    })
+    const multiLang = {
+      url: 'https://cdn.example/master.m3u8',
+      audioTracks: [
+        { label: 'English', language: 'en', url: 'https://cdn.example/en.m3u8', default: true },
+        { label: 'Japanese', language: 'ja', url: 'https://cdn.example/ja.m3u8', default: false },
+      ],
+    }
+    expect(() => resolveSubtitleAudioSource(multiLang, { audioIndex: -1, audioLanguage: '', audioLabel: '' }))
+      .toThrow('无法确认当前备用音轨')
+    expect(resolveSubtitleAudioSource(multiLang, { audioIndex: 1, audioLanguage: 'ja', audioLabel: 'Japanese' })).toMatchObject({
+      url: 'https://cdn.example/ja.m3u8',
+      audioUrl: undefined,
+    })
   })
   it('断句跨下载分片连续计时，优先在静音处提交并限制连续讲话窗口', () => {
     const pcm = new Uint8Array(12 * 32000)

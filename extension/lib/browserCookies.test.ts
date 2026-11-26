@@ -3,6 +3,8 @@ import {
   cookieLookupUrl,
   cookieHeaderForUrl,
   cookiePermissionAllows,
+  cookiePermissionHost,
+  isCookieHostAuthorized,
   normalizeCookiePermissionHosts,
   replayCookieIdentity,
   cookiePartitionSite,
@@ -10,6 +12,7 @@ import {
   isCookieHostPermissionError,
   isSrcdocCookieHostPermissionError,
 } from './browserCookies'
+import { isExcludedHost, normalizeExcludedHosts, normalizeHost } from './resources'
 
 describe('cookieLookupUrl', () => {
   it('accepts http and https URLs', () => {
@@ -103,6 +106,29 @@ describe('cookie site permissions', () => {
     expect(normalizeCookiePermissionHosts(
       Array.from({ length: 300 }, (_, index) => `site-${index}.test`),
     )).toHaveLength(256)
+  })
+
+  it('matches parent-domain authorizations and rejects non-HTTP schemes and bare IPv6 mismatches', () => {
+    expect(isCookieHostAuthorized('sub.video.site.test', ['site.test'])).toBe(true)
+    expect(isCookieHostAuthorized('https://sub.site.test/watch', ['*.site.test.'])).toBe(true)
+    expect(isCookieHostAuthorized('evil-site.test', ['site.test'])).toBe(false)
+    for (const nonHttp of [
+      'chrome://extensions',
+      'about:blank',
+      'magnet:?xt=urn:btih:0123456789abcdef',
+      'javascript:void(0)',
+      'data:text/plain,hello',
+      'blob:https://site.test/id',
+    ]) {
+      expect(cookiePermissionHost(nonHttp)).toBe('')
+      expect(normalizeHost(nonHttp)).toBe('')
+      expect(isCookieHostAuthorized(nonHttp, ['extensions', 'blank', 'site.test'])).toBe(false)
+    }
+    expect(normalizeHost('::1')).toBe('[::1]')
+    expect(normalizeHost('https://[::1]:8080/watch')).toBe('[::1]')
+    expect(cookiePermissionHost('2001:db8::1')).toBe('[2001:db8::1]')
+    expect(normalizeExcludedHosts(['*.Site.Test.', 'https://www.site.test/a', 'about:blank'])).toEqual(['site.test'])
+    expect(isExcludedHost('player.site.test', ['site.test'])).toBe(true)
   })
 })
 

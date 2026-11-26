@@ -11124,3 +11124,276 @@ fn single_ended_global_auto_start_does_not_fabricate_stop_window_and_stop_start_
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn local_link_file_expands_under_allowed_hosts_and_recomputes_child_resource_key_proxy_and_site_rules(
+) {
+    let root = lifecycle_test_root("expand-allowlist-proxy-rules");
+    fs::create_dir_all(&root).unwrap();
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting(
+            "allowed_hosts",
+            serde_json::json!("intranet.allowed.test, cdn.allowed.test"),
+        )
+        .unwrap();
+    coordinator
+        .set_setting("proxy_url", serde_json::json!("http://127.0.0.1:8888"))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_mode", serde_json::json!("manual"))
+        .unwrap();
+    coordinator
+        .set_setting("proxy_bypass", serde_json::json!("intranet.allowed.test"))
+        .unwrap();
+    let rules = crate::format_site_rules(&[crate::SiteRule {
+        host: "cdn.allowed.test".into(),
+        concurrency: 6,
+        referer: "https://portal.allowed.test/".into(),
+        ..Default::default()
+    }]);
+    coordinator
+        .set_setting("site_rules", serde_json::json!(rules))
+        .unwrap();
+
+    let allowed_list = root.join("allowed.txt");
+    fs::write(
+        &allowed_list,
+        "https://intranet.allowed.test/internal.zip\nhttps://cdn.allowed.test/video.mp4\n",
+    )
+    .unwrap();
+    coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: allowed_list.to_string_lossy().into_owned(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+    let specs: Vec<TaskSpec> = {
+        let core = coordinator.lock().unwrap();
+        core.tasks()
+            .into_iter()
+            .map(|t| core.task_spec(&t.task_id).unwrap().clone())
+            .collect()
+    };
+    assert_eq!(specs.len(), 2);
+    let intranet = specs
+        .iter()
+        .find(|s| s.url.contains("intranet.allowed.test"))
+        .unwrap();
+    let cdn = specs
+        .iter()
+        .find(|s| s.url.contains("cdn.allowed.test"))
+        .unwrap();
+    assert_eq!(
+        intranet.resource_key,
+        "https://intranet.allowed.test/internal.zip"
+    );
+    assert_eq!(intranet.proxy, crate::net_policy::DIRECT_PROXY_SENTINEL);
+    assert_eq!(cdn.resource_key, "https://cdn.allowed.test/video.mp4");
+    assert_eq!(cdn.proxy, "http://127.0.0.1:8888");
+    assert_eq!(cdn.concurrency, 6);
+    assert_eq!(
+        cdn.headers.get("Referer").map(String::as_str),
+        Some("https://portal.allowed.test/")
+    );
+
+    let blocked_list = root.join("blocked.txt");
+    fs::write(&blocked_list, "https://evil.blocked.test/payload.exe\n").unwrap();
+    let err = coordinator
+        .dispatch(CoreCommand::CreateTask {
+            spec: TaskSpec {
+                url: blocked_list.to_string_lossy().into_owned(),
+                start_paused: true,
+                ..Default::default()
+            },
+        })
+        .unwrap_err();
+    assert!(err.contains("白名单") || err.contains("域名范围"), "{err}");
+
+    let harvest_err = coordinator
+        .dispatch(CoreCommand::HarvestPage {
+            url: "https://evil.blocked.test/index.html".into(),
+            referer: String::new(),
+            probe_urls: Vec::new(),
+        })
+        .unwrap_err();
+    assert!(harvest_err.contains("域名范围"), "{harvest_err}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn handoff_editor_non_sensitive_header_edits_override_replay_context_and_workbench_presentation_is_distinct(
+) {
+    let root = lifecycle_test_root("handoff-cred-override-workbench");
+    let coordinator = CoreCoordinator::new(PersistentCore::in_memory().unwrap());
+    coordinator
+        .set_setting("legal_terms_accepted", serde_json::json!(true))
+        .unwrap();
+    coordinator
+        .set_setting(
+            "download_dir",
+            serde_json::json!(root.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    coordinator
+        .set_setting(
+            "default_referer",
+            serde_json::json!("https://global-default.example/"),
+        )
+        .unwrap();
+
+    let replay_json = serde_json::json!({
+        "cookie": "sid=keep_me",
+        "referer": "https://browser-page.example/watch",
+        "user_agent": "BrowserUA/1.0",
+        "request_contexts": {
+            "https://cdn.example.test": {
+                "cookie": "sid=keep_me",
+                "referer": "https://browser-page.example/watch",
+                "request_headers": {
+                    "X-Custom": "old-value",
+                    "User-Agent": "BrowserUA/1.0"
+                }
+            }
+        }
+    })
+    .to_string();
+    let blob = if cfg!(windows) {
+        CredentialVault.protect(&replay_json).unwrap()
+    } else {
+        replay_json.clone()
+    };
+    coordinator
+        .store_credential("browser-cred-orig", &blob, "browser_replay")
+        .unwrap();
+
+    let handoff = crate::contract::BrowserHandoff {
+        id: "handoff-wb-1".into(),
+        request_id: "req-wb-1".into(),
+        status: "pending".into(),
+        presentation: "queued".into(),
+        created_at_ms: 1_000,
+        task_id: None,
+        filename: "clip.mp4".into(),
+        title: "Clip".into(),
+        mime_type: "video/mp4".into(),
+        size: 0,
+        suppression: None,
+        offer: crate::ResourceOffer {
+            handoff_id: "handoff-wb-1".into(),
+            url: "https://cdn.example.test/clip.mp4".into(),
+            filename: "clip.mp4".into(),
+            title: "Clip".into(),
+            mime_type: "video/mp4".into(),
+            resource_kind: crate::ResourceKind::File,
+            credential_ref: Some("browser-cred-orig".into()),
+            source_page_url: "https://browser-page.example/watch".into(),
+            ..Default::default()
+        },
+    };
+    coordinator
+        .admit_handoff(&serde_json::to_string(&handoff).unwrap())
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::PresentHandoff {
+            handoff_id: "handoff-wb-1".into(),
+            ok: true,
+            presenter_id: "confirm-1".into(),
+        })
+        .unwrap();
+    coordinator
+        .dispatch(CoreCommand::PresentHandoff {
+            handoff_id: "handoff-wb-1".into(),
+            ok: true,
+            presenter_id: "workbench:confirm-1".into(),
+        })
+        .unwrap();
+    let persisted = coordinator
+        .query_handoffs(Some("handoff-wb-1"), None, false)
+        .unwrap();
+    let state: Value = serde_json::from_str(&persisted[0]).unwrap();
+    assert_eq!(state["presentation"], "workbench");
+    assert_eq!(state["presentation_owner"], "workbench");
+
+    let mut edited_headers = BTreeMap::new();
+    edited_headers.insert("Referer".into(), "https://edited.example/custom".into());
+    edited_headers.insert("User-Agent".into(), "EditedUA/2.0".into());
+    edited_headers.insert("X-Custom".into(), "edited-value".into());
+    coordinator
+        .dispatch(CoreCommand::AcceptHandoff {
+            handoff_id: "handoff-wb-1".into(),
+            filename: "clip.mp4".into(),
+            download_dir: root.to_string_lossy().into_owned(),
+            allow_duplicate: false,
+            trusted_ui: true,
+            start_paused: true,
+            queue_id: crate::DEFAULT_QUEUE_ID.into(),
+            spec_override: Some(Box::new(TaskSpec {
+                url: "https://cdn.example.test/clip.mp4".into(),
+                filename: "clip.mp4".into(),
+                headers: edited_headers,
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+
+    let stored_spec = coordinator
+        .lock()
+        .unwrap()
+        .task_spec("task-1")
+        .unwrap()
+        .clone();
+    assert_ne!(
+        stored_spec.credential_ref.as_deref(),
+        Some("browser-cred-orig")
+    );
+    let (hydrated, replay) = hydrate_replay_headers(&coordinator.core(), stored_spec).unwrap();
+    assert_eq!(
+        hydrated.headers.get("Cookie").map(String::as_str),
+        Some("sid=keep_me")
+    );
+    assert_eq!(
+        hydrated.headers.get("Referer").map(String::as_str),
+        Some("https://edited.example/custom")
+    );
+    assert_eq!(
+        hydrated.headers.get("User-Agent").map(String::as_str),
+        Some("EditedUA/2.0")
+    );
+    assert_eq!(
+        hydrated.headers.get("X-Custom").map(String::as_str),
+        Some("edited-value")
+    );
+    let mut wire_headers = BTreeMap::new();
+    apply_replay_json_for(
+        &mut wire_headers,
+        &replay,
+        "https://cdn.example.test/clip.mp4",
+    );
+    assert_eq!(
+        wire_headers.get("Referer").map(String::as_str),
+        Some("https://edited.example/custom")
+    );
+    assert_eq!(
+        wire_headers.get("User-Agent").map(String::as_str),
+        Some("EditedUA/2.0")
+    );
+    assert_eq!(
+        wire_headers.get("X-Custom").map(String::as_str),
+        Some("edited-value")
+    );
+    let _ = fs::remove_dir_all(root);
+}

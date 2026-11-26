@@ -77,6 +77,7 @@ export class TakeoverSettingsSync {
         'quickDownloadEnabled',
         'speedLimitEnabled',
         'speedLimitKib',
+        'tvboxConfigured',
       ])
       const previous = normalizePending(stored[PENDING_TAKEOVER_SETTINGS_KEY])
       const enabled = typeof update.enabled === 'boolean'
@@ -104,6 +105,7 @@ export class TakeoverSettingsSync {
       if (typeof update.speedLimitEnabled === 'boolean') local.speedLimitEnabled = update.speedLimitEnabled
       await this.storage.set(local)
       const speedLimitKib = normalizedBytes(stored.speedLimitKib)
+      const tvboxConfigured = typeof stored.tvboxConfigured === 'boolean' ? stored.tvboxConfigured : undefined
       return {
         ok: true,
         queued: true,
@@ -116,6 +118,7 @@ export class TakeoverSettingsSync {
           ? speedLimitEnabled
           : stored.speedLimitEnabled === true,
         ...(speedLimitKib !== undefined ? { speed_limit_kib: speedLimitKib } : {}),
+        ...(tvboxConfigured !== undefined ? { tvbox_configured: tvboxConfigured } : {}),
       }
     })
     this.triggerSync()
@@ -125,12 +128,18 @@ export class TakeoverSettingsSync {
   async applyPing(response: any): Promise<any> {
     const pending = await this.readPending()
     if (pending) {
+      await this.withStorageWrite(async () => {
+        const tvboxConfigured = this.extractTvboxConfigured(response)
+        if (tvboxConfigured !== undefined) await this.storage.set({ tvboxConfigured })
+      })
       this.triggerSync()
       return this.pendingResponse(response, pending)
     }
     return this.withStorageWrite(async () => {
       const newest = await this.readPending()
       if (newest) {
+        const tvboxConfigured = this.extractTvboxConfigured(response)
+        if (tvboxConfigured !== undefined) await this.storage.set({ tvboxConfigured })
         this.triggerSync()
         return this.pendingResponse(response, newest)
       }
@@ -201,14 +210,21 @@ export class TakeoverSettingsSync {
   }
 
   private pendingResponse(response: any, pending: PendingTakeoverSettings): any {
+    const tvboxConfigured = this.extractTvboxConfigured(response)
     return {
       ...response,
       ...(typeof pending.enabled === 'boolean' ? { takeover_enabled: pending.enabled } : {}),
       ...(pending.minimumBytes !== undefined ? { takeover_minimum_bytes: pending.minimumBytes } : {}),
       ...(typeof pending.quickDownloadEnabled === 'boolean' ? { quick_download_enabled: pending.quickDownloadEnabled } : {}),
       ...(typeof pending.speedLimitEnabled === 'boolean' ? { speed_limit_enabled: pending.speedLimitEnabled } : {}),
+      ...(tvboxConfigured !== undefined ? { tvbox_configured: tvboxConfigured } : {}),
       takeover_settings_pending: true,
     }
+  }
+
+  private extractTvboxConfigured(response: any): boolean | undefined {
+    return readDesktopBool(response, 'tvbox_configured', 'tvboxConfigured')
+      ?? (typeof response?.tvbox_endpoint === 'string' ? response.tvbox_endpoint.trim().length > 0 : undefined)
   }
 
   private async applyDesktopResponse(response: any): Promise<void> {
@@ -223,8 +239,7 @@ export class TakeoverSettingsSync {
     if (speedLimitEnabled !== undefined) values.speedLimitEnabled = speedLimitEnabled
     const speedLimitKib = normalizedBytes(response?.speed_limit_kib ?? response?.download_speed_limit_kib)
     if (speedLimitKib !== undefined) values.speedLimitKib = speedLimitKib
-    const tvboxConfigured = readDesktopBool(response, 'tvbox_configured', 'tvboxConfigured')
-      ?? (typeof response?.tvbox_endpoint === 'string' ? response.tvbox_endpoint.trim().length > 0 : undefined)
+    const tvboxConfigured = this.extractTvboxConfigured(response)
     if (tvboxConfigured !== undefined) values.tvboxConfigured = tvboxConfigured
     if (Object.keys(values).length) await this.storage.set(values)
   }

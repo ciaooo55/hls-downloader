@@ -23,18 +23,20 @@ export function prefetchSubtitleAudio(options: {
   prepare(position: number, duration: number, epoch: number): Promise<PreparedAudio>
   send(audio: string, position: number, epoch: number): Promise<void>
   commit(start: number, end: number, epoch: number): Promise<void>
-  ready(end: number, epoch: number): boolean
+  ready(end: number, epoch: number, windowStart?: number): boolean
   cached?(position: number): number
   failed(error: string): void
 }): PrefetchAudio {
   let epoch = options.epoch
   let position = options.position
+  let anchorPosition = options.position
   let generation = 0
   let stopped = false
   let activeGeneration = -1
   let buffered = new Uint8Array()
   let bufferedAt = position
   let waiting: number | undefined
+  let waitingStart: number | undefined
   let waitingAt = 0
   let nextSendAt = 0
   let windowStart = position
@@ -53,13 +55,20 @@ export function prefetchSubtitleAudio(options: {
     activeGeneration = current
     try {
       if (waiting != null) {
-        if (!options.ready(waiting, epoch)) {
+        if (!options.ready(waiting, epoch, waitingStart)) {
           if (Date.now() - waitingAt > 20000) throw new Error('字幕窗口翻译超时，请检查服务和网络')
           return
         }
         waiting = undefined
+        waitingStart = undefined
       }
       if (!windowBytes.length) {
+        if (clock.position < anchorPosition - .25 && options.cached && options.cached(clock.position) <= clock.position + .001) {
+          anchorPosition = clock.position
+          position = clock.position
+          buffered = new Uint8Array()
+          bufferedAt = position
+        }
         const cached = options.cached?.(position) ?? position
         if (cached > position + .001) {
           position = cached; buffered = new Uint8Array(); bufferedAt = position
@@ -91,7 +100,7 @@ export function prefetchSubtitleAudio(options: {
       if (offset === windowBytes.length) {
         await options.commit(windowStart, position, epoch)
         if (stopped || current !== generation) return
-        waiting = position; waitingAt = Date.now(); windowBytes = new Uint8Array()
+        waiting = position; waitingStart = windowStart; waitingAt = Date.now(); windowBytes = new Uint8Array()
       }
     } catch (reason) {
       if (!stopped && current === generation) {
@@ -106,9 +115,9 @@ export function prefetchSubtitleAudio(options: {
   void tick()
   return {
     reset(nextEpoch, nextPosition) {
-      generation++; activeGeneration = -1; epoch = nextEpoch; position = nextPosition
+      generation++; activeGeneration = -1; epoch = nextEpoch; position = nextPosition; anchorPosition = nextPosition
       buffered = new Uint8Array(); bufferedAt = position; windowBytes = new Uint8Array(); offset = 0
-      waiting = undefined; nextSendAt = 0
+      waiting = undefined; waitingStart = undefined; nextSendAt = 0
     },
     stop() { stopped = true; generation++; clearInterval(timer); buffered = new Uint8Array(); windowBytes = new Uint8Array() },
   }

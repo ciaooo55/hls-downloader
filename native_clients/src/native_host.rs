@@ -86,6 +86,7 @@ struct PopupSettingsSnapshot {
     quick_download_enabled: bool,
     speed_limit_enabled: bool,
     speed_limit_kib: u64,
+    tvbox_configured: bool,
 }
 
 impl HostCore {
@@ -205,6 +206,11 @@ impl HostCore {
                 let speed_limit_enabled = core
                     .store()
                     .setting_bool("download_speed_limit_enabled", speed_limit_kib > 0)?;
+                let tvbox_configured = !core
+                    .store()
+                    .setting_string("tvbox_endpoint", "")?
+                    .trim()
+                    .is_empty();
                 Ok(PopupSettingsSnapshot {
                     takeover_enabled: core
                         .store()
@@ -217,6 +223,7 @@ impl HostCore {
                         .setting_bool("browser_quick_download_enabled", false)?,
                     speed_limit_enabled,
                     speed_limit_kib,
+                    tvbox_configured,
                 })
             }
             Self::Remote(client) => match client.load_settings()? {
@@ -226,6 +233,7 @@ impl HostCore {
                     speed_limit_kib,
                     speed_limit_enabled,
                     quick_download_enabled,
+                    tvbox_endpoint,
                     ..
                 } => Ok(PopupSettingsSnapshot {
                     takeover_enabled,
@@ -233,6 +241,7 @@ impl HostCore {
                     quick_download_enabled,
                     speed_limit_enabled,
                     speed_limit_kib,
+                    tvbox_configured: !tvbox_endpoint.trim().is_empty(),
                 }),
                 other => Err(format!("unexpected takeover settings response: {other:?}")),
             },
@@ -519,6 +528,7 @@ impl NativeHostSession {
             "quick_download_enabled": settings.quick_download_enabled,
             "speed_limit_enabled": settings.speed_limit_enabled,
             "speed_limit_kib": settings.speed_limit_kib,
+            "tvbox_configured": settings.tvbox_configured,
             "recommended_extension_version": RECOMMENDED_EXTENSION_VERSION,
             "minimum_extension_version": MINIMUM_EXTENSION_VERSION,
             "extension_release_url": EXTENSION_RELEASE_URL,
@@ -932,6 +942,7 @@ impl NativeHostSession {
             "quick_download_enabled": settings.quick_download_enabled,
             "speed_limit_enabled": settings.speed_limit_enabled,
             "speed_limit_kib": settings.speed_limit_kib,
+            "tvbox_configured": settings.tvbox_configured,
         }))
     }
 
@@ -1193,7 +1204,7 @@ fn public_handoff(handoff: &Handoff, task: Option<&TaskSnapshot>) -> Value {
         "status": handoff.status,
         "task_id": handoff.task_id,
         "created_at_ms": handoff.created_at_ms,
-        "presented": handoff.presentation == "presented" || already_accepted,
+        "presented": matches!(handoff.presentation.as_str(), "presented" | "workbench") || already_accepted,
         "presentation": handoff.presentation,
         "presentation_mode": if handoff.presentation == "fallback" { "ui-fallback" } else { "native-rust" },
         "presentation_ok": handoff.presentation != "failed" && handoff.status != "failed",
@@ -2330,12 +2341,27 @@ mod tests {
         let response = session.dispatch(&json!({"op": "ping"})).unwrap();
         assert_eq!(response["ok"], true);
         assert_eq!(response["protocol"], "hls-downloader-v7-core");
+        assert_eq!(response["tvbox_configured"], false);
         assert!(response.get("bridge_base").is_none());
         assert!(response.get("bridge_token").is_none());
         let encoded = response.to_string();
         assert!(!encoded.contains("bridge_base"));
         assert!(!encoded.contains("bridge_token"));
         assert!(!encoded.contains("8765"));
+
+        session
+            .core
+            .set_settings_batch(std::collections::BTreeMap::from([(
+                "tvbox_endpoint".to_string(),
+                json!("http://192.168.1.50:9978"),
+            )]))
+            .unwrap();
+        let configured_ping = session.dispatch(&json!({"op": "ping"})).unwrap();
+        assert_eq!(configured_ping["tvbox_configured"], true);
+        let toggled = session
+            .dispatch(&json!({"op": "set_takeover_settings", "quick_download_enabled": true}))
+            .unwrap();
+        assert_eq!(toggled["tvbox_configured"], true);
     }
 
     #[test]

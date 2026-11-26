@@ -2,7 +2,9 @@ import { browser } from 'wxt/browser'
 import {
   downloadSelectionKey,
   isDefaultPopupResource,
+  isExcludedHost,
   isPlayableMediaResource,
+  normalizeExcludedHosts,
   normalizeHost,
   resourceFingerprint,
   selectMediaVariant,
@@ -13,7 +15,7 @@ import {
 import { patchKeyedChildren, setAttrIfChanged, setTextIfChanged, syncSelectOptions } from '../../lib/domPatch'
 import { resourceQuality } from '../../lib/hlsManifest'
 import { HANDOFF_SUPPRESSION_STORAGE_KEY, hostForPage, normalizeHandoffSuppressions, type HandoffSuppression } from '../../lib/handoffSuppression'
-import { normalizeCookiePermissionHosts } from '../../lib/browserCookies'
+import { isCookieHostAuthorized, normalizeCookiePermissionHosts } from '../../lib/browserCookies'
 import { extensionNeedsUpgrade } from '../../lib/version'
 import {
   classifyEngineConnectionState,
@@ -1114,8 +1116,8 @@ async function main() {
         void sendBatch(batchTargets.slice(0, 20))
       }
     }
-    const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
-    const cookieDowngraded = Boolean(host && cookieDowngradedHosts.includes(host))
+    const cookieAuthorized = Boolean(host && isCookieHostAuthorized(host, authorizedCookieHosts))
+    const cookieDowngraded = Boolean(host && isExcludedHost(host, cookieDowngradedHosts))
     const hasAuthSensitiveMedia = visible.some(
       item => !item.drmProtected && (item.kind === 'hls' || item.kind === 'dash' || item.kind === 'media' || Boolean(item.audioUrl)),
     )
@@ -1241,7 +1243,7 @@ async function main() {
     quickSpeedPill.setAttribute('aria-label', `下载限速：${speedLimitEnabled ? '开' : '关'}`)
     setTextIfChanged(quickSpeedPill, speedLimitEnabled && speedLimitKib > 0 ? `限速: ${speedLimitKib}K` : `限速: ${speedLimitEnabled ? '开' : '关'}`)
 
-    const cookieAuthorized = Boolean(host && authorizedCookieHosts.includes(host))
+    const cookieAuthorized = Boolean(host && isCookieHostAuthorized(host, authorizedCookieHosts))
     cookieBtn.textContent = cookieAuthorized ? '已授权' : '未授权'
     cookieBtn.setAttribute('aria-label', `本站 Cookie：${cookieBtn.textContent}`)
     cookieBtn.title = cookieAuthorized
@@ -1249,7 +1251,7 @@ async function main() {
       : '\u672a\u6388\u6743\uff1a\u9ed8\u8ba4\u4e0d\u8bfb\u53d6 Cookie\uff1b\u70b9\u51fb\u6388\u6743\u5f53\u524d\u7ad9\u70b9'
     cookieBtn.setAttribute('aria-pressed', String(cookieAuthorized))
     cookieBtn.classList.toggle('active', cookieAuthorized)
-    const siteExcluded = excluded.includes(host)
+    const siteExcluded = Boolean(host && isExcludedHost(host, excluded))
     excludeBtn.textContent = siteExcluded ? '已隐藏' : '已显示'
     excludeBtn.setAttribute('aria-label', `本站提示：${excludeBtn.textContent}`)
     excludeBtn.title = siteExcluded ? '\u5f53\u524d\u5df2\u5728\u672c\u7ad9\u9690\u85cf\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u6062\u590d' : '\u5f53\u524d\u4f1a\u5728\u672c\u7ad9\u663e\u793a\u81ea\u52a8\u63d0\u793a\uff1b\u70b9\u51fb\u9690\u85cf'
@@ -1613,8 +1615,9 @@ async function main() {
   })
   cookieBtn.addEventListener('click', async () => {
     if (!host || settingsBusy) return
-    const next = authorizedCookieHosts.includes(host)
-      ? authorizedCookieHosts.filter(value => value !== host)
+    const wasAuthorized = isCookieHostAuthorized(host, authorizedCookieHosts)
+    const next = wasAuthorized
+      ? authorizedCookieHosts.filter(rule => !isCookieHostAuthorized(host, [rule]))
       : normalizeCookiePermissionHosts([...authorizedCookieHosts, host])
     settingsBusy = cookieBtn
     refreshButtons()
@@ -1622,8 +1625,10 @@ async function main() {
     try {
       await browser.storage.local.set({ authorizedCookieHosts: next, useBrowserCookies: false })
       authorizedCookieHosts = next
-      if (next.includes(host) && cookieDowngradedHosts.includes(host)) {
-        cookieDowngradedHosts = cookieDowngradedHosts.filter(entry => entry !== host)
+      if (!wasAuthorized && isExcludedHost(host, cookieDowngradedHosts)) {
+        cookieDowngradedHosts = cookieDowngradedHosts.filter(
+          entry => !isExcludedHost(host, [entry]) && !isExcludedHost(entry, [host]),
+        )
         void browser.storage?.session?.set?.({ [COOKIE_DOWNGRADED_HOSTS_KEY]: cookieDowngradedHosts }).catch(() => undefined)
       }
       refreshButtons()
@@ -1637,7 +1642,9 @@ async function main() {
   })
   excludeBtn.addEventListener('click', async () => {
     if (!host || settingsBusy) return
-    const next = excluded.includes(host) ? excluded.filter(value => value !== host) : [...excluded, host]
+    const next = isExcludedHost(host, excluded)
+      ? excluded.filter(rule => !isExcludedHost(host, [rule]))
+      : normalizeExcludedHosts([...excluded, host])
     settingsBusy = excludeBtn
     refreshButtons()
     setError('')
@@ -1682,7 +1689,7 @@ async function main() {
   pageTabId = /^https?:\/\//i.test(pageUrl) ? tab?.id : undefined
   if (tabs[1].getAttribute('aria-selected') === 'true') selectPanel(1)
   if (pageTabId === undefined) subtitlePanel.replaceChildren(el('p', 'panel-hint', '请在包含播放器的网页中使用字幕翻译。'))
-  host = normalizeHost(pageUrl)
+  host = /^https?:\/\//i.test(pageUrl) ? normalizeHost(pageUrl) : ''
   suppressionHost = hostForPage(pageUrl)
   if (host && /^https?:\/\//i.test(pageUrl) && browser.cookies?.getAll) {
     void browser.cookies.getAll({ url: pageUrl }).then(cookies => {
@@ -1700,7 +1707,7 @@ async function main() {
   void browser.storage.session.get([downloadErrorKey, COOKIE_DOWNGRADED_HOSTS_KEY]).then(stored => {
     if (stored[downloadErrorKey]) setError(String(stored[downloadErrorKey]))
     if (Array.isArray(stored[COOKIE_DOWNGRADED_HOSTS_KEY])) {
-      cookieDowngradedHosts = stored[COOKIE_DOWNGRADED_HOSTS_KEY].map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
+      cookieDowngradedHosts = normalizeExcludedHosts(stored[COOKIE_DOWNGRADED_HOSTS_KEY])
       renderList()
     }
   }).catch(() => undefined)
@@ -1708,15 +1715,13 @@ async function main() {
     if (area === 'session') {
       if (changes[downloadErrorKey]) setError(String(changes[downloadErrorKey].newValue || ''))
       if (changes[COOKIE_DOWNGRADED_HOSTS_KEY]) {
-        const raw = changes[COOKIE_DOWNGRADED_HOSTS_KEY].newValue
-        cookieDowngradedHosts = Array.isArray(raw)
-          ? raw.map(entry => normalizeHost(String(entry || ''))).filter(Boolean)
-          : []
+        cookieDowngradedHosts = normalizeExcludedHosts(changes[COOKIE_DOWNGRADED_HOSTS_KEY].newValue)
         renderList()
       }
     }
     if (area === 'local' && !settingsBusy) {
       let dirty = false
+      let listDirty = false
       if (changes.enabled) {
         enabled = changes.enabled.newValue !== false
         dirty = true
@@ -1734,13 +1739,27 @@ async function main() {
         speedLimitKib = Number.isFinite(nextKib) && nextKib > 0 ? Math.floor(nextKib) : 0
         dirty = true
       }
+      if ('authorizedCookieHosts' in changes) {
+        authorizedCookieHosts = normalizeCookiePermissionHosts(changes.authorizedCookieHosts?.newValue)
+        dirty = true
+        listDirty = true
+      }
+      if ('excludedHosts' in changes) {
+        excluded = normalizeExcludedHosts(changes.excludedHosts?.newValue)
+        dirty = true
+      }
+      if (HANDOFF_SUPPRESSION_STORAGE_KEY in changes) {
+        suppressions = normalizeHandoffSuppressions(changes[HANDOFF_SUPPRESSION_STORAGE_KEY]?.newValue)
+        dirty = true
+      }
       if ('tvboxConfigured' in changes) {
         tvboxConfigured = typeof changes.tvboxConfigured?.newValue === 'boolean'
           ? changes.tvboxConfigured.newValue
           : undefined
-        renderList()
+        listDirty = true
       }
       if (dirty) refreshButtons()
+      if (listDirty) renderList()
     }
   })
   canScanPage = Number.isInteger(tab?.id) && /^https?:\/\//i.test(pageUrl)
@@ -1794,9 +1813,7 @@ async function main() {
   const storedLimitKib = Number(stored.speedLimitKib || 0)
   speedLimitKib = Number.isFinite(storedLimitKib) && storedLimitKib > 0 ? Math.floor(storedLimitKib) : 0
   authorizedCookieHosts = normalizeCookiePermissionHosts(stored.authorizedCookieHosts)
-  excluded = Array.isArray(stored.excludedHosts)
-    ? stored.excludedHosts.map(value => normalizeHost(String(value || ''))).filter(Boolean)
-    : []
+  excluded = normalizeExcludedHosts(stored.excludedHosts)
   suppressions = normalizeHandoffSuppressions(stored[HANDOFF_SUPPRESSION_STORAGE_KEY])
   enableBtn.disabled = false
   quickDownloadBtn.disabled = false

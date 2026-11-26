@@ -345,9 +345,11 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
       return
     }
     if (message?.type === 'subtitle-prefetch-start' && message.sessionId === sessionId && selected) {
-      capture = 'prefetch'; preparing = true; readyEnd = selected.currentTime
+      capture = 'prefetch'; preparing = true
       resumeAfterPrepare = !selected.paused
       selected.pause()
+      const pausedAt = selected.currentTime
+      readyEnd = pausedAt
       const media = selected
       stopCapture = () => {
         if (preparing && resumeAfterPrepare && media.isConnected && media.currentSrc === sourceUrl) {
@@ -355,7 +357,7 @@ export function installSubtitleContent(ctx: { onInvalidated(callback: () => void
         }
         preparing = false; resumeAfterPrepare = false
       }
-      clock(); render(); respond({ ok: true }); return
+      clock(); render(); respond({ ok: true, position: pausedAt }); return
     }
     if (message?.type === 'subtitle-capture-start' && message.sessionId === sessionId && selected) {
       const media = selected as HTMLMediaElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream }

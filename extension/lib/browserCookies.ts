@@ -98,20 +98,48 @@ export function cookiePermissionHost(value = ''): string {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return ''
   const normalize = (host: string) => host
-    .replace(/^\*\./, '')
+    .replace(/^(?:\*\.|\.+)+/, '')
     .replace(/^www\./, '')
-    .replace(/\.$/, '')
+    .replace(/\.+$/, '')
+  if (raw.includes('://')) {
+    try {
+      const sanitized = raw.replace(/^(https?:\/\/)(?:\*\.|\.+)+/i, '$1')
+      const parsed = new URL(sanitized)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+      return normalize(parsed.hostname)
+    } catch {
+      return ''
+    }
+  }
+  const cleaned = raw.replace(/^(?:\*\.|\.+)+/, '')
+  if (!cleaned) return ''
+  if (!cleaned.startsWith('[') && (cleaned.match(/:/g) || []).length >= 2 && /^[0-9a-f:.]+$/i.test(cleaned)) {
+    try {
+      return normalize(new URL(`https://[${cleaned}]`).hostname)
+    } catch {
+      return ''
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(cleaned) && !/^[^/:?#]+:\d+(?:[/?#]|$)/.test(cleaned)) {
+    return ''
+  }
   try {
-    const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`)
-    return normalize(parsed.hostname)
+    return normalize(new URL(`https://${cleaned}`).hostname)
   } catch {
-    return normalize(raw.replace(/:\d+$/, ''))
+    return normalize(cleaned.split(/[/?#]/, 1)[0].replace(/:\d+$/, ''))
   }
 }
 
 export function normalizeCookiePermissionHosts(values: unknown): string[] {
   if (!Array.isArray(values)) return []
   return [...new Set(values.map(value => cookiePermissionHost(String(value || ''))).filter(Boolean))].slice(0, 256)
+}
+
+export function isCookieHostAuthorized(value: string, authorizedHosts: unknown): boolean {
+  const host = cookiePermissionHost(value)
+  if (!host) return false
+  const rules = normalizeCookiePermissionHosts(authorizedHosts)
+  return rules.some(rule => host === rule || host.endsWith(`.${rule}`))
 }
 
 export function cookiePermissionAllows(

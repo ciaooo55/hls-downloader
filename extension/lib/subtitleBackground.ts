@@ -164,13 +164,17 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
       if (settings.prefetch) {
         const response = await browser.tabs.sendMessage(tabId, { type: 'subtitle-prefetch-start', sessionId: session.id }, { frameId: session.frameId })
         if (!response?.ok) throw new Error(response?.error || '无法准备播放器字幕缓冲')
+        const pausedAt = Number(response?.position)
+        const initialPosition = Number.isFinite(pausedAt) && pausedAt >= 0 ? pausedAt : startPosition
+        session.readyEnd = initialPosition
         prefetching.set(session.id, prefetchSubtitleAudio({
-          epoch: session.epoch, position: startPosition, duration: selected.duration,
-          clock: () => ({ position: session.clock?.position ?? selected.position, running: session.status === 'running' }),
+          epoch: session.epoch, position: initialPosition, duration: selected.duration,
+          clock: () => ({ position: session.clock?.position ?? initialPosition, running: session.status === 'running' }),
           prepare: (position, duration, epoch) => call('prepare_audio', session, { position, duration, epoch }),
           send: async (audio, position, epoch) => { await call('audio', session, { audio, position, rate: 1, epoch }) },
           commit: async (start, end, epoch) => { await call('commit', session, { start, end, epoch }) },
-          ready: (end, epoch) => session.epoch === epoch && (session.readyEnd ?? 0) >= end - .01,
+          ready: (end, epoch, windowStart) => session.epoch === epoch
+            && subtitleReadyEnd(session.readyRanges || [], windowStart ?? (session.clock?.position ?? initialPosition)) >= end - .01,
           cached: position => subtitleReadyEnd(session.readyRanges || [], position),
           failed: error => { void stop(session, error) },
         }))
@@ -225,8 +229,7 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
           session.sequence = response.latest_sequence
           for (const event of response.events || []) {
             if (event.type === 'ready' && event.epoch === session.epoch && Number.isFinite(event.start)
-              && Number.isFinite(event.end) && event.start <= (session.readyEnd ?? -1) + .01
-              && event.end >= event.start) {
+              && Number.isFinite(event.end) && event.end >= event.start) {
               session.readyRanges = [...(session.readyRanges || []), [event.start, event.end] as [number, number]].slice(-500)
               session.readyEnd = subtitleReadyEnd(session.readyRanges, session.clock?.position ?? event.start)
             }
@@ -356,6 +359,9 @@ export function installSubtitleBackground(native: (request: Record<string, unkno
         if (next.epoch < (live.clock?.epoch ?? live.epoch)) return { ok: true }
         live.clock = next
         if (!live.started) return { ok: true }
+        if (live.epoch === next.epoch && live.capture === 'prefetch' && live.readyRanges?.length) {
+          live.readyEnd = subtitleReadyEnd(live.readyRanges, next.position)
+        }
         if (live.epoch !== next.epoch) {
           live.epoch = next.epoch
           live.status = 'connecting'

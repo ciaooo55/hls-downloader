@@ -389,6 +389,9 @@ impl ResourceTools {
                 } else {
                     let probe_urls = if action == "probe" {
                         let chosen = self.chosen();
+                        if chosen.is_empty() {
+                            return Err("请选择要探测大小的资源".into());
+                        }
                         self.harvest
                             .borrow()
                             .iter()
@@ -399,9 +402,14 @@ impl ResourceTools {
                     } else {
                         Vec::new()
                     };
+                    let referer = if action == "probe" {
+                        source.clone()
+                    } else {
+                        String::new()
+                    };
                     self.command(CoreCommand::HarvestPage {
                         url: source,
-                        referer: String::new(),
+                        referer,
                         probe_urls,
                     });
                 }
@@ -589,6 +597,20 @@ impl ResourceTools {
         self.window.set_busy(false);
     }
 
+    fn harvest_row_detail(link: &HarvestCandidate) -> slint::SharedString {
+        format!(
+            "{} · {} · {}",
+            link.category,
+            if link.size > 0 {
+                crate::format_bytes(link.size)
+            } else {
+                "大小未知".into()
+            },
+            link.extension
+        )
+        .into()
+    }
+
     pub fn event(&self, envelope: &EventEnvelope) {
         if envelope.sequence > 0 {
             let mut seen = self.seen.borrow_mut();
@@ -602,7 +624,6 @@ impl ResourceTools {
         }
         match &envelope.event {
             CoreEvent::HarvestResult { url, links }
-            | CoreEvent::HarvestProbeResult { url, links }
                 if self.window.get_mode() == "harvest"
                     && self.window.get_source().trim() == url =>
             {
@@ -620,21 +641,36 @@ impl ResourceTools {
                                 link.filename.clone()
                             }
                             .into(),
-                            detail: format!(
-                                "{} · {} · {}",
-                                link.category,
-                                if link.size > 0 {
-                                    crate::format_bytes(link.size)
-                                } else {
-                                    "大小未知".into()
-                                },
-                                link.extension
-                            )
-                            .into(),
+                            detail: Self::harvest_row_detail(link),
                             selected: false,
                         })
                         .collect::<Vec<_>>(),
                 );
+            }
+            CoreEvent::HarvestProbeResult { url, links }
+                if self.window.get_mode() == "harvest"
+                    && self.window.get_source().trim() == url =>
+            {
+                self.window.set_busy(false);
+                let probed: std::collections::HashMap<&str, u64> = links
+                    .iter()
+                    .map(|item| (item.url.as_str(), item.size))
+                    .collect();
+                let mut current = self.harvest.borrow_mut();
+                for (index, item) in current.iter_mut().enumerate() {
+                    if let Some(&size) = probed.get(item.url.as_str()) {
+                        if size > 0 {
+                            item.size = size;
+                        }
+                        if let Some(mut row) = self.rows.row_data(index) {
+                            row.detail = Self::harvest_row_detail(item);
+                            self.rows.set_row_data(index, row);
+                        }
+                    }
+                }
+                self.window.set_status_tone("success".into());
+                self.window
+                    .set_status(format!("已探测 {} 项资源大小", links.len()).into());
             }
             CoreEvent::TaskTorrentFiles {
                 task_id,
@@ -853,6 +889,104 @@ mod tests {
             event: event.event,
         });
         assert_eq!(tools.rows.row_count(), 1);
+    }
+
+    #[test]
+    fn harvest_probe_requires_selection_forwards_referer_and_patches_in_place() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let sent = Rc::new(RefCell::new(Vec::<CorePipeRequest>::new()));
+        let sent_capture = Rc::clone(&sent);
+        let tools = ResourceTools::new(
+            "harvest",
+            "task".into(),
+            "",
+            &WorkbenchWindow::new().unwrap(),
+            Rc::new(move |req| {
+                sent_capture.borrow_mut().push(req);
+                true
+            }),
+            Rc::new(|_| true),
+            Rc::new(|| 99),
+        )
+        .unwrap();
+        tools
+            .window
+            .set_source("https://example.test/gallery".into());
+        tools.event(&EventEnvelope {
+            sequence: 10,
+            event: CoreEvent::HarvestResult {
+                url: "https://example.test/gallery".into(),
+                links: vec![
+                    HarvestCandidate {
+                        url: "https://cdn.example.test/a.mp4".into(),
+                        filename: "alpha.mp4".into(),
+                        extension: "mp4".into(),
+                        category: "media".into(),
+                        size: 0,
+                    },
+                    HarvestCandidate {
+                        url: "https://cdn.example.test/b.zip".into(),
+                        filename: "beta.zip".into(),
+                        extension: "zip".into(),
+                        category: "archive".into(),
+                        size: 0,
+                    },
+                ],
+            },
+        });
+        sent.borrow_mut().clear();
+
+        // Empty selection must NOT trigger a full-page re-harvest.
+        tools.window.invoke_action("probe".into());
+        assert!(sent.borrow().is_empty());
+        assert!(tools.window.get_status().contains("请选择要探测"));
+
+        // Selecting row 1 sends probe_urls for row 1 only with Referer == source.
+        tools.window.invoke_toggle("1".into(), true);
+        tools.window.invoke_action("probe".into());
+        assert_eq!(sent.borrow().len(), 1);
+        match &sent.borrow()[0] {
+            CorePipeRequest::Command {
+                command:
+                    CoreCommand::HarvestPage {
+                        url,
+                        referer,
+                        probe_urls,
+                    },
+                ..
+            } => {
+                assert_eq!(url, "https://example.test/gallery");
+                assert_eq!(referer, "https://example.test/gallery");
+                assert_eq!(
+                    probe_urls,
+                    &vec!["https://cdn.example.test/b.zip".to_string()]
+                );
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+
+        // HarvestProbeResult patches row 1's size in place without dropping row 0, labels, or selection.
+        tools.event(&EventEnvelope {
+            sequence: 11,
+            event: CoreEvent::HarvestProbeResult {
+                url: "https://example.test/gallery".into(),
+                links: vec![HarvestCandidate {
+                    url: "https://cdn.example.test/b.zip".into(),
+                    size: 2048,
+                    ..Default::default()
+                }],
+            },
+        });
+        assert_eq!(tools.rows.row_count(), 2);
+        let row0 = tools.rows.row_data(0).unwrap();
+        let row1 = tools.rows.row_data(1).unwrap();
+        assert_eq!(row0.label.as_str(), "alpha.mp4");
+        assert!(!row0.selected);
+        assert!(row0.detail.contains("大小未知"));
+        assert_eq!(row1.label.as_str(), "beta.zip");
+        assert!(row1.selected);
+        assert!(row1.detail.contains("archive") && row1.detail.contains("zip"));
+        assert!(!row1.detail.contains("大小未知"));
     }
 
     #[test]

@@ -1276,12 +1276,40 @@ export function resourceRequestIdentity(
 export function normalizeHost(value = ''): string {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return ''
-  try {
-    const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`)
-    return parsed.hostname.replace(/^\*\./, '').replace(/^www\./, '').replace(/\.$/, '')
-  } catch {
-    return raw.replace(/^\*\./, '').replace(/:\d+$/, '').replace(/^www\./, '').replace(/\.$/, '')
+  const normalizeHostname = (host: string) =>
+    host.replace(/^(?:\*\.|\.+)+/, '').replace(/^www\./, '').replace(/\.+$/, '')
+  if (raw.includes('://')) {
+    try {
+      const sanitized = raw.replace(/^(https?:\/\/)(?:\*\.|\.+)+/i, '$1')
+      const parsed = new URL(sanitized)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+      return normalizeHostname(parsed.hostname)
+    } catch {
+      return ''
+    }
   }
+  const cleaned = raw.replace(/^(?:\*\.|\.+)+/, '')
+  if (!cleaned) return ''
+  if (!cleaned.startsWith('[') && (cleaned.match(/:/g) || []).length >= 2 && /^[0-9a-f:.]+$/i.test(cleaned)) {
+    try {
+      return normalizeHostname(new URL(`https://[${cleaned}]`).hostname)
+    } catch {
+      return ''
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(cleaned) && !/^[^/:?#]+:\d+(?:[/?#]|$)/.test(cleaned)) {
+    return ''
+  }
+  try {
+    return normalizeHostname(new URL(`https://${cleaned}`).hostname)
+  } catch {
+    return normalizeHostname(cleaned.split(/[/?#]/, 1)[0].replace(/:\d+$/, ''))
+  }
+}
+
+export function normalizeExcludedHosts(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  return [...new Set(values.map(value => normalizeHost(String(value || ''))).filter(Boolean))].slice(0, 256)
 }
 
 function hostnameOf(value: string): string {
