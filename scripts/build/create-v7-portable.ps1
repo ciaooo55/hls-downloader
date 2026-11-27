@@ -1,6 +1,7 @@
 param(
     [string]$OutZip = '',
-    [Parameter(Mandatory = $true)][string]$AppImage
+    [Parameter(Mandatory = $true)][string]$AppImage,
+    [string]$PreflightPath = ''
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
@@ -53,11 +54,19 @@ try {
     New-Item -ItemType File -Force -Path (Join-Path $portable 'portable') | Out-Null
     Copy-Item -LiteralPath (Join-Path $repo 'scripts\upgrade-v7-portable.ps1') -Destination (Join-Path $portable 'scripts\upgrade-v7-portable.ps1') -Force
     Copy-Item -LiteralPath (Join-Path $repo 'scripts\V7HashFunctions.ps1') -Destination (Join-Path $portable 'scripts\V7HashFunctions.ps1') -Force
-    $rustCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
-    $rustc = if ($rustCommand) { $rustCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
     $preflight = Join-Path $portable 'scripts\HLSDownloaderPreflight.exe'
-    & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
-    if ($LASTEXITCODE -ne 0) { throw "Portable preflight build failed: $LASTEXITCODE" }
+    if (-not [String]::IsNullOrWhiteSpace($PreflightPath)) {
+        $resolvedPreflight = (Resolve-Path -LiteralPath $PreflightPath).Path
+        if (-not (Test-Path -LiteralPath $resolvedPreflight -PathType Leaf)) {
+            throw "Preflight executable is missing: $resolvedPreflight"
+        }
+        Copy-Item -LiteralPath $resolvedPreflight -Destination $preflight -Force
+    } else {
+        $rustCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
+        $rustc = if ($rustCommand) { $rustCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
+        & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
+        if ($LASTEXITCODE -ne 0) { throw "Portable preflight build failed: $LASTEXITCODE" }
+    }
     $portableExtensions = Join-Path $portable 'extensions'
     New-Item -ItemType Directory -Force -Path $portableExtensions | Out-Null
     $packagedExtensions = Join-Path $appImage 'app\resources\extensions'

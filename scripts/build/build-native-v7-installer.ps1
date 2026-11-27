@@ -5,7 +5,12 @@ param(
     [Parameter(Mandatory=$true)][string]$OutMsi,
     [Parameter(Mandatory=$true)][string]$OutExe,
     [Parameter(Mandatory=$true)][string]$ProductVersion,
-    [Parameter(Mandatory=$true)][string]$ProductCode
+    [Parameter(Mandatory=$true)][string]$ProductCode,
+    [string]$PreflightPath = '',
+    [string]$CertificateThumbprint = '',
+    [ValidateSet('CurrentUser', 'LocalMachine')][string]$CertificateStore = 'CurrentUser',
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    [string]$SignToolPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -14,6 +19,21 @@ $OutMsi = [IO.Path]::GetFullPath($OutMsi)
 $OutExe = [IO.Path]::GetFullPath($OutExe)
 foreach ($output in @($OutMsi, $OutExe)) {
     if (-not $output.StartsWith($repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "Installer output must stay inside the workspace: $output" }
+}
+$signEnabled = -not [String]::IsNullOrWhiteSpace($CertificateThumbprint)
+$signScript = Join-Path $repo 'scripts\release\sign-v7-authenticode.ps1'
+function Invoke-InstallerSign([string[]]$Targets) {
+    $signArgs = @{
+        Path = $Targets
+        CertificateThumbprint = $CertificateThumbprint
+        CertificateStore = $CertificateStore
+        TimestampUrl = $TimestampUrl
+    }
+    if (-not [String]::IsNullOrWhiteSpace($SignToolPath)) {
+        $signArgs['SignToolPath'] = $SignToolPath
+    }
+    & $signScript @signArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed with exit code $LASTEXITCODE." }
 }
 $work = Join-Path (Split-Path $OutMsi -Parent) ('.native-installer-' + [guid]::NewGuid().ToString('n'))
 if (Test-Path -LiteralPath $work) { throw "Installer work directory already exists: $work" }
@@ -27,12 +47,21 @@ function File-Id([string]$Relative) {
 }
 try {
     $preflight = Join-Path $work 'installer-preflight.exe'
-    $rustcCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
-    $rustc = if ($rustcCommand) { $rustcCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
-    if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw "Rust compiler not found: $rustc" }
-    Write-Verbose "Using Rust compiler: $rustc"
-    & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
-    if ($LASTEXITCODE -ne 0) { throw 'Installer preflight build failed.' }
+    if (-not [String]::IsNullOrWhiteSpace($PreflightPath)) {
+        $resolvedPreflight = (Resolve-Path -LiteralPath $PreflightPath).Path
+        if (-not (Test-Path -LiteralPath $resolvedPreflight -PathType Leaf)) { throw "Preflight executable is missing: $resolvedPreflight" }
+        Copy-Item -LiteralPath $resolvedPreflight -Destination $preflight -Force
+    } else {
+        $rustcCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
+        $rustc = if ($rustcCommand) { $rustcCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
+        if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw "Rust compiler not found: $rustc" }
+        Write-Verbose "Using Rust compiler: $rustc"
+        & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflight
+        if ($LASTEXITCODE -ne 0) { throw 'Installer preflight build failed.' }
+        if ($signEnabled) {
+            Invoke-InstallerSign @($preflight)
+        }
+    }
     $directories = [ordered]@{ '' = 'INSTALLDIR' }
     $components = New-Object 'System.Collections.Generic.List[string]'
     $files = Get-ChildItem -LiteralPath $image -File -Recurse | Sort-Object FullName
@@ -113,6 +142,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Native MSI link failed.' }
     & (Join-Path $PSScriptRoot 'set-v7-msi-rollback-order.ps1') -MsiPath $OutMsi -ProductCode $ProductCode
     if ($LASTEXITCODE -ne 0) { throw 'Native MSI lifecycle authoring failed.' }
+    if ($signEnabled) {
+        # Sign the MSI after database authoring and before Burn embeds it so the bundle carries the signed MSI.
+        Invoke-InstallerSign @($OutMsi)
+    }
     $bundle = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
@@ -131,6 +164,20 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Native bundle compilation failed.' }
     & (Join-Path $WixRoot 'light.exe') (Join-Path $work 'Bundle.wixobj') -out $OutExe -pdbout (Join-Path $work 'Bundle.wixpdb') -nologo -ext (Join-Path $WixRoot 'WixBalExtension.dll')
     if ($LASTEXITCODE -ne 0) { throw 'Native bundle link failed.' }
+    if ($signEnabled) {
+        # Detach and sign the Burn bootstrapper engine with WiX insignia, reattach it, then sign the outer bundle.
+        $insignia = Join-Path $WixRoot 'insignia.exe'
+        if (-not (Test-Path -LiteralPath $insignia -PathType Leaf)) {
+            throw "WiX insignia.exe is required to sign the Burn engine: $insignia"
+        }
+        $burnEngine = Join-Path $work 'burn-engine.exe'
+        & $insignia -ib $OutExe -o $burnEngine -nologo
+        if ($LASTEXITCODE -ne 0) { throw "WiX insignia engine detach failed with exit code $LASTEXITCODE." }
+        Invoke-InstallerSign @($burnEngine)
+        & $insignia -ab $burnEngine $OutExe -o $OutExe -nologo
+        if ($LASTEXITCODE -ne 0) { throw "WiX insignia engine reattach failed with exit code $LASTEXITCODE." }
+        Invoke-InstallerSign @($OutExe)
+    }
     $complete = $true
 } finally {
     # Retain failed authoring evidence; remove only after the entire pair exists.

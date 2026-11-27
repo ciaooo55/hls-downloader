@@ -39,11 +39,16 @@ function Resolve-V7PackageFile([string]$Root, [string]$RelativePath, [string]$Ex
     return $path
 }
 
-function Get-V7PortableExecutables {
+function Get-V7MsiFirstPartyExecutables {
     'HLSDownloader.exe'
     foreach ($name in @('Engine', 'NativeHost', 'Updater', 'Presenter', 'Cli')) {
         "app/resources/HLSDownloader$name.exe"
     }
 }
 
-Export-ModuleMember -Function Get-V7ReleaseExclusions, Resolve-V7PackageFile, Get-V7PortableExecutables
+function Get-V7PortableExecutables {
+    Get-V7MsiFirstPartyExecutables
+    'scripts/HLSDownloaderPreflight.exe'
+}
+
+Export-ModuleMember -Function Get-V7ReleaseExclusions, Resolve-V7PackageFile, Get-V7MsiFirstPartyExecutables, Get-V7PortableExecutables

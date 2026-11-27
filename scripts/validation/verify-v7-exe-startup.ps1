@@ -77,6 +77,7 @@ public static class HlsStartupWindow {
 }
 
 . (Join-Path $PSScriptRoot 'V7MsiInspection.ps1')
+Import-Module (Join-Path $PSScriptRoot '..\release\V7ReleaseScope.psm1') -Force
 $artifacts = Join-Path $repo 'artifacts\v7-productization\exe-startup'
 $fixture = Join-Path $repo '.tool-cache\test-tmp\exe-startup'
 if (Test-Path -LiteralPath $fixture) { throw "EXE startup requires a fresh fixture: $fixture" }
@@ -160,8 +161,20 @@ with sqlite3.connect(pathlib.Path(sys.argv[2]) / 'data.db') as connection:
         if (-not $product -or $product.product_code -ne $productCode) { throw 'EXE did not register the exact candidate MSI.' }
         $actualDir = (Get-ItemProperty -LiteralPath $nativeKey -Name InstallDir).InstallDir
         if ($actualDir.TrimEnd('\') -ne $ownedInstallDir.TrimEnd('\')) { throw "Unexpected installation path: $actualDir" }
+        $portableComponents = @(Get-V7PortableExecutables)
         foreach ($component in $manifest.components.PSObject.Properties) {
-            if ((Get-FileHash -LiteralPath (Join-Path $ownedInstallDir $component.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $component.Value) { throw "Installed component mismatch: $($component.Name)" }
+            if ($portableComponents -notcontains $component.Name) {
+                throw "Unexpected manifest component outside release scope: $($component.Name)"
+            }
+        }
+        foreach ($name in Get-V7MsiFirstPartyExecutables) {
+            $expectedHash = [string]$manifest.components.$name
+            if ([String]::IsNullOrWhiteSpace($expectedHash)) {
+                throw "Candidate manifest is missing installed component hash: $name"
+            }
+            if ((Get-FileHash -LiteralPath (Join-Path $ownedInstallDir $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash.ToLowerInvariant()) {
+                throw "Installed component mismatch: $name"
+            }
         }
         $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'HLS Downloader\HLS Downloader.lnk'
         if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) { throw 'Installed Start Menu shortcut is missing.' }

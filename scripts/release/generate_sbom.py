@@ -9,8 +9,6 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -44,6 +42,8 @@ def cargo_components(lock_path: Path) -> list[dict]:
 
 
 def npm_components(lock_path: Path) -> list[dict]:
+    import yaml
+
     lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
     packages = lock.get("packages") if isinstance(lock, dict) else None
     if not isinstance(packages, dict) or not packages:
@@ -59,12 +59,38 @@ def npm_components(lock_path: Path) -> list[dict]:
     return values
 
 
+def bundled_third_party_components(manifest_path: Path) -> list[dict]:
+    data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict) or data.get("schema") != 1:
+        raise ValueError(f"{manifest_path}: unsupported third-party component schema")
+    items = data.get("components")
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"{manifest_path}: missing bundled third-party components")
+    values = []
+    for item in items:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(key), str) and item[key].strip()
+            for key in ("type", "ecosystem", "name", "version")
+        ):
+            raise ValueError(f"{manifest_path}: malformed bundled third-party component")
+        values.append(
+            component(
+                item["type"],
+                item["ecosystem"],
+                item["name"],
+                item["version"],
+            )
+        )
+    return values
+
+
 def build_sbom(version: str, ui_runtime: str = "native") -> dict:
     values = [
         *cargo_components(ROOT / "Cargo.lock"),
         *npm_components(ROOT / "extension" / "pnpm-lock.yaml"),
-        component("application", "generic", "ffmpeg", "9.0.2"),
-        component("library", "generic", "libmpv", "20261110-git-a61f6c3abd"),
+        *bundled_third_party_components(
+            ROOT / "config" / "release" / "third-party-components.json"
+        ),
     ]
     unique = {item["bom-ref"]: item for item in values}
     components = [unique[key] for key in sorted(unique)]

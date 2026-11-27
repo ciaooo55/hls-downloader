@@ -38,6 +38,275 @@ fn main() -> ExitCode {
     }
 }
 
+fn validate_checkpoint_response(response: &[u8]) -> Result<(), String> {
+    const ERR_MSG: &str = "Core 未成功保存检查点，旧安装和用户数据已保留";
+    let text = std::str::from_utf8(response).map_err(|_| ERR_MSG.to_string())?;
+    let mut parser = JsonParser::new(text.as_bytes());
+    let root = parser.parse_value(0).ok_or_else(|| ERR_MSG.to_string())?;
+    parser.skip_ws();
+    if parser.pos != parser.bytes.len() {
+        return Err(ERR_MSG.into());
+    }
+    let JsonValue::Object(entries) = root else {
+        return Err(ERR_MSG.into());
+    };
+    let is_events_type = entries
+        .iter()
+        .any(|(k, v)| k == "type" && matches!(v, JsonValue::String(s) if s == "events"));
+    let is_request_one = entries
+        .iter()
+        .any(|(k, v)| k == "request_id" && matches!(v, JsonValue::Number(n) if n == "1"));
+    let events = entries.iter().find_map(|(k, v)| {
+        if k == "events" {
+            match v {
+                JsonValue::Array(items) => Some(items),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    });
+    let Some(events) = events else {
+        return Err(ERR_MSG.into());
+    };
+    if !is_events_type || !is_request_one {
+        return Err(ERR_MSG.into());
+    }
+    for item in events {
+        let JsonValue::Object(fields) = item else {
+            return Err(ERR_MSG.into());
+        };
+        let top_kind_is_error = fields
+            .iter()
+            .any(|(k, v)| k == "kind" && matches!(v, JsonValue::String(s) if s == "error"));
+        let nested_kind_is_error = fields.iter().any(|(k, v)| {
+            k == "event"
+                && matches!(v, JsonValue::Object(inner) if inner.iter().any(|(ik, iv)| {
+                    ik == "kind" && matches!(iv, JsonValue::String(s) if s == "error")
+                }))
+        });
+        if top_kind_is_error || nested_kind_is_error {
+            return Err(ERR_MSG.into());
+        }
+    }
+    Ok(())
+}
+
+enum JsonValue {
+    Null,
+    Bool,
+    Number(String),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(Vec<(String, JsonValue)>),
+}
+
+struct JsonParser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> JsonParser<'a> {
+    const MAX_DEPTH: usize = 16;
+
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, pos: 0 }
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(&b) = self.bytes.get(self.pos) {
+            if matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn parse_value(&mut self, depth: usize) -> Option<JsonValue> {
+        if depth > Self::MAX_DEPTH {
+            return None;
+        }
+        self.skip_ws();
+        match *self.bytes.get(self.pos)? {
+            b'"' => self.parse_string().map(JsonValue::String),
+            b'{' => self.parse_object(depth + 1),
+            b'[' => self.parse_array(depth + 1),
+            b't' => self.consume_literal(b"true").then_some(JsonValue::Bool),
+            b'f' => self.consume_literal(b"false").then_some(JsonValue::Bool),
+            b'n' => self.consume_literal(b"null").then_some(JsonValue::Null),
+            b'-' | b'0'..=b'9' => self.parse_number().map(JsonValue::Number),
+            _ => None,
+        }
+    }
+
+    fn consume_literal(&mut self, lit: &[u8]) -> bool {
+        if self.bytes.get(self.pos..self.pos + lit.len()) == Some(lit) {
+            self.pos += lit.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn parse_string(&mut self) -> Option<String> {
+        if self.bytes.get(self.pos) != Some(&b'"') {
+            return None;
+        }
+        self.pos += 1;
+        let mut out = String::new();
+        while let Some(&b) = self.bytes.get(self.pos) {
+            if b == b'"' {
+                self.pos += 1;
+                return Some(out);
+            }
+            if b == b'\\' {
+                self.pos += 1;
+                let esc = *self.bytes.get(self.pos)?;
+                self.pos += 1;
+                match esc {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    b'/' => out.push('/'),
+                    b'b' => out.push('\u{0008}'),
+                    b'f' => out.push('\u{000C}'),
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
+                    b't' => out.push('\t'),
+                    b'u' => {
+                        let hex =
+                            std::str::from_utf8(self.bytes.get(self.pos..self.pos + 4)?).ok()?;
+                        let code = u16::from_str_radix(hex, 16).ok()?;
+                        self.pos += 4;
+                        if (0xD800..=0xDBFF).contains(&code) {
+                            if self.bytes.get(self.pos..self.pos + 2) != Some(b"\\u") {
+                                return None;
+                            }
+                            self.pos += 2;
+                            let low_hex =
+                                std::str::from_utf8(self.bytes.get(self.pos..self.pos + 4)?)
+                                    .ok()?;
+                            let low = u16::from_str_radix(low_hex, 16).ok()?;
+                            if !(0xDC00..=0xDFFF).contains(&low) {
+                                return None;
+                            }
+                            self.pos += 4;
+                            let combined =
+                                0x10000 + (((code as u32 - 0xD800) << 10) | (low as u32 - 0xDC00));
+                            out.push(char::from_u32(combined)?);
+                        } else {
+                            out.push(char::from_u32(code as u32)?);
+                        }
+                    }
+                    _ => return None,
+                }
+            } else if b < 0x20 {
+                return None;
+            } else {
+                let rest = std::str::from_utf8(self.bytes.get(self.pos..)?).ok()?;
+                let ch = rest.chars().next()?;
+                out.push(ch);
+                self.pos += ch.len_utf8();
+            }
+        }
+        None
+    }
+
+    fn parse_number(&mut self) -> Option<String> {
+        let start = self.pos;
+        if self.bytes.get(self.pos) == Some(&b'-') {
+            self.pos += 1;
+        }
+        match *self.bytes.get(self.pos)? {
+            b'0' => self.pos += 1,
+            b'1'..=b'9' => {
+                while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
+                    self.pos += 1;
+                }
+            }
+            _ => return None,
+        }
+        if self.bytes.get(self.pos) == Some(&b'.') {
+            self.pos += 1;
+            let frac_start = self.pos;
+            while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            if self.pos == frac_start {
+                return None;
+            }
+        }
+        if matches!(self.bytes.get(self.pos), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.bytes.get(self.pos), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            let exp_start = self.pos;
+            while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            if self.pos == exp_start {
+                return None;
+            }
+        }
+        std::str::from_utf8(&self.bytes[start..self.pos])
+            .ok()
+            .map(str::to_string)
+    }
+
+    fn parse_array(&mut self, depth: usize) -> Option<JsonValue> {
+        self.pos += 1;
+        let mut items = Vec::new();
+        self.skip_ws();
+        if self.bytes.get(self.pos) == Some(&b']') {
+            self.pos += 1;
+            return Some(JsonValue::Array(items));
+        }
+        loop {
+            items.push(self.parse_value(depth)?);
+            self.skip_ws();
+            match *self.bytes.get(self.pos)? {
+                b',' => self.pos += 1,
+                b']' => {
+                    self.pos += 1;
+                    return Some(JsonValue::Array(items));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn parse_object(&mut self, depth: usize) -> Option<JsonValue> {
+        self.pos += 1;
+        let mut entries = Vec::new();
+        self.skip_ws();
+        if self.bytes.get(self.pos) == Some(&b'}') {
+            self.pos += 1;
+            return Some(JsonValue::Object(entries));
+        }
+        loop {
+            self.skip_ws();
+            let key = self.parse_string()?;
+            self.skip_ws();
+            if self.bytes.get(self.pos) != Some(&b':') {
+                return None;
+            }
+            self.pos += 1;
+            let value = self.parse_value(depth)?;
+            entries.push((key, value));
+            self.skip_ws();
+            match *self.bytes.get(self.pos)? {
+                b',' => self.pos += 1,
+                b'}' => {
+                    self.pos += 1;
+                    return Some(JsonValue::Object(entries));
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
 fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() || !path.is_absolute() {
         return Err("原安装目录必须是有效的绝对路径".into());
@@ -676,9 +945,7 @@ mod windows {
         }
         let mut response = vec![0; length];
         read_checkpoint_frame(&mut pipe, &mut response, deadline)?;
-        if !response.starts_with(br#"{"type":"events","request_id":1,"events":"#) {
-            return Err("Core 未成功保存检查点，旧安装和用户数据已保留".into());
-        }
+        super::validate_checkpoint_response(&response)?;
         drop(pipe);
         let wait = deadline
             .saturating_duration_since(Instant::now())
@@ -691,7 +958,11 @@ mod windows {
         writeln!(log, "helper stage=checkpoint-finished").map_err(|error| error.to_string())
     }
     pub(super) fn files_unlocked(root: &Path) -> Result<(), String> {
-        for directory in [root.to_path_buf(), root.join("app/resources")] {
+        for directory in [
+            root.to_path_buf(),
+            root.join("app/resources"),
+            root.join("app/resources/tools/curl-impersonate"),
+        ] {
             let entries = match std::fs::read_dir(&directory) {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -703,10 +974,9 @@ mod windows {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => return Err(error.to_string()),
                 };
-                if path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-                {
+                if path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("dll")
+                }) {
                     match OpenOptions::new().read(true).share_mode(0).open(&path) {
                         Ok(_) => {}
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -943,6 +1213,68 @@ mod tests {
         drop(exclusive_lock);
         assert!(windows::files_unlocked(&partial).is_ok());
 
+        // 4. DLLs under `app/resources` and nested `curl-impersonate.exe` must also fail closed when locked.
+        let libmpv_dll = app_res.join("libmpv-2.dll");
+        let vulkan_dll = app_res.join("vulkan-1.dll");
+        let curl_dir = app_res.join("tools/curl-impersonate");
+        std::fs::create_dir_all(&curl_dir).unwrap();
+        let curl_exe = curl_dir.join("curl-impersonate.exe");
+        for path in [&libmpv_dll, &vulkan_dll, &curl_exe] {
+            std::fs::write(path, b"stub").unwrap();
+        }
+        assert!(windows::files_unlocked(&partial).is_ok());
+        for locked_path in [&libmpv_dll, &vulkan_dll, &curl_exe] {
+            let guard = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(locked_path)
+                .unwrap();
+            let err = windows::files_unlocked(&partial).unwrap_err();
+            assert!(
+                err.contains("程序文件仍被占用"),
+                "locked {} must be rejected: {err}",
+                locked_path.display()
+            );
+            drop(guard);
+            assert!(windows::files_unlocked(&partial).is_ok());
+        }
+
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn checkpoint_response_validation_rejects_embedded_error_events() {
+        assert!(
+            validate_checkpoint_response(br#"{"type":"events","request_id":1,"events":[]}"#)
+                .is_ok()
+        );
+        assert!(validate_checkpoint_response(
+            br#"{"type":"events","request_id":1,"events":[{"seq":2,"event":{"kind":"shutdown_ready"}}]}"#
+        )
+        .is_ok());
+        // A literal substring inside a non-error event's message string must not false-positive.
+        assert!(validate_checkpoint_response(
+            br#"{"type":"events","request_id":1,"events":[{"seq":3,"event":{"kind":"toast","message":"not \"kind\":\"error\""}}]}"#
+        )
+        .is_ok());
+
+        // Embedded `{"kind":"error"}` inside `events` (with or without whitespace) must be rejected.
+        for bad in [
+            br#"{"type":"events","request_id":1,"events":[{"seq":1,"event":{"kind":"error","message":"checkpoint failed"}}]}"#
+                .as_slice(),
+            br#"{"type": "events", "request_id": 1, "events": [{"event": {"kind": "error"}}]}"#,
+            br#"{"type":"events","request_id":1,"events":[{"kind":"error","message":"boom"}]}"#,
+            br#"{"type":"error","request_id":1,"message":"denied"}"#,
+            br#"{"type":"events","request_id":2,"events":[]}"#,
+            br#"{"type":"events","request_id":1,"events":{}}"#,
+            br#"{"type":"events","request_id":1,"events":["#,
+        ] {
+            assert!(
+                validate_checkpoint_response(bad).is_err(),
+                "must reject invalid/error checkpoint response: {}",
+                String::from_utf8_lossy(bad)
+            );
+        }
     }
 }
