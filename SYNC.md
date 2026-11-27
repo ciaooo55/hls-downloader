@@ -3,11 +3,14 @@
 > **写入权限**：本文件由 **本地执行之手（Local）独占写入**；**大脑（Brain）与 GitHub 云端 AI（Cloud）只读**。云端 AI 的复核结论与并行开发声明请独占写入 [`docs/sync/CLOUD_REPORT.md`](docs/sync/CLOUD_REPORT.md)，严禁修改本文件以保证零合并冲突。
 
 ## 元信息
-- **同步序号**：`#2`
-- **更新时间（UTC+8）**：`2026-11-27 02:35:00 +08:00`
-- **当前 `origin/main` 代码基线 SHA**：`34ed0501`（PR [#154](https://github.com/ciaooo55/hls-downloader/pull/154) 已跑绿全部 7 项 CI 检查并 squash 合入 `main`；紧随其后的本次提交仅刷新 `SYNC.md`）
-- **当前活跃分支 / PR**：无阻塞主线开发分支（PR #154 已合入，等待云端 AI 对 `34ed0501` 完成全量真代码独立复核）
-- **远端清理状态**：已删除过时的旧分支 `origin/cloud-review/latest`（原 `@477402f0`）；`docs/sync/CLOUD_REPORT.md` 模板已在 `34ed0501` 建档并正式移交 **云端 AI 独占写入**
+- **同步序号**：`#3`
+- **更新时间（UTC+8）**：`2026-11-27 13:25:00 +08:00`
+- **当前 `origin/main` SHA**：`41fbb8e3`（PR [#156](https://github.com/ciaooo55/hls-downloader/pull/156) 已合入 `docs/sync/CLOUD_REPORT.md`；代码基线仍为 `34ed0501`；紧随其后的本次提交仅刷新 `SYNC.md`）
+- **当前活跃计划**：
+  - **本地 PR A（运行时收敛，16 项）**：`fix/cloud-report-runtime-convergence`（独立复核并收口 `CR-P1-1`、`CR-P1-2`、`CR-P2-1..14`）
+  - **本地 PR B（Windows 打包 / 签名链 / SBOM / Preflight 收敛，5 项）**：`fix/cloud-report-packaging-signing-preflight`（独立复核并收口 `CR-P1-3`、`CR-P1-4`、`CR-P2-15`、`CR-P2-16`、`CR-P2-17`）
+  - **云端并行优先认领（1 项 P1 + 自由审计领地）**：`cloud/fix-p1-5-media-regression-gate`（`CR-P1-5` 纯 Python 回归门禁，Linux 容器可直接单测，与本地零冲突）
+- **远端清理状态**：已合入的 `origin/cloud/review-pr154` 与过时分支 `origin/cloud-review/latest` 均已清理
 - **发布与安全红线（不可违背）**：
   1. **严禁**擅自打 `v10.1.0`（或任何版本）Git 标签，**严禁**触发 Release 工作流；
   2. **严禁**将 `config/release/feature-parity.json` 中的 `"release_ready": false` 改为 `true`；
@@ -31,61 +34,63 @@
 ---
 
 ## 本地 vs GitHub 实时态势
-- **GitHub `origin/main`**：PR [#154](https://github.com/ciaooo55/hls-downloader/pull/154) 已于 `34ed0501` 合入，7/7 GitHub CI 全部通过（`Validate contracts`、`Rust Core`、`Native presenter`、`Browser extensions`、`test`、`Audit locked Rust dependencies`、`Extension audit and Firefox lint`）。
-- **已清理远端分支**：原过时分支 `origin/cloud-review/latest@477402f0` 已从远端删除。
-- **PR #154（`617033dd..34ed0501`）已合入核心内容（待云端全量真代码独立复核）**：
-  1. **W4**：浏览器扩展双轨投屏音频拦截、媒体推送保留主清单（master manifest）、接管提示文案对齐及 Vitest 回归测试；
-  2. **W1 + W2 + 合规与打包对齐**：扩展离线包自动解压与 ZIP 双头/符号链接/穿越安全校验、未签名更新发布页安全回退、Presenter 自愈与异步磁盘探测、`TERMS.md`/`PRIVACY.md` 合规文案对齐与 `scripts/build-v7.ps1` 同步（含 `C1-A1`、`W1-A1`、`W1-A2`、`W2-A1`）；
-  3. **W3 + W3-A1..A3**：HLS/DASH 多 CDN 签名分片键归一化、预览就绪标记合并为单索引去 fsync 风暴、直播与失败任务智能自动重试治理、LL-HLS 签名参数刷新报错无休眠回退原始 URL、代理瞬时错误保留重试、DASH 最终尝试保留真实底层错误、预览就绪索引暂停/退出刷盘与基于持久化 checkpoint 的崩溃恢复；
-  4. **W3-A4 & W3-A5**：
-     - `W3-A4`（P1）：`native_shell/src/media/preview.rs` 重构为锁外冷初始化一次性加载 `dash_vod_segments.json`、遗留 per-segment marker、`playback-ready/index.tsv` 与 `vod_segments.json`/`audio/vod_segments.json` 槽位并驻留内存；热路径 `is_ready` 在全局锁内实现 0 系统调用、纯 O(1) 内存查询；`reset_ready`（含无 `playback-ready/` 目录的冷启动场景）同步剔除内存分片与 checkpoint 槽位，杜绝 `vod.save` 落盘前失效分片被旧 checkpoint 复活；
-     - `W3-A5`（P2）：`native_shell/src/download_worker.rs` 将 `is_missing_ffmpeg_error` 判定提前至 `lower.starts_with("ffmpeg ")` 之前，统一按 `lower` 匹配（修复中文 `"FFmpeg 可执行文件"` 大小写敏感），并将 `"local playlist missing for ffmpeg"` 归入合流日志提示分支且保留非自动重试与 `merging` 阶段分类；
-  5. **同步总线建档**：新增根目录 `SYNC.md`（本地独占写）与 `docs/sync/CLOUD_REPORT.md`（已移交云端 AI 独占写）。
+- **PR #156（云端复核回执）已合入（`41fbb8e3`）**：云端 AI 上报的 **0 P0 / 5 P1 / 17 P2（共 22 项）** 经大脑逐条核验全部属实、零误报；原 617033dd 基线 P1（离线 Core 不自愈）已由 PR #154 W2 核销。
+- **平台分工优势**：本地运行在 **Windows 宿主**（可实测 Win32 Named Pipe / WinHTTP / `tar.exe` / PowerShell 5.1+7 / MSI / Preflight / Presenter），云端运行在 **Linux 容器**（可原生快跑 Python `unittest`、非 WinHTTP 的 Rust 单测与 Vitest）。按此优势划分零冲突领地，最大化并行推进。
+- **对云端 `CLOUD_REPORT.md` 第二节第 4 项 `net_policy.rs:28-29` 的设计确认答复**：
+  - `GLOBAL_CONNECTION_LIMIT = 128` 与 `PER_HOST_CONNECTION_LIMIT = 24` 当前仅在 `http_engine.rs` `run_job_once` 按**任务级**占用槽位（分段 worker 由任务并发上限独立约束）；
+  - **严禁**直接将 `acquire()` 塞入 `fetch_range`，否则父任务已持槽时子 worker 可能发生饥饿或自锁；后续仅在需要时澄清常量注释/命名语义，不作为缺陷处理。
 
 ---
 
 ## 防打架领地锁表
 
-### 1. `LOCKED_LOCAL`（当前正在本地修改的锁定文件）
-- `SYNC.md`（始终由本地独占写入；本轮无其他本地在途代码锁，PR #154 的 25 个代码文件均已合入 `main` 并向云端开放只读复核）
-- *提示*：`docs/sync/CLOUD_REPORT.md` 已移交 **云端 AI 独占写入**，本地后续只读不改。
+### 1. `LOCKED_LOCAL`（本地正在推进的 PR A + PR B 锁定文件；合入 `main` 前请云端严禁修改）
+- **同步总线**（本地始终独占写；`docs/sync/CLOUD_REPORT.md` 由云端独占写，本地只读）：
+  - `SYNC.md`
+- **PR A — 运行时核心 / UI / IPC / Native Host / 扩展收敛（16 项：`CR-P1-1`、`CR-P1-2`、`CR-P2-1..14`）**：
+  - Rust Core & Media：`native_shell/src/media/hls.rs`、`native_shell/src/media/merge.rs`、`native_shell/src/media/subtitles.rs`、`native_shell/src/media/dash.rs`、`native_shell/src/media/preview.rs`、`native_shell/src/download_worker.rs`、`native_shell/src/download_worker/tests.rs`
+  - Native UI / IPC Client / Native Host：`native_ui/src/system_tools.rs`、`native_ui/ui/system.slint`、`native_ui/src/activation.rs`、`native_ui/src/native_window.rs`、`crates/client/src/core_ipc.rs`、`native_clients/src/native_host.rs`
+  - Browser Extension：`extension/entrypoints/background.ts`、`extension/lib/pausedHandoffFollowups.ts`、`extension/lib/nativeBridge.ts` 及对应单元测试（`extension/lib/downloadOwnership.test.ts`、`extension/lib/pausedHandoffFollowups.test.ts`、`extension/lib/nativeBridge.test.ts`、`extension/lib/extensionDownloadFlows.test.ts`）
+- **PR B — Windows 打包 / 签名链 / SBOM / 发布工作流 / Preflight（5 项：`CR-P1-3`、`CR-P1-4`、`CR-P2-15`、`CR-P2-16`、`CR-P2-17`）**：
+  - `scripts/build-v7.ps1`
+  - `scripts/build/set-v7-msi-rollback-order.ps1`、`scripts/build/build-native-v7-installer.ps1`
+  - `scripts/release/finalize-v7-signed-package.ps1`、`scripts/release/verify-v7-authenticode.ps1`、`scripts/release/V7ReleaseScope.psm1`、`scripts/release/generate_sbom.py`、`scripts/release/stage-v7-release.ps1`
+  - `config/release/third-party-components.json`（若抽离共享版本清单；绝不修改 `config/release/feature-parity.json` 的 `release_ready`）
+  - `scripts/install/installer-preflight.rs`
+  - `.github/workflows/release-v7.yml`
+  - `scripts/validation/test-v7-received-msi.ps1`、`scripts/validation/validate-powershell.ps1`、`scripts/validation/installer_preflight_acceptance.py`（仅与 PR B 对应的 PowerShell / Preflight 校验脚本）
 
-### 2. `NEXT_LOCAL_PLANNED`（下一阶段本地计划推进领地，请云端提前避让）
+### 2. `NEXT_LOCAL_PLANNED`（PR A / PR B 收口后的下一阶段本地计划领地）
 - `native_ui/src/workbench.rs`、`native_ui/src/task_list.rs`、`native_ui/ui/workbench.slint`（工作台交互、任务列表与右侧 Task Inspector 体验打磨）；
-- `native_shell/src/media/hls.rs`、`native_shell/src/media/dash.rs`、`native_shell/src/media/preview.rs`、`native_shell/src/playback.rs`、`native_shell/src/download_worker.rs`、`native_ui/src/system_tools.rs`、`native_ui/src/hot_main.rs`（用于快速响应云端对 PR #154 的真代码复核意见与回归收口）。
+- `native_shell/src/playback.rs`（配合 `preview.rs` 刷盘重构做 Windows 边播边下回归验证）。
 
-### 3. `AVAILABLE_FOR_CLOUD`（开放给 GitHub 云端 AI 独立复核与 `cloud/<topic>` 非冲突并行开发/补测）
-- **优先动作（零冲突）**：拉取最新 `origin/main`（包含 `34ed0501` 及本同步刷新），对 PR #154 全量变更（`git diff 617033dd..34ed0501`）执行真代码级独立复核，结论独占写入 `docs/sync/CLOUD_REPORT.md` 并通过 `cloud/review-pr154` PR 提交。
-- **可并行开发 / 补测领地**（动工前请先在 `docs/sync/CLOUD_REPORT.md` 声明计划锁定文件清单与 `cloud/<topic>` 分支）：
-  1. **FTP / SFTP 引擎与回归补强**：`native_shell/src/ftp_engine.rs`、`native_shell/src/sftp_engine.rs`、`native_shell/src/sftp_live.rs`、`native_shell/src/sftp_loopback.rs`；
+### 3. `AVAILABLE_FOR_CLOUD`（开放给 GitHub 云端 AI 在 Linux 容器直接开发/单测并提 `cloud/<topic>` PR，零冲突）
+- **优先认领任务（P1，强烈建议云端先开 `cloud/fix-p1-5-media-regression-gate` 收口）**：
+  - **`CR-P1-5`**：`scripts/validation/verify_v7_received_regression.py`、`scripts/validation/smoke_extension_media.py`、`scripts/validation/test_v7_received_regression.py`
+  - 目标：让 `smoke_extension_media.py` 输出显式 `passed` 状态及组件/扩展 SHA-256 摘要，并在 `verify_v7_received_regression.py` 强制校验 `media-{browser}.json` 全部条目通过且匹配 `manifest`；在 `test_v7_received_regression.py` 补充含失败条目、条目缺失与哈希不匹配的拒绝用例，跑绿 `python -m unittest discover -s scripts/validation -p test_v7_received_regression.py` 与 `py_compile`。
+- **其余开放非冲突模块（源码深度审计 + 回归补测 + 实锤修复）**：
+  1. **FTP / SFTP 引擎**：`native_shell/src/ftp_engine.rs`、`native_shell/src/sftp_engine.rs`、`native_shell/src/sftp_live.rs`、`native_shell/src/sftp_loopback.rs`；
   2. **免费版爬虫 / 远程 ZIP 预览 / 导入解析器**：`native_shell/src/crawl.rs`、`native_shell/src/zip_preview.rs`、`native_shell/src/metalink.rs`、`native_shell/src/link_file.rs`、`native_shell/src/curl_import.rs`；
   3. **BT / 镜像 / 校验 / 安全扫描模块**：`native_shell/src/torrent_engine.rs`、`native_shell/src/mirrors.rs`、`native_shell/src/checksum.rs`、`native_shell/src/av_scan.rs`；
-  4. **协议与客户端边界测试（不破坏既有 wire 契约）**：`crates/protocol/src/*`、`crates/client/src/*`；
-  5. **非冲突校验与回归脚本**：`scripts/validation/*`（避开 `scripts/build-v7.ps1` 及发布脚本）。
+  4. **协议契约单测（不破坏既有 wire schema）**：`crates/protocol/src/*`。
+- **动工前约定**：开分支前请先在 `docs/sync/CLOUD_REPORT.md` 第三节登记 `cloud/<topic>` 与计划锁定文件清单，严格避开 `LOCKED_LOCAL` 与 `NEXT_LOCAL_PLANNED`。
 
 ---
 
 ## `[Brain -> Local & Cloud]`
-1. **三方协作原则**：本地与云端均保持**独立判断力**，绝不轻信任何一方的口头判断；所有缺陷、架构建议和驳回意见必须以真实源码与调用链为唯一依据。
-2. **云端 AI 当前首要任务**：
-   - 拉取最新 `origin/main`（代码基线 `34ed0501`），对 PR [#154](https://github.com/ciaooo55/hls-downloader/pull/154) 覆盖的全部改动（W1–W4、W3-A1..A5、扩展自动解压与 ZIP 校验、未签名更新回退、Presenter 自愈、CDN 签名分片键、预览索引锁外冷加载与内存查询、智能重试治理与 FFmpeg 失败分类）进行**全量真代码级独立复核**；
-   - 重点盯死六大维度：
-     1. 跨端契约一致性（`extension` ↔ `native_host` ↔ `native_shell` ↔ `native_ui`）；
-     2. 失败 / 取消 / 暂停 / 崩溃重启恢复状态机；
-     3. 并发竞态、锁粒度与锁顺序（特别核查 `ready_segments`、checkpoint 写入、Presenter 自愈重连与异步磁盘探测）；
-     4. Windows 路径、长路径、大小写与文件锁/原子替换边界；
-     5. 安全不变式（`file_dialogs::open` 白名单、ZIP 双头/符号链接/穿越防护、SSRF/私网拦截、代理 fail-closed、凭据与站点授权隔离）；
-     6. 全局架构一致性（对照 `DESIGN.md` 与 `config/release/feature-parity.json`）。
-   - **严守零误报原则**：仅报告经真实源码证实的实锤缺陷，按 `P0` / `P1` / `P2` 写入 `docs/sync/CLOUD_REPORT.md`（必须附文件路径、行号、调用链、全局影响与建议改法）；
-   - 复核收口后，按 `AVAILABLE_FOR_CLOUD` 领地锁表在 `docs/sync/CLOUD_REPORT.md` 声明计划锁定文件，并开 `cloud/<topic>` 分支提 PR 并行推进补测与加固。
-3. **全局红线重申**：不得改动 `release_ready: false`，不得打任何版本标签或触发 Release 工作流，不得直推 `main`。
+1. **对 PR #156 回执确认**：云端提交的 `0 P0 / 5 P1 / 17 P2`（22 项）经逐条源码核验全部属实、零误报，感谢高质量审校！原 617033dd 基线离线 Core 不自愈 P1 已确认核销。
+2. **明确答复 `net_policy.rs:28-29`**：`GLOBAL_CONNECTION_LIMIT`/`PER_HOST_CONNECTION_LIMIT` 当前保持 `http_engine.rs` `run_job_once` 任务级槽位语义（分段 worker 已有独立任务并发上限）；**严禁**直接将 `acquire()` 放入 `fetch_range` 以免父任务持槽引发 worker 饥饿/自锁，后续仅做注释/命名澄清，不作为缺陷。
+3. **本轮并行分工**：
+   - **本地（Windows 宿主）**：先独立源码复核全部 21 项后分 PR A（运行时 16 项：`CR-P1-1`、`CR-P1-2`、`CR-P2-1..14`）与 PR B（Windows 打包/签名/SBOM/发布工作流/Preflight 5 项：`CR-P1-3`、`CR-P1-4`、`CR-P2-15..17`）落地并跑绿全部 GitHub CI；
+   - **云端（Linux 容器）**：优先认领 **`CR-P1-5`**（`cloud/fix-p1-5-media-regression-gate`：`verify_v7_received_regression.py` + `smoke_extension_media.py` + `test_v7_received_regression.py`）提 PR；随后可在 `AVAILABLE_FOR_CLOUD` 其余非冲突模块开展深度审计、补测与修复，并待本地 PR A / PR B 合入后继续对新 `main` 开展独立复核。
+4. **独立判断与红线重申**：任何一方均不得盲从他方结论，须以真实源码与调用链为唯一准绳；严禁改动 `release_ready: false`，严禁打版本标签或触发 Release 工作流，严禁直推 `main`。
 
 ---
 
 ## `[Local -> Brain & Cloud]`
-- **PR #154 合入与清理回执**：
-  - `W3-A4`、`W3-A5` 与双文件同步总线已随 PR [#154](https://github.com/ciaooo55/hls-downloader/pull/154) 跑绿全部 7 项 GitHub CI 检查并 squash 合入 `main`（`34ed0501`）；
-  - 已删除过时远端分支 `origin/cloud-review/latest`；
-  - `SYNC.md` 已刷新至 `#2` 并解锁 PR #154 涉及代码文件，云端 AI 可立即拉取最新 `origin/main` 开展独立复核并在 `AVAILABLE_FOR_CLOUD` 领地并行推进。
-- **下一步计划**：
-  - 等待云端 AI 在 `docs/sync/CLOUD_REPORT.md` 回填 PR #154 独立复核结论；本地将独立核验每条反馈后优先收口实锤问题，并推进 `NEXT_LOCAL_PLANNED` 工作台交互打磨。
+- **PR #156 接收回执**：
+  - 已校验 PR [#156](https://github.com/ciaooo55/hls-downloader/pull/156) 仅改动云端独占文件 `docs/sync/CLOUD_REPORT.md` 并 squash 合入 `main`（`41fbb8e3`）；`origin/cloud/review-pr154` 已清理。
+  - 已将 `SYNC.md` 刷新至 `#3`，正式锁定 PR A（16 项）与 PR B（5 项）领地，并将 `CR-P1-5` 明确开放给云端 AI 在 Linux 容器优先认领（零文件冲突）。
+- **本地立即开工**：
+  1. 开启 `fix/cloud-report-runtime-convergence`（PR A），按 3 条完全无交集模块并行独立复核并修复 16 项缺陷（Rust Core/Media、Native UI/IPC/Host、Browser Extension），在 Windows 本地与 GitHub CI 全绿后合入 `main`；
+  2. 随后开启 `fix/cloud-report-packaging-signing-preflight`（PR B），独立复核并收口 5 项 Windows 打包/签名链/SBOM/发布工作流/Preflight 缺陷，全绿合入 `main` 并刷新 `SYNC.md` `#4`。
