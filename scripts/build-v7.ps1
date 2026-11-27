@@ -6,6 +6,8 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'V7HashFunctions.ps1')
 . (Join-Path $PSScriptRoot 'V7ExtensionArchive.ps1')
+. (Join-Path $PSScriptRoot 'build\V7MsiIdentity.ps1')
+Import-Module (Join-Path $PSScriptRoot 'release\V7ReleaseScope.psm1') -Force
 $repo=(Resolve-Path "$PSScriptRoot\..").Path
 $contractSource = Get-Content -LiteralPath (Join-Path $repo 'crates\protocol\src\contract.rs') -Raw -Encoding UTF8
 if ($contractSource -notmatch 'V7_PROTOCOL_NAME\s*:\s*&str\s*=\s*"hls-downloader-v7-core"') {
@@ -44,6 +46,8 @@ $packageSwapBackupRoot = $null
 $packageResources = $null
 $candidateRuntime = $null
 $candidateManifest = $null
+$candidateManifestSha256 = ''
+$preflightBinary = $null
 if ($Task -eq 'candidate') {
     # Candidate packages are for external machine validation. They require the
     # canonical matrix, no blocked features and a clean tree, but not
@@ -90,25 +94,46 @@ if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR=Join-Path $cacheRoot 'ca
 # not leave a second hidden tool state behind in the repository.
 $env:COREPACK_HOME=Join-Path $cacheRoot 'corepack-home'
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT='0'
-$libMpvCache = Join-Path $cacheRoot 'libmpv-20261110'
+$thirdPartyManifestPath = Join-Path $repo 'config\release\third-party-components.json'
+if (-not (Test-Path -LiteralPath $thirdPartyManifestPath -PathType Leaf)) {
+    throw "Third-party component manifest is missing: $thirdPartyManifestPath"
+}
+$thirdPartyManifest = Get-Content -LiteralPath $thirdPartyManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ([int]$thirdPartyManifest.schema -ne 1) {
+    throw "Unsupported third-party component manifest schema: $($thirdPartyManifest.schema)"
+}
+$thirdPartyById = @{}
+foreach ($item in @($thirdPartyManifest.components)) {
+    $thirdPartyById[[string]$item.id] = $item
+}
+foreach ($requiredId in @('ffmpeg', 'libmpv', 'vulkan-loader', 'curl-impersonate')) {
+    if (-not $thirdPartyById.ContainsKey($requiredId)) {
+        throw "Third-party component manifest is missing required component: $requiredId"
+    }
+}
+$libMpvSpec = $thirdPartyById['libmpv']
+$vulkanSpec = $thirdPartyById['vulkan-loader']
+$curlSpec = $thirdPartyById['curl-impersonate']
+$sevenZipSpec = $thirdPartyManifest.build_tools.seven_zip
+$libMpvCache = Join-Path $cacheRoot ([string]$libMpvSpec.cache_dir)
 $sevenZipExe = Join-Path $libMpvCache '7zr.exe'
-$libMpvArchive = Join-Path $libMpvCache 'mpv-dev-x86_64.7z'
+$libMpvArchive = Join-Path $libMpvCache ([string]$libMpvSpec.archive_name)
 $libMpvDll = Join-Path $libMpvCache 'libmpv-2.dll'
-$libMpvDllSha256 = '5feefdced585b98282f9fd1ebe0a14c3b8c0827bff0ebf26fa43e735a789fed1'
-$sevenZipUrl = 'https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe'
-$sevenZipSha256 = '56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72'
-$libMpvArchiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261110/mpv-dev-x86_64-20261110-git-a61f6c3abd.7z'
-$libMpvArchiveSha256 = 'f07b97a72f2394a7798d6e1d36d952bbfd63577e25cef051f716751ea5dc9688'
-$vulkanRuntimeVersion = '1.4.363.0'
+$libMpvDllSha256 = [string]$libMpvSpec.dll_sha256
+$sevenZipUrl = [string]$sevenZipSpec.url
+$sevenZipSha256 = [string]$sevenZipSpec.sha256
+$libMpvArchiveUrl = [string]$libMpvSpec.archive_url
+$libMpvArchiveSha256 = [string]$libMpvSpec.archive_sha256
+$vulkanRuntimeVersion = [string]$vulkanSpec.version
 $vulkanRuntimeCache = Join-Path $cacheRoot "vulkan-runtime-$vulkanRuntimeVersion"
 $vulkanRuntimeArchive = Join-Path $vulkanRuntimeCache "VulkanRT-X64-$vulkanRuntimeVersion-Components.zip"
-$vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanRuntimeVersion/windows/VulkanRT-X64-$vulkanRuntimeVersion-Components.zip"
-$vulkanRuntimeArchiveSha256 = 'a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a'
-$curlImpersonateVersion = 'v2.0.0'
+$vulkanRuntimeUrl = [string]$vulkanSpec.archive_url
+$vulkanRuntimeArchiveSha256 = [string]$vulkanSpec.archive_sha256
+$curlImpersonateVersion = [string]$curlSpec.tag
 $curlImpersonateCache = Join-Path $cacheRoot "curl-impersonate-$curlImpersonateVersion"
-$curlImpersonateArchive = Join-Path $curlImpersonateCache 'curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
-$curlImpersonateUrl = 'https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/curl-impersonate-v2.0.0.x86_64-win32.tar.gz'
-$curlImpersonateSha256 = 'd2e5905f8adf76f042afe78d1758a978253afddf4eb7bdcb8ddfb38c2f0e530c'
+$curlImpersonateArchive = Join-Path $curlImpersonateCache ([string]$curlSpec.archive_name)
+$curlImpersonateUrl = [string]$curlSpec.archive_url
+$curlImpersonateSha256 = [string]$curlSpec.archive_sha256
 
 function Assert-FileSha256([string]$Path, [string]$Expected, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) { throw "$Label is missing: $Path" }
@@ -304,10 +329,11 @@ if ($isPackage) {
         $currentCommit = (& git -C $repo rev-parse HEAD).Trim()
         $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
         $releaseEvidence = Get-Content (Join-Path $repo 'artifacts\v7-productization\release-evidence.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $candidateManifestSha256 = (Get-FileHash $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($candidateManifest.package_tier -ne 'candidate' -or $candidateManifest.ui_runtime -ne 'native' -or
             $candidateManifest.source_commit -ne $currentCommit -or $candidateManifest.source_tree -ne $currentTree -or
             $candidateManifest.product_version -ne $productVersion -or
-            (Get-FileHash $candidatePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $releaseEvidence.candidate_artifact_manifest.sha256) {
+            $candidateManifestSha256 -ne $releaseEvidence.candidate_artifact_manifest.sha256) {
             throw 'Formal input is not the same native candidate certified by the release gates.'
         }
         $candidateRoot = Split-Path $candidatePath
@@ -322,7 +348,7 @@ if ($isPackage) {
             if (-not $componentPath.StartsWith($candidateRuntime + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Candidate component path escapes its image.' }
             Assert-FileSha256 $componentPath ([string]$entry.Value) 'tested executable'
         }
-        foreach ($name in @('HLSDownloader.exe', 'app/resources/HLSDownloaderEngine.exe', 'app/resources/HLSDownloaderNativeHost.exe', 'app/resources/HLSDownloaderUpdater.exe', 'app/resources/HLSDownloaderPresenter.exe', 'app/resources/HLSDownloaderCli.exe')) {
+        foreach ($name in Get-V7PortableExecutables) {
             if (-not $candidateManifest.components.$name) { throw "Tested component identity is missing: $name" }
         }
     }
@@ -487,13 +513,28 @@ $env:HLS_ENGINE_PATH = $engine
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($isPackage) {
         $sourceCommit = (& git -C $repo rev-parse HEAD).Trim()
-        $productCode = '{' + $sourceCommit.Substring(0, 8) + '-' + $sourceCommit.Substring(8, 4) + '-' + $sourceCommit.Substring(12, 4) + '-' + $sourceCommit.Substring(16, 4) + '-' + $sourceCommit.Substring(20, 12) + '}'
+        $productCode = New-V7MsiProductCode -SourceCommit $sourceCommit -PackageTier $packageTier -ProductVersion $productVersion -CandidateManifestSha256 $candidateManifestSha256
+        if ($candidateRuntime) {
+            $preflightBinary = Join-Path $candidateRuntime 'scripts\HLSDownloaderPreflight.exe'
+            if (-not (Test-Path -LiteralPath $preflightBinary -PathType Leaf)) {
+                throw "Tested candidate preflight executable is missing: $preflightBinary"
+            }
+        } else {
+            $preflightDir = Join-Path $artifactRoot '.preflight'
+            New-Item -ItemType Directory -Force -Path $preflightDir | Out-Null
+            $preflightBinary = Join-Path $preflightDir 'HLSDownloaderPreflight.exe'
+            $rustcCommand = Get-Command rustc.exe -ErrorAction SilentlyContinue
+            $rustc = if ($rustcCommand) { $rustcCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe' }
+            if (-not (Test-Path -LiteralPath $rustc -PathType Leaf)) { throw "Rust compiler not found: $rustc" }
+            & $rustc --edition 2021 --crate-name hls_installer_preflight -C opt-level=s -C panic=abort -C target-feature=+crt-static (Join-Path $repo 'scripts\install\installer-preflight.rs') -o $preflightBinary
+            if ($LASTEXITCODE -ne 0) { throw "Installer preflight build failed: $LASTEXITCODE" }
+        }
         $nativeMsi = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.msi"
         $nativeExe = Join-Path $artifactRoot "HLSDownloader-$productVersion-Windows-x64$artifactSuffix.exe"
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\build-native-v7-installer.ps1" -AppImage $nativeAppImage -WixRoot $wixRoot -OutMsi $nativeMsi -OutExe $nativeExe -ProductVersion $productVersion -ProductCode $productCode
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\build-native-v7-installer.ps1" -AppImage $nativeAppImage -WixRoot $wixRoot -OutMsi $nativeMsi -OutExe $nativeExe -ProductVersion $productVersion -ProductCode $productCode -PreflightPath $preflightBinary
         if ($LASTEXITCODE -ne 0) { throw 'Native installer build failed.' }
         $portablePath = Join-Path $artifactRoot ("HLSDownloader-$productVersion-Windows-x64-Portable$artifactSuffix.zip")
-        $imageArguments = @('-AppImage', $nativeAppImage)
+        $imageArguments = @('-AppImage', $nativeAppImage, '-PreflightPath', $preflightBinary)
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$repo\scripts\build\create-v7-portable.ps1" -OutZip $portablePath @imageArguments
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $extensionEvidence = [ordered]@{}
@@ -518,6 +559,9 @@ $env:HLS_ENGINE_PATH = $engine
             $launcherHash = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
             Assert-FileSha256 (Join-Path $portableRoot 'HLSDownloader.exe') $launcherHash 'native launcher'
             $componentEvidence['HLSDownloader.exe'] = $launcherHash
+            $preflightHash = (Get-FileHash -LiteralPath $preflightBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+            Assert-FileSha256 (Join-Path $portableRoot 'scripts\HLSDownloaderPreflight.exe') $preflightHash 'installer preflight helper'
+            $componentEvidence['scripts/HLSDownloaderPreflight.exe'] = $preflightHash
             $provenanceInPackage = Join-Path $portableRoot 'app\resources\BUILD-PROVENANCE.json'
             if (-not (Test-Path -LiteralPath $provenanceInPackage -PathType Leaf)) {
                 throw 'Portable package is missing app/resources/BUILD-PROVENANCE.json.'
@@ -630,6 +674,10 @@ $env:HLS_ENGINE_PATH = $engine
         $assemblyRoot = Join-Path $artifactRoot '.native-image'
         if ((Resolve-Path -LiteralPath $assemblyRoot).Path -ne [IO.Path]::GetFullPath($assemblyRoot)) { throw 'Native assembly path changed unexpectedly.' }
         Remove-Item -LiteralPath $assemblyRoot -Recurse -Force
+        $preflightStaging = Join-Path $artifactRoot '.preflight'
+        if (Test-Path -LiteralPath $preflightStaging -PathType Container) {
+            Remove-Item -LiteralPath $preflightStaging -Recurse -Force
+        }
         $packageResources = $null
         if ($candidateRuntime) {
             Remove-Item -LiteralPath $inputRoot -Recurse -Force

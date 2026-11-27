@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "ffmpeg",
+      "name": "ffmpeg",
+      "type": "application",
+      "ecosystem": "generic",
+      "version": "9.0.2",
+      "packaged_paths": [
+        "app/resources/ffmpeg.exe"
+      ]
+    },
+    {
+      "id": "libmpv",
+      "name": "libmpv",
+      "type": "library",
+      "ecosystem": "generic",
+      "version": "20261110-git-a61f6c3abd",
+      "cache_dir": "libmpv-20261110",
+      "archive_name": "mpv-dev-x86_64.7z",
+      "archive_url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261110/mpv-dev-x86_64-20261110-git-a61f6c3abd.7z",
+      "archive_sha256": "f07b97a72f2394a7798d6e1d36d952bbfd63577e25cef051f716751ea5dc9688",
+      "dll_sha256": "5feefdced585b98282f9fd1ebe0a14c3b8c0827bff0ebf26fa43e735a789fed1",
+      "packaged_paths": [
+        "app/resources/libmpv-2.dll"
+      ]
+    },
+    {
+      "id": "vulkan-loader",
+      "name": "vulkan-loader",
+      "type": "library",
+      "ecosystem": "generic",
+      "version": "1.4.363.0",
+      "archive_url": "https://sdk.lunarg.com/sdk/download/1.4.363.0/windows/VulkanRT-X64-1.4.363.0-Components.zip",
+      "archive_sha256": "a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a",
+      "packaged_paths": [
+        "app/resources/vulkan-1.dll"
+      ]
+    },
+    {
+      "id": "curl-impersonate",
+      "name": "curl-impersonate",
+      "type": "application",
+      "ecosystem": "generic",
+      "version": "2.0.0",
+      "tag": "v2.0.0",
+      "archive_name": "curl-impersonate-v2.0.0.x86_64-win32.tar.gz",
+      "archive_url": "https://github.com/lexiforest/curl-impersonate/releases/download/v2.0.0/curl-impersonate-v2.0.0.x86_64-win32.tar.gz",
+      "archive_sha256": "d2e5905f8adf76f042afe78d1758a978253afddf4eb7bdcb8ddfb38c2f0e530c",
+      "packaged_paths": [
+        "app/resources/tools/curl-impersonate/curl-impersonate.exe"
+      ]
+    }
+  ],
+  "build_tools": {
+    "seven_zip": {
+      "version": "26.02",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.02/7zr.exe",
+      "sha256": "56b8cc9f4971cef253644fafe54063ed7fdca551d4dee0f8c6baa81b855acd72"
+    }
+  }
+}

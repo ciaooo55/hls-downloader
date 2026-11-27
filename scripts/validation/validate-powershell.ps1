@@ -112,6 +112,11 @@ if ($usingDefaultPath) {
 
     Write-Output "Release-evidence gate-id contract passed across invoke, recorder, and verify."
 
+    & (Join-Path $PSScriptRoot 'test-v7-packaging-contracts.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
     # The default validation path also acts as an early product-version drift
     # gate before expensive Rust/native UI/Candidate work starts. Keep this last:
     # verify-v7-version-contract.ps1 exits the current PowerShell process.

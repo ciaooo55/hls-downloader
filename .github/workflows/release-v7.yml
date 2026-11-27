@@ -327,6 +327,13 @@ jobs:
         shell: pwsh
         run: |
           foreach ($root in @('artifacts\v7-productization\candidate-browser\portable\HLSDownloader', 'artifacts\v7-productization\performance\candidate-runtime\HLSDownloader')) {
-            & .\scripts\install\shutdown-running.ps1 -InstallDir (Join-Path (Get-Location).Path $root) -IncludeNativeHost
+            $dir = Join-Path (Get-Location).Path $root
+            if (Test-Path -LiteralPath $dir -PathType Container) {
+              try {
+                & .\scripts\install\shutdown-running.ps1 -InstallDir $dir -IncludeNativeHost
+              } catch {
+                Write-Warning "Failed to stop release-owned processes under ${dir}: $($_.Exception.Message)"
+              }
+            }
           }
           exit 0

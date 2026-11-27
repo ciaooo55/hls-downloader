@@ -3,11 +3,14 @@ param(
     [string]$ManifestPath = 'artifacts\v7-productization\package\ARTIFACT-MANIFEST.json',
     [string]$CertificateThumbprint = $env:HLS_V7_SIGN_CERT_THUMBPRINT,
     [ValidateSet('CurrentUser', 'LocalMachine')][string]$CertificateStore = $(if ($env:HLS_V7_SIGN_CERT_STORE) { $env:HLS_V7_SIGN_CERT_STORE } else { 'CurrentUser' }),
-    [string]$TimestampUrl = $(if ($env:HLS_V7_TIMESTAMP_URL) { $env:HLS_V7_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' })
+    [string]$TimestampUrl = $(if ($env:HLS_V7_TIMESTAMP_URL) { $env:HLS_V7_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }),
+    [string]$WixRoot = $(if ($env:HLS_V7_WIX_ROOT) { $env:HLS_V7_WIX_ROOT } else { '' }),
+    [string]$SignToolPath = $env:HLS_V7_SIGNTOOL
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\V7HashFunctions.ps1')
+. (Join-Path $PSScriptRoot '..\build\V7MsiIdentity.ps1')
 Import-Module (Join-Path $PSScriptRoot 'V7ReleaseScope.psm1') -Force
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
@@ -21,9 +24,33 @@ $currentTree = (& git -C $repo rev-parse 'HEAD^{tree}').Trim()
 if ([int]$manifest.schema -ne 1 -or [string]$manifest.package_tier -ne 'formal' -or [string]$manifest.source_commit -ne $currentCommit -or [string]$manifest.source_tree -ne $currentTree) {
     throw 'Formal package manifest is not bound to the current source commit/tree.'
 }
+$cacheRoot = if ($env:HLS_V7_BUILD_CACHE) { [IO.Path]::GetFullPath($env:HLS_V7_BUILD_CACHE) } else { Join-Path $repo '.tool-cache\build-cache' }
+$resolvedWixRoot = if (-not [String]::IsNullOrWhiteSpace($WixRoot)) {
+    [IO.Path]::GetFullPath($WixRoot)
+} else {
+    Join-Path $cacheRoot 'wix-3.14.1'
+}
+foreach ($wixTool in @('candle.exe', 'light.exe', 'insignia.exe')) {
+    $toolPath = Join-Path $resolvedWixRoot $wixTool
+    if (-not (Test-Path -LiteralPath $toolPath -PathType Leaf)) {
+        throw "Signed formal installer rebuild requires WiX tool $wixTool at $toolPath (set -WixRoot or HLS_V7_WIX_ROOT)."
+    }
+}
 $root = Split-Path $manifestFullPath -Parent
-function Invoke-Signer([string[]]$Targets) {
-    $output = @(& (Join-Path $PSScriptRoot 'sign-v7-authenticode.ps1') -Path $Targets -CertificateThumbprint $CertificateThumbprint -CertificateStore $CertificateStore -TimestampUrl $TimestampUrl)
+function Invoke-Signer([string[]]$Targets, [switch]$VerifyOnly) {
+    $signArgs = @{
+        Path = $Targets
+        CertificateThumbprint = $CertificateThumbprint
+        CertificateStore = $CertificateStore
+        TimestampUrl = $TimestampUrl
+    }
+    if (-not [String]::IsNullOrWhiteSpace($SignToolPath)) {
+        $signArgs['SignToolPath'] = $SignToolPath
+    }
+    if ($VerifyOnly) {
+        $signArgs['VerifyOnly'] = $true
+    }
+    $output = @(& (Join-Path $PSScriptRoot 'sign-v7-authenticode.ps1') @signArgs)
     if ($LASTEXITCODE -ne 0) { throw "Authenticode signer failed with exit code $LASTEXITCODE." }
     return @($output | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
 }
@@ -60,7 +87,46 @@ try {
     foreach ($name in Get-V7PortableExecutables) {
         $recordPaths[[IO.Path]::GetFullPath((Join-Path $portableRoot $name))] = "HLSDownloader/$name"
     }
-    foreach ($row in @(Invoke-Signer (@($exe, $msi) + $firstParty))) {
+    # 1. Sign every first-party EXE first (including scripts/HLSDownloaderPreflight.exe)
+    #    so MSI, Burn bundle, and Portable all embed the exact same signed binaries.
+    $signedPortableRows = @(Invoke-Signer $firstParty)
+
+    # 2. Assemble the signed MSI app-image from the signed Portable tree (excluding portable-only files).
+    $signedAppImage = Join-Path $stage 'signed-app-image\HLSDownloader'
+    [void][IO.Directory]::CreateDirectory($signedAppImage)
+    $portableOnlyTopLevel = @('portable', 'README-PORTABLE.txt', 'scripts', 'extensions')
+    foreach ($item in Get-ChildItem -LiteralPath $portableRoot -Force) {
+        if ($portableOnlyTopLevel -contains $item.Name) { continue }
+        Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $signedAppImage $item.Name) -Recurse -Force
+    }
+
+    # 3. Rebuild the MSI and Burn bundle from the signed EXEs and signed preflight helper:
+    #    build-native-v7-installer.ps1 signs the MSI before Burn embeds it, signs the Burn engine
+    #    via WiX insignia, and signs the outer Burn executable.
+    [IO.File]::Delete($exe)
+    [IO.File]::Delete($msi)
+    $signedProductCode = New-V7MsiProductCode -SourceCommit $currentCommit -PackageTier 'formal-signed' -ProductVersion ([string]$manifest.product_version)
+    $signedPreflight = Join-Path $portableRoot 'scripts\HLSDownloaderPreflight.exe'
+    $installerArgs = @{
+        AppImage = $signedAppImage
+        WixRoot = $resolvedWixRoot
+        OutMsi = $msi
+        OutExe = $exe
+        ProductVersion = [string]$manifest.product_version
+        ProductCode = $signedProductCode
+        PreflightPath = $signedPreflight
+        CertificateThumbprint = $CertificateThumbprint
+        CertificateStore = $CertificateStore
+        TimestampUrl = $TimestampUrl
+    }
+    if (-not [String]::IsNullOrWhiteSpace($SignToolPath)) {
+        $installerArgs['SignToolPath'] = $SignToolPath
+    }
+    & (Join-Path $PSScriptRoot '..\build\build-native-v7-installer.ps1') @installerArgs
+    if ($LASTEXITCODE -ne 0) { throw "Signed installer rebuild failed with exit code $LASTEXITCODE." }
+
+    $verifiedInstallerRows = @(Invoke-Signer @($exe, $msi) -VerifyOnly)
+    foreach ($row in @($verifiedInstallerRows + $signedPortableRows)) {
         $row.path = $recordPaths[$row.path]
         [void]$signatureRows.Add($row)
     }
