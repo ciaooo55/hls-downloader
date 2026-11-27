@@ -4,6 +4,7 @@ use hls_client::request_validation::{
     reserved_dos_device_name, sanitize_http_method, validate_local_source_path,
 };
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[test]
@@ -186,11 +187,21 @@ struct TempFile(PathBuf);
 
 impl TempFile {
     fn new(name: &str, bytes: &[u8]) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "hls-client-validation-{}-{name}",
+            "hls-client-validation-{}-{nanos}-{name}",
             std::process::id()
         ));
-        fs::write(&path, bytes).unwrap();
+        // create_new refuses existing paths, including planted symlinks.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(bytes))
+            .unwrap();
         Self(path)
     }
 }
