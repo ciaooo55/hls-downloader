@@ -20,6 +20,81 @@ export interface PausedHandoffFollowUp {
   /** Epoch ms when the decision window (resolution) or next re-check (readiness) is due. */
   deadline: number
   createdAt: number
+  /** Ephemeral browser-session UUID (storage.session); proves same browser process across SW sleep. */
+  sessionId?: string
+  /** Stable DownloadItem.startTime captured when parking or scheduling cleanup. */
+  sourceStartedAt?: string
+  /** Lowercase 64-hex SHA-256 digest of DownloadItem.url; never stores plaintext URL or query secret. */
+  sourceUrlDigest?: string
+  /** Finalized DownloadItem.filename captured only after state === 'complete'. */
+  sourceFilename?: string
+  /** Finalized positive DownloadItem.totalBytes/fileSize captured only after state === 'complete'. */
+  sourceTotalBytes?: number
+}
+
+export interface FollowUpDownloadCandidate {
+  id: number
+  startTime?: string
+  urlDigest?: string
+  filename?: string
+  totalBytes?: number
+  fileSize?: number
+}
+
+export function hasStableFollowUpIdentity(
+  record: Pick<PausedHandoffFollowUp, 'sourceStartedAt' | 'sourceUrlDigest'>,
+): boolean {
+  return Boolean(record.sourceStartedAt && record.sourceUrlDigest)
+}
+
+export function matchesFollowUpDownloadIdentity(
+  record: Pick<PausedHandoffFollowUp, 'sourceStartedAt' | 'sourceUrlDigest' | 'sourceFilename' | 'sourceTotalBytes'>,
+  candidate: Pick<FollowUpDownloadCandidate, 'startTime' | 'urlDigest' | 'filename' | 'totalBytes' | 'fileSize'>,
+): boolean {
+  if (record.sourceStartedAt && candidate.startTime !== record.sourceStartedAt) return false
+  if (record.sourceUrlDigest && candidate.urlDigest !== record.sourceUrlDigest) return false
+  if (record.sourceFilename && candidate.filename !== record.sourceFilename) return false
+  if (record.sourceTotalBytes !== undefined) {
+    const totalBytesMatch = candidate.totalBytes === record.sourceTotalBytes
+    const fileSizeMatch = candidate.fileSize === record.sourceTotalBytes
+    if (!totalBytesMatch && !fileSizeMatch) return false
+  }
+  return true
+}
+
+export type FollowUpDownloadSelection<T extends FollowUpDownloadCandidate> =
+  | { kind: 'matched', candidate: T, rebound: boolean }
+  | { kind: 'unmatched', reason: 'missing-identity' | 'not-found' | 'mismatch' | 'ambiguous' }
+
+/**
+ * Select the unique browser DownloadItem owned by a follow-up record.
+ *
+ * Within one browser process session (`sameSession === true`), numeric
+ * `downloadId` is stable while any recorded identity fields still verify the
+ * snapshot. Across a browser restart (`sameSession === false`), Firefox
+ * reassigns numeric download IDs from 0, so a record must carry stable
+ * identity (`sourceStartedAt` + `sourceUrlDigest`) and uniquely match one
+ * download in history; otherwise fail closed without deleting or mutating
+ * any user file.
+ */
+export function selectFollowUpDownloadCandidate<T extends FollowUpDownloadCandidate>(
+  record: PausedHandoffFollowUp,
+  candidates: readonly T[],
+  sameSession: boolean,
+): FollowUpDownloadSelection<T> {
+  if (sameSession) {
+    const byId = candidates.find(candidate => candidate.id === record.downloadId)
+    if (!byId) return { kind: 'unmatched', reason: 'not-found' }
+    if (!matchesFollowUpDownloadIdentity(record, byId)) return { kind: 'unmatched', reason: 'mismatch' }
+    return { kind: 'matched', candidate: byId, rebound: false }
+  }
+  if (!hasStableFollowUpIdentity(record)) {
+    return { kind: 'unmatched', reason: 'missing-identity' }
+  }
+  const matched = candidates.filter(candidate => matchesFollowUpDownloadIdentity(record, candidate))
+  if (matched.length === 0) return { kind: 'unmatched', reason: 'not-found' }
+  if (matched.length > 1) return { kind: 'unmatched', reason: 'ambiguous' }
+  return { kind: 'matched', candidate: matched[0], rebound: matched[0].id !== record.downloadId }
 }
 
 export interface FollowUpStorageArea {
@@ -39,6 +114,22 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
   const deadline = Number(item.deadline)
   const createdAt = Number(item.createdAt)
   const maxFutureWait = phase === 'resolution' ? PAUSED_HANDOFF_RESOLUTION_MS : PAUSED_FOLLOW_UP_RECHECK_MS
+  const sessionId = typeof item.sessionId === 'string' && item.sessionId.trim()
+    ? item.sessionId.trim().slice(0, 128)
+    : ''
+  const sourceStartedAt = typeof item.sourceStartedAt === 'string' && item.sourceStartedAt.trim()
+    ? item.sourceStartedAt.trim().slice(0, 64)
+    : ''
+  const rawDigest = typeof item.sourceUrlDigest === 'string' ? item.sourceUrlDigest.trim() : ''
+  const sourceUrlDigest = /^[a-f0-9]{64}$/i.test(rawDigest) ? rawDigest.toLowerCase() : ''
+  const sourceFilename = typeof item.sourceFilename === 'string' && item.sourceFilename.trim()
+    ? item.sourceFilename.trim().slice(0, 1024)
+    : ''
+  const sourceTotalBytes = typeof item.sourceTotalBytes === 'number'
+    && Number.isSafeInteger(item.sourceTotalBytes)
+    && item.sourceTotalBytes > 0
+    ? item.sourceTotalBytes
+    : undefined
   return {
     downloadId,
     handoffId,
@@ -51,6 +142,11 @@ export function normalizePausedHandoffFollowUp(value: unknown, now: number): Pau
       ? Math.min(deadline, now + maxFutureWait)
       : now,
     createdAt: Number.isFinite(createdAt) && createdAt > 0 ? Math.min(createdAt, now) : now,
+    ...(sessionId ? { sessionId } : {}),
+    ...(sourceStartedAt ? { sourceStartedAt } : {}),
+    ...(sourceUrlDigest ? { sourceUrlDigest } : {}),
+    ...(sourceFilename ? { sourceFilename } : {}),
+    ...(sourceTotalBytes !== undefined ? { sourceTotalBytes } : {}),
   }
 }
 

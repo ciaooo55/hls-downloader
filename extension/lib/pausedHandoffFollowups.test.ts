@@ -5,7 +5,10 @@ import {
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
   PAUSED_HANDOFF_RESOLUTION_MS,
   PausedHandoffFollowUpStore,
+  hasStableFollowUpIdentity,
+  matchesFollowUpDownloadIdentity,
   normalizePausedHandoffFollowUps,
+  selectFollowUpDownloadCandidate,
   stepPausedHandoffFollowUp,
   type FollowUpStorageArea,
   type PausedHandoffFollowUp,
@@ -262,5 +265,148 @@ describe('paused handoff follow-up normalization', () => {
     expect(byId.readiness.deadline).toBe(now + PAUSED_FOLLOW_UP_RECHECK_MS)
     expect(byId.resolution.createdAt).toBe(now)
     expect(byId.readiness.createdAt).toBe(now)
+  })
+
+  it('normalizes valid download identity fingerprints and strips invalid/plaintext URL digests', () => {
+    const digest = 'A'.repeat(64)
+    const normalized = normalizePausedHandoffFollowUps([
+      followUp({
+        handoffId: 'valid-id',
+        sessionId: 'sess-1',
+        sourceStartedAt: '2026-10-29T00:00:00.000Z',
+        sourceUrlDigest: digest,
+        sourceFilename: 'C:\\Downloads\\movie.mp4',
+        sourceTotalBytes: 4096,
+      }),
+      followUp({
+        handoffId: 'plaintext-rejected',
+        sourceStartedAt: '2026-10-29T00:00:00.000Z',
+        sourceUrlDigest: 'https://secret.test/file.bin?token=super-secret',
+        sourceTotalBytes: -5,
+      }),
+    ], 10_000)
+    const byId = Object.fromEntries(normalized.map(item => [item.handoffId, item]))
+
+    expect(byId['valid-id']).toMatchObject({
+      sessionId: 'sess-1',
+      sourceStartedAt: '2026-10-29T00:00:00.000Z',
+      sourceUrlDigest: 'a'.repeat(64),
+      sourceFilename: 'C:\\Downloads\\movie.mp4',
+      sourceTotalBytes: 4096,
+    })
+    expect(byId['plaintext-rejected'].sourceUrlDigest).toBeUndefined()
+    expect(byId['plaintext-rejected'].sourceTotalBytes).toBeUndefined()
+  })
+})
+
+describe('follow-up download identity matching across browser restarts (CR-P1-2)', () => {
+  const digestA = '1'.repeat(64)
+  const digestB = '2'.repeat(64)
+
+  it('requires both startTime and URL digest for stable cross-session identity', () => {
+    expect(hasStableFollowUpIdentity({ sourceStartedAt: '2026-10-29T00:00:00.000Z', sourceUrlDigest: digestA })).toBe(true)
+    expect(hasStableFollowUpIdentity({ sourceStartedAt: '2026-10-29T00:00:00.000Z' })).toBe(false)
+    expect(hasStableFollowUpIdentity({ sourceUrlDigest: digestA })).toBe(false)
+    expect(hasStableFollowUpIdentity({})).toBe(false)
+  })
+
+  it('fails closed on legacy identity-less records across restart while matching same-session records', () => {
+    const legacy = followUp({ downloadId: 42, phase: 'cleanup' })
+    const candidates = [{ id: 42, startTime: '2026-10-29T00:00:00.000Z', urlDigest: digestA }]
+
+    expect(selectFollowUpDownloadCandidate(legacy, candidates, false)).toEqual({
+      kind: 'unmatched',
+      reason: 'missing-identity',
+    })
+    expect(selectFollowUpDownloadCandidate(legacy, candidates, true)).toEqual({
+      kind: 'matched',
+      candidate: candidates[0],
+      rebound: false,
+    })
+  })
+
+  it('rejects a reused numeric downloadId belonging to an unrelated completed file and rebinds unique remapped matches', () => {
+    const record = followUp({
+      downloadId: 42,
+      phase: 'cleanup',
+      sessionId: 'old-session',
+      sourceStartedAt: '2026-10-29T00:00:00.000Z',
+      sourceUrlDigest: digestA,
+      sourceFilename: 'C:\\Downloads\\archive.zip',
+      sourceTotalBytes: 2048,
+    })
+    const unrelatedReused = {
+      id: 42,
+      startTime: '2026-10-28T12:00:00.000Z',
+      urlDigest: digestB,
+      filename: 'C:\\Downloads\\tax-return.pdf',
+      totalBytes: 99999,
+    }
+    const sameUrlDifferentDay = {
+      id: 42,
+      startTime: '2026-10-27T00:00:00.000Z',
+      urlDigest: digestA,
+      filename: 'C:\\Downloads\\archive.zip',
+      totalBytes: 2048,
+    }
+    const remappedOriginal = {
+      id: 7,
+      startTime: '2026-10-29T00:00:00.000Z',
+      urlDigest: digestA,
+      filename: 'C:\\Downloads\\archive.zip',
+      totalBytes: 2048,
+    }
+
+    expect(selectFollowUpDownloadCandidate(record, [unrelatedReused], false)).toEqual({
+      kind: 'unmatched',
+      reason: 'not-found',
+    })
+    expect(selectFollowUpDownloadCandidate(record, [sameUrlDifferentDay], false)).toEqual({
+      kind: 'unmatched',
+      reason: 'not-found',
+    })
+    expect(selectFollowUpDownloadCandidate(record, [unrelatedReused], true)).toEqual({
+      kind: 'unmatched',
+      reason: 'mismatch',
+    })
+    expect(selectFollowUpDownloadCandidate(record, [unrelatedReused, remappedOriginal], false)).toEqual({
+      kind: 'matched',
+      candidate: remappedOriginal,
+      rebound: true,
+    })
+    expect(selectFollowUpDownloadCandidate(record, [remappedOriginal, { ...remappedOriginal, id: 8 }], false)).toEqual({
+      kind: 'unmatched',
+      reason: 'ambiguous',
+    })
+  })
+
+  it('preserves identity fields through keep-paused and resolution-to-readiness steps', () => {
+    const record = followUp({
+      phase: 'resolution',
+      sessionId: 'sess-live',
+      sourceStartedAt: '2026-10-29T00:00:00.000Z',
+      sourceUrlDigest: digestA,
+      sourceFilename: 'C:\\Downloads\\clip.mp4',
+      sourceTotalBytes: 8192,
+    })
+    expect(matchesFollowUpDownloadIdentity(record, {
+      startTime: '2026-10-29T00:00:00.000Z',
+      urlDigest: digestA,
+      filename: 'C:\\Downloads\\clip.mp4',
+      fileSize: 8192,
+    })).toBe(true)
+
+    const stepped = stepPausedHandoffFollowUp(record, { status: 'accepted' }, 20_000, 60_000)
+    expect(stepped).toEqual({
+      kind: 'keep-paused',
+      followUp: expect.objectContaining({
+        phase: 'readiness',
+        sessionId: 'sess-live',
+        sourceStartedAt: '2026-10-29T00:00:00.000Z',
+        sourceUrlDigest: digestA,
+        sourceFilename: 'C:\\Downloads\\clip.mp4',
+        sourceTotalBytes: 8192,
+      }),
+    })
   })
 })

@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NativeBridge, NativeHostError, PORT_IDLE_MS, PREEMPT_GRACE_MS, nativeDisconnectDetail, nativeDisconnectError, type NativePortLike } from './nativeBridge'
+import {
+  NativeBridge,
+  NativeBridgeError,
+  NativeHostError,
+  PORT_IDLE_MS,
+  PREEMPT_GRACE_MS,
+  isDefiniteUnsentNativeError,
+  nativeDisconnectDetail,
+  nativeDisconnectError,
+  type NativePortLike,
+} from './nativeBridge'
 
 class FakeEvent<T extends (...args: any[]) => void> {
   listener: T | null = null
@@ -702,5 +712,78 @@ describe('nativeDisconnectError codes', () => {
     expect(shutdownReply.transport_error).toBeUndefined()
     expect(fourth.disconnect).not.toHaveBeenCalled()
     bridge.close()
+  })
+})
+
+describe('definite-unsent NativeBridgeError classification (CR-P2-14)', () => {
+  it('marks 64-entry queue-full and post-close admission rejections as definiteUnsent without calling postMessage', async () => {
+    const port = new FakePort()
+    const bridge = new NativeBridge(() => port)
+    const queued = Array.from({ length: 64 }, (_, index) => bridge.request({ op: 'offer', index }))
+    try {
+      let overflowError: unknown
+      try {
+        await bridge.request({ op: 'offer', index: 64 })
+      } catch (error) {
+        overflowError = error
+      }
+      expect(overflowError).toBeInstanceOf(NativeBridgeError)
+      expect(overflowError).toMatchObject({ code: 'queue_full', definiteUnsent: true })
+      expect(isDefiniteUnsentNativeError(overflowError)).toBe(true)
+      expect(port.posted).toHaveLength(1)
+    } finally {
+      bridge.close()
+    }
+
+    // Active (index 0) was already posted -> NOT definiteUnsent.
+    // Queued (index 1..63) were never posted -> definiteUnsent: true!
+    const settled = await Promise.allSettled(queued)
+    expect(settled[0].status).toBe('rejected')
+    const activeErr = (settled[0] as PromiseRejectedResult).reason
+    expect(activeErr).toBeInstanceOf(NativeBridgeError)
+    expect(activeErr).toMatchObject({ code: 'bridge_closed', definiteUnsent: false })
+    expect(isDefiniteUnsentNativeError(activeErr)).toBe(false)
+
+    for (let index = 1; index < settled.length; index += 1) {
+      expect(settled[index].status).toBe('rejected')
+      const queuedErr = (settled[index] as PromiseRejectedResult).reason
+      expect(queuedErr).toBeInstanceOf(NativeBridgeError)
+      expect(queuedErr).toMatchObject({ code: 'bridge_closed', definiteUnsent: true })
+      expect(isDefiniteUnsentNativeError(queuedErr)).toBe(true)
+    }
+
+    // New request after bridge.close() is also definiteUnsent: true.
+    let closedErr: unknown
+    try {
+      await bridge.request({ op: 'offer', index: 99 })
+    } catch (error) {
+      closedErr = error
+    }
+    expect(closedErr).toBeInstanceOf(NativeBridgeError)
+    expect(closedErr).toMatchObject({ code: 'bridge_closed', definiteUnsent: true })
+    expect(isDefiniteUnsentNativeError(closedErr)).toBe(true)
+  })
+
+  it('never classifies post-send timeout or port disconnect errors as definiteUnsent', async () => {
+    vi.useFakeTimers()
+    const port1 = new FakePort()
+    const port2 = new FakePort()
+    const bridge = new NativeBridge(vi.fn().mockReturnValueOnce(port1).mockReturnValueOnce(port2), 100)
+    try {
+      const timedOut = bridge.request({ op: 'offer', id: 'timeout' })
+      const timedOutErrPromise = timedOut.catch(error => error)
+      await vi.advanceTimersByTimeAsync(101)
+      const timedOutErr = await timedOutErrPromise
+      expect(isDefiniteUnsentNativeError(timedOutErr)).toBe(false)
+
+      const disconnected = bridge.request({ op: 'offer', id: 'disconnect' })
+      port2.onDisconnect.emit()
+      const disconnectedErr = await disconnected.catch(error => error)
+      expect(disconnectedErr).toBeInstanceOf(NativeHostError)
+      expect(isDefiniteUnsentNativeError(disconnectedErr)).toBe(false)
+    } finally {
+      bridge.close()
+      vi.useRealTimers()
+    }
   })
 })

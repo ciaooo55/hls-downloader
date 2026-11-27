@@ -2857,4 +2857,483 @@ describe('browser download ownership through registered event listeners', () => 
     }
     expect(mocks.native.mock.calls.some(([m]) => m.op === 'media_push')).toBe(false)
   })
+
+  it.each(['cleanup', 'resolution', 'readiness'] as const)(
+    'never deletes an unrelated completed download when Firefox reuses numeric downloadId after restart (phase=%s, CR-P1-2)',
+    async phase => {
+      vi.stubEnv('CHROME', '')
+      vi.stubEnv('FIREFOX', 'true')
+      const secretToken = 'super-secret-query-token-999'
+      const originalUrl = `https://cdn.test/video/original.m3u8?token=${secretToken}`
+      item = {
+        ...item,
+        id: 42,
+        url: originalUrl,
+        finalUrl: originalUrl,
+        filename: 'C:\\Downloads\\original.m3u8',
+        mime: 'application/vnd.apple.mpegurl',
+        state: phase === 'cleanup' ? 'complete' : 'in_progress',
+        paused: phase !== 'cleanup',
+        bytesReceived: 1024,
+        totalBytes: 1024,
+        fileSize: 1024,
+        startTime: '2026-10-29T00:00:00.000Z',
+      }
+
+      if (phase === 'cleanup') {
+        mocks.browser.downloads.removeFile.mockRejectedValueOnce(new Error('file temporarily locked'))
+        const background = await import('../entrypoints/background')
+        await background.completeBrowserTakeover(item, 'handoff-cleanup-1')
+        await flush()
+        const persisted = local['paused-handoff-followups-v1'] as Record<string, unknown>[]
+        expect(persisted).toHaveLength(1)
+        expect(persisted[0]).toMatchObject({
+          downloadId: 42,
+          handoffId: 'handoff-cleanup-1',
+          phase: 'cleanup',
+          sourceStartedAt: '2026-10-29T00:00:00.000Z',
+          sourceFilename: 'C:\\Downloads\\original.m3u8',
+          sourceTotalBytes: 1024,
+        })
+        expect(persisted[0].sourceUrlDigest).toMatch(/^[a-f0-9]{64}$/)
+        // Privacy boundary: no plaintext URL or query token may ever be persisted to storage.local.
+        expect(JSON.stringify(persisted)).not.toContain(secretToken)
+        expect(JSON.stringify(persisted)).not.toContain('cdn.test')
+      } else {
+        const digest = createHash('sha256').update(originalUrl).digest('hex')
+        local['paused-handoff-followups-v1'] = [{
+          downloadId: 42,
+          handoffId: phase === 'readiness' ? 'handoff-readiness-1' : '',
+          ...(phase === 'resolution' ? { clientRequestId: 'download:uncertain-ff-1' } : {}),
+          phase,
+          deadline: Date.now() - 1_000,
+          createdAt: Date.now() - 10_000,
+          sessionId: 'previous-firefox-session',
+          sourceStartedAt: '2026-10-29T00:00:00.000Z',
+          sourceUrlDigest: digest,
+        }]
+      }
+
+      // Simulate Firefox restart: storage.session cleared, original download gone from history,
+      // and unrelated completed user file reuses numeric downloadId 42.
+      const unrelatedFinished = {
+        id: 42,
+        url: 'https://bank.test/statements/tax-2026.pdf',
+        finalUrl: 'https://bank.test/statements/tax-2026.pdf',
+        referrer: 'https://bank.test/',
+        filename: 'C:\\Downloads\\tax-2026.pdf',
+        mime: 'application/pdf',
+        state: 'complete',
+        paused: false,
+        bytesReceived: 88_888,
+        totalBytes: 88_888,
+        fileSize: 88_888,
+        startTime: '2026-10-28T10:30:00.000Z',
+      }
+      mocks.browser.downloads.search.mockImplementation(async () => [{ ...unrelatedFinished }])
+      mocks.browser.downloads.removeFile.mockClear().mockResolvedValue(undefined)
+      mocks.browser.downloads.cancel.mockClear().mockResolvedValue(undefined)
+      mocks.browser.downloads.erase.mockClear().mockResolvedValue([42])
+      mocks.browser.downloads.resume.mockClear().mockResolvedValue(undefined)
+      mocks.native.mockImplementation(async message => {
+        if (message.op === 'ping') return { ok: true }
+        if (message.op === 'handoff_status') {
+          return {
+            ok: true,
+            handoff: {
+              id: 'desktop-accepted',
+              status: 'accepted',
+              task_status: 'completed',
+              task_downloaded_bytes: 1024,
+            },
+          }
+        }
+        return { ok: true }
+      })
+
+      vi.clearAllTimers()
+      session = {}
+      vi.resetModules()
+      const restarted = await import('../entrypoints/background')
+      ;(restarted.default as unknown as { main(): void }).main()
+      await vi.advanceTimersByTimeAsync(65_000)
+
+      expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalled()
+      expect(mocks.browser.downloads.cancel).not.toHaveBeenCalled()
+      expect(mocks.browser.downloads.erase).not.toHaveBeenCalled()
+      expect(mocks.browser.downloads.resume).not.toHaveBeenCalled()
+      expect(local['paused-handoff-followups-v1']).toEqual([])
+    },
+  )
+
+  it('drops legacy identity-less follow-up records across restart and cleans/resumes uniquely matched remapped downloads (CR-P1-2)', async () => {
+    vi.stubEnv('CHROME', '')
+    vi.stubEnv('FIREFOX', 'true')
+    const unrelatedReused = {
+      id: 42,
+      url: 'https://bank.test/keep-me.pdf',
+      finalUrl: 'https://bank.test/keep-me.pdf',
+      filename: 'C:\\Downloads\\keep-me.pdf',
+      state: 'complete',
+      paused: false,
+      bytesReceived: 5000,
+      totalBytes: 5000,
+      fileSize: 5000,
+      startTime: '2026-10-28T08:00:00.000Z',
+    }
+    const cleanupUrl = 'https://cdn.test/remapped-cleanup.m3u8'
+    const resumeUrl = 'https://cdn.test/remapped-resume.m3u8'
+    const remappedCleanup = {
+      id: 7,
+      url: cleanupUrl,
+      finalUrl: cleanupUrl,
+      filename: 'C:\\Downloads\\remapped-cleanup.m3u8',
+      state: 'complete',
+      paused: false,
+      bytesReceived: 2048,
+      totalBytes: 2048,
+      fileSize: 2048,
+      startTime: '2026-10-29T01:00:00.000Z',
+    }
+    const remappedResume = {
+      id: 9,
+      url: resumeUrl,
+      finalUrl: resumeUrl,
+      filename: 'C:\\Downloads\\remapped-resume.m3u8',
+      state: 'in_progress',
+      paused: true,
+      bytesReceived: 512,
+      totalBytes: 4096,
+      fileSize: 4096,
+      startTime: '2026-10-29T01:05:00.000Z',
+    }
+
+    local['paused-handoff-followups-v1'] = [
+      // Legacy record with no sessionId / no stable identity: MUST be dropped safely.
+      {
+        downloadId: 42,
+        handoffId: 'legacy-no-identity',
+        phase: 'cleanup',
+        deadline: Date.now() - 1_000,
+        createdAt: Date.now() - 10_000,
+      },
+      // Valid cleanup record remapped from 42 -> 7 after Firefox restart.
+      {
+        downloadId: 42,
+        handoffId: 'remapped-cleanup',
+        phase: 'cleanup',
+        deadline: Date.now() - 1_000,
+        createdAt: Date.now() - 10_000,
+        sessionId: 'previous-firefox-session',
+        sourceStartedAt: remappedCleanup.startTime,
+        sourceUrlDigest: createHash('sha256').update(cleanupUrl).digest('hex'),
+        sourceFilename: remappedCleanup.filename,
+        sourceTotalBytes: 2048,
+      },
+      // Valid resolution record remapped from 43 -> 9 after Firefox restart, rejected on desktop -> resume 9.
+      {
+        downloadId: 43,
+        handoffId: 'remapped-resume',
+        phase: 'resolution',
+        deadline: Date.now() - 1_000,
+        createdAt: Date.now() - 10_000,
+        sessionId: 'previous-firefox-session',
+        sourceStartedAt: remappedResume.startTime,
+        sourceUrlDigest: createHash('sha256').update(resumeUrl).digest('hex'),
+      },
+    ]
+
+    const downloads = [unrelatedReused, remappedCleanup, remappedResume]
+    mocks.browser.downloads.search.mockImplementation(async (query: { id?: number } = {}) => {
+      if (query.id !== undefined) return downloads.filter(entry => entry.id === query.id).map(entry => ({ ...entry }))
+      return downloads.map(entry => ({ ...entry }))
+    })
+    mocks.browser.downloads.removeFile.mockClear().mockResolvedValue(undefined)
+    mocks.browser.downloads.erase.mockClear().mockResolvedValue([])
+    mocks.browser.downloads.resume.mockClear().mockResolvedValue(undefined)
+    mocks.native.mockImplementation(async message => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'handoff_status' && message.handoff_id === 'remapped-resume') {
+        return { ok: true, handoff: { id: 'remapped-resume', status: 'rejected' } }
+      }
+      return { ok: true }
+    })
+
+    vi.clearAllTimers()
+    session = {}
+    vi.resetModules()
+    const restarted = await import('../entrypoints/background')
+    ;(restarted.default as unknown as { main(): void }).main()
+    await flush()
+
+    expect(mocks.browser.downloads.removeFile).toHaveBeenCalledTimes(1)
+    expect(mocks.browser.downloads.removeFile).toHaveBeenCalledWith(7)
+    expect(mocks.browser.downloads.removeFile).not.toHaveBeenCalledWith(42)
+    expect(mocks.browser.downloads.erase).toHaveBeenCalledTimes(1)
+    expect(mocks.browser.downloads.erase).toHaveBeenCalledWith({ id: 7 })
+    expect(mocks.browser.downloads.resume).toHaveBeenCalledTimes(1)
+    expect(mocks.browser.downloads.resume).toHaveBeenCalledWith(9)
+    expect(local['paused-handoff-followups-v1']).toEqual([])
+  })
+
+  it('blocks context-menu Cast/TVBox for direct video.srcUrl matching a recognized dual-track resource while isolating single-track, blob, other frames, and other pages (CR-P2-7)', async () => {
+    const pageUrl = 'https://www.bilibili.com/video/BV1xx411c7mD/'
+    const primaryVideoUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30080.mp4?deadline=1900000000'
+    const variantVideoUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30064.mp4?deadline=1900000000'
+    const audioUrl = 'https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/1/2/123-1-30280.m4a?deadline=1900000000'
+    const singleTrackUrl = 'https://cdn.test/single-track-clip.mp4'
+
+    mocks.browser.tabs.get.mockResolvedValue({ url: pageUrl })
+    mocks.native.mockImplementation(async message => message.op === 'media_push'
+      ? { ok: true, id: String(message.request_id || 'push-ok'), status: 'pending' }
+      : { ok: true, handoff: { id: 'ctx-dl', status: 'pending' } })
+
+    // Record a known dual-track resource with variants in tab 7, frame 0.
+    await new Promise<any>(resolve => listener(mocks.browser.runtime.onMessage)(
+      {
+        type: 'resource',
+        resource: {
+          url: primaryVideoUrl,
+          audioUrl,
+          kind: 'media',
+          mimeType: 'video/mp4',
+          evidence: ['site_player_metadata'],
+          variants: [
+            { url: primaryVideoUrl, height: 1080, bandwidth: 3_000_000, audioUrl },
+            { url: variantVideoUrl, height: 720, bandwidth: 1_500_000, audioUrl },
+          ],
+        },
+      },
+      { url: pageUrl, tab: { id: 7 }, frameId: 0 },
+      resolve,
+    ))
+    await flush()
+
+    const expectedError = '该视频为音画分离流，请先点击下载合并后再投屏播放'
+
+    // 1. Direct primary srcUrl and recorded variant srcUrl on same tab/frame/page are blocked for BOTH Cast and TVBox.
+    for (const srcUrl of [primaryVideoUrl, variantVideoUrl]) {
+      for (const menuItemId of ['hls-cast-link', 'hls-push-tvbox-link'] as const) {
+        mocks.native.mockClear()
+        mocks.browser.tabs.sendMessage.mockClear()
+        delete session['download-error:7']
+        listener(mocks.browser.contextMenus.onClicked)(
+          { menuItemId, srcUrl, mediaType: 'video', pageUrl, frameId: 0 },
+          { id: 7, url: pageUrl, title: 'Bilibili Split Video' },
+        )
+        await flush()
+        expect(mocks.native.mock.calls.some(([m]) => m.op === 'media_push')).toBe(false)
+        expect(session['download-error:7']).toBe(expectedError)
+        expect(mocks.browser.tabs.sendMessage).toHaveBeenCalledWith(
+          7,
+          { type: 'download-error', error: expectedError },
+          { frameId: 0 },
+        )
+      }
+    }
+
+    // 2. Ordinary single-track video on the same page/frame still casts and pushes to TVBox normally.
+    mocks.native.mockClear()
+    for (const menuItemId of ['hls-cast-link', 'hls-push-tvbox-link'] as const) {
+      listener(mocks.browser.contextMenus.onClicked)(
+        { menuItemId, srcUrl: singleTrackUrl, mediaType: 'video', pageUrl, frameId: 0 },
+        { id: 7, url: pageUrl, title: 'Single Track Video' },
+      )
+    }
+    await flush()
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'media_push')).toHaveLength(2)
+
+    // 3. Ordinary context-menu download on the dual-track video URL is unaffected.
+    mocks.native.mockClear()
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-download-link', srcUrl: primaryVideoUrl, mediaType: 'video', pageUrl, frameId: 0 },
+      { id: 7, url: pageUrl, title: 'Bilibili Split Video' },
+    )
+    await flush()
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'offer')).toHaveLength(1)
+
+    // 4. blob: srcUrl on Cast/TVBox never sends media_push and never misuses the dual-track record.
+    mocks.native.mockClear()
+    mocks.browser.tabs.sendMessage.mockClear()
+    delete session['download-error:7']
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-cast-link', srcUrl: 'blob:https://www.bilibili.com/mse-1', mediaType: 'video', pageUrl, frameId: 0 },
+      { id: 7, url: pageUrl, title: 'MSE Blob' },
+    )
+    await flush()
+    expect(mocks.native.mock.calls.some(([m]) => m.op === 'media_push')).toBe(false)
+    expect(session['download-error:7']).toBeUndefined()
+
+    // 5. Different frameId on the same page does NOT inherit frame 0's dual-track record.
+    mocks.native.mockClear()
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-cast-link', srcUrl: primaryVideoUrl, mediaType: 'video', pageUrl, frameId: 5 },
+      { id: 7, url: pageUrl, title: 'Iframe Player' },
+    )
+    await flush()
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'media_push')).toHaveLength(1)
+
+    // 6. Different page / site does NOT inherit another page's dual-track record or credentials.
+    const otherPageUrl = 'https://other.test/watch'
+    mocks.browser.tabs.get.mockResolvedValue({ url: otherPageUrl })
+    mocks.native.mockClear()
+    listener(mocks.browser.contextMenus.onClicked)(
+      { menuItemId: 'hls-push-tvbox-link', srcUrl: primaryVideoUrl, mediaType: 'video', pageUrl: otherPageUrl, frameId: 0 },
+      { id: 7, url: otherPageUrl, title: 'Other Page' },
+    )
+    await flush()
+    expect(mocks.native.mock.calls.filter(([m]) => m.op === 'media_push')).toHaveLength(1)
+  })
+
+  it('clears the journal and resumes browser download when NativeBridge 64-entry queue is full (CR-P2-14)', async () => {
+    const actualBridgeModule = await vi.importActual<typeof import('./nativeBridge')>('./nativeBridge')
+    class BridgePort {
+      readonly posted: Record<string, unknown>[] = []
+      messageListener: ((message: unknown) => void) | null = null
+      disconnectListener: (() => void) | null = null
+      readonly onMessage = { addListener: (fn: (message: unknown) => void) => { this.messageListener = fn } }
+      readonly onDisconnect = { addListener: (fn: () => void) => { this.disconnectListener = fn } }
+      postMessage(message: Record<string, unknown>) { this.posted.push(message) }
+      disconnect() { this.disconnectListener?.() }
+    }
+
+    // Saturate a real NativeBridge with 64 pending requests so the 65th (offer) is rejected before postMessage.
+    const fullPort = new BridgePort()
+    const fullBridge = new actualBridgeModule.NativeBridge(() => fullPort, 30_000)
+    const saturated = Array.from({ length: 64 }, (_, index) => fullBridge.request({ op: 'download', index }))
+    mocks.native.mockImplementation(async (message, timeoutMs, retryCount) => {
+      if (message.op === 'ping') return { ok: true }
+      return fullBridge.request(message, timeoutMs, retryCount)
+    })
+
+    try {
+      // 1. Browser download paused takeover hits real 64-entry queue_full -> purges journal, no follow-up, resumes download!
+      item.url = item.finalUrl = 'https://site.test/queued-full.m3u8'
+      item.state = 'in_progress'
+      item.paused = false
+      mocks.browser.downloads.resume.mockImplementation(async () => { item.paused = false })
+      response(true)
+      const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+      await vi.advanceTimersByTimeAsync(500)
+      await takeover
+
+      expect(fullPort.posted.some(msg => msg.op === 'offer')).toBe(false)
+      expect(mocks.browser.downloads.resume).toHaveBeenCalledWith(42)
+      expect(local['pending-direct-offers-v1'] || []).toEqual([])
+      expect(local['paused-handoff-followups-v1'] || []).toEqual([])
+
+      // 2. Firefox pre-request takeover hitting real 64-entry queue_full -> returns undefined (does not cancel) and purges journal!
+      const ffQueueFull = await firefoxFileRequest({ url: 'https://site.test/queued-full.zip', requestHeaders: [] })
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(await ffQueueFull.blocked).toBeUndefined()
+      expect(local['pending-direct-offers-v1'] || []).toEqual([])
+    } finally {
+      fullBridge.close()
+      await Promise.allSettled(saturated)
+    }
+  })
+
+  it('keeps post-send timeout, disconnect, recover_offer queue-full, and handoff:null conservatively parked as uncertainOffer (CR-P2-14)', async () => {
+    const actualBridgeModule = await vi.importActual<typeof import('./nativeBridge')>('./nativeBridge')
+    class BridgePort {
+      readonly posted: Record<string, unknown>[] = []
+      messageListener: ((message: unknown) => void) | null = null
+      disconnectListener: (() => void) | null = null
+      readonly onMessage = { addListener: (fn: (message: unknown) => void) => { this.messageListener = fn } }
+      readonly onDisconnect = { addListener: (fn: () => void) => { this.disconnectListener = fn } }
+      postMessage(message: Record<string, unknown>) { this.posted.push(message) }
+      disconnect() { this.disconnectListener?.() }
+    }
+
+    // 1. Real post-send timeout on NativeBridge MUST stay uncertainOffer, keep journal & follow-up, and NEVER resume on `handoff: null`.
+    const timeoutPort = new BridgePort()
+    const timeoutBridge = new actualBridgeModule.NativeBridge(() => timeoutPort, 500)
+    mocks.browser.downloads.resume.mockClear()
+    mocks.native.mockImplementation(async (message, timeoutMs, retryCount) => {
+      if (message.op === 'ping') return { ok: true }
+      if (message.op === 'handoff_status') return { ok: true, handoff: null }
+      return timeoutBridge.request(message, timeoutMs, retryCount)
+    })
+
+    try {
+      item.url = item.finalUrl = 'https://site.test/post-send-timeout.m3u8'
+      item.state = 'in_progress'
+      item.paused = false
+      response(true)
+      const takeover = listener(mocks.browser.downloads.onCreated)({ ...item })
+      await vi.advanceTimersByTimeAsync(2_000)
+      await takeover
+
+      expect(timeoutPort.posted.some(msg => msg.op === 'offer')).toBe(true)
+      expect(item.paused).toBe(true)
+      expect(mocks.browser.downloads.resume).not.toHaveBeenCalled()
+      expect((local['pending-direct-offers-v1'] as unknown[])?.length).toBe(1)
+      expect((local['paused-handoff-followups-v1'] as unknown[])?.length).toBe(1)
+
+      // Follow-up alarm receiving `{ ok: true, handoff: null }` MUST keep the download parked, never resuming!
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(mocks.browser.downloads.resume).not.toHaveBeenCalled()
+      expect((local['paused-handoff-followups-v1'] as unknown[])?.length).toBe(1)
+    } finally {
+      timeoutBridge.close()
+    }
+
+    // 2. Recovering an already-journaled offer (`recover_offer`) hitting `queue_full` MUST stay `uncertainOffer` (never drop existing journal).
+    const fullPort = new BridgePort()
+    const fullBridge = new actualBridgeModule.NativeBridge(() => fullPort, 30_000)
+    const saturated = Array.from({ length: 64 }, (_, index) => fullBridge.request({ op: 'download', index }))
+    try {
+      const { localDownloadIntentUrl, resourceFingerprint } = await import('./resources')
+      const recoveryHref = 'https://site.test/existing-journal.zip'
+      local['pending-direct-offers-v1'] = [{
+        key: await localDownloadIntentUrl(`7:${resourceFingerprint({ url: recoveryHref, kind: 'file' })}`),
+        tabId: 7,
+        clientRequestId: 'download:existing-uncertain-1',
+      }]
+      mocks.native.mockImplementation(async (message, timeoutMs, retryCount) => {
+        if (message.op === 'handoff_status') return { ok: true, handoff: null }
+        return fullBridge.request(message, timeoutMs, retryCount)
+      })
+      const replyPromise = directLink(recoveryHref)
+      await vi.advanceTimersByTimeAsync(500)
+      const reply = await replyPromise
+      expect(reply).toMatchObject({
+        ok: false,
+        ownership_uncertain: true,
+        browserFallback: false,
+        client_request_id: 'download:existing-uncertain-1',
+      })
+      expect((local['pending-direct-offers-v1'] as any[]).some(r => r.clientRequestId === 'download:existing-uncertain-1')).toBe(true)
+    } finally {
+      fullBridge.close()
+      await Promise.allSettled(saturated)
+    }
+
+    // 3. Firefox pre-request takeover hitting post-send port disconnect MUST still return `{ cancel: true }`.
+    const disconnectPorts: BridgePort[] = []
+    const disconnectBridge = new actualBridgeModule.NativeBridge(() => {
+      const port = new BridgePort()
+      const origPost = port.postMessage.bind(port)
+      port.postMessage = message => {
+        origPost(message)
+        if (message.op === 'offer' || message.op === 'handoff_status') {
+          queueMicrotask(() => port.disconnect())
+        }
+      }
+      disconnectPorts.push(port)
+      return port
+    }, 30_000)
+    mocks.native.mockImplementation(async (message, timeoutMs, retryCount) => {
+      if (message.op === 'ping') return { ok: true }
+      return disconnectBridge.request(message, timeoutMs, retryCount)
+    })
+    try {
+      const ffDisconnect = await firefoxFileRequest({ url: 'https://site.test/post-send-disconnect.zip', requestHeaders: [] })
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(await ffDisconnect.blocked).toEqual({ cancel: true })
+      expect(disconnectPorts.some(port => port.posted.some(msg => msg.op === 'offer'))).toBe(true)
+    } finally {
+      disconnectBridge.close()
+    }
+  })
 })
