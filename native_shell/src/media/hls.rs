@@ -3289,7 +3289,7 @@ fn capture_live_subtitle_track(
             pending_discontinuity = false;
             continue;
         }
-        let discontinuity = std::mem::take(&mut pending_discontinuity);
+        let discontinuity = pending_discontinuity;
         let init_map_file = match segment.init_map.as_ref() {
             Some(init_map) => match ensure_subtitle_init_map(
                 init_map,
@@ -3346,6 +3346,7 @@ fn capture_live_subtitle_track(
                 discontinuity,
             });
             track.count += 1;
+            pending_discontinuity = false;
         } else {
             track.seen.remove(&identity);
             let _ = fs::remove_file(path);
@@ -8124,6 +8125,128 @@ mod tests {
             "VOD fetched 3 distinct maps + Live fetched 3 distinct maps (no duplicate fetch of MAP B on poll 2)"
         );
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_subtitle_preserves_pending_discontinuity_when_first_segment_after_boundary_fails() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let before_wrap = (1u64 << 33) - 90_000;
+        let seg0 = format!(
+            "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:{before_wrap}\n\n00:00:00.000 --> 00:00:01.000\nBefore boundary\n"
+        );
+        let seg2 = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:90000\n\n00:00:00.000 --> 00:00:01.000\nAfter transient failure\n";
+        let playlist = "#EXTM3U\n\
+            #EXT-X-VERSION:7\n\
+            #EXT-X-TARGETDURATION:4\n\
+            #EXT-X-MEDIA-SEQUENCE:0\n\
+            #EXTINF:4.0,\n\
+            seg0.vtt\n\
+            #EXT-X-DISCONTINUITY\n\
+            #EXTINF:4.0,\n\
+            seg1-broken.vtt\n\
+            #EXTINF:4.0,\n\
+            seg2.vtt\n";
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seg0_bytes = seg0.into_bytes();
+        let seg2_bytes = seg2.as_bytes().to_vec();
+        let pl_bytes = playlist.as_bytes().to_vec();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let srv_stop = Arc::clone(&stop);
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            while !srv_stop.load(std::sync::atomic::Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let mut buf = [0u8; 2048];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req = String::from_utf8_lossy(&buf[..n]);
+                        let path = req
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("");
+                        match path {
+                            "/live.m3u8" => {
+                                let _ = write!(
+                                    stream,
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    pl_bytes.len()
+                                );
+                                let _ = stream.write_all(&pl_bytes);
+                            }
+                            "/seg0.vtt" => {
+                                let _ = write!(
+                                    stream,
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    seg0_bytes.len()
+                                );
+                                let _ = stream.write_all(&seg0_bytes);
+                            }
+                            "/seg2.vtt" => {
+                                let _ = write!(
+                                    stream,
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    seg2_bytes.len()
+                                );
+                                let _ = stream.write_all(&seg2_bytes);
+                            }
+                            _ => {
+                                let _ = write!(
+                                    stream,
+                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "hls-sub-discont-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+        let track = Rendition {
+            kind: "SUBTITLES".into(),
+            group_id: "subs".into(),
+            name: "English".into(),
+            language: "en".into(),
+            uri: Some(format!("http://{addr}/live.m3u8")),
+            default: true,
+            autoselect: true,
+        };
+        let mut session = LiveSubSession::load(&root, std::slice::from_ref(&track));
+        session.capture(&HashMap::new(), "", &root, &control);
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = server.join();
+
+        let published = session.publish(&root);
+        assert_eq!(published.len(), 1);
+        let merged = fs::read_to_string(&published[0]).unwrap();
+        assert!(
+            merged.contains("26:30:42.718 --> 26:30:43.718\nBefore boundary"),
+            "pre-discontinuity segment timestamp wrong:\n{merged}"
+        );
+        assert!(
+            merged.contains("00:00:01.000 --> 00:00:02.000\nAfter transient failure"),
+            "discontinuity must carry over to seg2 after seg1 fails instead of triggering 33-bit wraparound:\n{merged}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
