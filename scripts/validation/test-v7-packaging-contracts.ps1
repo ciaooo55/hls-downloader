@@ -58,6 +58,28 @@ if ($buildSource -notmatch 'foreach \(\$name in Get-V7PortableExecutables\)') {
     throw 'build-v7.ps1 formal candidate promotion must require every Get-V7PortableExecutables component (including scripts/HLSDownloaderPreflight.exe).'
 }
 
+# 2c. PRB-P1-3: Installed MSI directory verification and diagnostics must scope to
+#     Get-V7MsiFirstPartyExecutables (6 installed EXEs), because scripts/HLSDownloaderPreflight.exe
+#     lives only in the Portable ZIP and the MSI Binary table (not INSTALLDIR).
+$exeStartupSource = Get-Content -LiteralPath (Join-Path $repo 'scripts\validation\verify-v7-exe-startup.ps1') -Raw -Encoding UTF8
+foreach ($needle in @('V7ReleaseScope.psm1', 'Get-V7MsiFirstPartyExecutables', 'Get-V7PortableExecutables')) {
+    if ($exeStartupSource -notmatch [regex]::Escape($needle)) {
+        throw "verify-v7-exe-startup.ps1 is missing MSI component scope guard: $needle"
+    }
+}
+if ($exeStartupSource -match 'Join-Path \$ownedInstallDir \$component\.Name') {
+    throw 'verify-v7-exe-startup.ps1 must not hash non-MSI manifest.components entries against $ownedInstallDir.'
+}
+$msiLifecycleSource = Get-Content -LiteralPath (Join-Path $repo 'scripts\validation\verify-v7-msi-lifecycle.ps1') -Raw -Encoding UTF8
+foreach ($needle in @('V7ReleaseScope.psm1', 'foreach ($name in Get-V7MsiFirstPartyExecutables)')) {
+    if ($msiLifecycleSource -notmatch [regex]::Escape($needle)) {
+        throw "verify-v7-msi-lifecycle.ps1 is missing MSI installed_components diagnostic scope: $needle"
+    }
+}
+if ($msiLifecycleSource -match '\$manifest\.components\.PSObject\.Properties') {
+    throw 'verify-v7-msi-lifecycle.ps1 must not iterate $manifest.components.PSObject.Properties against an MSI install directory.'
+}
+
 # 2b. PRB-P1-1: Verify WindowsInstaller.Installer Binary ReadStream format 1 (msiReadStreamBytes)
 #     preserves all 256 byte values (0x00..0xFF) losslessly under both PowerShell 5.1 and 7.
 $msiStreamTemp = Join-Path (Join-Path $repo '.tool-cache\test-tmp') ('msi-binary-stream-' + [guid]::NewGuid().ToString('n'))

@@ -31,6 +31,7 @@ $result = $null
 $previousDataDir = $env:HLS_V7_DATA_DIR
 $previousDownloadDir = $env:HLS_V7_DOWNLOAD_DIR
 Import-Module (Join-Path $PSScriptRoot '..\release\V7VersionContract.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\release\V7ReleaseScope.psm1') -Force
 
 $expectedInstallDir = [IO.Path]::GetFullPath((Join-Path $repo ('.tool-cache\test-tmp\msi-lifecycle-' + $Scenario.ToLowerInvariant()))).TrimEnd('\', '/')
 if ([String]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = $expectedInstallDir }
@@ -128,9 +129,9 @@ function Start-InstalledApplication([string]$Root) {
                 Select-Object Name, ProcessId, ParentProcessId, SessionId, ExecutablePath, CommandLine)
             installed_components = [ordered]@{}
         }
-        foreach ($property in $manifest.components.PSObject.Properties) {
-            $path = Join-Path $Root $property.Name
-            $diagnostic.installed_components[$property.Name] = if (Test-Path -LiteralPath $path -PathType Leaf) {
+        foreach ($name in Get-V7MsiFirstPartyExecutables) {
+            $path = Join-Path $Root $name
+            $diagnostic.installed_components[$name] = if (Test-Path -LiteralPath $path -PathType Leaf) {
                 (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             } else { 'missing' }
         }
