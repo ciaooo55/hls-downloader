@@ -72,6 +72,8 @@ struct NativeHostSession {
     media_push_ui_request_id: Option<String>,
     #[cfg(test)]
     presenter_waker: Option<Box<dyn FnMut() -> Result<(), String>>>,
+    #[cfg(test)]
+    workbench_opener: Option<Box<dyn FnMut() -> Result<(), String>>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -372,12 +374,23 @@ impl NativeHostSession {
             media_push_ui_request_id: None,
             #[cfg(test)]
             presenter_waker: None,
+            #[cfg(test)]
+            workbench_opener: None,
         }
     }
 
     #[cfg(test)]
     fn with_presenter_waker(mut self, waker: impl FnMut() -> Result<(), String> + 'static) -> Self {
         self.presenter_waker = Some(Box::new(waker));
+        self
+    }
+
+    #[cfg(test)]
+    fn with_workbench_opener(
+        mut self,
+        opener: impl FnMut() -> Result<(), String> + 'static,
+    ) -> Self {
+        self.workbench_opener = Some(Box::new(opener));
         self
     }
 
@@ -1135,8 +1148,28 @@ impl NativeHostSession {
         if self.media_push_ui_request_id.as_deref() == Some(request_id) {
             return;
         }
-        self.media_push_ui_request_id = Some(request_id.to_string());
-        let _ = self.core.open_workbench();
+        #[cfg(test)]
+        let result = if let Some(opener) = self.workbench_opener.as_mut() {
+            opener()
+        } else {
+            self.core.open_workbench()
+        };
+        #[cfg(not(test))]
+        let result = self.core.open_workbench();
+        match result {
+            Ok(()) => {
+                self.media_push_ui_request_id = Some(request_id.to_string());
+            }
+            Err(error) => {
+                crate::record_runtime_log(
+                    "media_push_open_workbench_failed",
+                    json!({
+                        "request_id": request_id,
+                        "error": error,
+                    }),
+                );
+            }
+        }
     }
 
     fn persist_browser_context(
@@ -4123,5 +4156,173 @@ mod tests {
             }))
             .unwrap_err();
         assert!(err.contains("找不到下载确认组件"), "err={err}");
+    }
+
+    #[test]
+    fn media_push_retries_open_workbench_after_transient_failure_without_dropping_pending_request()
+    {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        // Case 1: First `open_workbench` fails on initial media_push; subsequent new click
+        // hits Core's active-pending rejection, resolves back to the original pending ID,
+        // retries `open_workbench` (now succeeding), and preserves original credentials.
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_spy = Arc::clone(&attempts);
+        let mut session = NativeHostSession::in_memory()
+            .unwrap()
+            .with_workbench_opener(move || {
+                let n = attempts_spy.fetch_add(1, Ordering::SeqCst) + 1;
+                if n == 1 {
+                    Err("spawn:无法启动桌面工作台".into())
+                } else {
+                    Ok(())
+                }
+            });
+
+        let first = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "request_id": "media-push-wake-retry-1",
+                "resource": {
+                    "url": "https://cdn.test/stream.m3u8",
+                    "title": "Retry Stream",
+                    "cookie": "session=secret-token",
+                    "referer": "https://site.test/play"
+                }
+            }))
+            .unwrap();
+        assert_eq!(first["ok"], true, "first={first}");
+        assert_eq!(first["id"], "media-push-wake-retry-1");
+        assert_eq!(first["status"], "pending");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            session.media_push_ui_request_id, None,
+            "failed open_workbench must not cache dedup request_id"
+        );
+
+        let stored_before = session
+            .core
+            .local()
+            .store()
+            .query_handoffs(Some("media-push-wake-retry-1"), None, false)
+            .unwrap();
+        assert_eq!(stored_before.len(), 1);
+        let stored_req: MediaPushRequest = serde_json::from_str(&stored_before[0]).unwrap();
+        let cred_ref = stored_req
+            .credential_ref
+            .clone()
+            .expect("pending push must retain browser credential_ref");
+        assert!(
+            session
+                .core
+                .local()
+                .store()
+                .load_credential(&cred_ref)
+                .unwrap()
+                .is_some(),
+            "failed workbench open must not delete persisted credential"
+        );
+
+        // User clicks cast again with a new request_id in the same Host session:
+        // Core rejects the overlapping ID, Host finds original pending ID, and retries open_workbench!
+        let second = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "request_id": "media-push-wake-retry-2",
+                "resource": {
+                    "url": "https://cdn.test/stream2.m3u8",
+                    "title": "Second Click"
+                }
+            }))
+            .unwrap();
+        assert_eq!(second["ok"], true, "second={second}");
+        assert_eq!(second["status"], "failed");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "second trigger must retry waking workbench for original pending request"
+        );
+        assert_eq!(
+            session.media_push_ui_request_id.as_deref(),
+            Some("media-push-wake-retry-1")
+        );
+        // Original pending request and its credential remain intact.
+        assert!(session
+            .core
+            .local()
+            .store()
+            .load_credential(&cred_ref)
+            .unwrap()
+            .is_some());
+
+        // Once `open_workbench` succeeded for `media-push-wake-retry-1`, further retries deduplicate.
+        let third = session
+            .dispatch(&json!({
+                "op": "media_push",
+                "kind": "cast",
+                "request_id": "media-push-wake-retry-1",
+                "resource": {
+                    "url": "https://cdn.test/stream.m3u8",
+                    "title": "Retry Stream"
+                }
+            }))
+            .unwrap();
+        assert_eq!(third["ok"], true);
+        assert_eq!(third["id"], "media-push-wake-retry-1");
+        assert_eq!(third["status"], "pending");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "dedup must suppress redundant wake after open_workbench succeeded"
+        );
+
+        // Case 2: Same-request_id idempotent retry after initial failure also retries waking UI
+        // without creating a duplicate pending request.
+        let same_id_attempts = Arc::new(AtomicUsize::new(0));
+        let same_id_spy = Arc::clone(&same_id_attempts);
+        let mut session2 = NativeHostSession::in_memory()
+            .unwrap()
+            .with_workbench_opener(move || {
+                let n = same_id_spy.fetch_add(1, Ordering::SeqCst) + 1;
+                if n == 1 {
+                    Err("spawn:transient failure".into())
+                } else {
+                    Ok(())
+                }
+            });
+        let push_msg = json!({
+            "op": "media_push",
+            "kind": "tvbox",
+            "request_id": "media-push-same-id-1",
+            "resource": {
+                "url": "https://cdn.test/tv.m3u8",
+                "title": "TV Stream"
+            }
+        });
+        let r1 = session2.dispatch(&push_msg).unwrap();
+        assert_eq!(r1["status"], "pending");
+        assert_eq!(same_id_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(session2.media_push_ui_request_id, None);
+
+        let r2 = session2.dispatch(&push_msg).unwrap();
+        assert_eq!(r2["id"], "media-push-same-id-1");
+        assert_eq!(r2["status"], "pending");
+        assert_eq!(same_id_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            session2.media_push_ui_request_id.as_deref(),
+            Some("media-push-same-id-1")
+        );
+        let all_pending = session2
+            .core
+            .local()
+            .store()
+            .query_handoffs(None, None, true)
+            .unwrap();
+        assert_eq!(all_pending.len(), 1, "must not duplicate pending request");
     }
 }

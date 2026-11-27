@@ -617,22 +617,33 @@ impl OverlappedPipe {
         Ok(())
     }
 
+    fn write_message_deadline<T: Serialize>(
+        &mut self,
+        message: &T,
+        deadline: Instant,
+    ) -> Result<(), String> {
+        let encoded = encode_message(message)?;
+        self.write_all_deadline(&encoded, Some(deadline))
+            .map_err(|error| format!("Core pipe write: {error}"))
+    }
+
     fn write_message_timeout<T: Serialize>(
         &mut self,
         message: &T,
         timeout: Duration,
     ) -> Result<(), String> {
-        let encoded = encode_message(message)?;
-        let deadline = Instant::now() + timeout;
-        self.write_all_deadline(&encoded, Some(deadline))
-            .map_err(|error| format!("Core pipe write: {error}"))
+        self.write_message_deadline(message, Instant::now() + timeout)
     }
 
-    fn read_message_timeout<T: for<'de> Deserialize<'de>>(
+    fn read_message_deadline<T: for<'de> Deserialize<'de>>(
         &mut self,
-        timeout: Duration,
+        deadline: Instant,
+        timeout_budget: Option<Duration>,
     ) -> Result<Option<T>, String> {
-        let deadline = Instant::now() + timeout;
+        let timeout_error = || match timeout_budget {
+            Some(timeout) => format!("Core pipe read timed out after {} ms", timeout.as_millis()),
+            None => "Core pipe read timed out (deadline exceeded)".into(),
+        };
         let mut header = [0u8; 4];
         let mut offset = 0;
         while offset < header.len() {
@@ -645,12 +656,7 @@ impl OverlappedPipe {
                     };
                 }
                 OverlappedOutcome::Completed(count) => offset += count as usize,
-                OverlappedOutcome::TimedOut => {
-                    return Err(format!(
-                        "Core pipe read timed out after {} ms",
-                        timeout.as_millis()
-                    ));
-                }
+                OverlappedOutcome::TimedOut => return Err(timeout_error()),
                 OverlappedOutcome::Stopped => return Ok(None),
                 OverlappedOutcome::OsError(code) => {
                     let error = std::io::Error::from_raw_os_error(code as i32);
@@ -670,12 +676,7 @@ impl OverlappedPipe {
                     return Err("Core pipe closed during frame payload".into());
                 }
                 OverlappedOutcome::Completed(count) => offset += count as usize,
-                OverlappedOutcome::TimedOut => {
-                    return Err(format!(
-                        "Core pipe read timed out after {} ms",
-                        timeout.as_millis()
-                    ));
-                }
+                OverlappedOutcome::TimedOut => return Err(timeout_error()),
                 OverlappedOutcome::Stopped => return Ok(None),
                 OverlappedOutcome::OsError(code) => {
                     let error = std::io::Error::from_raw_os_error(code as i32);
@@ -686,6 +687,13 @@ impl OverlappedPipe {
         let mut frame = header.to_vec();
         frame.extend_from_slice(&payload);
         decode_message(&frame).map(Some)
+    }
+
+    fn read_message_timeout<T: for<'de> Deserialize<'de>>(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<T>, String> {
+        self.read_message_deadline(Instant::now() + timeout, Some(timeout))
     }
 }
 
@@ -1545,6 +1553,22 @@ pub struct NamedPipeClient {
 #[cfg(windows)]
 impl NamedPipeClient {
     pub fn connect(name: &str, timeout_ms: u32) -> Result<Self, String> {
+        Self::connect_inner(
+            name,
+            Instant::now() + Duration::from_millis(u64::from(timeout_ms)),
+            true,
+        )
+    }
+
+    pub fn connect_with_deadline(name: &str, deadline: Instant) -> Result<Self, String> {
+        Self::connect_inner(name, deadline, false)
+    }
+
+    fn connect_inner(
+        name: &str,
+        deadline: Instant,
+        allow_initial_attempt_if_expired: bool,
+    ) -> Result<Self, String> {
         use windows_sys::Win32::Foundation::{
             ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE,
         };
@@ -1555,8 +1579,14 @@ impl NamedPipeClient {
         use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
         let wide_name =
             checked_wide(name).map_err(|reason| format!("CreateFileW pipe failed: {reason}"))?;
-        let started = Instant::now();
+        let mut first_attempt = true;
         loop {
+            if (!first_attempt || !allow_initial_attempt_if_expired)
+                && deadline.saturating_duration_since(Instant::now()).is_zero()
+            {
+                return Err("CreateFileW pipe failed: timed out (deadline exceeded)".into());
+            }
+            first_attempt = false;
             // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 pipe path without interior NULs;
             // `CreateFileW` returns `INVALID_HANDLE_VALUE` on failure or a fresh overlapped handle.
             let raw_handle = unsafe {
@@ -1582,25 +1612,25 @@ impl NamedPipeClient {
             }
             let mut error = std::io::Error::last_os_error();
             let mut operation = "CreateFileW pipe";
-            let remaining = timeout_ms
-                .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
+            let remaining = deadline.saturating_duration_since(Instant::now());
             // WaitNamedPipe 不预留实例；其他客户端可能抢先打开，必须在同一总时限内重试。
-            if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && remaining > 0 {
+            if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) && !remaining.is_zero() {
+                // Avoid passing 0 (`NMPWAIT_USE_DEFAULT_WAIT`) or `u32::MAX` (`NMPWAIT_WAIT_FOREVER`).
+                let wait_ms = remaining.as_millis().clamp(1, (u32::MAX - 1) as u128) as u32;
                 // SAFETY: `wide_name` is a valid NUL-terminated UTF-16 pipe path live across the call.
-                if unsafe { WaitNamedPipeW(wide_name.as_ptr(), remaining) } != 0 {
+                if unsafe { WaitNamedPipeW(wide_name.as_ptr(), wait_ms) } != 0 {
                     continue;
                 }
                 error = std::io::Error::last_os_error();
                 operation = "WaitNamedPipeW";
             }
-            let remaining = timeout_ms
-                .saturating_sub(started.elapsed().as_millis().min(u32::MAX as u128) as u32);
-            if error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND as i32) || remaining == 0 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND as i32) || remaining.is_zero() {
                 return Err(format!("{operation} failed: {error}"));
             }
             // 最后一个旧实例关闭到服务端创建下一实例之间，WaitNamedPipe 会立即返回找不到文件。
             // 等待原期限内的新实例，不能在这个窗口提前报错，也不能空转占满 CPU。
-            thread::sleep(Duration::from_millis(u64::from(remaining.min(5))));
+            thread::sleep(Duration::from_millis(5).min(remaining));
         }
     }
 
@@ -1652,7 +1682,43 @@ impl NamedPipeClient {
         request: &CorePipeRequest,
         timeout: Duration,
     ) -> Result<CorePipeResponse, String> {
-        self.request_inner(request, timeout, timeout)
+        self.request_with_deadline_inner(request, Instant::now() + timeout, Some(timeout))
+    }
+
+    pub fn request_with_deadline(
+        &mut self,
+        request: &CorePipeRequest,
+        deadline: Instant,
+    ) -> Result<CorePipeResponse, String> {
+        self.request_with_deadline_inner(request, deadline, None)
+    }
+
+    fn request_with_deadline_inner(
+        &mut self,
+        request: &CorePipeRequest,
+        deadline: Instant,
+        timeout_budget: Option<Duration>,
+    ) -> Result<CorePipeResponse, String> {
+        let mut stream = self
+            .stream
+            .take()
+            .ok_or_else(|| "Core pipe closed".to_string())?;
+        if deadline.saturating_duration_since(Instant::now()).is_zero() {
+            return Err(match timeout_budget {
+                Some(timeout) => format!(
+                    "Core pipe request timed out after {} ms",
+                    timeout.as_millis()
+                ),
+                None => "Core pipe request timed out (deadline exceeded)".into(),
+            });
+        }
+        stream.write_message_deadline(request, deadline)?;
+        let response = stream
+            .read_message_deadline(deadline, timeout_budget)?
+            .ok_or_else(|| "Core pipe closed".to_string())?;
+        validate_client_response("Core pipe", request, &response)?;
+        self.stream = Some(stream);
+        Ok(response)
     }
 }
 
@@ -4001,6 +4067,105 @@ mod tests {
             .unwrap_err();
         assert_eq!(after, "Core pipe closed");
 
+        stop.store(true, Ordering::SeqCst);
+        stop_handle.signal();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_client_connect_and_request_with_deadline_bounds_hanging_peer() {
+        let name = unique_test_pipe_name("deadline-hanging-peer");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server = NamedPipeServer::new(name.clone());
+        let stop_handle = server.stop_handle();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let (received_tx, received_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let handler: Arc<dyn Fn(CorePipeRequest) -> CorePipeResponse + Send + Sync> =
+            Arc::new(move |request| {
+                let _ = received_tx.try_send(());
+                let _ = release_rx
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .recv_timeout(Duration::from_secs(5));
+                match request {
+                    CorePipeRequest::Command { request_id, .. } => CorePipeResponse::Events {
+                        request_id,
+                        events: Vec::new(),
+                    },
+                    _ => CorePipeResponse::Hello {
+                        protocol: V7_PROTOCOL_NAME.into(),
+                        version: V7_PROTOCOL_VERSION,
+                        pid: std::process::id(),
+                    },
+                }
+            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let server_stop = Arc::clone(&stop);
+        let worker =
+            thread::spawn(move || server.serve_loop_with_ready(server_stop, handler, ready_tx));
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready timed out")
+            .expect("ready failed");
+
+        // 1. An already-expired deadline fails immediately without waiting.
+        let expired_started = Instant::now();
+        let expired_err = NamedPipeClient::connect_with_deadline(&name, Instant::now())
+            .err()
+            .expect("expired connect_with_deadline should fail");
+        assert!(expired_err.contains("timed out"), "{expired_err}");
+        assert!(
+            expired_started.elapsed() < Duration::from_millis(100),
+            "expired connect_with_deadline waited too long: {:?}",
+            expired_started.elapsed()
+        );
+
+        // 2. Peer accepts connection and never replies to `OpenMain`:
+        //    shared total deadline bounds connect + write + read (never waiting 180s).
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(220);
+        let mut client =
+            NamedPipeClient::connect_with_deadline(&name, deadline).expect("connect_with_deadline");
+        let err = client
+            .request_with_deadline(
+                &CorePipeRequest::Command {
+                    request_id: 1,
+                    command: CoreCommand::OpenMain {
+                        launch_id: Some("deadline-test".into()),
+                    },
+                },
+                deadline,
+            )
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            err.contains("timed out"),
+            "expected deadline timeout error, got: {err}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(180) && elapsed < Duration::from_secs(1),
+            "deadline request took unexpected duration: {elapsed:?}"
+        );
+        // Confirm server actually accepted and received the frame before timing out.
+        received_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("server did not receive OpenMain request");
+        // Client fails closed after timeout so half-read frames can never desync subsequent calls.
+        let after = client
+            .request_with_deadline(
+                &CorePipeRequest::Command {
+                    request_id: 2,
+                    command: CoreCommand::Ping,
+                },
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap_err();
+        assert_eq!(after, "Core pipe closed");
+
+        drop(client);
+        let _ = release_tx.send(());
         stop.store(true, Ordering::SeqCst);
         stop_handle.signal();
         worker.join().unwrap().unwrap();
