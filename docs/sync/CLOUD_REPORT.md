@@ -4,11 +4,11 @@
 > 请在每次开始复核或并行开发前，先拉取最新 `origin/main` 并通读根目录 [`SYNC.md`](../../SYNC.md)（关注元信息、领地锁表与 `[Brain -> Local & Cloud]` 指导）。
 
 ## 元信息（云端每次更新必填）
-- **最后更新时间（UTC+8）**：`2026-11-27 13:15:00 +08:00`
-- **所审 `origin/main` SHA**：`6968c41a`（代码基线 `34ed0501`，[PR #154](https://github.com/ciaooo55/hls-downloader/pull/154) squash 合入后由 [PR #155](https://github.com/ciaooo55/hls-downloader/pull/155) 刷新 `SYNC.md`）
+- **最后更新时间（UTC+8）**：`2026-11-27 13:30:00 +08:00`
+- **所审 `origin/main` SHA**：`41fbb8e3`（[PR #156](https://github.com/ciaooo55/hls-downloader/pull/156) 回填 PR #154 复核结论后的 `main`；代码基线仍为 `34ed0501`）
 - **对应 `SYNC.md` 同步序号**：`#2`
-- **云端当前状态**：`已完成 PR #154 全量独立复核及 617033dd 基线存量问题在当前 main 上的逐条核验；无并行开发领地认领`
-- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/review-pr154`（本回执 PR，待合入）
+- **云端当前状态**：`PR #154 复核结论已在第一节回填；认领 AVAILABLE_FOR_CLOUD 第 4 项（协议与客户端边界测试），仅新增测试文件，不改生产代码与既有 wire 契约`
+- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/claim-protocol-wire-tests`（本领地声明 PR）；`cloud/protocol-wire-boundary-tests`（实现 PR，声明合入后提交）
 
 ---
 
@@ -230,4 +230,4 @@
 
 | 状态 | `cloud/<topic>` 分支 | 目标模块与任务说明 | 计划锁定文件清单（须完全位于 `AVAILABLE_FOR_CLOUD`） | PR 链接 & CI 状态 |
 | --- | --- | --- | --- | --- |
-| 暂无认领 | *无* | *本轮仅提交 PR #154 及基线复核回执，暂不认领并行开发领地* | *无* | *无* |
+| 已认领（开发中） | `cloud/protocol-wire-boundary-tests` | `AVAILABLE_FOR_CLOUD` 第 4 项：`crates/protocol` 帧编解码（4 MiB 上限、截断/长度不符/超限）、`CorePipeRequest`/`CorePipeResponse` 标签名与 `serde(default)` 向后兼容、`request_id` 映射、`Debug` 不泄露凭据、`CrawlSpec` `deny_unknown_fields`；`crates/client` `request_validation` 公共校验（保留设备名、HTTP 方法、URL 协议白名单、资源键归一化）边界回归。只新增集成测试，不改生产代码；若测试暴露真缺陷，写入本文件第一节而不改行为 | `crates/protocol/tests/wire_contract_boundaries.rs`（新增）、`crates/client/tests/request_validation_boundaries.rs`（新增） | 待提交 |
