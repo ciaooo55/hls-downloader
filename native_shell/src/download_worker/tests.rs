@@ -13660,6 +13660,10 @@ fn auto_retry_governance_skips_permanent_failures_while_retrying_transient_error
         ),
         ("手动代理模式未配置代理服务器地址", "NETWORK_POLICY"),
         ("proxy not configured", "NETWORK_POLICY"),
+        ("代理地址无效", "NETWORK_POLICY"),
+        ("Windows 系统代理地址无效", "NETWORK_POLICY"),
+        ("站点规则代理地址无效", "NETWORK_POLICY"),
+        ("下载地址无效或不安全", "INVALID_URL"),
         ("HTTP 403", "HTTP_403"),
         ("HTTP 404", "HTTP_404"),
     ] {
@@ -13671,6 +13675,35 @@ fn auto_retry_governance_skips_permanent_failures_while_retrying_transient_error
             failure.code
         );
     }
+
+    // Proxy address errors must not be shadowed by the generic `"地址无效"` `INVALID_URL` branch.
+    for proxy_invalid in [
+        "代理地址无效",
+        "Windows 系统代理地址无效",
+        "站点规则代理地址无效",
+    ] {
+        let failure =
+            task_failure_from_error(proxy_invalid, "transfer", "https://cdn.test/x", 1, false);
+        assert_eq!(failure.code, "NETWORK_POLICY", "error={proxy_invalid}");
+        assert!(
+            failure.hint.contains("代理配置"),
+            "expected proxy/network-policy hint for {proxy_invalid:?}, got {:?}",
+            failure.hint
+        );
+    }
+    let bad_url = task_failure_from_error(
+        "下载地址无效或不安全",
+        "transfer",
+        "https://cdn.test/x",
+        1,
+        false,
+    );
+    assert_eq!(bad_url.code, "INVALID_URL");
+    assert!(
+        bad_url.hint.contains("下载地址格式"),
+        "expected INVALID_URL hint, got {:?}",
+        bad_url.hint
+    );
 
     // Missing-FFmpeg errors must surface the FFmpeg path configuration hint rather than being
     // shadowed by the generic `ffmpeg ` prefix branch, and must match Chinese/ASCII case-insensitively.

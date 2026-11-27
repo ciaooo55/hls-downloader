@@ -76,6 +76,7 @@ interface PendingRequest {
   retriesRemaining: number
   priority: number
   startedAt?: number
+  posted?: boolean
   resolve(value: unknown): void
   reject(reason: Error): void
   timer?: ReturnType<typeof setTimeout>
@@ -89,6 +90,7 @@ const NATIVE_HOST_MISSING = /native messaging host not found|no such native appl
 const NATIVE_HOST_FORBIDDEN = /access to the specified native messaging host is forbidden/i
 
 export type NativeErrorCode = 'host_missing' | 'host_forbidden' | 'host_disconnected'
+export type NativeBridgeErrorCode = 'queue_full' | 'bridge_closed'
 
 /** Transport failure with a stable code; callers must not parse the Chinese message. */
 export class NativeHostError extends Error {
@@ -96,6 +98,32 @@ export class NativeHostError extends Error {
     super(message)
     this.name = 'NativeHostError'
   }
+}
+
+/**
+ * Local NativeBridge admission/lifecycle failure.
+ * Only errors with `definiteUnsent === true` prove that `port.postMessage` was
+ * never invoked for this request.
+ */
+export class NativeBridgeError extends Error {
+  constructor(
+    message: string,
+    readonly code: NativeBridgeErrorCode,
+    readonly definiteUnsent: boolean,
+  ) {
+    super(message)
+    this.name = 'NativeBridgeError'
+  }
+}
+
+export function isDefiniteUnsentNativeError(error: unknown): error is NativeBridgeError {
+  if (error instanceof NativeBridgeError) return error.definiteUnsent === true
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { name?: unknown }).name === 'NativeBridgeError'
+    && (error as { definiteUnsent?: unknown }).definiteUnsent === true,
+  )
 }
 
 export function nativeDisconnectError(detail: string): NativeHostError {
@@ -144,8 +172,12 @@ export class NativeBridge {
     timeoutMs = this.timeoutMs,
     retryCount = 0,
   ): Promise<any> {
-    if (this.closed) return Promise.reject(new Error('插件连接已关闭'))
-    if (this.queue.length >= 64) return Promise.reject(new Error('插件请求过多，请等待当前操作完成后重试'))
+    if (this.closed) {
+      return Promise.reject(new NativeBridgeError('插件连接已关闭', 'bridge_closed', true))
+    }
+    if (this.queue.length >= 64) {
+      return Promise.reject(new NativeBridgeError('插件请求过多，请等待当前操作完成后重试', 'queue_full', true))
+    }
     return new Promise((resolve, reject) => {
       const requestId = `${Date.now().toString(36)}-${++this.requestSequence}`
       const request: PendingRequest = {
@@ -251,9 +283,13 @@ export class NativeBridge {
     if (this.closed) return
     this.closed = true
     this.clearPreemptTimer()
-    const error = new Error('插件连接已关闭')
-    this.rejectActive(error)
-    while (this.queue.length) this.queue.shift()!.reject(error)
+    if (this.active) {
+      this.rejectActive(new NativeBridgeError('插件连接已关闭', 'bridge_closed', this.active.posted !== true))
+    }
+    while (this.queue.length) {
+      const queued = this.queue.shift()!
+      queued.reject(new NativeBridgeError('插件连接已关闭', 'bridge_closed', queued.posted !== true))
+    }
     const port = this.port
     this.port = null
     try { port?.disconnect() } catch {}
@@ -286,6 +322,7 @@ export class NativeBridge {
         if (this.active !== request) return
         this.retryOrRejectActive(port, new Error('插件请求超时'))
       }, request.timeoutMs)
+      request.posted = true
       port.postMessage(request.message)
     } catch (error) {
       this.clearPreemptTimer()

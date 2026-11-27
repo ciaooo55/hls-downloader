@@ -4,6 +4,7 @@ use slint::ComponentHandle;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -769,6 +770,12 @@ impl SystemTools {
                 let asset_ready = *sha256_verified
                     && *installer_size > 0
                     && installer_name.to_ascii_lowercase().ends_with(".msi");
+                let effective_release_url =
+                    if (!signing_ready || !asset_ready) && valid_release_url.is_none() {
+                        Some(self.ensure_fallback_release_url())
+                    } else {
+                        valid_release_url
+                    };
                 *self.update.borrow_mut() = format_update_available_summary(
                     current,
                     latest,
@@ -777,13 +784,13 @@ impl SystemTools {
                     *installer_size,
                     *sha256_verified,
                     signing_ready,
-                    valid_release_url.as_deref(),
+                    effective_release_url.as_deref(),
                 );
                 self.set_can_download(signing_ready && asset_ready);
                 self.set_can_install(false);
                 self.set_busy(false);
                 if !signing_ready {
-                    if valid_release_url.is_some() {
+                    if effective_release_url.is_some() {
                         self.set_notice(
                             "info",
                             "当前版本未嵌入代码签名证书，请点击「打开发布页」下载安装包手动覆盖升级",
@@ -1638,11 +1645,13 @@ fn validate_extension_zip_entries(bytes: &[u8]) -> Result<(), String> {
     let eocd = eocd_pos.ok_or_else(|| "扩展压缩包缺少有效的 ZIP 目录尾记录".to_string())?;
     let disk_num = read_u16_le(bytes, eocd + 4).unwrap_or(1);
     let cd_disk = read_u16_le(bytes, eocd + 6).unwrap_or(1);
+    let entries_on_disk = usize::from(read_u16_le(bytes, eocd + 8).unwrap_or(0));
     let total_entries = usize::from(read_u16_le(bytes, eocd + 10).unwrap_or(0));
     let cd_size = read_u32_le(bytes, eocd + 12).unwrap_or(u32::MAX) as usize;
     let cd_offset = read_u32_le(bytes, eocd + 16).unwrap_or(u32::MAX) as usize;
     if disk_num != 0
         || cd_disk != 0
+        || entries_on_disk != total_entries
         || total_entries == 0
         || total_entries > MAX_EXTENSION_ENTRIES
         || total_entries == 0xFFFF
@@ -1683,14 +1692,18 @@ fn validate_extension_zip_entries(bytes: &[u8]) -> Result<(), String> {
         let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
         let extra_len = usize::from(read_u16_le(bytes, cursor + 30).unwrap_or(0));
         let comment_len = usize::from(read_u16_le(bytes, cursor + 32).unwrap_or(0));
+        let disk_start = read_u16_le(bytes, cursor + 34).unwrap_or(1);
+        if disk_start != 0 {
+            return Err("扩展压缩包不支持分卷条目".into());
+        }
         let external_attrs = read_u32_le(bytes, cursor + 38).unwrap_or(0);
         let local_offset = read_u32_le(bytes, cursor + 42).unwrap_or(u32::MAX) as usize;
 
         let creator_os = version_made_by >> 8;
-        if creator_os == 3 && ((external_attrs >> 16) & 0o170000) == 0o120000 {
+        if ((external_attrs >> 16) & 0o170000) == 0o120000 {
             return Err("扩展压缩包包含不安全的符号链接条目".into());
         }
-        if matches!(creator_os, 0 | 10) && (external_attrs & 0x0400) != 0 {
+        if matches!(creator_os, 0 | 10 | 14) && (external_attrs & 0x0400) != 0 {
             return Err("扩展压缩包包含不安全的重解析点条目".into());
         }
 
@@ -1710,13 +1723,17 @@ fn validate_extension_zip_entries(bytes: &[u8]) -> Result<(), String> {
             .map_err(|_| "扩展压缩包包含非 UTF-8 文件名".to_string())?;
         let (clean_name, is_dir) = validate_zip_entry_path(raw_name)?;
 
-        // Cross-check Local File Header filename so streaming extractors see the identical path.
+        // Cross-check Local File Header flags and filename so streaming extractors see the identical entry.
         let local_name_start = local_offset
             .checked_add(30)
             .filter(|end| *end <= cd_offset)
             .ok_or_else(|| "扩展压缩包本地文件头越界".to_string())?;
         if bytes.get(local_offset..local_offset + 4) != Some(&[0x50, 0x4b, 0x03, 0x04]) {
             return Err("扩展压缩包本地文件头签名无效".into());
+        }
+        let local_flags = read_u16_le(bytes, local_offset + 6).unwrap_or(0x0001);
+        if (local_flags & 0x0001) != 0 {
+            return Err("扩展压缩包本地文件头不支持加密条目".into());
         }
         let local_name_len = usize::from(read_u16_le(bytes, local_offset + 26).unwrap_or(0));
         let local_name_end = local_name_start
@@ -1791,10 +1808,12 @@ fn unpack_chromium_extension_archive(
                 "解压后的 Chromium 扩展缺少匹配的 v{expected_version} manifest.json 或 popup.html"
             ));
         }
+        ensure_safe_publish_dest(dest_dir)?;
         // Invalidate any previous `.archive-stamp` before publishing so an interrupted
         // fallback copy can never leave a premature or stale stamp on a partial tree.
         let _ = std::fs::remove_file(&stamp_file);
         publish_extracted_directory(&staging_dir, dest_dir)?;
+        verify_extracted_tree(dest_dir)?;
         if !is_valid_chromium_manifest_dir(dest_dir, expected_version) {
             return Err("扩展目录发布后校验未通过".into());
         }
@@ -1829,29 +1848,99 @@ fn configure_hidden_command(command: &mut std::process::Command) {
     }
 }
 
+fn is_symlink_or_reparse_point(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn ensure_safe_publish_dest(dest_dir: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(dest_dir) {
+        Ok(meta) => {
+            if is_symlink_or_reparse_point(&meta) || !meta.is_dir() {
+                return Err(format!(
+                    "扩展目标目录不是安全的普通目录，已拒绝发布：{}",
+                    dest_dir.display()
+                ));
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "读取扩展目标目录元数据失败 {}: {error}",
+            dest_dir.display()
+        )),
+    }
+}
+
+fn reset_extraction_staging_dir(dest_dir: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(dest_dir) {
+        Ok(meta) => {
+            if is_symlink_or_reparse_point(&meta) || !meta.is_dir() {
+                return Err("扩展临时解压目录类型异常，已拒绝清理".into());
+            }
+            std::fs::remove_dir_all(dest_dir)
+                .map_err(|error| format!("清理残留的临时解压目录失败: {error}"))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("读取临时解压目录状态失败: {error}")),
+    }
+    std::fs::create_dir_all(dest_dir).map_err(|error| format!("重建扩展临时解压目录失败: {error}"))
+}
+
 fn extract_zip_archive(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
     let sys_root = system_root_dir();
     let system_tar = sys_root.join("System32").join("tar.exe");
-    if system_tar.is_file() {
-        let mut command = std::process::Command::new(&system_tar);
-        command.arg("-xf").arg(zip_path).arg("-C").arg(dest_dir);
-        configure_hidden_command(&mut command);
-        if let Ok(output) = command.output() {
-            if output.status.success() {
-                return Ok(());
+    #[cfg(windows)]
+    let powershell = sys_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    extract_zip_archive_with(
+        zip_path,
+        dest_dir,
+        |zip, dest| {
+            if !system_tar.is_file() {
+                return false;
             }
-        }
+            let mut command = std::process::Command::new(&system_tar);
+            command.arg("-xf").arg(zip).arg("-C").arg(dest);
+            configure_hidden_command(&mut command);
+            command.output().is_ok_and(|output| output.status.success())
+        },
+        #[cfg(windows)]
+        powershell.as_path(),
+    )
+}
+
+fn extract_zip_archive_with(
+    zip_path: &Path,
+    dest_dir: &Path,
+    mut primary_extract: impl FnMut(&Path, &Path) -> bool,
+    #[cfg(windows)] powershell: &Path,
+) -> Result<(), String> {
+    if primary_extract(zip_path, dest_dir) {
+        return Ok(());
     }
 
     #[cfg(windows)]
     {
-        let powershell = sys_root
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
         if powershell.is_file() {
-            let mut command = std::process::Command::new(&powershell);
+            // Clear any partial files written by a failed `tar.exe` attempt because
+            // PowerShell 5.1 / .NET Framework `ZipFile::ExtractToDirectory` throws
+            // `IOException` whenever a destination file already exists.
+            reset_extraction_staging_dir(dest_dir)?;
+            let mut command = std::process::Command::new(powershell);
             command
                 .args([
                     "-NoLogo",
@@ -1878,6 +1967,7 @@ fn extract_zip_archive(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
 
     #[cfg(not(windows))]
     {
+        reset_extraction_staging_dir(dest_dir)?;
         let mut command = std::process::Command::new("tar");
         command.arg("-xf").arg(zip_path).arg("-C").arg(dest_dir);
         configure_hidden_command(&mut command);
@@ -1894,7 +1984,7 @@ fn extract_zip_archive(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
 fn verify_extracted_tree(root: &Path) -> Result<(), String> {
     let root_meta = std::fs::symlink_metadata(root)
         .map_err(|error| format!("读取解压目录元数据失败: {error}"))?;
-    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
+    if is_symlink_or_reparse_point(&root_meta) || !root_meta.is_dir() {
         return Err("解压目标目录类型异常".into());
     }
     let mut pending = vec![root.to_path_buf()];
@@ -1908,15 +1998,15 @@ fn verify_extracted_tree(root: &Path) -> Result<(), String> {
             if visited > MAX_EXTENSION_ENTRIES {
                 return Err("解压目录文件数量超出安全上限".into());
             }
-            let file_type = entry
-                .file_type()
+            let entry_path = entry.path();
+            let entry_meta = std::fs::symlink_metadata(&entry_path)
                 .map_err(|error| format!("读取解压文件类型失败: {error}"))?;
-            if file_type.is_symlink() {
+            if is_symlink_or_reparse_point(&entry_meta) {
                 return Err("解压目录包含不安全的符号链接".into());
             }
-            if file_type.is_dir() {
-                pending.push(entry.path());
-            } else if !file_type.is_file() {
+            if entry_meta.is_dir() {
+                pending.push(entry_path);
+            } else if !entry_meta.is_file() {
                 return Err("解压目录包含不支持的特殊文件".into());
             }
         }
@@ -1924,7 +2014,67 @@ fn verify_extracted_tree(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_entry_name(name: &OsStr) -> OsString {
+    #[cfg(windows)]
+    {
+        match name.to_str() {
+            Some(text) => OsString::from(text.to_lowercase()),
+            None => name.to_os_string(),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_os_string()
+    }
+}
+
+fn prune_stale_entry(path: &Path, errors: &mut Vec<String>) {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            errors.push(format!("{} ({error})", path.display()));
+            return;
+        }
+    };
+    if is_symlink_or_reparse_point(&meta) {
+        // Remove the link/junction entry itself without descending into its target.
+        let remove_res = if cfg!(windows) && meta.is_dir() {
+            std::fs::remove_dir(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        if let Err(error) = remove_res {
+            errors.push(format!("{} ({error})", path.display()));
+        }
+        return;
+    }
+    if meta.is_dir() {
+        if std::fs::remove_dir_all(path).is_ok() {
+            return;
+        }
+        // Best-effort cleanup of unlocked entries inside a partially locked stale directory.
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                prune_stale_entry(&entry.path(), errors);
+            }
+        }
+        if let Err(error) = std::fs::remove_dir(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                errors.push(format!("{} ({error})", path.display()));
+            }
+        }
+        return;
+    }
+    if let Err(error) = std::fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            errors.push(format!("{} ({error})", path.display()));
+        }
+    }
+}
+
 fn publish_extracted_directory(staging_dir: &Path, dest_dir: &Path) -> Result<(), String> {
+    ensure_safe_publish_dest(dest_dir)?;
     if dest_dir.exists() {
         let _ = std::fs::remove_dir_all(dest_dir);
     }
@@ -1932,12 +2082,33 @@ fn publish_extracted_directory(staging_dir: &Path, dest_dir: &Path) -> Result<()
         return Ok(());
     }
     // Fallback when Explorer or the browser holds an open directory handle on `dest_dir`.
-    copy_directory_contents(staging_dir, dest_dir)
+    sync_directory_contents(staging_dir, dest_dir)
 }
 
-fn copy_directory_contents(src: &Path, dst: &Path) -> Result<(), String> {
+fn sync_directory_contents(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut prune_errors = Vec::new();
+    sync_directory_contents_inner(src, dst, &mut prune_errors)?;
+    if !prune_errors.is_empty() {
+        return Err(format!(
+            "清理过期扩展文件失败（部分文件可能正被占用）：{}",
+            prune_errors.join("；")
+        ));
+    }
+    Ok(())
+}
+
+fn sync_directory_contents_inner(
+    src: &Path,
+    dst: &Path,
+    prune_errors: &mut Vec<String>,
+) -> Result<(), String> {
+    ensure_safe_publish_dest(dst)?;
     std::fs::create_dir_all(dst)
         .map_err(|error| format!("创建扩展目录失败 {}: {error}", dst.display()))?;
+    ensure_safe_publish_dest(dst)?;
+
+    let mut staged_entries = Vec::new();
+    let mut expected_names = HashSet::new();
     let entries = std::fs::read_dir(src)
         .map_err(|error| format!("读取临时扩展目录失败 {}: {error}", src.display()))?;
     for entry_res in entries {
@@ -1945,11 +2116,52 @@ fn copy_directory_contents(src: &Path, dst: &Path) -> Result<(), String> {
         let file_type = entry
             .file_type()
             .map_err(|error| format!("读取扩展条目类型失败: {error}"))?;
-        let target = dst.join(entry.file_name());
+        let name = entry.file_name();
+        expected_names.insert(normalize_entry_name(&name));
+        staged_entries.push((name, entry.path(), file_type));
+    }
+
+    let existing_entries = std::fs::read_dir(dst)
+        .map_err(|error| format!("读取现有扩展目录失败 {}: {error}", dst.display()))?;
+    for existing_res in existing_entries {
+        let existing = existing_res.map_err(|error| format!("读取现有扩展条目失败: {error}"))?;
+        if !expected_names.contains(&normalize_entry_name(&existing.file_name())) {
+            prune_stale_entry(&existing.path(), prune_errors);
+        }
+    }
+
+    for (name, src_path, file_type) in staged_entries {
+        let target = dst.join(&name);
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) => {
+                if is_symlink_or_reparse_point(&meta) {
+                    return Err(format!(
+                        "扩展目标包含不安全的符号链接或重解析点，已拒绝覆盖：{}",
+                        target.display()
+                    ));
+                }
+                if file_type.is_dir() && !meta.is_dir() {
+                    std::fs::remove_file(&target).map_err(|error| {
+                        format!("清理冲突扩展文件失败 {}: {error}", target.display())
+                    })?;
+                } else if file_type.is_file() && meta.is_dir() {
+                    std::fs::remove_dir_all(&target).map_err(|error| {
+                        format!("清理冲突扩展目录失败 {}: {error}", target.display())
+                    })?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "读取扩展目标条目元数据失败 {}: {error}",
+                    target.display()
+                ));
+            }
+        }
         if file_type.is_dir() {
-            copy_directory_contents(&entry.path(), &target)?;
+            sync_directory_contents_inner(&src_path, &target, prune_errors)?;
         } else if file_type.is_file() {
-            std::fs::copy(entry.path(), &target)
+            std::fs::copy(&src_path, &target)
                 .map_err(|error| format!("更新扩展文件失败 {}: {error}", target.display()))?;
         }
     }
@@ -3026,5 +3238,447 @@ mod tests {
         );
         #[cfg(windows)]
         drop(_exclusive_lock);
+    }
+
+    struct CustomZipEntry<'a> {
+        local_name: &'a str,
+        central_name: &'a str,
+        content: &'a [u8],
+        version_made_by: u16,
+        local_flags: u16,
+        central_flags: u16,
+        external_attrs: u32,
+        disk_start: u16,
+    }
+
+    impl<'a> CustomZipEntry<'a> {
+        fn plain(name: &'a str, content: &'a [u8]) -> Self {
+            Self {
+                local_name: name,
+                central_name: name,
+                content,
+                version_made_by: 20,
+                local_flags: 0,
+                central_flags: 0,
+                external_attrs: 0,
+                disk_start: 0,
+            }
+        }
+    }
+
+    fn build_custom_test_zip(
+        entries: &[CustomZipEntry<'_>],
+        eocd_entries_on_disk_override: Option<u16>,
+    ) -> Vec<u8> {
+        let mut archive = Vec::new();
+        let mut central = Vec::new();
+        for entry in entries {
+            let local_offset = archive.len() as u32;
+            let crc = crc32_ieee(entry.content);
+            let size = entry.content.len() as u32;
+            let local_bytes = entry.local_name.as_bytes();
+            archive.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
+            archive.extend_from_slice(&20u16.to_le_bytes());
+            archive.extend_from_slice(&entry.local_flags.to_le_bytes());
+            archive.extend_from_slice(&0u16.to_le_bytes());
+            archive.extend_from_slice(&0u16.to_le_bytes());
+            archive.extend_from_slice(&0u16.to_le_bytes());
+            archive.extend_from_slice(&crc.to_le_bytes());
+            archive.extend_from_slice(&size.to_le_bytes());
+            archive.extend_from_slice(&size.to_le_bytes());
+            archive.extend_from_slice(&(local_bytes.len() as u16).to_le_bytes());
+            archive.extend_from_slice(&0u16.to_le_bytes());
+            archive.extend_from_slice(local_bytes);
+            archive.extend_from_slice(entry.content);
+
+            let central_bytes = entry.central_name.as_bytes();
+            central.extend_from_slice(&[0x50, 0x4b, 0x01, 0x02]);
+            central.extend_from_slice(&entry.version_made_by.to_le_bytes());
+            central.extend_from_slice(&20u16.to_le_bytes());
+            central.extend_from_slice(&entry.central_flags.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&crc.to_le_bytes());
+            central.extend_from_slice(&size.to_le_bytes());
+            central.extend_from_slice(&size.to_le_bytes());
+            central.extend_from_slice(&(central_bytes.len() as u16).to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&entry.disk_start.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&entry.external_attrs.to_le_bytes());
+            central.extend_from_slice(&local_offset.to_le_bytes());
+            central.extend_from_slice(central_bytes);
+        }
+        let cd_offset = archive.len() as u32;
+        let cd_size = central.len() as u32;
+        let count = entries.len() as u16;
+        let entries_on_disk = eocd_entries_on_disk_override.unwrap_or(count);
+        archive.extend_from_slice(&central);
+        archive.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+        archive.extend_from_slice(&0u16.to_le_bytes());
+        archive.extend_from_slice(&0u16.to_le_bytes());
+        archive.extend_from_slice(&entries_on_disk.to_le_bytes());
+        archive.extend_from_slice(&count.to_le_bytes());
+        archive.extend_from_slice(&cd_size.to_le_bytes());
+        archive.extend_from_slice(&cd_offset.to_le_bytes());
+        archive.extend_from_slice(&0u16.to_le_bytes());
+        archive
+    }
+
+    fn create_test_dir_link(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "mklink", "/J"]).arg(link).arg(target);
+            configure_hidden_command(&mut cmd);
+            cmd.output().is_ok_and(|out| out.status.success())
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+    }
+
+    fn remove_test_dir_link(link: &Path) {
+        #[cfg(windows)]
+        {
+            let _ = std::fs::remove_dir(link);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = std::fs::remove_file(link);
+        }
+    }
+
+    #[test]
+    fn extension_zip_validator_rejects_darwin_symlinks_vfat_reparse_eocd_mismatch_and_lfh_encryption(
+    ) {
+        let valid_manifest = chromium_manifest_json(env!("CARGO_PKG_VERSION"));
+
+        // 1. macOS/Darwin (`creator_os = 19`) POSIX symlink rejected.
+        let mut darwin_link = CustomZipEntry::plain("link.js", b"../target");
+        darwin_link.version_made_by = (19 << 8) | 20;
+        darwin_link.external_attrs = 0o120_777u32 << 16;
+        let zip = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                darwin_link,
+            ],
+            None,
+        );
+        let err = validate_extension_zip_entries(&zip).unwrap_err();
+        assert!(err.contains("符号链接"), "err={err}");
+
+        // 2. Non-UNIX creator_os (`0`) carrying POSIX S_IFLNK mode bits also rejected unconditionally.
+        let mut dos_posix_link = CustomZipEntry::plain("link2.js", b"../target");
+        dos_posix_link.version_made_by = 20;
+        dos_posix_link.external_attrs = 0o120_777u32 << 16;
+        let zip = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                dos_posix_link,
+            ],
+            None,
+        );
+        assert!(validate_extension_zip_entries(&zip).is_err());
+
+        // 3. VFAT (`creator_os = 14`) reparse point bit (`0x0400`) rejected.
+        let mut vfat_reparse = CustomZipEntry::plain("reparse.js", b"x");
+        vfat_reparse.version_made_by = (14 << 8) | 20;
+        vfat_reparse.external_attrs = 0x0400;
+        let zip = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                vfat_reparse,
+            ],
+            None,
+        );
+        let err = validate_extension_zip_entries(&zip).unwrap_err();
+        assert!(err.contains("重解析点"), "err={err}");
+
+        // 4. EOCD `entries_on_disk != total_entries` rejected.
+        let eocd_mismatch = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                CustomZipEntry::plain("popup.html", b"<!doctype html>"),
+            ],
+            Some(1),
+        );
+        assert!(validate_extension_zip_entries(&eocd_mismatch).is_err());
+
+        // 5. LFH encrypted bit (`flags & 0x0001 != 0`) while CD flags == 0 rejected.
+        let mut lfh_encrypted = CustomZipEntry::plain("popup.html", b"secret");
+        lfh_encrypted.local_flags = 0x0001;
+        lfh_encrypted.central_flags = 0;
+        let zip = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                lfh_encrypted,
+            ],
+            None,
+        );
+        let err = validate_extension_zip_entries(&zip).unwrap_err();
+        assert!(err.contains("加密"), "err={err}");
+
+        // 6. Legitimate Darwin regular file and VFAT regular file are accepted.
+        let mut darwin_regular = CustomZipEntry::plain("popup.html", b"<!doctype html>");
+        darwin_regular.version_made_by = (19 << 8) | 20;
+        darwin_regular.external_attrs = 0o100_644u32 << 16;
+        let mut vfat_regular = CustomZipEntry::plain("chunks/bg.js", b"console.log(1);");
+        vfat_regular.version_made_by = (14 << 8) | 20;
+        vfat_regular.external_attrs = 0x0020; // FILE_ATTRIBUTE_ARCHIVE
+        let ok_zip = build_custom_test_zip(
+            &[
+                CustomZipEntry::plain("manifest.json", &valid_manifest),
+                darwin_regular,
+                vfat_regular,
+            ],
+            None,
+        );
+        assert!(validate_extension_zip_entries(&ok_zip).is_ok());
+    }
+
+    #[test]
+    fn extract_zip_archive_fallback_clears_partial_tar_leftovers_and_rejects_reparse_dest() {
+        let sandbox = TempTestDir::new("zip-fallback-cleanup");
+        let version = env!("CARGO_PKG_VERSION");
+        let manifest = chromium_manifest_json(version);
+        let zip_bytes = build_test_zip(&[
+            ("manifest.json", "manifest.json", &manifest),
+            ("popup.html", "popup.html", b"<!doctype html><h1>ok</h1>"),
+            ("chunks/bg.js", "chunks/bg.js", b"console.log('clean');"),
+        ]);
+        let zip_path = sandbox.path().join("Chromium.zip");
+        std::fs::write(&zip_path, &zip_bytes).unwrap();
+
+        // Simulate `tar.exe` failing after writing a conflicting `manifest.json` and extra partial file.
+        let dest_dir = sandbox.path().join("staging");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        #[cfg(windows)]
+        let powershell = system_root_dir()
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+
+        extract_zip_archive_with(
+            &zip_path,
+            &dest_dir,
+            |_, dest| {
+                std::fs::write(dest.join("manifest.json"), b"partial-corrupt").unwrap();
+                std::fs::write(dest.join("tar-partial.tmp"), b"leftover").unwrap();
+                false
+            },
+            #[cfg(windows)]
+            powershell.as_path(),
+        )
+        .expect("fallback extraction should clear partial leftovers and succeed");
+
+        assert!(
+            !dest_dir.join("tar-partial.tmp").exists(),
+            "stale partial file left by failed tar must be cleared before fallback"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("popup.html")).unwrap(),
+            b"<!doctype html><h1>ok</h1>"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("chunks/bg.js")).unwrap(),
+            b"console.log('clean');"
+        );
+
+        // `reset_extraction_staging_dir` must refuse to follow/delete a symlink or NTFS junction.
+        let victim = sandbox.path().join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep.txt"), b"safe").unwrap();
+        let link_dest = sandbox.path().join("staging-link");
+        if create_test_dir_link(&link_dest, &victim) {
+            let err = reset_extraction_staging_dir(&link_dest).unwrap_err();
+            assert!(err.contains("类型异常"), "err={err}");
+            assert!(
+                victim.join("keep.txt").is_file(),
+                "victim directory must remain untouched"
+            );
+            remove_test_dir_link(&link_dest);
+        }
+    }
+
+    #[test]
+    fn publish_extracted_directory_fallback_prunes_stale_files_verifies_tree_and_rejects_link_dest()
+    {
+        let sandbox = TempTestDir::new("publish-fallback-prune");
+        let version = env!("CARGO_PKG_VERSION");
+        let manifest = chromium_manifest_json(version);
+        let zip_bytes = build_test_zip(&[
+            ("manifest.json", "manifest.json", &manifest),
+            ("popup.html", "popup.html", b"<!doctype html>new"),
+            ("chunks/bg.js", "chunks/bg.js", b"console.log('v2');"),
+        ]);
+        let zip_path = sandbox.path().join("Chromium.zip");
+        std::fs::write(&zip_path, &zip_bytes).unwrap();
+
+        let dest_dir = sandbox.path().join("unpacked").join("Chromium");
+        std::fs::create_dir_all(dest_dir.join("chunks")).unwrap();
+        std::fs::create_dir_all(dest_dir.join("legacy_dir")).unwrap();
+        std::fs::write(dest_dir.join("manifest.json"), b"old-manifest").unwrap();
+        std::fs::write(dest_dir.join("obsolete.js"), b"stale-root").unwrap();
+        std::fs::write(dest_dir.join("chunks/old-chunk.js"), b"stale-chunk").unwrap();
+        std::fs::write(dest_dir.join("legacy_dir/old.txt"), b"stale-dir").unwrap();
+
+        // On Windows, open `dest_dir` with backup semantics and WITHOUT `FILE_SHARE_DELETE`
+        // (same lock Explorer holds when viewing the folder), forcing `publish_extracted_directory`
+        // into the fallback overlay-copy path while allowing files inside to be updated & pruned.
+        #[cfg(windows)]
+        let _dir_handle = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            const FILE_SHARE_READ: u32 = 0x0000_0001;
+            const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&dest_dir)
+                .unwrap()
+        };
+
+        #[cfg(windows)]
+        {
+            unpack_chromium_extension_archive(&zip_path, &dest_dir, version).expect(
+                "fallback publish should prune stale entries and pass post-publish verification",
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let staging = sandbox.path().join("staging-direct");
+            std::fs::create_dir_all(staging.join("chunks")).unwrap();
+            std::fs::write(staging.join("manifest.json"), &manifest).unwrap();
+            std::fs::write(staging.join("popup.html"), b"<!doctype html>new").unwrap();
+            std::fs::write(staging.join("chunks/bg.js"), b"console.log('v2');").unwrap();
+            sync_directory_contents(&staging, &dest_dir).unwrap();
+            verify_extracted_tree(&dest_dir).unwrap();
+        }
+
+        assert!(
+            !dest_dir.join("obsolete.js").exists(),
+            "stale root file must be pruned"
+        );
+        assert!(
+            !dest_dir.join("chunks/old-chunk.js").exists(),
+            "stale nested file must be pruned"
+        );
+        assert!(
+            !dest_dir.join("legacy_dir").exists(),
+            "stale directory must be pruned"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("popup.html")).unwrap(),
+            b"<!doctype html>new"
+        );
+        assert_eq!(
+            std::fs::read(dest_dir.join("chunks/bg.js")).unwrap(),
+            b"console.log('v2');"
+        );
+        assert!(verify_extracted_tree(&dest_dir).is_ok());
+
+        #[cfg(windows)]
+        {
+            assert!(dest_dir.join(".archive-stamp").is_file());
+            drop(_dir_handle);
+        }
+
+        // Symlink / NTFS junction `dest_dir` MUST be rejected before touching target contents.
+        let victim = sandbox.path().join("victim-publish");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("important.txt"), b"keep-me").unwrap();
+        let link_dest = sandbox.path().join("dest-link");
+        if create_test_dir_link(&link_dest, &victim) {
+            let err =
+                unpack_chromium_extension_archive(&zip_path, &link_dest, version).unwrap_err();
+            assert!(err.contains("不是安全的普通目录"), "err={err}");
+            assert!(
+                victim.join("important.txt").is_file(),
+                "target behind junction/symlink must never be modified or deleted"
+            );
+            assert!(!victim.join("manifest.json").exists());
+            remove_test_dir_link(&link_dest);
+        }
+    }
+
+    #[test]
+    fn update_available_falls_back_to_default_github_releases_when_release_url_is_missing() {
+        crate::offscreen::OffscreenPlatform::init_test();
+        let recorded = RecordedOps::new();
+        let next = Cell::new(0);
+        let tools = SystemTools::new_with_hooks(
+            WorkbenchWindow::new().unwrap(),
+            Rc::new(|_| true),
+            Rc::new(move || {
+                next.set(next.get() + 1);
+                next.get()
+            }),
+            recorded.hooks(None, None, None),
+        )
+        .unwrap();
+
+        // 1. Unsigned build + empty `release_url`: button must still be shown and open default URL.
+        tools.signing_configured.set(false);
+        tools.event(&EventEnvelope {
+            sequence: 50,
+            event: CoreEvent::UpdateAvailable {
+                current: "10.1.0".into(),
+                latest: "10.2.0".into(),
+                notes: "Unsigned release notes".into(),
+                release_url: String::new(),
+                installer_name: "HLSDownloader-10.2.0-Windows-x64.msi".into(),
+                installer_size: 120_000_000,
+                sha256_verified: true,
+            },
+        });
+        assert!(!tools.can_download.get());
+        assert!(tools.can_open_release.get());
+        let window = tools.window.borrow().as_ref().unwrap().clone_strong();
+        assert!(window.get_can_open_release());
+        assert!(tools.update.borrow().contains(DEFAULT_GITHUB_RELEASES_URL));
+        assert!(tools.update.borrow().contains("打开发布页"));
+        tools.action("open_release");
+        assert_eq!(
+            recorded.opened_targets.borrow().as_slice(),
+            [DEFAULT_GITHUB_RELEASES_URL]
+        );
+
+        // 2. Signed build + missing/unverified MSI asset + invalid non-GitHub `release_url`:
+        //    also falls back to `DEFAULT_GITHUB_RELEASES_URL` so button matches guidance text.
+        recorded.opened_targets.borrow_mut().clear();
+        tools.signing_configured.set(true);
+        tools.event(&EventEnvelope {
+            sequence: 51,
+            event: CoreEvent::UpdateAvailable {
+                current: "10.1.0".into(),
+                latest: "10.2.1".into(),
+                notes: "Portable only".into(),
+                release_url: "https://evil.example/not-github".into(),
+                installer_name: "HLSDownloader-10.2.1-Portable.zip".into(),
+                installer_size: 90_000_000,
+                sha256_verified: false,
+            },
+        });
+        assert!(!tools.can_download.get());
+        assert!(tools.can_open_release.get());
+        assert!(window.get_can_open_release());
+        assert!(tools.update.borrow().contains(DEFAULT_GITHUB_RELEASES_URL));
+        tools.action("open_release");
+        assert_eq!(
+            recorded.opened_targets.borrow().as_slice(),
+            [DEFAULT_GITHUB_RELEASES_URL]
+        );
+        tools.close();
     }
 }

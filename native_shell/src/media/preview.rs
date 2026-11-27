@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 // 两轨按播放时间领取分片，避免先下载整条音轨；未知时长仍按分片交错。
@@ -61,11 +61,20 @@ struct ReadyTaskState {
     /// Cold-loaded crash-recovery slots from `audio/vod_segments.json`.
     audio_checkpoint_slots: HashMap<usize, u64>,
     marker_dir_created: bool,
+    /// Monotonic counter bumped on every in-memory mutation of `segments` so concurrent
+    /// flushes never clear dirty mutations landed while disk I/O was in flight.
+    generation: u64,
+    flushed_generation: u64,
     dirty_ops: usize,
     last_flush: Instant,
     checked: Instant,
+    /// Per-task flush lock acquired strictly AFTER releasing `ready_segments()` so disk I/O
+    /// and Windows atomic-replace retries never block unrelated tasks.
+    flush_lock: Arc<Mutex<()>>,
     #[cfg(test)]
     disk_loads: u64,
+    #[cfg(test)]
+    disk_flushes: u64,
 }
 
 impl ReadyTaskState {
@@ -293,29 +302,133 @@ fn load_ready_state_from_disk(root: &Path) -> ReadyTaskState {
         hls_checkpoint_slots,
         audio_checkpoint_slots,
         marker_dir_created,
+        generation: 0,
+        flushed_generation: 0,
         dirty_ops: 0,
         last_flush: now,
         checked: now,
+        flush_lock: Arc::new(Mutex::new(())),
         #[cfg(test)]
         disk_loads: 1,
+        #[cfg(test)]
+        disk_flushes: 0,
     }
 }
 
+struct EvictedReadyTask {
+    root: PathBuf,
+    segments: HashMap<String, u64>,
+    flush_lock: Arc<Mutex<()>>,
+}
+
 pub(crate) fn flush_ready(root: &Path) -> Result<(), String> {
+    let flush_lock = {
+        let map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(entry) = map.get(root) else {
+            return Ok(());
+        };
+        if entry.generation == entry.flushed_generation || !entry.marker_dir_created {
+            return Ok(());
+        }
+        Arc::clone(&entry.flush_lock)
+    };
+    flush_ready_locked(root, flush_lock, false)
+}
+
+/// Serializes disk persistence for a single task under `flush_lock`, keeping all file I/O
+/// strictly outside the global `ready_segments()` lock. Lock order is always
+/// `flush_lock -> ready_segments()`, never the reverse.
+fn flush_ready_locked(
+    root: &Path,
+    flush_lock: Arc<Mutex<()>>,
+    create_dir_if_missing: bool,
+) -> Result<(), String> {
+    let _flush_guard = flush_lock.lock().unwrap_or_else(|error| error.into_inner());
+    let (snapshot, snapshot_gen, snapshot_dirty, need_dir) = {
+        let map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(entry) = map.get(root) else {
+            return Ok(());
+        };
+        if !Arc::ptr_eq(&entry.flush_lock, &flush_lock) {
+            return Ok(());
+        }
+        if entry.generation == entry.flushed_generation {
+            return Ok(());
+        }
+        if !create_dir_if_missing && !entry.marker_dir_created {
+            return Ok(());
+        }
+        (
+            entry.segments.clone(),
+            entry.generation,
+            entry.dirty_ops,
+            create_dir_if_missing && !entry.marker_dir_created,
+        )
+    };
+
     let marker_dir = root.join(READY_DIR);
+    if need_dir {
+        fs::create_dir_all(&marker_dir).map_err(|error| error.to_string())?;
+    } else if !create_dir_if_missing && !marker_dir.is_dir() {
+        let mut map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = map
+            .get_mut(root)
+            .filter(|entry| Arc::ptr_eq(&entry.flush_lock, &flush_lock))
+        {
+            entry.marker_dir_created = false;
+        }
+        return Ok(());
+    }
+
+    match flush_ready_index(&marker_dir, &snapshot) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create_dir_if_missing => {
+            fs::create_dir_all(&marker_dir).map_err(|err| err.to_string())?;
+            flush_ready_index(&marker_dir, &snapshot).map_err(|err| err.to_string())?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut map = ready_segments()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(entry) = map
+                .get_mut(root)
+                .filter(|entry| Arc::ptr_eq(&entry.flush_lock, &flush_lock))
+            {
+                entry.marker_dir_created = false;
+            }
+            return Ok(());
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+
     let mut map = ready_segments()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let Some(entry) = map.get_mut(root) else {
-        return Ok(());
-    };
-    if entry.dirty_ops == 0 || !entry.marker_dir_created || !marker_dir.is_dir() {
-        return Ok(());
+    if let Some(entry) = map
+        .get_mut(root)
+        .filter(|entry| Arc::ptr_eq(&entry.flush_lock, &flush_lock))
+    {
+        entry.marker_dir_created = true;
+        entry.flushed_generation = snapshot_gen;
+        if entry.generation == entry.flushed_generation {
+            entry.dirty_ops = 0;
+        } else {
+            entry.dirty_ops = entry.dirty_ops.saturating_sub(snapshot_dirty).max(1);
+        }
+        let now = Instant::now();
+        entry.last_flush = now;
+        entry.checked = now;
+        #[cfg(test)]
+        {
+            entry.disk_flushes += 1;
+        }
     }
-    flush_ready_index(&marker_dir, &entry.segments).map_err(|error| error.to_string())?;
-    entry.dirty_ops = 0;
-    entry.last_flush = Instant::now();
-    entry.checked = Instant::now();
     Ok(())
 }
 
@@ -336,10 +449,13 @@ fn flush_ready_index(marker_dir: &Path, segments: &HashMap<String, u64>) -> std:
     super::hls::replace_file_atomic(&temporary, &marker_dir.join(READY_INDEX_FILE))
 }
 
-fn prune_ready_segments(map: &mut HashMap<PathBuf, ReadyTaskState>) {
+fn take_evicted_ready_segments(
+    map: &mut HashMap<PathBuf, ReadyTaskState>,
+) -> Vec<EvictedReadyTask> {
     if map.len() < READY_MAX_ENTRIES {
-        return;
+        return Vec::new();
     }
+    let mut evicted_dirty = Vec::new();
     while map.len() >= READY_MAX_ENTRIES {
         let Some(oldest) = map
             .iter()
@@ -349,10 +465,34 @@ fn prune_ready_segments(map: &mut HashMap<PathBuf, ReadyTaskState>) {
             break;
         };
         if let Some(evicted) = map.remove(&oldest) {
-            let marker_dir = oldest.join(READY_DIR);
-            if evicted.dirty_ops > 0 && evicted.marker_dir_created && marker_dir.is_dir() {
-                let _ = flush_ready_index(&marker_dir, &evicted.segments);
+            if evicted.generation != evicted.flushed_generation && evicted.marker_dir_created {
+                evicted_dirty.push(EvictedReadyTask {
+                    root: oldest,
+                    segments: evicted.segments,
+                    flush_lock: evicted.flush_lock,
+                });
             }
+        }
+    }
+    evicted_dirty
+}
+
+fn flush_evicted_ready_tasks(evicted: Vec<EvictedReadyTask>) {
+    for item in evicted {
+        let _flush_guard = item
+            .flush_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let superseded = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains_key(&item.root);
+        if superseded {
+            continue;
+        }
+        let marker_dir = item.root.join(READY_DIR);
+        if marker_dir.is_dir() {
+            let _ = flush_ready_index(&marker_dir, &item.segments);
         }
     }
 }
@@ -363,7 +503,6 @@ pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
     if size == 0 {
         return Err("播放分片为空".into());
     }
-    let marker_dir = root.join(READY_DIR);
     let loaded = {
         let map = ready_segments()
             .lock()
@@ -375,41 +514,34 @@ pub(crate) fn mark_ready(root: &Path, file: &Path) -> Result<(), String> {
             Some(load_ready_state_from_disk(root))
         }
     };
-    let mut map = ready_segments()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    prune_ready_segments(&mut map);
-    let now = Instant::now();
-    let entry = match map.entry(root.to_path_buf()) {
-        std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
-        std::collections::hash_map::Entry::Vacant(vacant) => {
-            vacant.insert(loaded.unwrap_or_else(|| load_ready_state_from_disk(root)))
-        }
-    };
-    let created_now = !entry.marker_dir_created;
-    if created_now {
-        fs::create_dir_all(&marker_dir).map_err(|error| error.to_string())?;
-        entry.marker_dir_created = true;
-    }
-    entry.clear_checkpoint_slot(&relative);
-    entry.segments.insert(relative, size);
-    entry.dirty_ops = entry.dirty_ops.saturating_add(1);
-    entry.checked = now;
-    let should_flush = created_now
-        || entry.segments.len() <= 2
-        || entry.dirty_ops >= READY_FLUSH_BATCH
-        || entry.last_flush.elapsed() >= READY_FLUSH_INTERVAL;
-    if should_flush {
-        match flush_ready_index(&marker_dir, &entry.segments) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir_all(&marker_dir).map_err(|err| err.to_string())?;
-                flush_ready_index(&marker_dir, &entry.segments).map_err(|err| err.to_string())?;
+    let (evicted, flush_lock) = {
+        let mut map = ready_segments()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let evicted = take_evicted_ready_segments(&mut map);
+        let now = Instant::now();
+        let entry = match map.entry(root.to_path_buf()) {
+            std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                vacant.insert(loaded.unwrap_or_else(|| load_ready_state_from_disk(root)))
             }
-            Err(error) => return Err(error.to_string()),
-        }
-        entry.dirty_ops = 0;
-        entry.last_flush = Instant::now();
+        };
+        let needs_create_dir = !entry.marker_dir_created;
+        entry.clear_checkpoint_slot(&relative);
+        entry.segments.insert(relative, size);
+        entry.generation = entry.generation.wrapping_add(1);
+        entry.dirty_ops = entry.dirty_ops.saturating_add(1);
+        entry.checked = now;
+        let should_flush = needs_create_dir
+            || entry.segments.len() <= 2
+            || entry.dirty_ops >= READY_FLUSH_BATCH
+            || entry.last_flush.elapsed() >= READY_FLUSH_INTERVAL;
+        let flush_lock = should_flush.then(|| Arc::clone(&entry.flush_lock));
+        (evicted, flush_lock)
+    };
+    flush_evicted_ready_tasks(evicted);
+    if let Some(flush_lock) = flush_lock {
+        flush_ready_locked(root, flush_lock, true)?;
     }
     Ok(())
 }
@@ -435,11 +567,11 @@ pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
             Some(load_ready_state_from_disk(root))
         }
     };
-    {
+    let evicted = {
         let mut map = ready_segments()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        prune_ready_segments(&mut map);
+        let evicted = take_evicted_ready_segments(&mut map);
         let now = Instant::now();
         let entry = match map.entry(root.to_path_buf()) {
             std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
@@ -450,19 +582,13 @@ pub(crate) fn reset_ready(root: &Path, file: &Path) -> Result<(), String> {
         entry.checked = now;
         let removed_segment = entry.segments.remove(&relative).is_some();
         entry.clear_checkpoint_slot(&relative);
-        if removed_segment && entry.marker_dir_created {
-            match flush_ready_index(&marker_dir, &entry.segments) {
-                Ok(()) => {
-                    entry.dirty_ops = 0;
-                    entry.last_flush = Instant::now();
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    entry.marker_dir_created = false;
-                }
-                Err(error) => return Err(error.to_string()),
-            }
+        if removed_segment {
+            entry.generation = entry.generation.wrapping_add(1);
+            entry.dirty_ops = entry.dirty_ops.saturating_add(1);
         }
-    }
+        evicted
+    };
+    flush_evicted_ready_tasks(evicted);
     match fs::remove_file(marker_dir.join(relative)) {
         Ok(()) => Ok(()),
         Err(error)
@@ -481,13 +607,13 @@ pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
     let Some(relative) = valid_relative_str(relative) else {
         return false;
     };
-    let expected = {
+    let (expected, evicted) = {
         let mut map = ready_segments()
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(entry) = map.get_mut(root) {
             entry.checked = Instant::now();
-            entry.expected_size(&relative)
+            (entry.expected_size(&relative), Vec::new())
         } else {
             drop(map);
             if !root.is_dir() {
@@ -497,13 +623,14 @@ pub(crate) fn is_ready(root: &Path, relative: &str) -> bool {
             let mut map = ready_segments()
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            prune_ready_segments(&mut map);
+            let evicted = take_evicted_ready_segments(&mut map);
             let now = Instant::now();
             let entry = map.entry(root.to_path_buf()).or_insert(loaded);
             entry.checked = now;
-            entry.expected_size(&relative)
+            (entry.expected_size(&relative), evicted)
         }
     };
+    flush_evicted_ready_tasks(evicted);
     expected.is_some_and(|size| {
         size > 0
             && fs::metadata(root.join(relative))
@@ -650,6 +777,15 @@ fn ready_disk_loads(root: &Path) -> u64 {
         .map_or(0, |entry| entry.disk_loads)
 }
 
+#[cfg(test)]
+fn ready_disk_flushes(root: &Path) -> u64 {
+    ready_segments()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(root)
+        .map_or(0, |entry| entry.disk_flushes)
+}
+
 fn write_priority(root: &Path, name: &str, value: &str) -> Result<(), String> {
     static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = WRITER.lock().map_err(|_| "播放优先级锁已失效")?;
@@ -749,7 +885,8 @@ mod tests {
         assert_eq!(marker_entries, vec!["index.tsv".to_string()]);
 
         // Mutating segment length invalidates readiness until `mark_ready` is called again,
-        // and `reset_ready` drops readiness immediately both in memory and after reload.
+        // and `reset_ready` drops readiness immediately in memory; persisting the reset across
+        // restart happens on `flush_ready` (avoiding per-segment disk rewrites during batch reset).
         let seg10 = seg_dir.join("000010.ts");
         fs::write(&seg10, b"short").unwrap();
         assert!(!is_ready(&root, "segments/000010.ts"));
@@ -757,6 +894,7 @@ mod tests {
         assert!(is_ready(&root, "segments/000010.ts"));
         reset_ready(&root, &seg10).unwrap();
         assert!(!is_ready(&root, "segments/000010.ts"));
+        flush_ready(&root).unwrap();
 
         // Simulated process restart reloads flushed index entries and legacy per-segment files.
         fs::create_dir_all(root.join("playback-ready/legacy")).unwrap();
@@ -890,5 +1028,92 @@ mod tests {
 
         forget_byte_priority(&root);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch_reset_ready_coalesces_into_single_flush_and_persists_across_reload() {
+        let root = temp_root("batch-reset-coalesced");
+        let seg_dir = root.join("segments");
+        fs::create_dir_all(&seg_dir).unwrap();
+
+        for idx in 0..128 {
+            let seg = seg_dir.join(format!("{idx:06}.ts"));
+            fs::write(&seg, format!("payload-{idx:06}").as_bytes()).unwrap();
+            mark_ready(&root, &seg).unwrap();
+        }
+        flush_ready(&root).unwrap();
+        let flushes_before = ready_disk_flushes(&root);
+        assert!(flushes_before > 0);
+
+        // Resetting 100 segments in a loop must invalidate RAM immediately without per-segment disk flushes.
+        for idx in 0..100 {
+            let seg = seg_dir.join(format!("{idx:06}.ts"));
+            reset_ready(&root, &seg).unwrap();
+            assert!(!is_ready(&root, &format!("segments/{idx:06}.ts")));
+        }
+        assert_eq!(
+            ready_disk_flushes(&root),
+            flushes_before,
+            "reset_ready must not flush index.tsv synchronously per segment"
+        );
+
+        // One trailing flush_ready persists the entire batch in O(1) disk writes.
+        flush_ready(&root).unwrap();
+        assert_eq!(ready_disk_flushes(&root), flushes_before + 1);
+        // Clean flush_ready is a no-op.
+        flush_ready(&root).unwrap();
+        assert_eq!(ready_disk_flushes(&root), flushes_before + 1);
+
+        // Simulate process restart and verify persisted invalidations vs surviving entries.
+        forget_byte_priority(&root);
+        for idx in 0..100 {
+            assert!(
+                !is_ready(&root, &format!("segments/{idx:06}.ts")),
+                "reset segment {idx} must stay invalid after reload"
+            );
+        }
+        for idx in 100..128 {
+            assert!(
+                is_ready(&root, &format!("segments/{idx:06}.ts")),
+                "untouched segment {idx} must stay ready after reload"
+            );
+        }
+
+        // Verify concurrent flush of one task never blocks another task's ready map operations
+        // and that flush_lock -> ready_segments lock ordering cannot deadlock under contention.
+        let other = temp_root("batch-reset-concurrent-other");
+        let other_seg_dir = other.join("segments");
+        fs::create_dir_all(&other_seg_dir).unwrap();
+        let other_seg = other_seg_dir.join("000000.ts");
+        fs::write(&other_seg, b"other-payload").unwrap();
+        mark_ready(&other, &other_seg).unwrap();
+
+        let root_a = root.clone();
+        let root_b = other.clone();
+        let seg_a = seg_dir.join("000100.ts");
+        let seg_b = other_seg.clone();
+        let t1 = std::thread::spawn(move || {
+            for _ in 0..32 {
+                reset_ready(&root_a, &seg_a).unwrap();
+                mark_ready(&root_a, &seg_a).unwrap();
+                flush_ready(&root_a).unwrap();
+            }
+        });
+        let t2 = std::thread::spawn(move || {
+            for _ in 0..32 {
+                assert!(is_ready(&root_b, "segments/000000.ts"));
+                mark_ready(&root_b, &seg_b).unwrap();
+                flush_ready(&root_b).unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        assert!(is_ready(&root, "segments/000100.ts"));
+        assert!(is_ready(&other, "segments/000000.ts"));
+
+        forget_byte_priority(&root);
+        forget_byte_priority(&other);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(other).unwrap();
     }
 }

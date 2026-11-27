@@ -3,6 +3,15 @@
 use std::collections::HashSet;
 
 const MPEGTS_CLOCK: f64 = 90_000.0;
+const MPEGTS_MODULO: u64 = 1u64 << 33;
+const MPEGTS_HALF_MODULO: u64 = 1u64 << 32;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebVttSegment {
+    pub text: String,
+    pub init_header: Option<String>,
+    pub discontinuity: bool,
+}
 
 #[derive(Clone, Debug)]
 struct Cue {
@@ -12,12 +21,74 @@ struct Cue {
     payload: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimestampMap {
+    local: f64,
+    mpegts: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ParsedTimestampMap {
+    Absent,
+    Invalid,
+    Valid(TimestampMap),
+}
+
 pub fn merge_webvtt_segments(texts: &[String]) -> String {
+    let entries: Vec<WebVttSegment> = texts
+        .iter()
+        .map(|text| WebVttSegment {
+            text: text.clone(),
+            init_header: None,
+            discontinuity: false,
+        })
+        .collect();
+    merge_webvtt_entries(&entries)
+}
+
+pub fn merge_webvtt_entries(segments: &[WebVttSegment]) -> String {
     let mut merged = Vec::new();
     let mut seen = HashSet::new();
-    for text in texts {
-        let offset = timestamp_offset(text);
-        for cue in parse_cues(text) {
+    let mut prev_raw_mpegts: Option<u64> = None;
+    let mut wrap_cycles: u64 = 0;
+
+    for segment in segments {
+        if segment.discontinuity {
+            prev_raw_mpegts = None;
+            wrap_cycles = 0;
+        }
+        let resolved_map = match parse_timestamp_map(&segment.text) {
+            ParsedTimestampMap::Absent => segment
+                .init_header
+                .as_deref()
+                .map(parse_timestamp_map)
+                .unwrap_or(ParsedTimestampMap::Absent),
+            other => other,
+        };
+        let offset = match resolved_map {
+            ParsedTimestampMap::Absent | ParsedTimestampMap::Invalid => 0.0,
+            ParsedTimestampMap::Valid(map) => {
+                if let Some(ticks) = map.mpegts {
+                    if let Some(prev) = prev_raw_mpegts {
+                        if prev > ticks && prev - ticks > MPEGTS_HALF_MODULO {
+                            wrap_cycles = wrap_cycles.saturating_add(1);
+                        } else if wrap_cycles > 0
+                            && ticks > prev
+                            && ticks - prev > MPEGTS_HALF_MODULO
+                        {
+                            wrap_cycles -= 1;
+                        }
+                    }
+                    prev_raw_mpegts = Some(ticks);
+                    let unwrapped_ticks =
+                        u128::from(ticks) + u128::from(wrap_cycles) * u128::from(MPEGTS_MODULO);
+                    unwrapped_ticks as f64 / MPEGTS_CLOCK - map.local
+                } else {
+                    -map.local
+                }
+            }
+        };
+        for cue in parse_cues(&segment.text) {
             let start = (cue.start + offset).max(0.0);
             let end = (cue.end + offset).max(start);
             let key = (
@@ -83,24 +154,59 @@ pub fn has_cues(vtt_text: &str) -> bool {
     !parse_cues(vtt_text).is_empty()
 }
 
+#[cfg(test)]
 fn timestamp_offset(text: &str) -> f64 {
+    match parse_timestamp_map(text) {
+        ParsedTimestampMap::Valid(map) => map.mpegts.unwrap_or(0) as f64 / MPEGTS_CLOCK - map.local,
+        ParsedTimestampMap::Absent | ParsedTimestampMap::Invalid => 0.0,
+    }
+}
+
+fn parse_timestamp_map(text: &str) -> ParsedTimestampMap {
     let mut body = None;
-    for line in text.lines() {
-        let line = line.trim_end_matches('\r').trim_start_matches('\u{feff}');
-        if line.trim().is_empty() {
-            break;
+    let mut saw_first_line = false;
+    for raw_line in text.lines() {
+        let line = raw_line
+            .trim_end_matches('\r')
+            .trim_start_matches('\u{feff}');
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if saw_first_line {
+                break;
+            }
+            continue;
         }
         let upper = line.to_ascii_uppercase();
+        if !saw_first_line {
+            saw_first_line = true;
+            let trimmed_upper = trimmed.to_ascii_uppercase();
+            if let Some(start) = upper.find("X-TIMESTAMP-MAP=") {
+                if trimmed_upper.starts_with("X-TIMESTAMP-MAP=") {
+                    body = Some(&line[start + 16..]);
+                    break;
+                }
+            }
+            if !(trimmed_upper == "WEBVTT"
+                || trimmed_upper.starts_with("WEBVTT ")
+                || trimmed_upper.starts_with("WEBVTT\t"))
+            {
+                return ParsedTimestampMap::Absent;
+            }
+            continue;
+        }
+        if is_timing_line(line) {
+            return ParsedTimestampMap::Absent;
+        }
         if let Some(start) = upper.find("X-TIMESTAMP-MAP=") {
             body = Some(&line[start + 16..]);
             break;
         }
     }
     let Some(body) = body else {
-        return 0.0;
+        return ParsedTimestampMap::Absent;
     };
     let mut local = 0.0;
-    let mut mpegts = 0.0;
+    let mut mpegts = None;
     for part in body.split(',') {
         let (key, rest) = part.split_once(':').unwrap_or((part, ""));
         match key.trim().to_ascii_uppercase().as_str() {
@@ -114,16 +220,16 @@ fn timestamp_offset(text: &str) -> f64 {
                     .trim()
                     .parse::<u64>()
                     .ok()
-                    .filter(|ticks| *ticks < 1 << 33)
+                    .filter(|ticks| *ticks < MPEGTS_MODULO)
                 else {
-                    return 0.0;
+                    return ParsedTimestampMap::Invalid;
                 };
-                mpegts = ticks as f64;
+                mpegts = Some(ticks);
             }
             _ => {}
         }
     }
-    mpegts / MPEGTS_CLOCK - local
+    ParsedTimestampMap::Valid(TimestampMap { local, mpegts })
 }
 
 fn parse_cues(text: &str) -> Vec<Cue> {
@@ -323,5 +429,123 @@ mod tests {
         // Unclosed `<` followed by multibyte UTF-8 text is preserved without panicking.
         let unclosed = "WEBVTT\n\n00:00:05.000 --> 00:00:06.000\na < b 字幕😀\n";
         assert!(webvtt_to_srt(unclosed).contains("a < b 字幕😀"));
+    }
+
+    #[test]
+    fn merge_entries_applies_init_header_timestamp_map_and_handles_map_switches() {
+        let init_a = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:900000\n\n".to_string();
+        let init_b = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:2700000\n\n".to_string();
+        let segments = vec![
+            WebVttSegment {
+                text: "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nfrom map A\n".into(),
+                init_header: Some(init_a.clone()),
+                discontinuity: false,
+            },
+            WebVttSegment {
+                // Cue-only segment with no WEBVTT header inherits init_header.
+                text: "00:00:04.000 --> 00:00:06.000\ncue only map A\n".into(),
+                init_header: Some(init_a.clone()),
+                discontinuity: false,
+            },
+            WebVttSegment {
+                // Segment-level X-TIMESTAMP-MAP overrides init_header.
+                text: "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:1800000\n\n00:00:01.000 --> 00:00:02.000\nsegment override\n".into(),
+                init_header: Some(init_a),
+                discontinuity: false,
+            },
+            WebVttSegment {
+                // Switched EXT-X-MAP applies new offset (+30s).
+                text: "WEBVTT\n\n00:00:02.000 --> 00:00:04.000\nfrom map B\n".into(),
+                init_header: Some(init_b),
+                discontinuity: false,
+            },
+        ];
+        let merged = merge_webvtt_entries(&segments);
+        assert!(
+            merged.contains("00:00:11.000 --> 00:00:13.000\nfrom map A"),
+            "{merged}"
+        );
+        assert!(
+            merged.contains("00:00:14.000 --> 00:00:16.000\ncue only map A"),
+            "{merged}"
+        );
+        assert!(
+            merged.contains("00:00:21.000 --> 00:00:22.000\nsegment override"),
+            "{merged}"
+        );
+        assert!(
+            merged.contains("00:00:32.000 --> 00:00:34.000\nfrom map B"),
+            "{merged}"
+        );
+    }
+
+    #[test]
+    fn merge_unwraps_33bit_mpegts_rollover_but_resets_on_discontinuity() {
+        let before_wrap = MPEGTS_MODULO - 90_000; // 2^33 - 1s (~95442.718s = 26:30:42.718)
+        let after_wrap = 90_000; // +1s past wraparound -> unwrapped = 2^33 + 1s (~95444.718s = 26:30:44.718)
+        let later_after_wrap = 270_000; // +3s past wraparound -> unwrapped = 2^33 + 3s (~95446.718s)
+
+        let seg0 = format!(
+            "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:{before_wrap}\n\n00:00:00.000 --> 00:00:01.000\nbefore wrap\n"
+        );
+        let seg1 = format!(
+            "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:{after_wrap}\n\n00:00:00.000 --> 00:00:01.000\nafter wrap\n"
+        );
+        let seg2 = format!(
+            "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:{later_after_wrap}\n\n00:00:00.000 --> 00:00:01.000\nlater after wrap\n"
+        );
+
+        // Continuous timeline (no discontinuity): unwraps across 2^33 without jumping back ~26.5h.
+        let unwrapped = merge_webvtt_segments(&[seg0.clone(), seg1.clone(), seg2.clone()]);
+        let pos_before = unwrapped.find("before wrap").unwrap();
+        let pos_after = unwrapped.find("after wrap").unwrap();
+        let pos_later = unwrapped.find("later after wrap").unwrap();
+        assert!(
+            pos_before < pos_after && pos_after < pos_later,
+            "cues must stay monotonic across 33-bit wraparound:\n{unwrapped}"
+        );
+        assert!(
+            unwrapped.contains("26:30:42.718 --> 26:30:43.718\nbefore wrap"),
+            "{unwrapped}"
+        );
+        assert!(
+            unwrapped.contains("26:30:44.718 --> 26:30:45.718\nafter wrap"),
+            "{unwrapped}"
+        );
+        assert!(
+            unwrapped.contains("26:30:46.718 --> 26:30:47.718\nlater after wrap"),
+            "{unwrapped}"
+        );
+
+        // Contrast with EXT-X-DISCONTINUITY: clock reset must NOT be unwrapped by +2^33.
+        let reset = merge_webvtt_entries(&[
+            WebVttSegment {
+                text: seg0,
+                init_header: None,
+                discontinuity: false,
+            },
+            WebVttSegment {
+                text: seg1,
+                init_header: None,
+                discontinuity: true,
+            },
+            WebVttSegment {
+                text: seg2,
+                init_header: None,
+                discontinuity: false,
+            },
+        ]);
+        assert!(
+            reset.contains("00:00:01.000 --> 00:00:02.000\nafter wrap"),
+            "discontinuity must reset 33-bit unwrap state:\n{reset}"
+        );
+        assert!(
+            reset.contains("00:00:03.000 --> 00:00:04.000\nlater after wrap"),
+            "post-discontinuity segments must stay in reset epoch:\n{reset}"
+        );
+        assert!(
+            reset.contains("26:30:42.718 --> 26:30:43.718\nbefore wrap"),
+            "{reset}"
+        );
     }
 }

@@ -1193,53 +1193,223 @@ pub fn restore_geometry(window: &Window) {
     window.set_size(slint::LogicalSize::new(width as f32, height as f32));
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MonitorMetrics {
+    pub monitor: (i32, i32, i32, i32),
+    pub work: (i32, i32, i32, i32),
+}
+
+pub(crate) fn resolve_maximized_save_geometry(
+    previous: SavedWindowGeometry,
+    normal_workspace_rect: Option<(i32, i32, i32, i32)>,
+    monitor_metrics: Option<MonitorMetrics>,
+    border: (u32, u32),
+    scale: f32,
+) -> SavedWindowGeometry {
+    let fallback = SavedWindowGeometry {
+        maximized: true,
+        ..previous
+    };
+    let Some((nl, nt, nr, nb)) = normal_workspace_rect else {
+        return fallback;
+    };
+    if nr <= nl || nb <= nt || nl <= -16_000 || nt <= -16_000 {
+        return fallback;
+    }
+    let (screen_left, screen_top, screen_right, screen_bottom) =
+        if let Some(MonitorMetrics { monitor, work }) = monitor_metrics {
+            let dx = work.0.saturating_sub(monitor.0);
+            let dy = work.1.saturating_sub(monitor.1);
+            let sl = nl.saturating_add(dx);
+            let st = nt.saturating_add(dy);
+            let sr = nr.saturating_add(dx);
+            let sb = nb.saturating_add(dy);
+            if monitor.2 > monitor.0
+                && monitor.3 > monitor.1
+                && (sr <= monitor.0 || sl >= monitor.2 || sb <= monitor.1 || st >= monitor.3)
+            {
+                return fallback;
+            }
+            (sl, st, sr, sb)
+        } else {
+            (nl, nt, nr, nb)
+        };
+    if screen_left <= -16_000
+        || screen_top <= -16_000
+        || screen_right <= screen_left
+        || screen_bottom <= screen_top
+    {
+        return fallback;
+    }
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let outer_w = (i64::from(screen_right) - i64::from(screen_left)) as u64;
+    let outer_h = (i64::from(screen_bottom) - i64::from(screen_top)) as u64;
+    let inner_w = outer_w.saturating_sub(u64::from(border.0));
+    let inner_h = outer_h.saturating_sub(u64::from(border.1));
+    let logical_w = (inner_w as f64 / f64::from(scale)).round() as u32;
+    let logical_h = (inner_h as f64 / f64::from(scale)).round() as u32;
+    if !(300..=16_384).contains(&logical_w) || !(200..=16_384).contains(&logical_h) {
+        return fallback;
+    }
+    SavedWindowGeometry {
+        x: Some(screen_left),
+        y: Some(screen_top),
+        width: logical_w,
+        height: logical_h,
+        maximized: true,
+    }
+}
+
+#[cfg(windows)]
+fn normal_window_border_from_style(style: u32, ex_style: u32, scale: f32) -> Option<(u32, u32)> {
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        UI::WindowsAndMessaging::{AdjustWindowRectEx, WS_MAXIMIZE, WS_MINIMIZE},
+    };
+    #[link(name = "user32")]
+    extern "system" {
+        fn AdjustWindowRectExForDpi(
+            lp_rect: *mut RECT,
+            dw_style: u32,
+            b_menu: i32,
+            dw_ex_style: u32,
+            dpi: u32,
+        ) -> i32;
+    }
+    let normal_style = style & !(WS_MAXIMIZE | WS_MINIMIZE);
+    let dpi = if scale.is_finite() && scale > 0.0 {
+        (scale * 96.0).round().clamp(96.0, 960.0) as u32
+    } else {
+        96
+    };
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: `rect` is a valid stack-allocated `RECT` initialized to zero; both Win32 functions
+    // only compute frame deltas for `(normal_style, ex_style)` without accessing window state.
+    let ok = unsafe { AdjustWindowRectExForDpi(&mut rect, normal_style, 0, ex_style, dpi) != 0 }
+        || unsafe { AdjustWindowRectEx(&mut rect, normal_style, 0, ex_style) != 0 };
+    if ok && rect.right >= rect.left && rect.bottom >= rect.top {
+        Some((
+            (rect.right - rect.left) as u32,
+            (rect.bottom - rect.top) as u32,
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn normal_window_border(
+    window: &Window,
+    handle: windows_sys::Win32::Foundation::HWND,
+    scale: f32,
+) -> (u32, u32) {
+    use slint::winit_030::WinitWindowAccessor;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GWL_STYLE};
+    if let (Some(style), Some(ex_style)) = (
+        get_window_long_ptr(handle, GWL_STYLE),
+        get_window_long_ptr(handle, GWL_EXSTYLE),
+    ) {
+        if let Some(border) = normal_window_border_from_style(style as u32, ex_style as u32, scale)
+        {
+            return border;
+        }
+    }
+    window
+        .with_winit_window(|native| {
+            let outer = native.outer_size();
+            let inner = native.inner_size();
+            (
+                outer.width.saturating_sub(inner.width),
+                outer.height.saturating_sub(inner.height),
+            )
+        })
+        .unwrap_or_default()
+}
+
 pub fn save_geometry(window: &Window) {
     let directory = ui_directory();
     let path = directory.join("window-geometry.properties");
     #[cfg(windows)]
     if let Some(handle) = hwnd(window) {
         use windows_sys::Win32::{
-            Foundation::RECT,
+            Foundation::{HWND, RECT},
+            Graphics::Gdi::{
+                GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, MONITORINFO,
+                MONITOR_DEFAULTTONEAREST,
+            },
             UI::WindowsAndMessaging::{
                 GetWindowPlacement, GetWindowRect, IsIconic, IsZoomed, WINDOWPLACEMENT,
             },
         };
-        // SAFETY: `IsIconic`, `IsZoomed`, `GetWindowPlacement`, and `GetWindowRect` inspect `handle`
-        // and write into valid stack-allocated `WINDOWPLACEMENT` (`length` initialized) and `RECT` structs.
+        let hwnd_ptr = handle as HWND;
+        // SAFETY: `IsIconic`, `IsZoomed`, `GetWindowPlacement`, `MonitorFromRect`,
+        // `MonitorFromWindow`, `GetMonitorInfoW`, and `GetWindowRect` inspect `hwnd_ptr`
+        // and write into valid stack-allocated structs (`WINDOWPLACEMENT.length` and
+        // `MONITORINFO.cbSize` initialized).
         unsafe {
-            if IsIconic(handle as _) != 0 {
+            if IsIconic(hwnd_ptr) != 0 {
                 return;
             }
-            let maximized = IsZoomed(handle as _) != 0;
+            let maximized = IsZoomed(hwnd_ptr) != 0;
             if maximized {
-                let mut previous =
+                let previous =
                     parse_geometry_properties(&std::fs::read_to_string(&path).unwrap_or_default());
-                if previous.x.is_none() || previous.y.is_none() {
-                    let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
-                    placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
-                    if GetWindowPlacement(handle as _, &mut placement) != 0 {
+                let mut placement: WINDOWPLACEMENT = std::mem::zeroed();
+                placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+                let (normal_rect, monitor_metrics) =
+                    if GetWindowPlacement(hwnd_ptr, &mut placement) != 0 {
                         let normal = placement.rcNormalPosition;
-                        if normal.right > normal.left && normal.bottom > normal.top {
-                            let scale = window.scale_factor();
-                            let scale = if scale.is_finite() && scale > 0.0 {
-                                scale
-                            } else {
-                                1.0
-                            };
-                            previous.x = Some(normal.left);
-                            previous.y = Some(normal.top);
-                            let nw = ((normal.right - normal.left) as f32 / scale).round() as u32;
-                            let nh = ((normal.bottom - normal.top) as f32 / scale).round() as u32;
-                            if nw >= 300 && nh >= 200 {
-                                previous.width = nw;
-                                previous.height = nh;
-                            }
+                        let mut monitor = MonitorFromRect(&normal, MONITOR_DEFAULTTONEAREST);
+                        if monitor.is_null() {
+                            monitor = MonitorFromWindow(hwnd_ptr, MONITOR_DEFAULTTONEAREST);
                         }
-                    }
-                }
-                previous.maximized = true;
+                        let metrics = if !monitor.is_null() {
+                            let mut info: MONITORINFO = std::mem::zeroed();
+                            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+                            (GetMonitorInfoW(monitor, &mut info) != 0).then_some(MonitorMetrics {
+                                monitor: (
+                                    info.rcMonitor.left,
+                                    info.rcMonitor.top,
+                                    info.rcMonitor.right,
+                                    info.rcMonitor.bottom,
+                                ),
+                                work: (
+                                    info.rcWork.left,
+                                    info.rcWork.top,
+                                    info.rcWork.right,
+                                    info.rcWork.bottom,
+                                ),
+                            })
+                        } else {
+                            None
+                        };
+                        (
+                            Some((normal.left, normal.top, normal.right, normal.bottom)),
+                            metrics,
+                        )
+                    } else {
+                        (None, None)
+                    };
+                let scale = window.scale_factor();
+                let border = normal_window_border(window, hwnd_ptr, scale);
+                let geometry = resolve_maximized_save_geometry(
+                    previous,
+                    normal_rect,
+                    monitor_metrics,
+                    border,
+                    scale,
+                );
                 if std::fs::create_dir_all(&directory).is_ok() {
-                    let _ = std::fs::write(&path, format_geometry_properties(previous));
+                    let _ = std::fs::write(&path, format_geometry_properties(geometry));
                 }
                 return;
             }
@@ -1252,7 +1422,7 @@ pub fn save_geometry(window: &Window) {
                 return;
             }
             let mut rect: RECT = std::mem::zeroed();
-            let (x, y) = if GetWindowRect(handle as _, &mut rect) != 0
+            let (x, y) = if GetWindowRect(hwnd_ptr, &mut rect) != 0
                 && !is_parked_window_rect((rect.left, rect.top, rect.right, rect.bottom))
             {
                 (Some(rect.left), Some(rect.top))
@@ -1300,7 +1470,7 @@ mod tests {
         bottom_right_hud_position, bottom_right_toast_position, clamp_window_to_work_area,
         dwm_color_ref, format_geometry_properties, is_parked_window_rect,
         parse_geometry_properties, quns_is_fullscreen_or_busy, rect_covers_monitor,
-        SavedWindowGeometry,
+        resolve_maximized_save_geometry, MonitorMetrics, SavedWindowGeometry,
     };
 
     #[test]
@@ -1442,5 +1612,126 @@ mod tests {
             GWL_EXSTYLE,
             0
         ));
+    }
+
+    #[test]
+    fn maximized_close_persists_latest_normal_rect_over_stale_disk_geometry_and_falls_back_when_invalid(
+    ) {
+        let dir =
+            std::env::temp_dir().join(format!("hls-native-window-geometry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("window-geometry.properties");
+
+        // 1. Previous session persisted normal layout A on disk.
+        let layout_a = SavedWindowGeometry {
+            x: Some(120),
+            y: Some(80),
+            width: 1200,
+            height: 700,
+            maximized: false,
+        };
+        std::fs::write(&file, format_geometry_properties(layout_a)).unwrap();
+        let previous = parse_geometry_properties(&std::fs::read_to_string(&file).unwrap());
+        assert_eq!(previous, layout_a);
+
+        // 2. User moves/resizes normal window to layout B (logical 1480x880 at 150% DPI on a
+        //    monitor with a 48px top taskbar, border 22x57), then maximizes and closes.
+        //    Screen rect of B: x=300, y=168, outer_w = 1480*1.5 + 22 = 2242, outer_h = 880*1.5 + 57 = 1377.
+        //    Workspace rect (`rcNormalPosition`) is shifted by -(work.top - mon.top) = -48.
+        let monitor = (0, 0, 3840, 2160);
+        let work_top_taskbar = (0, 48, 3840, 2160);
+        let normal_workspace_b = (300, 120, 300 + 2242, 120 + 1377);
+        let saved_b = resolve_maximized_save_geometry(
+            previous,
+            Some(normal_workspace_b),
+            Some(MonitorMetrics {
+                monitor,
+                work: work_top_taskbar,
+            }),
+            (22, 57),
+            1.5,
+        );
+        std::fs::write(&file, format_geometry_properties(saved_b)).unwrap();
+        let persisted_b = parse_geometry_properties(&std::fs::read_to_string(&file).unwrap());
+        assert_eq!(
+            persisted_b,
+            SavedWindowGeometry {
+                x: Some(300),
+                y: Some(168),
+                width: 1480,
+                height: 880,
+                maximized: true,
+            }
+        );
+
+        // 3. Secondary monitor on the left with a 60px left-docked taskbar preserves negative X
+        //    correctly when converting workspace coordinates to virtual screen coordinates.
+        let left_monitor = (-1920, 0, 0, 1080);
+        let left_work = (-1860, 0, 0, 1080);
+        let normal_left_workspace = (-1660, 100, -1660 + 1216, 100 + 739);
+        let saved_left = resolve_maximized_save_geometry(
+            persisted_b,
+            Some(normal_left_workspace),
+            Some(MonitorMetrics {
+                monitor: left_monitor,
+                work: left_work,
+            }),
+            (16, 39),
+            1.0,
+        );
+        assert_eq!(
+            saved_left,
+            SavedWindowGeometry {
+                x: Some(-1600),
+                y: Some(100),
+                width: 1200,
+                height: 700,
+                maximized: true,
+            }
+        );
+
+        // 4. Missing, parked, degenerate, tiny, or completely off-monitor placement falls back to
+        //    `previous` while keeping `maximized = true`.
+        for invalid in [
+            None,
+            Some((-32_000, -32_000, -30_600, -31_200)),
+            Some((200, 200, 200, 200)),
+            Some((200, 200, 350, 300)),
+            Some((40_000, 40_000, 41_400, 40_820)),
+        ] {
+            let fallback = resolve_maximized_save_geometry(
+                layout_a,
+                invalid,
+                Some(MonitorMetrics {
+                    monitor: (0, 0, 1920, 1080),
+                    work: (0, 0, 1920, 1040),
+                }),
+                (16, 39),
+                1.0,
+            );
+            assert_eq!(
+                fallback,
+                SavedWindowGeometry {
+                    maximized: true,
+                    ..layout_a
+                },
+                "invalid placement {invalid:?} should fall back to previous geometry"
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{WS_MAXIMIZE, WS_OVERLAPPEDWINDOW};
+            let normal_border = super::normal_window_border_from_style(WS_OVERLAPPEDWINDOW, 0, 1.0)
+                .expect("AdjustWindowRectExForDpi should return normal border");
+            let from_maximized_style =
+                super::normal_window_border_from_style(WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, 1.0)
+                    .expect("WS_MAXIMIZE must be stripped when computing normal border");
+            assert_eq!(normal_border, from_maximized_style);
+            assert!(normal_border.0 > 0 && normal_border.1 > 0);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

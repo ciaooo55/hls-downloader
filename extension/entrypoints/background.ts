@@ -3,7 +3,7 @@ import { browser } from 'wxt/browser'
 import { downloadSelectionKey, localDownloadIntentUrl } from '../lib/resources'
 import { mediaPushRequestId, resolveMediaPushResource, SPLIT_AUDIO_PUSH_ERROR } from '../lib/mediaPush'
 import { isSniffCurrentPageCommand, openMediaPanelCommandDispatch, shouldAggregateTabMedia } from '../lib/sniffCommand'
-import { NativeBridge, NativeHostError, type NativePortLike } from '../lib/nativeBridge'
+import { NativeBridge, NativeBridgeError, NativeHostError, isDefiniteUnsentNativeError, type NativePortLike } from '../lib/nativeBridge'
 import { boundedConfidence, canonicalMediaUrl, capturedRequestIdentity, classifyDownload, classifyPlaybackSource, classifyResource, compactResources, isConcreteDownloadMime, isShortLivedMediaSignatureUsable, mergeResources, normalizeHost, pageIdentity, pageResourceKey, pruneExpiredResources, replayableRequestHeaders, resourceBelongsToFrame, resourceFingerprint, resourceId, resourceRequestIdentity, shouldTakeover, suggestedResourceFilename, usesShortLivedMediaSignature, type DownloadClickIntent, type MediaResource } from '../lib/resources'
 import { RequestChainStore, replayablePostRequest, requestHeader, responseHeader, responseIdentity, type RequestChain, type DownloadLike } from '../lib/requestChain'
 import { browserCleanupAction, canContinueTakeover, canResumeBrowserDownload, desktopAcceptedHandoff, localFileTaskReadiness, handoffTerminalStatus, type BrowserHandoffPayload } from '../lib/takeover'
@@ -11,6 +11,9 @@ import {
   PAUSED_FOLLOW_UP_RECHECK_MS,
   PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY,
   PausedHandoffFollowUpStore,
+  hasStableFollowUpIdentity,
+  matchesFollowUpDownloadIdentity,
+  selectFollowUpDownloadCandidate,
   type PausedHandoffFollowUp,
   stepPausedHandoffFollowUp,
 } from '../lib/pausedHandoffFollowups'
@@ -635,6 +638,8 @@ const pausedFollowUpStore = new PausedHandoffFollowUpStore({
   get: key => browser.storage.local.get(key),
   set: items => browser.storage.local.set(items),
 }, PAUSED_HANDOFF_FOLLOWUPS_STORAGE_KEY)
+const BROWSER_SESSION_ID_KEY = 'browser-session-id-v1'
+let browserSessionIdPromise: Promise<string> | null = null
 const pausedFollowUpsInFlight = new Set<string>()
 let pausedFollowUpPass = false
 let pausedFollowUpAccelerator: ReturnType<typeof setTimeout> | null = null
@@ -642,6 +647,98 @@ const WORKER_ALARM_NAME = 'desktop-heartbeat'
 const WORKER_ALARM_PERIOD_MINUTES = 0.5
 const BADGE_REFRESH_MINIMUM_MS = 5 * 60_000
 let lastBadgeRefreshAt = 0
+
+function currentBrowserSessionId(): Promise<string> {
+  browserSessionIdPromise ??= (async () => {
+    const createId = () => globalThis.crypto?.randomUUID?.()
+      || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    try {
+      const stored = await browser.storage.session.get(BROWSER_SESSION_ID_KEY)
+      const existing = typeof stored?.[BROWSER_SESSION_ID_KEY] === 'string'
+        ? stored[BROWSER_SESSION_ID_KEY].trim()
+        : ''
+      if (existing) return existing
+      const created = createId()
+      await browser.storage.session.set({ [BROWSER_SESSION_ID_KEY]: created }).catch(() => undefined)
+      return created
+    } catch {
+      return createId()
+    }
+  })()
+  return browserSessionIdPromise
+}
+
+async function downloadUrlDigest(url?: string): Promise<string | undefined> {
+  const normalized = String(url || '')
+  if (!normalized) return undefined
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized))
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function completedDownloadStableFields(
+  item: Pick<Browser.downloads.DownloadItem, 'state' | 'filename' | 'totalBytes' | 'fileSize'>,
+): Pick<PausedHandoffFollowUp, 'sourceFilename' | 'sourceTotalBytes'> {
+  if (item.state !== 'complete') return {}
+  const sourceFilename = typeof item.filename === 'string' && item.filename.trim()
+    ? item.filename.trim()
+    : undefined
+  const completedBytes = Number.isSafeInteger(item.fileSize) && item.fileSize > 0
+    ? item.fileSize
+    : Number.isSafeInteger(item.totalBytes) && item.totalBytes > 0
+      ? item.totalBytes
+      : undefined
+  return {
+    ...(sourceFilename ? { sourceFilename } : {}),
+    ...(completedBytes !== undefined ? { sourceTotalBytes: completedBytes } : {}),
+  }
+}
+
+async function buildFollowUpDownloadIdentity(
+  item: Browser.downloads.DownloadItem,
+): Promise<Pick<PausedHandoffFollowUp, 'sessionId' | 'sourceStartedAt' | 'sourceUrlDigest' | 'sourceFilename' | 'sourceTotalBytes'>> {
+  let snapshot = item
+  if (!snapshot.startTime || !snapshot.url || snapshot.state !== 'complete') {
+    try {
+      const [current] = await browser.downloads.search({ id: item.id })
+      if (
+        current
+        && (!snapshot.startTime || !current.startTime || current.startTime === snapshot.startTime)
+        && (!snapshot.url || !current.url || current.url === snapshot.url)
+      ) {
+        snapshot = { ...snapshot, ...current }
+      }
+    } catch {}
+  }
+  const sessionId = await currentBrowserSessionId()
+  const sourceStartedAt = typeof snapshot.startTime === 'string' && snapshot.startTime.trim()
+    ? snapshot.startTime.trim()
+    : undefined
+  const sourceUrlDigest = await downloadUrlDigest(snapshot.url)
+  return {
+    sessionId,
+    ...(sourceStartedAt ? { sourceStartedAt } : {}),
+    ...(sourceUrlDigest ? { sourceUrlDigest } : {}),
+    ...completedDownloadStableFields(snapshot),
+  }
+}
+
+async function matchesBrowserDownloadGuard(
+  current: Browser.downloads.DownloadItem,
+  snapshot: Pick<Browser.downloads.DownloadItem, 'startTime' | 'url'>,
+  identityGuard?: Pick<PausedHandoffFollowUp, 'sourceStartedAt' | 'sourceUrlDigest' | 'sourceFilename' | 'sourceTotalBytes'>,
+): Promise<boolean> {
+  if (snapshot.startTime && current.startTime && current.startTime !== snapshot.startTime) return false
+  if (snapshot.url && current.url && current.url !== snapshot.url) return false
+  if (!identityGuard) return true
+  const urlDigest = identityGuard.sourceUrlDigest ? await downloadUrlDigest(current.url) : undefined
+  return matchesFollowUpDownloadIdentity(identityGuard, {
+    startTime: typeof current.startTime === 'string' && current.startTime.trim() ? current.startTime.trim() : undefined,
+    urlDigest,
+    filename: typeof current.filename === 'string' && current.filename.trim() ? current.filename.trim() : undefined,
+    totalBytes: current.totalBytes,
+    fileSize: current.fileSize,
+  })
+}
 
 function browserClientId(): Promise<string> {
   browserClientIdPromise ||= stableBrowserClientId(
@@ -993,40 +1090,89 @@ function schedulePausedFollowUpAccelerator(delay: number): void {
   }, Math.max(0, delay))
 }
 
-async function rememberPausedHandoffFollowUp(downloadId: number, handoffId: string): Promise<PausedHandoffFollowUp> {
-  // 只在桌面确认接收后创建；先保存清理责任，避免 worker 休眠留下暂停副本。
+async function rememberPausedHandoffFollowUp(
+  item: Browser.downloads.DownloadItem,
+  handoffId: string,
+): Promise<PausedHandoffFollowUp> {
+  // 只在桌面确认接收后创建；先保存清理责任与稳定身份，避免 worker 休眠留下暂停副本或重启后误删复用 ID 的无关文件。
+  const identity = await buildFollowUpDownloadIdentity(item)
   const record = await pausedFollowUpStore.remember({
-    downloadId,
+    downloadId: item.id,
     handoffId,
     phase: 'cleanup',
     deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
+    ...identity,
   })
   schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
   return record
 }
 
-async function resumeFollowUpDownload(downloadId: number): Promise<boolean> {
-  let current: Browser.downloads.DownloadItem | undefined
-  try {
-    const [found] = await browser.downloads.search({ id: downloadId })
-    current = found
-  } catch {
-    return false
+type ResolvedFollowUpDownload =
+  | { kind: 'matched', item: Browser.downloads.DownloadItem, rebound: boolean }
+  | { kind: 'unmatched' }
+  | { kind: 'error' }
+
+async function resolveFollowUpBrowserDownload(
+  record: PausedHandoffFollowUp,
+  activeSessionId: string,
+): Promise<ResolvedFollowUpDownload> {
+  const sameSession = Boolean(record.sessionId && record.sessionId === activeSessionId)
+  if (!sameSession && !hasStableFollowUpIdentity(record)) {
+    return { kind: 'unmatched' }
   }
-  if (!current) return true
-  return resumeBrowserDownload(current, true)
+  let rawItems: Browser.downloads.DownloadItem[]
+  try {
+    rawItems = await browser.downloads.search(sameSession ? { id: record.downloadId } : {})
+  } catch {
+    return { kind: 'error' }
+  }
+  const candidates = await Promise.all(rawItems.map(async candidate => {
+    const startTime = typeof candidate.startTime === 'string' && candidate.startTime.trim()
+      ? candidate.startTime.trim()
+      : undefined
+    const needsUrlDigest = Boolean(record.sourceUrlDigest)
+      && (!record.sourceStartedAt || startTime === record.sourceStartedAt)
+    return {
+      id: candidate.id,
+      startTime,
+      urlDigest: needsUrlDigest ? await downloadUrlDigest(candidate.url) : undefined,
+      filename: typeof candidate.filename === 'string' && candidate.filename.trim()
+        ? candidate.filename.trim()
+        : undefined,
+      totalBytes: candidate.totalBytes,
+      fileSize: candidate.fileSize,
+      item: candidate,
+    }
+  }))
+  const selection = selectFollowUpDownloadCandidate(record, candidates, sameSession)
+  if (selection.kind === 'unmatched') return { kind: 'unmatched' }
+  return { kind: 'matched', item: selection.candidate.item, rebound: selection.rebound }
 }
 
-async function removeFollowUpDownload(downloadId: number): Promise<boolean> {
-  let current: Browser.downloads.DownloadItem | undefined
-  try {
-    const [found] = await browser.downloads.search({ id: downloadId })
-    current = found
-  } catch {
-    return false
+function bindFollowUpToMatchedItem(
+  record: PausedHandoffFollowUp,
+  item: Browser.downloads.DownloadItem,
+  activeSessionId: string,
+): PausedHandoffFollowUp {
+  const completedFields = completedDownloadStableFields(item)
+  return {
+    ...record,
+    downloadId: item.id,
+    sessionId: activeSessionId,
+    ...(record.sourceFilename ? {} : completedFields.sourceFilename ? { sourceFilename: completedFields.sourceFilename } : {}),
+    ...(record.sourceTotalBytes !== undefined ? {} : completedFields.sourceTotalBytes !== undefined ? { sourceTotalBytes: completedFields.sourceTotalBytes } : {}),
   }
-  if (!current) return true
-  return removeBrowserDownload(current)
+}
+
+async function resumeFollowUpDownload(
+  record: PausedHandoffFollowUp,
+  activeSessionId: string,
+): Promise<boolean> {
+  const resolved = await resolveFollowUpBrowserDownload(record, activeSessionId)
+  if (resolved.kind === 'error') return false
+  if (resolved.kind === 'unmatched') return true
+  const bound = bindFollowUpToMatchedItem(record, resolved.item, activeSessionId)
+  return resumeBrowserDownload(resolved.item, true, bound)
 }
 
 async function retryPausedFollowUp(record: PausedHandoffFollowUp): Promise<void> {
@@ -1057,55 +1203,62 @@ async function continuePausedHandoffFollowups(): Promise<void> {
   pausedFollowUpPass = true
   try {
     await pausedFollowUpStore.hydrate()
+    const activeSessionId = await currentBrowserSessionId()
     for (const record of pausedFollowUpStore.list()) {
       if (record.deadline > Date.now()) continue
       const followUpKey = record.clientRequestId || record.handoffId
       if (pausedFollowUpsInFlight.has(followUpKey)) continue
       pausedFollowUpsInFlight.add(followUpKey)
       try {
-        if (record.phase === 'cleanup') {
-          const removed = await removeFollowUpDownload(record.downloadId)
+        // Firefox reassigns numeric download IDs from 0 after restart. Verify
+        // unique download identity before any cleanup, resume, or removal across
+        // all follow-up phases (`cleanup`, `resolution`, `readiness`).
+        const resolved = await resolveFollowUpBrowserDownload(record, activeSessionId)
+        if (resolved.kind === 'error') {
+          await retryPausedFollowUp(record)
+          continue
+        }
+        if (resolved.kind === 'unmatched') {
+          await pausedFollowUpStore.drop(followUpKey)
+          continue
+        }
+        const browserItem = resolved.item
+        const effectiveRecord = bindFollowUpToMatchedItem(record, browserItem, activeSessionId)
+        if (effectiveRecord.phase === 'cleanup') {
+          const removed = await removeBrowserDownload(browserItem, false, effectiveRecord)
           if (removed) await pausedFollowUpStore.drop(followUpKey)
-          else await retryPausedFollowUp(record)
+          else await retryPausedFollowUp(effectiveRecord)
           continue
         }
         // The user may resume, cancel, finish or erase the browser item while
         // Core is unreachable. That is an explicit browser-side ownership
         // decision; never resume it again or remove its file on a later alarm.
-        let browserItems: Browser.downloads.DownloadItem[]
-        try {
-          browserItems = await browser.downloads.search({ id: record.downloadId })
-        } catch {
-          await retryPausedFollowUp(record)
-          continue
-        }
-        const [browserItem] = browserItems
-        if (!browserItem || !isParkedBrowserDownload(browserItem)) {
+        if (!isParkedBrowserDownload(browserItem)) {
           await pausedFollowUpStore.drop(followUpKey)
           continue
         }
         let handoff: BrowserHandoffPayload = {}
         try {
-          const response = await native({ op: 'handoff_status', ...(record.clientRequestId
-            ? { client_request_id: record.clientRequestId } : { handoff_id: record.handoffId }) }, 2_500)
+          const response = await native({ op: 'handoff_status', ...(effectiveRecord.clientRequestId
+            ? { client_request_id: effectiveRecord.clientRequestId } : { handoff_id: effectiveRecord.handoffId }) }, 2_500)
           if (response?.ok) handoff = (response.handoff || {}) as BrowserHandoffPayload
         } catch {
           // An unreachable desktop must not resume or remove anything.
         }
-        const step = stepPausedHandoffFollowUp(record, handoff, Date.now(), PAUSED_FOLLOW_UP_RECHECK_MS)
+        const step = stepPausedHandoffFollowUp(effectiveRecord, handoff, Date.now(), PAUSED_FOLLOW_UP_RECHECK_MS)
         if (step.kind === 'keep-paused') {
           await pausedFollowUpStore.remember(step.followUp)
           continue
         }
         if (step.kind === 'resume-download') {
-          const resumed = await resumeFollowUpDownload(record.downloadId)
+          const resumed = await resumeFollowUpDownload(effectiveRecord, activeSessionId)
           if (resumed) await pausedFollowUpStore.drop(followUpKey)
-          else await retryPausedFollowUp(record)
+          else await retryPausedFollowUp(effectiveRecord)
           continue
         }
-        const removed = await removeBrowserDownload(browserItem, true)
+        const removed = await removeBrowserDownload(browserItem, true, effectiveRecord)
         if (removed) await pausedFollowUpStore.drop(followUpKey)
-        else await retryPausedFollowUp(record)
+        else await retryPausedFollowUp(effectiveRecord)
       } finally {
         pausedFollowUpsInFlight.delete(followUpKey)
       }
@@ -1352,13 +1505,30 @@ async function tabHasCookiesForUrl(url: string, pageUrl = '', tabId = -1, frameI
   }
 }
 
+function isDefiniteUnsentError(error: unknown): boolean {
+  if (typeof isDefiniteUnsentNativeError === 'function') {
+    return isDefiniteUnsentNativeError(error)
+  }
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { name?: unknown }).name === 'NativeBridgeError'
+    && (error as { definiteUnsent?: unknown }).definiteUnsent === true,
+  )
+}
+
 function nativeErrorCode(error: unknown): string {
   // 端口仍在但请求超时：宿主或 Core 卡住，归为下载引擎无响应。
-  return error instanceof NativeHostError ? error.code : 'core_unreachable'
+  return typeof NativeHostError === 'function' && error instanceof NativeHostError ? error.code : 'core_unreachable'
 }
 
 async function native(message: Record<string, unknown>, timeoutMs?: number): Promise<any> {
-  if (!nativeBridge) return Promise.reject(new Error('插件连接尚未初始化'))
+  if (!nativeBridge) {
+    const error = typeof NativeBridgeError === 'function'
+      ? new NativeBridgeError('插件连接尚未初始化', 'bridge_closed', true)
+      : Object.assign(new Error('插件连接尚未初始化'), { name: 'NativeBridgeError', code: 'bridge_closed', definiteUnsent: true })
+    return Promise.reject(error)
+  }
   const identity = extensionIdentity()
   const operation = String(message.op || '')
   // Passive background pings must not retry-spam when Core is stopped/offline.
@@ -2081,6 +2251,15 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: Res
     // original ownership unresolved instead of replaying through old admission.
     response = await native({ op: recovering ? 'recover_offer' : 'offer', resource: payload })
   } catch (error) {
+    // A local NativeBridge rejection raised before `port.postMessage` (e.g.
+    // 64-entry queue full or bridge closed) proves a brand-new offer was never
+    // transmitted. Rethrow so `requestDownload` purges the journal and lets the
+    // browser transfer resume instead of parking forever as `uncertainOffer`.
+    // Recovering an existing journal remains conservative because the original
+    // offer may already have reached Core.
+    if (!recovering && isDefiniteUnsentError(error)) {
+      throw error
+    }
     response = { ok: false, transport_error: true, error: errorText(error) }
   }
   if (response?.transport_error || (recovering && !response?.ok)) {
@@ -2107,9 +2286,11 @@ async function offer(resource: MediaResource, chain?: RequestChain, options: Res
 }
 
 async function retainUncertainBrowserDownload(item: Browser.downloads.DownloadItem, response: any, tabId?: number): Promise<void> {
+  const identity = await buildFollowUpDownloadIdentity(item)
   await pausedFollowUpStore.remember({
     downloadId: item.id, handoffId: '', clientRequestId: response.client_request_id,
     phase: 'resolution', deadline: Date.now() + PAUSED_FOLLOW_UP_RECHECK_MS,
+    ...identity,
   })
   schedulePausedFollowUpAccelerator(PAUSED_FOLLOW_UP_RECHECK_MS)
   await reportDownloadError(tabId ?? downloadIdentity(item).tabId, response.error)
@@ -2146,7 +2327,11 @@ export async function refreshedDownload(downloadId: number, original: Browser.do
   return refreshed
 }
 
-async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyIfStillParked = false): Promise<boolean> {
+async function removeBrowserDownload(
+  item: Browser.downloads.DownloadItem,
+  onlyIfStillParked = false,
+  identityGuard?: Pick<PausedHandoffFollowUp, 'sourceStartedAt' | 'sourceUrlDigest' | 'sourceFilename' | 'sourceTotalBytes'>,
+): Promise<boolean> {
   let current: Browser.downloads.DownloadItem | undefined
   try {
     const [found] = await browser.downloads.search({ id: item.id })
@@ -2155,6 +2340,7 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyI
     return false
   }
   if (!current) return true
+  if (!await matchesBrowserDownloadGuard(current, item, identityGuard)) return true
   // Receipt lookup can outlive a browser-side resume/cancel. Recheck at the
   // cleanup boundary so an old paused snapshot cannot override that choice.
   if (onlyIfStillParked && !isParkedBrowserDownload(current)) return true
@@ -2169,6 +2355,7 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyI
       for (let attempt = 0; attempt < 20; attempt++) {
         const [settled] = await browser.downloads.search({ id: item.id })
         if (!settled) return true
+        if (!await matchesBrowserDownloadGuard(settled, item, identityGuard)) return true
         if (settled.state === 'complete') {
           await browser.downloads.removeFile(item.id)
           break
@@ -2187,7 +2374,7 @@ async function removeBrowserDownload(item: Browser.downloads.DownloadItem, onlyI
 
 export async function completeBrowserTakeover(item: Browser.downloads.DownloadItem, handoffId: string): Promise<void> {
   // 回执已确认桌面接管；持久化清理责任与取消并行，不能让慢存储拖住浏览器副本。
-  const followUp = rememberPausedHandoffFollowUp(item.id, handoffId)
+  const followUp = rememberPausedHandoffFollowUp(item, handoffId)
   const removed = await removeBrowserDownload(item)
   await followUp
   if (removed) await pausedFollowUpStore.drop(handoffId)
@@ -2238,7 +2425,11 @@ export async function pauseBrowserDownload(item: Browser.downloads.DownloadItem)
   }
 }
 
-async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, paused: boolean): Promise<boolean> {
+async function resumeBrowserDownload(
+  item: Browser.downloads.DownloadItem,
+  paused: boolean,
+  identityGuard?: Pick<PausedHandoffFollowUp, 'sourceStartedAt' | 'sourceUrlDigest' | 'sourceFilename' | 'sourceTotalBytes'>,
+): Promise<boolean> {
   if (!paused) return true
   let current: Browser.downloads.DownloadItem | undefined
   try {
@@ -2248,6 +2439,7 @@ async function resumeBrowserDownload(item: Browser.downloads.DownloadItem, pause
     return false
   }
   if (!current) return true
+  if (!await matchesBrowserDownloadGuard(current, item, identityGuard)) return true
   if (current.state === 'complete' || (current.state === 'in_progress' && current.paused === false)) return true
   if (current.state === 'interrupted' && current.error === 'USER_CANCELED' && !current.canResume) return true
   // Edge/Chrome may report a just-paused response as `interrupted` while it is
@@ -2301,6 +2493,73 @@ async function waitForClickIntent(
     if (attempt + 1 < polls) await new Promise(resolve => setTimeout(resolve, 25))
   }
   return undefined
+}
+
+function resourceMatchesContextMenuUrl(resource: MediaResource, targetUrl: string): boolean {
+  if (resource.url === targetUrl) return true
+  const targetFingerprint = resourceFingerprint({ kind: resource.kind, url: targetUrl })
+  if (resourceFingerprint({ kind: resource.kind, url: resource.url }) === targetFingerprint) return true
+  return (resource.variants || []).some(variant =>
+    variant.url === targetUrl
+    || resourceFingerprint({ kind: resource.kind, url: variant.url }) === targetFingerprint)
+}
+
+function matchingSplitAudioUrl(resource: MediaResource, targetUrl: string): string | null {
+  const matchesUrl = (candidateUrl: string): boolean => {
+    if (!candidateUrl) return false
+    if (candidateUrl === targetUrl) return true
+    return resourceFingerprint({ kind: resource.kind, url: candidateUrl })
+      === resourceFingerprint({ kind: resource.kind, url: targetUrl })
+  }
+  if (matchesUrl(resource.url)) {
+    const directAudio = resource.audioUrl?.trim() || ''
+    return directAudio || null
+  }
+  const matchedVariants = (resource.variants || []).filter(variant => matchesUrl(variant.url))
+  if (!matchedVariants.length) return null
+  const variantAudios = matchedVariants.map(variant => (variant.audioUrl || resource.audioUrl || '').trim())
+  if (variantAudios.some(audio => !audio)) return null
+  const uniqueAudios = new Set(variantAudios)
+  return uniqueAudios.size === 1 ? [...uniqueAudios][0] : null
+}
+
+/**
+ * Look up split-audio (`audioUrl`) evidence for a direct HTTP(S) context-menu
+ * Cast/TVBox click strictly scoped to the same tab, frame, current page, and
+ * target URL (including recorded variants). Only a unique match contributes its
+ * `audioUrl` to trigger the split-audio guard; credentials and other metadata
+ * are never inherited across sites, pages, or frames.
+ */
+async function findContextMenuSplitAudioUrl(input: {
+  tabId: number | undefined
+  frameId: number
+  pageUrl: string
+  targetUrl: string
+}): Promise<string | undefined> {
+  if (!validDownloadIdentity(input.tabId)) return undefined
+  if (!/^https?:\/\//i.test(input.targetUrl)) return undefined
+  const clickedPageUrl = input.pageUrl.trim()
+  const currentPageUrl = await topLevelPageUrl(input.tabId, clickedPageUrl)
+  if (!/^https?:\/\//i.test(currentPageUrl)) return undefined
+  if (clickedPageUrl && !samePageOrSiteVideo(clickedPageUrl, currentPageUrl)) return undefined
+  const key = pageResourceKey(input.tabId, currentPageUrl)
+  let stored: Record<string, unknown>
+  try {
+    stored = await browser.storage.session.get(key)
+  } catch {
+    return undefined
+  }
+  const raw = Array.isArray(stored?.[key]) ? stored[key] as MediaResource[] : []
+  if (!raw.length) return undefined
+  const scoped = compactResources(pruneExpiredResources(raw), 100, true).filter(item =>
+    (!validDownloadIdentity(item.tabId) || item.tabId === input.tabId)
+    && resourceBelongsToFrame(item, input.frameId)
+    && (!item.pageUrl || samePageOrSiteVideo(item.pageUrl, currentPageUrl))
+    && resourceMatchesContextMenuUrl(item, input.targetUrl),
+  )
+  if (scoped.length !== 1) return undefined
+  const audioUrl = matchingSplitAudioUrl(scoped[0], input.targetUrl)
+  return audioUrl && /^https?:\/\//i.test(audioUrl) ? audioUrl : undefined
 }
 
 let contextMenuInstallInFlight: Promise<void> | null = null
@@ -3254,16 +3513,22 @@ export default defineBackground(() => {
       seenAt: Date.now(), evidence: ['context_menu'], owner: 'context-menu', confidence: 0.99,
       replayContext: { method: 'GET', page_url: String(tab?.url || '') },
     }
-    if (info.menuItemId === 'hls-cast-link') {
-      void castToDevice(resource)
-        .then(response => { if (!response.ok) return reportDownloadError(tab?.id, response.error) })
-        .catch(error => console.warn('HLS Downloader context cast failed', error))
-      return
-    }
-    if (info.menuItemId === 'hls-push-tvbox-link') {
-      void pushToTv(resource)
-        .then(response => { if (!response.ok) return reportDownloadError(tab?.id, response.error) })
-        .catch(error => console.warn('HLS Downloader context TVBox push failed', error))
+    if (info.menuItemId === CONTEXT_MENU_IDS.castLink || info.menuItemId === CONTEXT_MENU_IDS.pushTvboxLink) {
+      const isCast = info.menuItemId === CONTEXT_MENU_IDS.castLink
+      void (async () => {
+        const splitAudioUrl = await findContextMenuSplitAudioUrl({
+          tabId: tab?.id,
+          frameId: resource.frameId,
+          pageUrl: String((info as { pageUrl?: string }).pageUrl || tab?.url || ''),
+          targetUrl: url,
+        })
+        const targetResource = splitAudioUrl ? { ...resource, audioUrl: splitAudioUrl } : resource
+        const response = isCast ? await castToDevice(targetResource) : await pushToTv(targetResource)
+        if (!response.ok) return reportDownloadError(tab?.id, response.error)
+      })().catch(error => console.warn(
+        isCast ? 'HLS Downloader context cast failed' : 'HLS Downloader context TVBox push failed',
+        error,
+      ))
       return
     }
     // Choosing the extension's context-menu command is already an explicit

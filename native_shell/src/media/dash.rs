@@ -3400,6 +3400,7 @@ fn resume_or_fetch(
         vod.save(task_dir)?;
     }
     super::preview::reset_ready(task_dir, dest)?;
+    let _ = super::preview::flush_ready(task_dir);
     download_one(url, range, headers, proxy, dest, control)?;
     if checkpoint {
         vod.remember(
@@ -4362,6 +4363,8 @@ fn expand_timeline(
             .attribute("r")
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(0);
+        let mut entry_start_time = time;
+        let mut skipped_before_cutoff = 0u64;
         let repeat = if repeat == -1 {
             let next_time = entry
                 .next_siblings()
@@ -4385,24 +4388,72 @@ fn expand_timeline(
                 if !live_units.is_finite() || live_units <= 0.0 {
                     continue;
                 }
-                let boundary = offset.saturating_add(live_units as u64);
+                if live_units >= u64::MAX as f64 {
+                    return Err("DASH timeline overflow".into());
+                }
+                let boundary = u128::from(offset) + u128::from(live_units as u64);
                 let Some(first_end) = time.checked_add(duration) else {
                     return Err("DASH timeline overflow".into());
                 };
-                if boundary < first_end {
+                if boundary < u128::from(first_end) {
                     continue;
                 }
-                ((boundary - time) / duration).saturating_sub(1)
+                let total_segments = (boundary - u128::from(time)) / u128::from(duration);
+                let mut skip: u128 = 0;
+                if let Some(cutoff) = clip.cutoff_in_period {
+                    let cutoff_units = (cutoff * timescale as f64).floor();
+                    if cutoff_units.is_finite() && cutoff_units > -(u64::MAX as f64) {
+                        let cutoff_ticks = i128::from(offset)
+                            + if cutoff_units >= u64::MAX as f64 {
+                                i128::from(u64::MAX)
+                            } else {
+                                cutoff_units as i128
+                            };
+                        let time_i128 = i128::from(time);
+                        if cutoff_ticks > time_i128 {
+                            let raw_skip =
+                                ((cutoff_ticks - time_i128) as u128) / u128::from(duration);
+                            // Keep one conservative boundary segment so the loop's exact f64
+                            // DVR cutoff check (`seg_end <= cutoff + 1e-9`) remains authoritative.
+                            skip = raw_skip.min(total_segments).saturating_sub(1);
+                        }
+                    }
+                }
+                if skip > 0 {
+                    let skip_u64 =
+                        u64::try_from(skip).map_err(|_| "DASH segment number overflow")?;
+                    let delta_clock = skip
+                        .checked_mul(u128::from(duration))
+                        .and_then(|delta| u64::try_from(delta).ok())
+                        .ok_or("DASH timeline overflow")?;
+                    entry_start_time = time
+                        .checked_add(delta_clock)
+                        .ok_or("DASH timeline overflow")?;
+                    skipped_before_cutoff = skip_u64;
+                }
+                let remaining = total_segments.saturating_sub(skip);
+                u64::try_from(remaining.saturating_sub(1))
+                    .map_err(|_| "DASH timeline exceeds segment limit")?
             } else {
                 return Err("unbounded DASH negative timeline repeat".into());
             }
         } else {
             u64::try_from(repeat).map_err(|_| "invalid DASH timeline repeat")?
         };
-        if repeat >= 1_000_000 || media.len() as u64 + repeat + 1 > 1_000_000 {
+        if repeat >= 1_000_000
+            || (media.len() as u64)
+                .checked_add(repeat)
+                .and_then(|count| count.checked_add(1))
+                .is_none_or(|count| count > 1_000_000)
+        {
             return Err("DASH timeline exceeds segment limit".into());
         }
-        clock = time;
+        if skipped_before_cutoff > 0 {
+            number = number
+                .checked_add(skipped_before_cutoff)
+                .ok_or("DASH segment number overflow")?;
+        }
+        clock = entry_start_time;
         let mut clipped_future = false;
         for _ in 0..=repeat {
             let seg_start = (clock as f64 - offset as f64) / timescale as f64;
@@ -9507,5 +9558,77 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dynamic_r_minus_one_skips_expired_dvr_history_before_segment_limit_while_keeping_budget_cap()
+    {
+        // 1. Long-running 24x7 stream (> 1,000,000s) with 60s DVR window must parse cleanly
+        // and advance both `$Number$` and `$Time$` accurately without hitting the 1M cap.
+        let xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT60S">
+            <Period start="PT0S">
+                <Representation id="v" mimeType="video/mp4">
+                    <SegmentTemplate timescale="90000" presentationTimeOffset="900000" startNumber="10" media="seg-$Number$-$Time$.m4s">
+                        <SegmentTimeline><S t="900000" d="90000" r="-1"/></SegmentTimeline>
+                    </SegmentTemplate>
+                </Representation>
+            </Period>
+        </MPD>"#;
+        let live_now = 1_500_000.0;
+        let parsed = parse_mpd_at(xml, "https://cdn.test/live.mpd", live_now).unwrap();
+        let rep = &parsed.representations[0];
+        assert_eq!(rep.media.len(), 60, "60s DVR window with 1s segments");
+        // First kept segment starts at 1_499_940s (end = 1_499_941s > cutoff 1_499_940s):
+        // number = 10 + 1_499_940 = 1_499_950; time = 900_000 + 1_499_940 * 90_000 = 134_995_500_000.
+        assert_eq!(
+            rep.media.first().map(String::as_str),
+            Some("https://cdn.test/seg-1499950-134995500000.m4s")
+        );
+        assert_eq!(
+            rep.media.last().map(String::as_str),
+            Some("https://cdn.test/seg-1500009-135000810000.m4s")
+        );
+        assert_eq!(rep.media_presentation_starts.first(), Some(&1_499_940.0));
+        assert_eq!(rep.media_presentation_starts.last(), Some(&1_499_999.0));
+        assert_eq!(rep.live_end, Some(1_500_000.0));
+
+        // 2. Contrast: an oversized DVR window (> 1,000,000 retained segments) MUST still be
+        // rejected by the 1,000,000 segment safety cap.
+        let oversized_window_xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z" timeShiftBufferDepth="PT1200000S">
+            <Period start="PT0S">
+                <Representation id="v" mimeType="video/mp4">
+                    <SegmentTemplate timescale="1" startNumber="1" media="seg-$Number$.m4s">
+                        <SegmentTimeline><S t="0" d="1" r="-1"/></SegmentTimeline>
+                    </SegmentTemplate>
+                </Representation>
+            </Period>
+        </MPD>"#;
+        let err = parse_mpd_at(
+            oversized_window_xml,
+            "https://cdn.test/live.mpd",
+            1_500_000.0,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("DASH timeline exceeds segment limit"),
+            "oversized DVR window must still fail safety cap, got: {err}"
+        );
+
+        // 3. Contrast: dynamic r="-1" without timeShiftBufferDepth over 1,000,000 segments MUST
+        // also still be rejected.
+        let no_dvr_xml = r#"<MPD type="dynamic" availabilityStartTime="1970-01-01T00:00:00Z">
+            <Period start="PT0S">
+                <Representation id="v" mimeType="video/mp4">
+                    <SegmentTemplate timescale="1" startNumber="1" media="seg-$Number$.m4s">
+                        <SegmentTimeline><S t="0" d="1" r="-1"/></SegmentTimeline>
+                    </SegmentTemplate>
+                </Representation>
+            </Period>
+        </MPD>"#;
+        let err = parse_mpd_at(no_dvr_xml, "https://cdn.test/live.mpd", 1_500_000.0).unwrap_err();
+        assert!(
+            err.contains("DASH timeline exceeds segment limit"),
+            "unbounded live history without DVR window must still fail safety cap, got: {err}"
+        );
     }
 }
