@@ -6,7 +6,7 @@ use crate::http_engine::{
     set_media_network_scope, validate_media_target, EngineError, Job, MediaTransferError,
 };
 use crate::media::merge::{concat_files, mux_av};
-use crate::media::subtitles::{has_cues, merge_webvtt_segments, webvtt_to_srt};
+use crate::media::subtitles::{has_cues, merge_webvtt_entries, webvtt_to_srt, WebVttSegment};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -41,6 +41,7 @@ pub struct Rendition {
     pub language: String,
     pub uri: Option<String>,
     pub default: bool,
+    pub autoselect: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +51,7 @@ pub struct Variant {
     pub codecs: String,
     pub resolution: (u32, u32),
     pub audio_group: String,
+    pub subtitles_group: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +118,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
     let mut pending_codecs = String::new();
     let mut pending_resolution = (0u32, 0u32);
     let mut pending_audio_group = String::new();
+    let mut pending_subtitles_group = String::new();
     let mut pending_duration = 0.0;
     let mut pending_range: Option<(Option<u64>, u64)> = None;
     let mut media_range_ends = HashMap::new();
@@ -171,6 +174,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
             pending_resolution =
                 parse_resolution(&attr_str(attrs, "RESOLUTION").unwrap_or_default());
             pending_audio_group = attr_str(attrs, "AUDIO").unwrap_or_default();
+            pending_subtitles_group = attr_str(attrs, "SUBTITLES").unwrap_or_default();
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MAP:") {
             let uri = attr_str(attrs, "URI")
                 .map(|uri| resolve(&uri))
@@ -279,6 +283,11 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 part_index = part_index.saturating_add(1);
             }
         } else if let Some(attrs) = tag_value(line, "#EXT-X-MEDIA:") {
+            let default =
+                attr_str(attrs, "DEFAULT").is_some_and(|value| value.eq_ignore_ascii_case("YES"));
+            let autoselect = default
+                || attr_str(attrs, "AUTOSELECT")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("YES"));
             let rendition = Rendition {
                 kind: attr_str(attrs, "TYPE").unwrap_or_default(),
                 group_id: attr_str(attrs, "GROUP-ID").unwrap_or_default(),
@@ -288,8 +297,8 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     .map(|uri| resolve(&uri))
                     .transpose()?
                     .filter(|uri| !uri.is_empty()),
-                default: attr_str(attrs, "DEFAULT")
-                    .is_some_and(|value| value.eq_ignore_ascii_case("YES")),
+                default,
+                autoselect,
             };
             remaining_bytes = remaining_bytes
                 .checked_sub(
@@ -305,6 +314,7 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                 pending_codecs.clear();
                 pending_resolution = (0, 0);
                 pending_audio_group.clear();
+                pending_subtitles_group.clear();
                 pending_daterange_ad = false;
                 pending_duration = 0.0;
                 pending_range = None;
@@ -324,11 +334,13 @@ pub fn parse_playlist(text: &str, base: &str) -> Result<Playlist, String> {
                     codecs: pending_codecs.clone(),
                     resolution: pending_resolution,
                     audio_group: pending_audio_group.clone(),
+                    subtitles_group: pending_subtitles_group.clone(),
                 });
                 pending_bandwidth = 0;
                 pending_codecs.clear();
                 pending_resolution = (0, 0);
                 pending_audio_group.clear();
+                pending_subtitles_group.clear();
             } else {
                 let byterange = pending_range
                     .take()
@@ -556,15 +568,24 @@ pub fn select_audio_track<'a>(
     variant: &Variant,
     preferred: &str,
 ) -> Option<&'a Rendition> {
+    if variant.audio_group.is_empty() {
+        return None;
+    }
     let mut tracks: Vec<&Rendition> = playlist
         .renditions
         .iter()
         .filter(|item| {
-            item.kind.eq_ignore_ascii_case("AUDIO")
-                && (variant.audio_group.is_empty() || item.group_id == variant.audio_group)
+            item.kind.eq_ignore_ascii_case("AUDIO") && item.group_id == variant.audio_group
         })
         .collect();
-    tracks.sort_by_key(|item| (!item.default, item.language.clone(), item.name.clone()));
+    tracks.sort_by_key(|item| {
+        (
+            !item.default,
+            !item.autoselect,
+            item.language.clone(),
+            item.name.clone(),
+        )
+    });
     let preferred = preferred.trim();
     if !preferred.is_empty() {
         if let Some(hit) = tracks
@@ -584,14 +605,28 @@ pub fn select_audio_track<'a>(
     tracks.into_iter().next()
 }
 
-pub fn select_subtitles(playlist: &Playlist) -> Vec<Rendition> {
+pub fn select_subtitles(playlist: &Playlist, variant: &Variant) -> Vec<Rendition> {
+    if variant.subtitles_group.is_empty() {
+        return Vec::new();
+    }
     let mut tracks: Vec<Rendition> = playlist
         .renditions
         .iter()
-        .filter(|item| item.kind.eq_ignore_ascii_case("SUBTITLES") && item.uri.is_some())
+        .filter(|item| {
+            item.kind.eq_ignore_ascii_case("SUBTITLES")
+                && item.group_id == variant.subtitles_group
+                && item.uri.is_some()
+        })
         .cloned()
         .collect();
-    tracks.sort_by_key(|item| (!item.default, item.language.clone(), item.name.clone()));
+    tracks.sort_by_key(|item| {
+        (
+            !item.default,
+            !item.autoselect,
+            item.language.clone(),
+            item.name.clone(),
+        )
+    });
     tracks
 }
 
@@ -802,7 +837,7 @@ fn download_hls_scoped_with_control(
             audio_uri = select_audio_track(master, variant, &options.preferred_audio)
                 .and_then(|track| track.uri.clone());
             if options.download_subtitles {
-                subtitle_tracks = select_subtitles(master);
+                subtitle_tracks = select_subtitles(master, variant);
             }
             current = variant.uri.clone();
             initial_playlist = load_initial(&current)?;
@@ -2938,6 +2973,12 @@ struct LiveSubSession {
     tracks: Vec<LiveSubTrack>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct LiveSubSegmentMeta {
+    init_map_file: Option<String>,
+    discontinuity: bool,
+}
+
 struct LiveSubTrack {
     key: String,
     language: String,
@@ -2945,6 +2986,8 @@ struct LiveSubTrack {
     uri: String,
     seen: BTreeSet<String>,
     count: usize,
+    segments: Vec<LiveSubSegmentMeta>,
+    map_cache: HashMap<String, PathBuf>,
 }
 
 impl LiveSubSession {
@@ -2965,6 +3008,8 @@ impl LiveSubSession {
                 uri: uri.clone(),
                 seen: BTreeSet::new(),
                 count: 0,
+                segments: Vec::new(),
+                map_cache: HashMap::new(),
             };
             if let Some(saved_tracks) = saved
                 .as_ref()
@@ -2985,6 +3030,30 @@ impl LiveSubSession {
                             .filter_map(|value| value.as_str().map(str::to_string))
                             .collect();
                     }
+                    if let Some(saved_segments) =
+                        found.get("segments").and_then(|value| value.as_array())
+                    {
+                        item.segments = saved_segments
+                            .iter()
+                            .map(|entry| {
+                                let init_map_file = entry
+                                    .get("init_map_file")
+                                    .and_then(|value| value.as_str())
+                                    .filter(|leaf| {
+                                        !leaf.is_empty() && playlist_leaf(Path::new(leaf)) == *leaf
+                                    })
+                                    .map(str::to_string);
+                                let discontinuity = entry
+                                    .get("discontinuity")
+                                    .and_then(|value| value.as_bool())
+                                    .unwrap_or(false);
+                                LiveSubSegmentMeta {
+                                    init_map_file,
+                                    discontinuity,
+                                }
+                            })
+                            .collect();
+                    }
                 }
             }
             session.tracks.push(item);
@@ -2999,6 +3068,9 @@ impl LiveSubSession {
         task_dir: &Path,
         control: &Path,
     ) {
+        if self.tracks.is_empty() {
+            return;
+        }
         for track in &mut self.tracks {
             let _ = capture_live_subtitle_track(track, headers, proxy, task_dir, control);
         }
@@ -3010,6 +3082,16 @@ impl LiveSubSession {
             .tracks
             .iter()
             .map(|track| {
+                let segments: Vec<serde_json::Value> = track
+                    .segments
+                    .iter()
+                    .map(|meta| {
+                        serde_json::json!({
+                            "init_map_file": meta.init_map_file,
+                            "discontinuity": meta.discontinuity,
+                        })
+                    })
+                    .collect();
                 serde_json::json!({
                     "key": track.key,
                     "language": track.language,
@@ -3017,6 +3099,7 @@ impl LiveSubSession {
                     "uri": track.uri,
                     "count": track.count,
                     "seen": track.seen.iter().cloned().collect::<Vec<_>>(),
+                    "segments": segments,
                 })
             })
             .collect();
@@ -3027,20 +3110,42 @@ impl LiveSubSession {
     }
 
     fn publish(&self, task_dir: &Path) -> Vec<PathBuf> {
+        if self.tracks.is_empty() {
+            return Vec::new();
+        }
         let sub_dir = task_dir.join("subs");
         let _ = fs::create_dir_all(&sub_dir);
         let mut published = Vec::new();
         let mut used = BTreeSet::new();
         for track in &self.tracks {
             let cache = task_dir.join("live-subtitles").join(&track.key);
-            let mut texts = Vec::new();
+            let mut init_cache: HashMap<String, String> = HashMap::new();
+            let mut segments = Vec::new();
             for index in 0..track.count {
                 let path = cache.join(format!("{index:08}.vtt"));
-                if let Ok(text) = fs::read_to_string(path) {
-                    texts.push(text);
+                if let Ok(text) = read_subtitle_text(&path) {
+                    let meta = track.segments.get(index);
+                    let init_header = meta
+                        .and_then(|entry| entry.init_map_file.as_deref())
+                        .and_then(|leaf| {
+                            if leaf.is_empty() || playlist_leaf(Path::new(leaf)) != leaf {
+                                return None;
+                            }
+                            if let Some(cached) = init_cache.get(leaf) {
+                                return Some(cached.clone());
+                            }
+                            let loaded = read_subtitle_text(&cache.join(leaf)).ok()?;
+                            init_cache.insert(leaf.to_string(), loaded.clone());
+                            Some(loaded)
+                        });
+                    segments.push(WebVttSegment {
+                        text,
+                        init_header,
+                        discontinuity: meta.is_some_and(|entry| entry.discontinuity),
+                    });
                 }
             }
-            let merged = merge_webvtt_segments(&texts);
+            let merged = merge_webvtt_entries(&segments);
             if !has_cues(&merged) {
                 continue;
             }
@@ -3065,6 +3170,31 @@ impl LiveSubSession {
         }
         published
     }
+}
+
+fn ensure_subtitle_init_map(
+    init_map: &InitMap,
+    headers: &HashMap<String, String>,
+    proxy: &str,
+    cache_dir: &Path,
+    control: &Path,
+    key_cache: &mut HashMap<String, Vec<u8>>,
+    map_cache: &mut HashMap<String, PathBuf>,
+) -> Result<PathBuf, String> {
+    let path = ensure_init_map(
+        init_map, headers, proxy, cache_dir, control, key_cache, map_cache,
+    )?;
+    if file_len(&path) > super::MAX_MANIFEST_BYTES {
+        return Err("HLS subtitle EXT-X-MAP exceeds size limit".into());
+    }
+    Ok(path)
+}
+
+fn read_subtitle_text(path: &Path) -> Result<String, String> {
+    if file_len(path) > super::MAX_MANIFEST_BYTES {
+        return Err("HLS subtitle segment exceeds size limit".into());
+    }
+    fs::read_to_string(path).map_err(|error| error.to_string())
 }
 
 fn live_subtitle_key(track: &Rendition) -> String {
@@ -3130,6 +3260,13 @@ fn capture_live_subtitle_track(
             let path = cache.join(format!("{:08}.vtt", track.count));
             write_text_atomic(&path, text)?;
             track.seen.insert(identity);
+            if track.segments.len() < track.count {
+                track
+                    .segments
+                    .resize_with(track.count, LiveSubSegmentMeta::default);
+            }
+            track.segments.truncate(track.count);
+            track.segments.push(LiveSubSegmentMeta::default());
             track.count += 1;
         }
         return Ok(());
@@ -3139,14 +3276,38 @@ fn capture_live_subtitle_track(
         _ => return Ok(()),
     };
     let mut keys = HashMap::new();
+    let mut pending_discontinuity = false;
     for segment in playlist.segments {
+        if segment.discontinuity {
+            pending_discontinuity = true;
+        }
         if segment.gap {
             continue;
         }
         let identity = segment_identity(&segment);
         if !track.seen.insert(identity.clone()) {
+            pending_discontinuity = false;
             continue;
         }
+        let discontinuity = std::mem::take(&mut pending_discontinuity);
+        let init_map_file = match segment.init_map.as_ref() {
+            Some(init_map) => match ensure_subtitle_init_map(
+                init_map,
+                headers,
+                proxy,
+                &cache,
+                control,
+                &mut keys,
+                &mut track.map_cache,
+            ) {
+                Ok(path) => Some(playlist_leaf(&path)),
+                Err(_) => {
+                    track.seen.remove(&identity);
+                    continue;
+                }
+            },
+            None => None,
+        };
         let key = match segment
             .key
             .as_ref()
@@ -3174,6 +3335,16 @@ fn capture_live_subtitle_track(
         .is_ok()
             && file_len(&path) > 0
         {
+            if track.segments.len() < track.count {
+                track
+                    .segments
+                    .resize_with(track.count, LiveSubSegmentMeta::default);
+            }
+            track.segments.truncate(track.count);
+            track.segments.push(LiveSubSegmentMeta {
+                init_map_file,
+                discontinuity,
+            });
             track.count += 1;
         } else {
             track.seen.remove(&identity);
@@ -3217,8 +3388,33 @@ fn download_vod_subtitle(
         let cache = output.with_extension("segments");
         fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
         let mut keys = HashMap::new();
-        let mut texts = Vec::new();
-        for (index, segment) in playlist.segments.iter().enumerate().filter(|(_, s)| !s.gap) {
+        let mut maps = HashMap::new();
+        let mut map_texts: HashMap<PathBuf, String> = HashMap::new();
+        let mut segments = Vec::new();
+        let mut pending_discontinuity = false;
+        for (index, segment) in playlist.segments.iter().enumerate() {
+            if segment.discontinuity {
+                pending_discontinuity = true;
+            }
+            if segment.gap {
+                continue;
+            }
+            let discontinuity = std::mem::take(&mut pending_discontinuity);
+            let init_header = match segment.init_map.as_ref() {
+                Some(init_map) => {
+                    let init_path = ensure_subtitle_init_map(
+                        init_map, headers, proxy, &cache, control, &mut keys, &mut maps,
+                    )?;
+                    if let Some(cached) = map_texts.get(&init_path) {
+                        Some(cached.clone())
+                    } else {
+                        let loaded = read_subtitle_text(&init_path)?;
+                        map_texts.insert(init_path, loaded.clone());
+                        Some(loaded)
+                    }
+                }
+                None => None,
+            };
             let key = segment
                 .key
                 .as_ref()
@@ -3236,9 +3432,13 @@ fn download_vod_subtitle(
                 segment.media_sequence,
                 true,
             )?;
-            texts.push(fs::read_to_string(path).map_err(|error| error.to_string())?);
+            segments.push(WebVttSegment {
+                text: read_subtitle_text(&path)?,
+                init_header,
+                discontinuity,
+            });
         }
-        merge_webvtt_segments(&texts)
+        merge_webvtt_entries(&segments)
     };
     if !has_cues(&merged) {
         return Err("HLS subtitle contains no WebVTT cues".into());
@@ -5100,8 +5300,9 @@ mod tests {
     fn master_collects_subtitle_renditions() {
         let text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,URI=\"en.vtt\"\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,SUBTITLES=\"subs\"\nindex.m3u8\n";
         let playlist = parse_playlist(text, "https://cdn.test/master.m3u8").unwrap();
+        let variant = select_variant_for(&playlist, 0, 0, "").unwrap();
         assert_eq!(
-            select_subtitles(&playlist)[0].uri.as_deref(),
+            select_subtitles(&playlist, variant)[0].uri.as_deref(),
             Some("https://cdn.test/en.vtt")
         );
     }
@@ -5875,6 +6076,8 @@ mod tests {
                 uri: "https://cdn.test/en.m3u8".into(),
                 seen: BTreeSet::new(),
                 count: 2,
+                segments: Vec::new(),
+                map_cache: HashMap::new(),
             }],
         };
         let published = session.publish(&dir);
@@ -5920,6 +6123,8 @@ mod tests {
                 uri: format!("http://127.0.0.1:{port}/en.vtt"),
                 seen: BTreeSet::new(),
                 count: 0,
+                segments: Vec::new(),
+                map_cache: HashMap::new(),
             }],
         };
         session.capture(&HashMap::new(), "", &dir, &control);
@@ -6086,6 +6291,7 @@ mod tests {
             language: "en".into(),
             uri: Some("https://cdn.test/subs/en-cc.m3u8?token=a".into()),
             default: true,
+            autoselect: true,
         };
         let track_b = Rendition {
             kind: "SUBTITLES".into(),
@@ -6094,6 +6300,7 @@ mod tests {
             language: "en".into(),
             uri: Some("https://cdn.test/subs/en-forced.m3u8?token=b".into()),
             default: false,
+            autoselect: false,
         };
         assert_ne!(live_subtitle_key(&track_a), live_subtitle_key(&track_b));
         // Rotating auth query must keep the same stable key.
@@ -6190,6 +6397,7 @@ mod tests {
                 language: "en".into(),
                 uri: Some(format!("{base}/sub.m3u8")),
                 default: true,
+                autoselect: true,
             }],
         );
         session.capture(&HashMap::new(), "", &root, &control);
@@ -7506,6 +7714,414 @@ mod tests {
             t_wake.elapsed() < Duration::from_millis(220),
             "finish must abort retry sleep promptly: {:?}",
             t_wake.elapsed()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn variant_without_declared_audio_or_subtitles_group_preserves_embedded_audio_and_skips_other_groups(
+    ) {
+        // Master playlist mixing:
+        // - Variant A1 (1080p) declaring AUDIO="aud-a", SUBTITLES="sub-a"
+        // - Variant A2 (480p) declaring AUDIO="aud-b", SUBTITLES="sub-b"
+        // - Variant B  (720p) with embedded audio and NO AUDIO/SUBTITLES attributes
+        let master = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-VERSION:4\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud-a\",NAME=\"Director\",LANGUAGE=\"en\",DEFAULT=NO,AUTOSELECT=NO,URI=\"aud-a-dir.m3u8\"\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud-a\",NAME=\"Main A\",LANGUAGE=\"en\",DEFAULT=NO,AUTOSELECT=YES,URI=\"aud-a-main.m3u8\"\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud-b\",NAME=\"Main B\",LANGUAGE=\"ja\",DEFAULT=YES,AUTOSELECT=YES,URI=\"aud-b-main.m3u8\"\n",
+            "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"sub-a\",NAME=\"English A\",LANGUAGE=\"en\",DEFAULT=YES,URI=\"sub-a-en.m3u8\"\n",
+            "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"sub-b\",NAME=\"Japanese B\",LANGUAGE=\"ja\",DEFAULT=YES,URI=\"sub-b-ja.m3u8\"\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,AUDIO=\"aud-a\",SUBTITLES=\"sub-a\"\n",
+            "video-a1.m3u8\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n",
+            "video-b-embedded.m3u8\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=854x480,AUDIO=\"aud-b\",SUBTITLES=\"sub-b\"\n",
+            "video-a2.m3u8\n",
+        );
+        let parsed = parse_playlist(master, "https://cdn.test/master.m3u8").unwrap();
+
+        // Variant B (720p) declares neither AUDIO nor SUBTITLES -> MUST return None / empty!
+        let variant_b = select_variant_for(&parsed, 0, 720, "").unwrap();
+        assert_eq!(variant_b.uri, "https://cdn.test/video-b-embedded.m3u8");
+        assert!(variant_b.audio_group.is_empty());
+        assert!(variant_b.subtitles_group.is_empty());
+        assert!(
+            select_audio_track(&parsed, variant_b, "").is_none(),
+            "variant without AUDIO attribute must keep embedded audio"
+        );
+        assert!(
+            select_audio_track(&parsed, variant_b, "Main B").is_none(),
+            "preferred audio must not pull an external track from another group when AUDIO is omitted"
+        );
+        assert!(
+            select_subtitles(&parsed, variant_b).is_empty(),
+            "variant without SUBTITLES attribute must not pull subtitle tracks from other groups"
+        );
+
+        // Variant A1 (1080p) declares AUDIO="aud-a", SUBTITLES="sub-a" -> strictly scoped to aud-a / sub-a,
+        // and AUTOSELECT=YES wins over AUTOSELECT=NO within aud-a.
+        let variant_a1 = select_variant_for(&parsed, 0, 1080, "").unwrap();
+        assert_eq!(variant_a1.audio_group, "aud-a");
+        assert_eq!(variant_a1.subtitles_group, "sub-a");
+        let audio_a1 = select_audio_track(&parsed, variant_a1, "").unwrap();
+        assert_eq!(audio_a1.name, "Main A");
+        assert_eq!(
+            audio_a1.uri.as_deref(),
+            Some("https://cdn.test/aud-a-main.m3u8")
+        );
+        let subs_a1 = select_subtitles(&parsed, variant_a1);
+        assert_eq!(subs_a1.len(), 1);
+        assert_eq!(subs_a1[0].group_id, "sub-a");
+        assert_eq!(
+            subs_a1[0].uri.as_deref(),
+            Some("https://cdn.test/sub-a-en.m3u8")
+        );
+
+        // Variant A2 (480p) declares AUDIO="aud-b", SUBTITLES="sub-b" -> strictly scoped to aud-b / sub-b.
+        let variant_a2 = select_variant_for(&parsed, 0, 480, "").unwrap();
+        let audio_a2 = select_audio_track(&parsed, variant_a2, "").unwrap();
+        assert_eq!(audio_a2.group_id, "aud-b");
+        let subs_a2 = select_subtitles(&parsed, variant_a2);
+        assert_eq!(subs_a2.len(), 1);
+        assert_eq!(subs_a2[0].group_id, "sub-b");
+
+        // End-to-end VOD and Live selection against local HTTP server: selecting Variant B must
+        // succeed even when other groups' external audio/subtitle URLs return 404 (and must never
+        // request them).
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        for is_live in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let hit_paths = Arc::new(Mutex::new(Vec::<String>::new()));
+            let srv_hits = Arc::clone(&hit_paths);
+            let master_body = master.as_bytes().to_vec();
+            let variant_body = if is_live {
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\nb0.ts\n"
+                    .to_vec()
+            } else {
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\nb0.ts\n#EXT-X-ENDLIST\n"
+                    .to_vec()
+            };
+            let root = std::env::temp_dir().join(format!(
+                "hls-cr-p1-1-{}-{}",
+                if is_live { "live" } else { "vod" },
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).unwrap();
+            let control = root.join("control");
+            fs::write(&control, "run").unwrap();
+            let stop_ctl = control.clone();
+            let expected_requests = 3usize; // master, video-b-embedded.m3u8, b0.ts
+            let server = std::thread::spawn(move || {
+                for _ in 0..expected_requests {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        break;
+                    };
+                    let mut buf = [0u8; 1024];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("")
+                        .to_string();
+                    srv_hits.lock().unwrap().push(path.clone());
+                    let (status, body): (&str, Vec<u8>) = match path.as_str() {
+                        "/master.m3u8" => ("200 OK", master_body.clone()),
+                        "/video-b-embedded.m3u8" => ("200 OK", variant_body.clone()),
+                        "/b0.ts" => {
+                            if is_live {
+                                let _ = fs::write(&stop_ctl, "finish");
+                            }
+                            ("200 OK", b"EMBEDDED-AV-TS".to_vec())
+                        }
+                        _ => (
+                            "404 Not Found",
+                            b"unexpected external group request".to_vec(),
+                        ),
+                    };
+                    let header = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(header.as_bytes());
+                    let _ = stream.write_all(&body);
+                }
+            });
+            let output = download_hls_with(
+                &format!("http://{addr}/master.m3u8"),
+                &HashMap::new(),
+                "",
+                &root,
+                &control,
+                HlsDownloadOptions {
+                    live: is_live,
+                    preferred_height: 720,
+                    download_subtitles: true,
+                    remux_ts_to_mp4: false,
+                    ..HlsDownloadOptions::default()
+                },
+            )
+            .unwrap();
+            server.join().unwrap();
+            assert_eq!(fs::read(&output).unwrap(), b"EMBEDDED-AV-TS");
+            let paths = hit_paths.lock().unwrap().clone();
+            assert!(
+                !paths
+                    .iter()
+                    .any(|p| p.contains("aud-") || p.contains("sub-")),
+                "mode live={is_live} must not fetch external audio/subtitle groups: {paths:?}"
+            );
+            assert!(
+                !root.join("subs").exists(),
+                "mode live={is_live} must not publish unrelated subtitle sidecars"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn hls_vod_and_live_subtitles_apply_ext_x_map_headers_switches_and_33bit_wraparound() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let before_wrap = (1u64 << 33) - 90_000; // 2^33 - 1s
+        let map_wrap_a =
+            format!("WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:{before_wrap}\n\n");
+        let map_wrap_b = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:90000\n\n".to_string();
+        let map_reset_c = "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:90000\n\n".to_string();
+        let combined_maps = format!("{map_wrap_a}{map_wrap_b}");
+        let map_a_len = map_wrap_a.len();
+        let map_b_len = map_wrap_b.len();
+
+        let seg0_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nBefore wrap via MAP A\n";
+        let seg1_body = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nAfter wrap via MAP B\n";
+        let seg2_body =
+            "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nReset via DISCONTINUITY + MAP C\n";
+
+        let vod_playlist = format!(
+            "#EXTM3U\n\
+             #EXT-X-VERSION:7\n\
+             #EXT-X-TARGETDURATION:4\n\
+             #EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXT-X-MAP:URI=\"maps.vtt\",BYTERANGE=\"{map_a_len}@0\"\n\
+             #EXTINF:4.0,\n\
+             seg0.vtt\n\
+             #EXT-X-MAP:URI=\"maps.vtt\",BYTERANGE=\"{map_b_len}@{map_a_len}\"\n\
+             #EXTINF:4.0,\n\
+             seg1.vtt\n\
+             #EXT-X-DISCONTINUITY\n\
+             #EXT-X-MAP:URI=\"map-c.vtt\"\n\
+             #EXTINF:4.0,\n\
+             seg2.vtt\n\
+             #EXT-X-ENDLIST\n"
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let map_hits = Arc::new(Mutex::new(0usize));
+        let srv_map_hits = Arc::clone(&map_hits);
+        let combined_bytes = combined_maps.as_bytes().to_vec();
+        let map_c_bytes = map_reset_c.as_bytes().to_vec();
+        let vod_bytes = vod_playlist.as_bytes().to_vec();
+        let live_poll1 = format!(
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXT-X-MAP:URI=\"maps.vtt\",BYTERANGE=\"{map_a_len}@0\"\n\
+             #EXTINF:4.0,\nseg0.vtt\n\
+             #EXT-X-MAP:URI=\"maps.vtt\",BYTERANGE=\"{map_b_len}@{map_a_len}\"\n\
+             #EXTINF:4.0,\nseg1.vtt\n"
+        )
+        .into_bytes();
+        let live_poll2 = format!(
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:1\n\
+             #EXT-X-MAP:URI=\"maps.vtt\",BYTERANGE=\"{map_b_len}@{map_a_len}\"\n\
+             #EXTINF:4.0,\nseg1.vtt\n\
+             #EXT-X-DISCONTINUITY\n\
+             #EXT-X-MAP:URI=\"map-c.vtt\"\n\
+             #EXTINF:4.0,\nseg2.vtt\n"
+        )
+        .into_bytes();
+        let live_poll_count = Arc::new(Mutex::new(0usize));
+        let srv_live_polls = Arc::clone(&live_poll_count);
+
+        // Serve VOD (7 requests: playlist, mapA, seg0, mapB, seg1, mapC, seg2)
+        // + Live poll 1 (5 requests: live.m3u8, mapA, seg0, mapB, seg1)
+        // + Live poll 2 (3 requests: live.m3u8, mapC, seg2).
+        let server = std::thread::spawn(move || {
+            for _ in 0..15 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("")
+                    .to_string();
+                let range = req.lines().find_map(|line| {
+                    let (k, v) = line.split_once(':')?;
+                    k.trim()
+                        .eq_ignore_ascii_case("range")
+                        .then(|| v.trim().strip_prefix("bytes="))
+                        .flatten()
+                });
+                match path.as_str() {
+                    "/vod.m3u8" => {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            vod_bytes.len()
+                        );
+                        let _ = stream.write_all(&vod_bytes);
+                    }
+                    "/live.m3u8" => {
+                        let mut count = srv_live_polls.lock().unwrap();
+                        *count += 1;
+                        let body = if *count == 1 {
+                            &live_poll1
+                        } else {
+                            &live_poll2
+                        };
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(body);
+                    }
+                    "/maps.vtt" => {
+                        *srv_map_hits.lock().unwrap() += 1;
+                        if let Some((start, end)) = range.and_then(|r| {
+                            let (a, b) = r.split_once('-')?;
+                            Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                        }) {
+                            let slice = &combined_bytes[start..=end.min(combined_bytes.len() - 1)];
+                            let _ = write!(
+                                stream,
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                start + slice.len() - 1,
+                                combined_bytes.len(),
+                                slice.len()
+                            );
+                            let _ = stream.write_all(slice);
+                        } else {
+                            let _ = write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                combined_bytes.len()
+                            );
+                            let _ = stream.write_all(&combined_bytes);
+                        }
+                    }
+                    "/map-c.vtt" => {
+                        *srv_map_hits.lock().unwrap() += 1;
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            map_c_bytes.len()
+                        );
+                        let _ = stream.write_all(&map_c_bytes);
+                    }
+                    "/seg0.vtt" | "/seg1.vtt" | "/seg2.vtt" => {
+                        let body = match path.as_str() {
+                            "/seg0.vtt" => seg0_body.as_bytes(),
+                            "/seg1.vtt" => seg1_body.as_bytes(),
+                            _ => seg2_body.as_bytes(),
+                        };
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(body);
+                    }
+                    _ => {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                    }
+                }
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!("hls-sub-map-wrap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let control = root.join("control");
+        fs::write(&control, "run").unwrap();
+
+        // 1. VOD subtitle download with EXT-X-MAP (byterange + switch) + 33-bit wrap + DISCONTINUITY.
+        let vod_out = root.join("vod.vtt");
+        download_vod_subtitle(
+            &format!("http://{addr}/vod.m3u8"),
+            &HashMap::new(),
+            "",
+            &vod_out,
+            &control,
+        )
+        .unwrap();
+        let vod_merged = fs::read_to_string(&vod_out).unwrap();
+        assert!(
+            vod_merged.contains("26:30:42.718 --> 26:30:43.718\nBefore wrap via MAP A"),
+            "VOD MAP A offset missing:\n{vod_merged}"
+        );
+        assert!(
+            vod_merged.contains("26:30:44.718 --> 26:30:45.718\nAfter wrap via MAP B"),
+            "VOD MAP B must unwrap 33-bit rollover:\n{vod_merged}"
+        );
+        assert!(
+            vod_merged.contains("00:00:01.000 --> 00:00:02.000\nReset via DISCONTINUITY + MAP C"),
+            "VOD DISCONTINUITY + MAP C must reset clock epoch:\n{vod_merged}"
+        );
+
+        // 2. Live subtitle capture across two polls + reload from live_subtitles.json before publish.
+        let live_root = root.join("live");
+        fs::create_dir_all(&live_root).unwrap();
+        let track = Rendition {
+            kind: "SUBTITLES".into(),
+            group_id: "subs".into(),
+            name: "English".into(),
+            language: "en".into(),
+            uri: Some(format!("http://{addr}/live.m3u8")),
+            default: true,
+            autoselect: true,
+        };
+        let mut live_session = LiveSubSession::load(&live_root, std::slice::from_ref(&track));
+        live_session.capture(&HashMap::new(), "", &live_root, &control);
+        live_session.capture(&HashMap::new(), "", &live_root, &control);
+        server.join().unwrap();
+
+        // Reload persisted live_subtitles.json to verify init_map_file and discontinuity survive restart.
+        let reloaded = LiveSubSession::load(&live_root, std::slice::from_ref(&track));
+        let published = reloaded.publish(&live_root);
+        assert_eq!(published.len(), 1);
+        let live_merged = fs::read_to_string(&published[0]).unwrap();
+        assert!(
+            live_merged.contains("26:30:42.718 --> 26:30:43.718\nBefore wrap via MAP A"),
+            "Live MAP A offset missing:\n{live_merged}"
+        );
+        assert!(
+            live_merged.contains("26:30:44.718 --> 26:30:45.718\nAfter wrap via MAP B"),
+            "Live MAP B must unwrap 33-bit rollover:\n{live_merged}"
+        );
+        assert!(
+            live_merged.contains("00:00:01.000 --> 00:00:02.000\nReset via DISCONTINUITY + MAP C"),
+            "Live DISCONTINUITY + MAP C must reset clock epoch:\n{live_merged}"
+        );
+        assert_eq!(
+            *map_hits.lock().unwrap(),
+            6,
+            "VOD fetched 3 distinct maps + Live fetched 3 distinct maps (no duplicate fetch of MAP B on poll 2)"
         );
 
         let _ = fs::remove_dir_all(root);

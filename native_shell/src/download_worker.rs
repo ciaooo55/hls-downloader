@@ -5386,14 +5386,6 @@ fn task_failure_from_error(
             "NETWORK_TIMEOUT".into(),
             "检查网络或代理设置，降低并发后重试".into(),
         )
-    } else if lower.contains("invalid url")
-        || lower.contains("invalid uri")
-        || lower.contains("地址无效")
-    {
-        (
-            "INVALID_URL".into(),
-            "检查下载地址格式，或回到来源页面重新识别".into(),
-        )
     } else if is_drm_protection_error(&lower, error) {
         (
             "DRM_PROTECTED".into(),
@@ -5403,6 +5395,14 @@ fn task_failure_from_error(
         (
             "NETWORK_POLICY".into(),
             "当前网络策略、域名白名单或代理配置拒绝了该请求，请检查设置后重试".into(),
+        )
+    } else if lower.contains("invalid url")
+        || lower.contains("invalid uri")
+        || lower.contains("地址无效")
+    {
+        (
+            "INVALID_URL".into(),
+            "检查下载地址格式，或回到来源页面重新识别".into(),
         )
     } else {
         (
