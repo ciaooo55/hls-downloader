@@ -4,11 +4,11 @@
 > 请在每次开始复核或并行开发前，先拉取最新 `origin/main` 并通读根目录 [`SYNC.md`](../../SYNC.md)（关注元信息、领地锁表与 `[Brain -> Local & Cloud]` 指导）。
 
 ## 元信息（云端每次更新必填）
-- **最后更新时间（UTC+8）**：`2026-11-27 13:30:00 +08:00`
-- **所审 `origin/main` SHA**：`41fbb8e3`（[PR #156](https://github.com/ciaooo55/hls-downloader/pull/156) 回填 PR #154 复核结论后的 `main`；代码基线仍为 `34ed0501`）
-- **对应 `SYNC.md` 同步序号**：`#2`
-- **云端当前状态**：`PR #154 复核结论已在第一节回填；认领 AVAILABLE_FOR_CLOUD 第 4 项（协议与客户端边界测试），仅新增测试文件，不改生产代码与既有 wire 契约`
-- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/claim-protocol-wire-tests`（本领地声明 PR）；`cloud/protocol-wire-boundary-tests`（实现 PR，声明合入后提交）
+- **最后更新时间（UTC+8）**：`2026-11-28 15:49:35 +08:00`
+- **所审 `origin/main` SHA**：`529fcbf4`（`529fcbf4e8c4bad77a9c8a3c6b457f39ceadc322`；看板中的 `74848fe3` 是刷新 `SYNC.md` 前的代码基线）
+- **对应 `SYNC.md` 同步序号**：`#4`
+- **云端当前状态**：PR #160、#161 独立复核已完成，核销与新缺陷见第二节第 5、6 小节；本次只更新复核回执，不认领业务代码。
+- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/review-pr160-pr161`（本复核回执）；`cloud/fix-p1-5-media-regression-gate`（[PR #163](https://github.com/ciaooo55/hls-downloader/pull/163)，单独处理 CR-P1-5）。
 
 ---
 
@@ -219,6 +219,111 @@
 ### 4. 待设计确认与验证边界说明（非缺陷）
 - **连接池常量语义确认（`native_shell/src/net_policy.rs:28-29`）**：`GLOBAL_CONNECTION_LIMIT = 128` / `PER_HOST_CONNECTION_LIMIT = 24` 目前仅在 `http_engine.rs` `run_job_once` 按“任务”取 1 个名额，分段 worker 不单独占名额，同 host 实际 TCP 连接数可能超过 24。若本意为按任务限流建议重命名常量/注释；若本意为按 TCP 连接限流则需在 `fetch_range` 内按连接取名额。
 - **Linux 容器验证限制**：本轮全部复核在 Linux 容器执行（含 `extension` 65 个测试文件 / 764 用例全绿与 `native_shell` 媒体/回放/投屏单测）；`media_proxy::public_cast_manifest_blocks_ssrf_subroutes_and_redirects_while_preserving_lan_mounts` 在非 Windows 下因 `http_engine` 返回 `https/proxy needs WinHTTP` 报 502 属平台限制，非 Windows 投屏缺陷，需在 Windows 环境复跑。真实投屏/TVBox 硬件与 Windows 实机安装包尚未验证。
+
+### 5. PR #160 运行时修复复核（`16324a8f`）
+
+- 对照 [PR #160](https://github.com/ciaooo55/hls-downloader/pull/160) 合并前后的真实变更，在 `origin/main@529fcbf4` 复核调用链与错误处理；后续提交未改动这 17 个变更文件。[PR CI](https://github.com/ciaooo55/hls-downloader/pull/160/checks)：`7 passed, 0 failed, 0 pending, 0 skipped`。
+- **17 项：14 项已修复、3 项部分修复、0 项未修复；确认 3 条新 P2（P2-18～P2-20），无新增 P0/P1。** 下列核销更新第一节对应的历史记录；同一直播字幕回归同时影响 CR-P2-9 与 PRA-P2-1，只计为一条新缺陷。
+- 本次两份复核均不含 CR-P1-5；该项由 [PR #163](https://github.com/ciaooo55/hls-downloader/pull/163) 单独处理，未在此核销。发布门禁仍为 `release_ready: false`。
+
+#### 逐项核销
+
+| 编号 | 判定 | 当前主线证据与边界 |
+|---|---|---|
+| CR-P1-1 | 已修复 | `native_shell/src/media/hls.rs:566–629,828–843,865–875,931–935`：VOD/直播共同入口按选中变体的 `AUDIO`、`SUBTITLES` 组绑定；空组无外轨；无 URI 的音频保留为带内；音频仍可按名称/语言选择。 |
+| CR-P1-2 | 已修复 | `extension/entrypoints/background.ts:651–675,696–741,1115–1149,1202–1262,2330–2368`；`extension/lib/pausedHandoffFollowups.ts:44–98`：浏览器重启后须按开始时间和 URL 摘要唯一匹配，供完成态文件名与大小辅助约束，身份不足或歧义只丢记录，不删除/恢复；删除前重新查项并校验。 |
+| CR-P2-1 | 已修复 | `native_shell/src/download_worker.rs:5389–5406`：DRM 和网络策略分支在泛化的无效 URL 之前；`native_shell/src/download_worker/tests.rs:13656–13687` 覆盖多种代理地址错误。 |
+| CR-P2-2 | 已修复 | `native_shell/src/media/preview.rs:324–433,549–603`：`reset_ready` 不再每片写索引，刷新用逐任务锁与 generation 快照，在全局锁外写盘；`native_shell/src/media/hls.rs:1012–1025`、`native_shell/src/media/dash.rs:2792–2807,3393–3404` 接回批量和单点刷盘。原写放大已收口；容量边界的新回归见 P2-18。 |
+| CR-P2-3 | 已修复 | `native_ui/src/system_tools.rs:1885–1897,1926–1966`：主解包失败后先清除并重建普通 staging 目录，拒绝链接及重解析点，再进入 Windows PowerShell 路径。 |
+| CR-P2-4 | 已修复 | `native_ui/src/system_tools.rs:1645–1661,1695–1707,1726–1745`：EOCD 条目计数、中央目录条目磁盘号检查；包含 Darwin 的 POSIX 链接类型、VFAT 重解析位以及本地头加密位被拒绝，保留路径和本地/中央头文件名校验。这里只核销原报告中明确列出的缺口，不等同 ZIP 安全认证。 |
+| CR-P2-5 | 已修复 | `native_ui/src/system_tools.rs:1803–1822,1866–1882,2076–2168`：主路径与回退均检查目标类型；覆盖路径递归清理旧条目，清理或覆盖报错则不成功；发布后复检落盘树及 manifest，再写 `.archive-stamp`。 |
+| CR-P2-6 | 已修复 | `native_ui/src/system_tools.rs:476–498,765–805`：无签名或无可用 MSI、且合法 release URL 不存在时，接入默认官方 Releases URL；按钮和摘要读取同一有效 URL，没有打开自动安装。 |
+| CR-P2-7 | 已修复 | `extension/entrypoints/background.ts:2498–2563,3510–3527,2181–2207`：直接 HTTP(S) 菜单入口先查同 tab/frame/页面及 URL（含变体）；只有唯一匹配的双轨证据才传入 `audioUrl` 触发“先下载合并”，不继承被查资源的凭据。无匹配/歧义未被扩大成全站拒绝。 |
+| CR-P2-8 | 已修复 | `native_shell/src/media/hls.rs:2724–2760,3120–3148,3175–3197,3293–3310,3389–3442`；`native_shell/src/media/subtitles.rs:55–85`：两条路径均拉取、缓存并使用对应初始化文件的 `X-TIMESTAMP-MAP`，并处理 MAP 切换；沿用原范围、密钥和代理通路。实现的内存回归见 P2-20。 |
+| CR-P2-9 | 部分修复 | `native_shell/src/media/subtitles.rs:49–85,110–118`：同一时钟纪元内能展开 33 位回绕，已保存的 discontinuity 会清空展开状态；但直播清单滚动时未保存的边界可丢失，真实重置仍会被当作回绕，见 P2-19（同 PRA-P2-1）。 |
+| CR-P2-10 | 部分修复 | `native_shell/src/media/dash.rs:4386–4456,4462–4489,9564–9632`：无结束边界、窄 DVR 的典型长直播已经能跳过过期段并推进 `$Number$/$Time$`，URL 预算仍生效；精确上限有一处分支仍先算被裁的边界段。以 `t=0,d=1,timescale=1,startNumber=1,live_end=1,500,000,DVR=1,000,000` 为例，理论保留 1,000,000 段，但 `skip=500,000-1` 后 cap 看到 1,000,001 个候选而拒绝，尚未运行下一层 `seg_end <= cutoff`。建议在预算计数前按同一裁剪谓词验证保守保留的边界候选，并测 999,999 / 1,000,000 / 1,000,001；不放宽 cap 及 URL 字节预算。这是旧拒绝行为的残余，不另计新增项。 |
+| CR-P2-11 | 已修复 | `native_clients/src/native_host.rs:97–111,1015–1025,1092–1101,1147–1172`：新请求与已有 pending 的重试均到 `prompt_media_push_ui`；只有 `open_workbench()` 返回 `Ok` 才设请求 ID，同会话的 Core/启动失败仍可重试并记日志。这里只证明原“同步错误吞掉后还缓存”已修复，不把进程 spawn 成功视为窗口最终呈现实测。 |
+| CR-P2-12 | 已修复 | `native_ui/src/activation.rs:93–151`、`crates/client/src/core_ipc.rs:620–689,1563–1634,1688–1721,345–370`：连接、写帧、读帧和退避在同一绝对总期限内，且取消仍等待 overlapped 操作收尾，未弱化管道属主及响应 ID 校验。Windows 专用运行路径本机未跑。 |
+| CR-P2-13 | 已修复 | `native_ui/src/workbench.rs:681` → `native_ui/src/native_window.rs:1202–1264,1267–1335,1362–1414`：关闭最大化窗口优先读有效普通态矩形，换算工作区偏移和 DPI，查询失败/矩形无效才退回磁盘。不把计算单测等同于 Windows 多屏实测。 |
+| CR-P2-14 | 已修复 | `extension/lib/nativeBridge.ts:170–190` → `extension/entrypoints/background.ts:2095–2120,2248–2272,2923–2947,3453`：队满在投递前以明确错误退出，新 offer 清 journal 并让原下载继续；已 journal 的恢复和可能已投递的超时保留不确定状态，不把 `handoff: null` 当成拒绝。 |
+| PRA-P2-1 | 部分修复 | `native_shell/src/media/hls.rs:3274–3354,8132–8249`：同一次 poll 内，首片失败后若后续有成功片，边界正确随首个成功片保存；下一轮 poll 或暂停恢复没有待定边界，且未解析 discontinuity sequence（`hls.rs:143–159`）。见 P2-19。 |
+
+#### 确认的新问题
+
+##### P2-18｜预览缓存达到 256 项时，更新最老的当前任务会丢失尚未刷盘的就绪分片
+
+- **定位**：`native_shell/src/media/preview.rs:452–496,506–544`（淘汰、重载、跳过旧快照）；生产读端 `native_shell/src/playback.rs:434–480`。
+- **调用链和实证**：HLS 直播不走 VOD 分片 checkpoint（`native_shell/src/media/hls.rs:1166–1178,2520–2545,2588–2603`）；就绪读端的冷加载只读索引、旧标记及 VOD checkpoint，不读直播 `live_state.json`（`preview.rs:287–299`）。当前任务 A 的第 3 片已 `mark_ready` 但尚未成批刷盘。其后 255 个预览根可由 `is_ready` 的冷读进入缓存（`preview.rs:606–639`），A 成为最旧项。再 `mark_ready(A, 第4片)` 时，代码先选牺牲项再查找 A，遂移除 A、从旧索引重建 A、加入第 4 片。晚到的淘汰刷盘只见 A 键仍存在，便丢弃旧快照中的第 3 片。基线代码在移除时立即刷旧索引（`16324a8f^1:native_shell/src/media/preview.rs:339–355,378–386`），再装入 A 时会读到第 3 片。
+- **验证/影响**：Linux 仓库外探针调用真实 `mark_ready/is_ready/flush_ready`，确认第 3 片原本可读，更新并显式刷盘后只剩第 4 片：`segment 3 before capacity: true; after marking segment 4 and flushing: false; persisted: false; segment 4 ready: true`。实际文件未丢失、任务最终合并不依赖该标记；边播边下的 HTTP 预览却会对已落盘文件返回缩略图 503 或等待直至超时。
+- **建议**：只在插入新根且容量不足时淘汰；不淘汰当前更新根。让真正淘汰的旧根在同根重载完成移交前保持可读取的最新快照，或者让重载与淘汰写串行于同一个稳定的根锁；保留全局锁外 I/O。
+- **建议测试**：在 `preview.rs` 用无 VOD checkpoint 的 HLS 直播式目录、明确的 LRU 顺序复现上述容量场景，断言第 3/4 片均就绪且显式 flush 后都在盘；另用 barrier 验证淘汰根与同根并发重载不会回退索引。
+
+##### P2-19｜字幕 discontinuity 在直播窗口跨 poll 滑出后，被新的 33 位展开逻辑错判为回绕
+
+- **定位**：`native_shell/src/media/hls.rs:143–159,2980–2991,3080–3108,3279–3307,3337–3353`；`native_shell/src/media/subtitles.rs:55–85`。
+- **调用链和最小两轮场景**：启用字幕的直播每次迭代调用 `LiveSubSession::capture`（`hls.rs:931–958`），后者有自己的字幕清单拉取，执行完保存 track（`3064–3078,3240–3277`）。第一轮成功写 A（映射 `2^33−90000`），看到 `#EXT-X-DISCONTINUITY` 后 B 下载失败或标作 gap，且本轮没有下一片成功。第二轮播放列表合法滑窗，只剩新片 C，原边界已由上游 `#EXT-X-DISCONTINUITY-SEQUENCE` 表示；解析器只检查精确 `#EXT-X-DISCONTINUITY`，没有读序号，`pending_discontinuity` 又在每次调用重新置 `false`，持久文件只存已成功分片的布尔值。C 成功以 `false` 写存；结束时 `publish` 把 A、C 送入 `merge_webvtt_entries`（`1424–1426,3124–3148`）。C 的 raw `90000` 因此被展开为 `2^33+90000`，cue 从该实现期望的 `00:00:01.000` 变为 `26:30:44.718`。若错误边界和下一成功片仍在同一轮，现有 `hls.rs:8132–8249` 可通过，不能覆盖上述路径。基线独立按 raw tick 算偏移，不会对这个真实重置新加一圈。
+- **影响**：合法滑窗加 gap/短时不可用即可触发，无须用户重启。字幕边车错误；有字幕的最终混流也读取该产物（`hls.rs:1463–1473`）。不会导致媒体分片丢失。
+- **建议**：在字幕轨上按 media sequence 持久记录尚未消费的边界和已消费的 discontinuity sequence；解析并比较 `EXT-X-DISCONTINUITY-SEQUENCE`，直到首个在新纪元的有效分片提交才消费，不用任意见过的旧片清掉边界；保留同纪元连续帧的正常回绕。
+- **建议测试**：沿用本地 HTTP 字幕夹具做双 poll，第一轮尾部有边界但无可用后片，第二轮携带上升的 discontinuity sequence 并让第一个后片成功，断言 cue 为 `00:00:01.000`，无 `26:30:44.718`；在两轮之间 reload `live_subtitles.json` 加一组复测。
+
+##### P2-20｜初始化 MAP 虽只读一次，合并却给每个分片深拷贝一份完整头
+
+- **定位**：`native_shell/src/media/hls.rs:3122–3148,3187–3197,3393–3414,3435–3442`；`native_shell/src/media/subtitles.rs:9–15,55–67`。
+- **调用链**：开启字幕的常规 VOD 下载（`hls.rs:1428–1444`）或直播结束（`:1424–1426`）走各自的聚合。对同一个 `EXT-X-MAP`，缓存命中返回 `String::clone()`，每个 `WebVttSegment` 持有独立的 `Option<String>`；所有副本留到整轨 `merge_webvtt_entries`。合并只需从头读 `X-TIMESTAMP-MAP`，不需持有每片完整头。`read_subtitle_text` 的 8 MiB 阈值只限制单文件（`native_shell/src/media/mod.rs:16`），不限制克隆后的合计，也无流式收集或 MAP 头短路。改动前不会为分片分配这部分内存。
+- **影响**：额外常驻文本为 `分片数 × 复用头大小`。例如共享 64 KiB 初始化头的 10,000 个短分片，仅副本就约 625 MiB，不含分片和 cue；压力在单一 Rust Core 中，可能使并行任务/UI 状态查询一并变慢。这里确认的是可计算的分配放大，没有宣称在 Linux 人为跑到 OOM。
+- **建议**：按 MAP 缓存已解析、可复制的小型 timestamp 元数据；若需保留完整头则共享 `Arc<str>`，避免逐片深拷贝，同时保留分片自己的合法 timestamp-map 优先及切 MAP 行为。
+- **建议测试**：合成 1,000 个引用同一 MAP 的短分片，验证不同分片共享同一头分配（或同一 MAP 仅解析一次），并对照 MAP 切换与分片本地头覆盖的 cue 时间，不以堆分配失败作为判定条件。
+
+#### 验证与限制
+
+- Linux 扩展：`pnpm install --frozen-lockfile && pnpm test`（加载已安装的 Node v24.22.2，pnpm 11.7.0）→ `Test Files  65 passed (65)`、`Tests  778 passed (778)`，包含 TypeScript 检查及三项扩展回归覆盖。
+- Linux 媒体：`cargo test --locked -p hls-native-shell --lib 'media::'` → `test result: ok. 187 passed; 0 failed; 3 ignored; 0 measured; 920 filtered out; finished in 21.44s`。
+- Linux 下载 Worker：`cargo test --locked -p hls-native-shell --lib 'download_worker::'` 中，覆盖 CR-P2-1 的 `auto_retry_governance_skips_permanent_failures_while_retrying_transient_errors ... ok`；较宽的整组未全绿，日志有 Linux 路径长度 `File name too long (os error 36)` 和其他失败，且 `t2_r8_magnet_metadata_proxy_preserves_global_manual_and_system_and_fails_closed_on_empty_manual has been running for over 60 seconds`，已停止该扩展检查。未将未做基线复跑的失败归为 #160 新缺陷。
+- Linux Native Host（canonical 源码由 Core 单测 harness 编入）：`cargo test --locked -p hls-native-shell --lib 'native_host::tests::'` → `test result: FAILED. 44 passed; 2 failed; 0 ignored; 0 measured; 1064 filtered out; finished in 1.08s`。失败的是 `media_push_retries_open_workbench_after_transient_failure_without_dropping_pending_request` 与 `stale_pipe_reconnects_and_autostarts_core_on_explicit_media_push_with_idempotent_request_id`；两者均为 `DPAPI credentials require Windows`，在进入工作台唤醒断言前就失败。凭据分支需 Windows 验证，不能算本机通过，也未将该平台限制列为产品缺陷。
+- Linux Presenter：`cargo test --locked -p hls-native-ui --bin hls-downloader-presenter` 未运行测试。`yeslogic-fontconfig-sys` 构建报 `The pkg-config command could not be found.`；已查本机未安装 pkg-config 或对应 fontconfig 开发包，Windows CI 结果不代表本机跑过 UI。
+- P2-18 仓库外 Linux 源码探针：复现输出见 P2-18；未修改仓库增加测试。P2-19、P2-20 及 CR-P2-10 临界值为源码调用链与确定性状态/算术推演，不宣称已新增或运行对应回归测试。
+- 未做 Windows 真机/UI 视觉、Win32 IPC、真实浏览器重启与真实投屏/TVBox 设备测试。上述边界不算本地通过；不将 CI 绿等同于发布放行。未发现此次变更改写 `file_dialogs::open` 白名单，或移除现有媒体请求的 SSRF/私网、代理与凭据隔离检查；不将 `net_policy::acquire` 不进入既定 `fetch_range` 视为缺陷。
+
+### 6. PR #161 Windows 打包修复复核（`74848fe3`）
+
+- 对照 [PR #161](https://github.com/ciaooo55/hls-downloader/pull/161) 合并前后的真实变更，使用同一 `origin/main@529fcbf4` 基线；`74848fe3` 后仅刷新了 `SYNC.md`。
+- **9 项：8 项已修复、1 项部分修复（CR-P2-15）、0 项未修复；确认 1 条新 P2（P2-21），无新增 P0/P1。** 本表更新第一节对应的历史记录；SBOM 已补上本单点名的 curl-impersonate 和 Vulkan loader，但 FFmpeg 声明仍未绑定实际打包二进制。
+- 当前公开发布仍按既定策略无签名；本节签名链结论限于可选签名工具，不代表公开 Release 已执行签名验收。
+
+#### 逐项核销
+
+以下文件与行号均指向所审 `main`，不是历史报告行号。
+
+| 项目 | 结论 | 证据及核销范围 |
+|---|---|---|
+| CR-P1-3 · 同提交 MSI ProductCode 冲突 | **已修复** | `scripts/build-v7.ps1:34,332,515–534` 传入 tier、源提交、版本、候选清单哈希；`scripts/build/V7MsiIdentity.ps1:20–41` 默认加每次构建的新 GUID nonce，显式固定 nonce 时结果可复现，tier 不同则输入不同；`scripts/release/finalize-v7-signed-package.ps1:108–125` 为签名重打包另生成 ProductCode。MSI UpgradeCode 不变，且 `scripts/build/build-native-v7-installer.ps1:108–115` 的升级范围包含同版本。 |
+| CR-P1-4 · 先签载荷，再签 MSI/Burn | **已修复（签名路径）** | `scripts/release/finalize-v7-signed-package.ps1:75–125,128–143` 先签 7 个 EXE，用同一份签名 preflight 和签名 app-image 重建，再更新清单；`scripts/build/build-native-v7-installer.ps1:49–53,130–132,139–179` 把 helper 放入 Binary 表，数据库修改完成后先签 MSI，Burn 链内嵌已签 MSI，最后 `insignia` 分离、签引擎、重附加并签外层。验签覆盖见 PRB-P2-1。 |
+| CR-P2-15 · 第三方 SBOM / 构建版本一致 | **部分修复** | `config/release/third-party-components.json:4–54` 与 `scripts/release/generate_sbom.py:62–96` 产出 FFmpeg、libmpv、Vulkan loader、curl-impersonate 四项；`scripts/build-v7.ps1:97–136,159–224,366–367` 使用相同清单中的 libmpv/Vulkan/curl 下载配置。**FFmpeg 是例外**：构建只检查 JSON 有该 ID，实际从环境变量、任意匹配缓存或 PATH 取 EXE；随后只验证 `-version` 进程正常退出，不核实版本或哈希（`scripts/build-v7.ps1:109–117,439–486`）；`scripts/release/stage-v7-release.ps1:84–88` 只把产品版本传给 SBOM，不传二进制身份。官方 Release bootstrap 有自己的固定归档配置（`scripts/build/bootstrap-v7-media-tools.ps1:17–25,38–64`、`.github/workflows/release-v7.yml:139–146`），所以不声称标准 CI 已发错版本。修复建议：共享锁定 FFmpeg 版本与来源，进入包前核对实际二进制身份，或从构建证据生成 SBOM；验收用不同版本的可运行 FFmpeg 验证拒绝/如实记载，再比较实际包中第三方二进制与 SBOM。 |
+| CR-P2-16 · 清理缺目录时继续 | **已修复** | `.github/workflows/release-v7.yml:325–339` 保留 `always()`，逐目录 `Test-Path -LiteralPath ... -PathType Container` 后才调用，单目录抛异常时继续下一个。浏览器及性能门禁确实产出这两个路径（`scripts/validation/verify-v7-candidate-browser.ps1:15,29–30`、`scripts/validation/benchmark-v7.ps1:9–10,18–21`）。PowerShell stub 分别验证了首项缺失与首项抛错。 |
+| CR-P2-17 · Checkpoint 内嵌错误 / DLL、curl 锁 | **已修复（原报告具体场景）** | `scripts/install/installer-preflight.rs:41–92,908–958` 解析帧、校验类型/请求号、拒绝内嵌错误，再等 Core 退出；实际 Core 通过 `native_shell/src/core_server.rs:639–656,684–697` 返回 Events 或顶层 Error。锁检查覆盖安装根、resources 及 curl 工具目录的 EXE/DLL（`scripts/install/installer-preflight.rs:960–990,1040–1066`）；Windows 独占句柄测试与帧测试在同文件 `:1216–1278`。新加入的扫描对普通目录存在误报，见 P2-21。 |
+| PRB-P1-1 · MSI Binary 流必须按原始字节读取 | **已修复** | `scripts/release/verify-v7-authenticode.ps1:38–71,109–117` 用 `ReadStream(..., [int]1)`，检查完整长度和 SHA-256 再验签；微软定义 format 1 为每字符一原始字节。Windows 合约测试创建真实 COM Binary 记录、覆盖所有字节值，并调用实际导出函数（`scripts/validation/test-v7-packaging-contracts.ps1:83–139`）。 |
+| PRB-P1-2 · 无 PyYAML 的 Windows CI 仍能检查第三方清单 | **已修复** | `scripts/release/generate_sbom.py:44–47,62–84` 把 `import yaml` 限于 npm lock 解析；`scripts/validation/test-v7-packaging-contracts.ps1:140–203` 无条件验证 stdlib 分支，有 PyYAML 才生成完整 SBOM。本次用 `python3.11 -S` 独立通过。 |
+| PRB-P1-3 · 安装目录与便携文件分开验 | **已修复** | `scripts/release/V7ReleaseScope.psm1:42–54` 分为六个 MSI 落地 EXE 和七个便携 EXE；`scripts/validation/verify-v7-exe-startup.ps1:156–177` 在真实 Bundle 安装后拒绝清单额外键，仅逐一校验六个安装 EXE 的必填 SHA-256；`scripts/validation/verify-v7-msi-lifecycle.ps1:121–137` 的失败诊断也只检查这六项，不把 Binary 表内的 helper 当作落地文件。 |
+| PRB-P2-1 · Preflight 身份与签名内部产物验证 | **已修复（脚本契约）** | `scripts/build-v7.ps1:324–353,517–539,559–564` 候选只编译一次 helper，两种容器使用同一文件，候选提升要求该哈希存在且匹配；`scripts/release/verify-v7-authenticode.ps1:75–145` 校验签名后的 ZIP、MSI 行政解包 EXE、Binary 表 helper，以及有 WiX 时的 Burn 引擎与内嵌 MSI 签名和 MSI SHA-256。缺 WiX 时默认明确回报 `burn_inner_verified=false` 但仍可能 `passed=true`（`:144–145,176`）；做完整签名验收必须传 `-RequireBurnInnerVerification`，不能只消费 `passed`。 |
+
+#### 新缺陷
+
+##### P2-21｜普通 `.dll` 后缀目录被 preflight 误判为占用，升级停在替换之前
+
+- **位置：** `scripts/install/installer-preflight.rs:960–985`（具体为 `:971–984`）。遍历得到 `DirEntry`，立刻丢掉类型信息，只按路径后缀判断；本 PR 把此前仅 `.exe` 扩展到 `.dll`。Windows Rust `OpenOptions::new().read(true).share_mode(0)` 对目录没有设置 `FILE_FLAG_BACKUP_SEMANTICS`；[CreateFileW 文档](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew#directories) 规定打开目录必须设置该标志。该打开错误不是文件消失，却被统一归为“程序文件仍被占用”。
+- **复现与调用链：** 在完整、已退出的旧便携安装根下建一个普通空目录 `notes.dll`，不替代任何程序文件，不持有任何文件句柄。运行新便携包的升级脚本。旧目录的镜像检查不排斥这个额外目录（`scripts/upgrade-v7-portable.ps1:36–101,153–161`），`:165` 在移动目录之前调用 `:15–30` 启动新版 helper。helper 的 `prepare_install` 进入 Windows shutdown（`scripts/install/installer-preflight.rs:373–391`），无剩余进程时仍反复调用 `files_unlocked`（`:1043–1087`）。确定的目录打开失败最后清理超时并返回 1（`:27–37`），升级脚本抛错，不到达移动语句（`scripts/upgrade-v7-portable.ps1:165–169`）。MSI 对已有路径执行同一 helper，且 `Return="check"`（`scripts/build/build-native-v7-installer.ps1:130–132`），因此相同条件也会阻止覆盖安装／卸载。
+- **影响：** 正常文件均未锁仍无法升级或卸载；会留下旧安装和用户数据，不是数据损坏。以前根目录的 `notes.dll` 不进入 EXE 锁检测；当前回归并不依赖伪造 IPC、签名或特殊权限。
+- **建议改法：** 在锁探测前区分普通目录与文件，跳过普通目录；对元数据错误、重解析点和已知文件位上的异常类型保持现有防护，不要泛化忽略访问失败。
+- **建议测试：** 在现有 Windows 锁测试中加一个名为 `notes.dll` 的普通目录，断言 `files_unlocked` 成功，然后在同一扫描范围持有实际 DLL 的独占句柄，仍断言失败。用带该目录的旧便携 fixture 走一次升级，验证交换目录成功且数据保留。
+- **证据级别：** 由 Windows API 契约和可达的调用/错误传播链确认；本次 Linux 未运行该 Windows 复现。
+
+#### 验证方法与局限
+
+- GitHub [#161 checks](https://github.com/ciaooo55/hls-downloader/pull/161/checks)：`5 passed, 0 failed, 0 pending, 0 skipped`；含 Validate contracts、Rust Core、Native presenter、Browser extensions、test。Windows PowerShell 5.1 与 7 合约接入点是 `.github/workflows/ci.yml:65–66` 和 `scripts/validation/validate-powershell.ps1:115–118`。
+- Linux PowerShell 7.4.13 实跑了 ProductCode 固定输入可复现、tier 分离、默认 nonce 重建分离与 MSI/Portable 6/7 项清单；输出 `Parsed 11 changed PowerShell scripts and modules.`。从工作流取出实际清理逻辑，以 stub 替代子脚本、测试目录替代真实路径；输出 `Cleanup YAML logic: second root processed after first root missing or throwing.`。未运行实际停进程动作。
+- Python 3.11.18 隔离验证：`python3 -S` 导入输出 `stdlib-only: ['ffmpeg', 'libmpv', 'vulkan-loader', 'curl-impersonate']`；带 PyYAML 运行实际 `generate_sbom.py` 输出 `CycloneDX 1.6 1266`，断言四项第三方版本全部匹配。系统 Python 3.10 缺 `tomllib`，改用机器已装 3.11。**独立证实但非新回归**：包还始终复制 `vcruntime140.dll`（`scripts/build-v7.ps1:425–433`），共享清单及 SBOM 都未列出。若合规目标是全量清点，应一并从实际构建证据补齐；父提交也漏此项。
+- 原样 Linux `rustc --edition 2021 --test scripts/install/installer-preflight.rs` 报 ``error[E0425]: cannot find type `PathBuf` in this scope``：`PathBuf` 导入在 `#[cfg(windows)]` 下而解析函数不受该条件限制（`scripts/install/installer-preflight.rs:7–8,310`），父提交已存在。通过 stdin 临时补导入、不改仓库源码后，非 Windows 测试输出 `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`；这不等价于 Windows 原生构建。
+- 未执行 Windows MSI/Burn 安装、真实证书签名/时间戳、Windows 独占句柄、重解析点和加载映像的实机行为；未把源码中的路径规范化或显式句柄测试外推为这些场景均通过。若启用签名发布，建议在授权 Windows 环境用一次性测试签名证书，完整跑 `finalize → verify -RequireBurnInnerVerification → candidate→formal 同版本覆盖升级`，不触发 Release。
 
 ---
 
