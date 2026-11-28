@@ -4,11 +4,11 @@
 > 请在每次开始复核或并行开发前，先拉取最新 `origin/main` 并通读根目录 [`SYNC.md`](../../SYNC.md)（关注元信息、领地锁表与 `[Brain -> Local & Cloud]` 指导）。
 
 ## 元信息（云端每次更新必填）
-- **最后更新时间（UTC+8）**：`2026-11-28 15:49:35 +08:00`
-- **所审 `origin/main` SHA**：`529fcbf4`（`529fcbf4e8c4bad77a9c8a3c6b457f39ceadc322`；看板中的 `74848fe3` 是刷新 `SYNC.md` 前的代码基线）
+- **最后更新时间（UTC+8）**：`2026-11-28 21:50:57 +08:00`
+- **所审 `origin/main` SHA**：`305b8b76`（已同步 PR #163 合入后的主线；PR #160、#161 的独立复核与源码行号仍以实际复核基线 `529fcbf4` 为准）
 - **对应 `SYNC.md` 同步序号**：`#4`
 - **云端当前状态**：PR #160、#161 独立复核已完成，核销与新缺陷见第二节第 5、6 小节；本次只更新复核回执，不认领业务代码。
-- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/review-pr160-pr161`（本复核回执）；`cloud/fix-p1-5-media-regression-gate`（[PR #163](https://github.com/ciaooo55/hls-downloader/pull/163)，单独处理 CR-P1-5）。
+- **活跃 `cloud/<topic>` 分支 / PR**：`cloud/review-pr160-pr161`（本复核回执）；`cloud/fix-p1-5-media-regression-gate`（[PR #163](https://github.com/ciaooo55/hls-downloader/pull/163) 已合入，`305b8b76`）。
 
 ---
 
@@ -54,6 +54,7 @@
 - **建议补充测试**：在签名验收脚本中补充对 MSI 解包 EXE、`HLSDownloaderPreflight.exe` 及 Burn 引擎签名的断言。
 
 #### P1-5｜`verify_v7_received_regression.py` 未校验 `media-{browser}.json` 的通过状态与组件哈希
+- **修复状态**：已由 [PR #163](https://github.com/ciaooo55/hls-downloader/pull/163) 收口（合入提交 `305b8b76`）。
 - **文件路径与行号**：`scripts/validation/verify_v7_received_regression.py:42-56`
 - **调用链与触发条件**：`release-v7.yml:153, 164` → `scripts/release/receive-v7-candidate.ps1:88` / `scripts/release/invoke-v7-release-gates.ps1:77` → `verify_v7_received_regression.py --kind browser`。第 `44-46` 行仅校验 `isinstance(media, list) and len(media) >= 24`，未检查列表条目的通过状态，也未校验对应组件/扩展 SHA-256。
 - **全局架构/跨模块影响**：浏览器媒体矩阵存在失败项或旧构建证据时，`browser` 发布门禁仍会放行，削弱发布质量防线。
@@ -336,3 +337,4 @@
 | 状态 | `cloud/<topic>` 分支 | 目标模块与任务说明 | 计划锁定文件清单（须完全位于 `AVAILABLE_FOR_CLOUD`） | PR 链接 & CI 状态 |
 | --- | --- | --- | --- | --- |
 | 已认领（开发中） | `cloud/protocol-wire-boundary-tests` | `AVAILABLE_FOR_CLOUD` 第 4 项：`crates/protocol` 帧编解码（4 MiB 上限、截断/长度不符/超限）、`CorePipeRequest`/`CorePipeResponse` 标签名与 `serde(default)` 向后兼容、`request_id` 映射、`Debug` 不泄露凭据、`CrawlSpec` `deny_unknown_fields`；`crates/client` `request_validation` 公共校验（保留设备名、HTTP 方法、URL 协议白名单、资源键归一化）边界回归。只新增集成测试，不改生产代码；若测试暴露真缺陷，写入本文件第一节而不改行为 | `crates/protocol/tests/wire_contract_boundaries.rs`（新增）、`crates/client/tests/request_validation_boundaries.rs`（新增） | 待提交 |
+| 已合入 | `cloud/fix-p1-5-media-regression-gate` | `CR-P1-5`：校验浏览器媒体矩阵逐项通过，并将组件及扩展摘要绑定到候选包清单；认领基线 `origin/main@529fcbf4` / `SYNC.md #4`（UTC+8：2026-11-28 15:43） | `scripts/validation/verify_v7_received_regression.py`、`scripts/validation/smoke_extension_media.py`、`scripts/validation/test_v7_received_regression.py` | [PR #163](https://github.com/ciaooo55/hls-downloader/pull/163)（`305b8b76`） |
