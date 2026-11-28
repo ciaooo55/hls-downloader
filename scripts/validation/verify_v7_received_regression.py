@@ -9,6 +9,58 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from zipfile import ZipFile
+
+
+MEDIA_MODES = (
+    "direct", "dual-source", "srcdoc", "shadow", "geometry", "dynamic-shadow", "iframe", "cross-iframe",
+    "ad-direct", "spa", "mse", "mse-sliced", "mse-encrypted", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
+    "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
+)
+MEDIA_COMPONENTS = ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe', 'HLSDownloaderPresenter.exe')
+EXTENSION_FAMILIES = {'edge': 'Chromium', 'firefox': 'Firefox'}
+
+
+def candidate_media_identity(manifest_path, runtime, extension, browser):
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+    archive_path = manifest_path.parent / manifest['extensions'][EXTENSION_FAMILIES[browser]]['path']
+    archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    with ZipFile(archive_path) as archive:
+        members = [member for member in archive.infolist() if not member.is_dir()]
+        files = {path.relative_to(extension).as_posix(): path
+                 for path in extension.rglob('*') if path.is_file()}
+        if (len(members) != len(files) or {member.orig_filename for member in members} != files.keys()
+                or any(archive.read(member) != files[member.orig_filename].read_bytes() for member in members)):
+            raise ValueError(f'Media extension differs from candidate archive: {browser}')
+    resources = runtime / 'app' / 'resources'
+    return {
+        'components': {name: hashlib.sha256((resources / name).read_bytes()).hexdigest()
+                       for name in MEDIA_COMPONENTS},
+        'extension_sha256': archive_sha256,
+    }
+
+
+def verify_media(report, browser, manifest):
+    if not isinstance(report, dict) or report.get('passed') is not True:
+        raise ValueError(f'Media regression did not pass: {browser}')
+    cases = report.get('cases')
+    if not isinstance(cases, list) or len(cases) != len(MEDIA_MODES):
+        raise ValueError(f'Media matrix incomplete: {browser}')
+    for case in cases:
+        if not isinstance(case, dict) or case.get('passed') is not True:
+            mode = case.get('mode') if isinstance(case, dict) else None
+            raise ValueError(f'Media case did not pass: {browser}/{mode}')
+    if {case.get('mode') for case in cases if isinstance(case.get('mode'), str)} != set(MEDIA_MODES):
+        raise ValueError(f'Media matrix incomplete: {browser}')
+    if report.get('browser') != browser:
+        raise ValueError(f'Media browser mismatch: {browser}')
+    component_hashes = report.get('components')
+    for name in MEDIA_COMPONENTS:
+        if (not isinstance(component_hashes, dict)
+                or component_hashes.get(name) != manifest['components'][f'app/resources/{name}']):
+            raise ValueError(f'Media component mismatch: {browser}/{name}')
+    if report.get('extension_sha256') != manifest['extensions'][EXTENSION_FAMILIES[browser]]['sha256']:
+        raise ValueError(f'Media extension mismatch: {browser}')
 
 
 def verify(kind, manifest_path, evidence, candidate_run_id=None):
@@ -41,14 +93,12 @@ def verify(kind, manifest_path, evidence, candidate_run_id=None):
     components = {Path(name).name: digest for name, digest in manifest['components'].items()}
     if kind == 'browser':
         for browser in ('edge', 'firefox'):
-            media = read(f'media-{browser}.json')
-            if not isinstance(media, list) or len(media) < 24:
-                raise ValueError(f'Media matrix incomplete: {browser}')
+            verify_media(read(f'media-{browser}.json'), browser, manifest)
             response = passed(f'response-{browser}.json')
             takeover = passed(f'takeover-{browser}.json')
             if not takeover.get('real_native_host') or not takeover.get('user_tasks_preserved'):
                 raise ValueError(f'Actual runtime handoff not established: {browser}')
-            for name in ('HLSDownloaderEngine.exe', 'HLSDownloaderNativeHost.exe', 'HLSDownloaderPresenter.exe'):
+            for name in MEDIA_COMPONENTS:
                 if takeover['components'].get(name) != components[name]:
                     raise ValueError(f'Takeover component mismatch: {browser}/{name}')
                 if response['isolation']['binaries'][name]['sha256'] != components[name]:
