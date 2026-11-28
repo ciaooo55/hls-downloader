@@ -32,15 +32,12 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support.ui import WebDriverWait
 
+from verify_v7_received_regression import MEDIA_MODES, candidate_media_identity
+
 
 EDGE_CANDIDATES = (
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
-)
-MEDIA_MODES = (
-    "direct", "dual-source", "srcdoc", "shadow", "geometry", "dynamic-shadow", "iframe", "cross-iframe",
-    "ad-direct", "spa", "mse", "mse-sliced", "mse-encrypted", "mse-worker", "mse-worker-dedicated", "multi-worker", "multi-mse", "hls-mse", "ll-hls-mse", "dash-mse",
-    "empty-video-src", "dash-low-mse", "multi-dash-mse", "dash-unknown-mse",
 )
 FIREFOX_CANDIDATES = (
     Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"),
@@ -714,7 +711,6 @@ def run(
                     state[key] = [value for sample in hovered for value in sample[key]]
                 state["mode"] = mode
                 state["browserErrors"] = _browser_errors(driver, f"http://127.0.0.1:{server.server_port}")
-                results.append(state)
                 if state.get("marker") != "1":
                     raise AssertionError(f"{mode}: content script 未就绪: {state}")
                 expected_frames = 2 if mode in {"iframe", "cross-iframe", "srcdoc"} else 1
@@ -728,10 +724,9 @@ def run(
                 if mode == "dash-unknown-mse":
                     time.sleep(1)
                     state = _overlay_state(driver)
-                    state["mode"] = mode
-                    results[-1] = state
                     if "下载视频" in state.get("labels", []) or any(state.get("resourceIds", [])):
                         raise AssertionError(f"{mode}: 无关清单被误绑定到播放器: {state}")
+                    results.append({**state, "mode": mode, "passed": True})
                     continue
                 if "下载视频" not in state.get("labels", []):
                     raise AssertionError(f"{mode}: 当前播放器没有得到唯一一键资源: {state}")
@@ -854,8 +849,7 @@ def run(
                             raise AssertionError(f"{mode}: 展开面板未沿用指定播放器的清单: {locations}, expected {expected_leaf}")
                         panels.append({'resourceId': resource_id, 'locations': locations})
                     state['playerPanels'] = panels
-                state['mode'] = mode
-                results[-1] = state
+                results.append({**state, "mode": mode, "passed": True})
         finally:
             if driver is not None:
                 with contextlib.suppress(Exception):
@@ -880,8 +874,15 @@ def main() -> None:
     parser.add_argument("--mode", action="append", choices=MEDIA_MODES, help="只执行指定媒体场景；可重复指定")
     parser.add_argument("--report", type=Path)
     arguments = parser.parse_args()
+    extension = arguments.extension.resolve()
+    identity = {}
+    if arguments.report and (runtime := os.environ.get("HLS_TEST_RUNTIME")):
+        if arguments.addon:
+            parser.error("--addon cannot be used with hosted candidate media evidence")
+        manifest = arguments.report.parent / "candidate" / "ARTIFACT-MANIFEST.json"
+        identity = candidate_media_identity(manifest, Path(runtime), extension, arguments.browser)
     results = run(
-        arguments.extension.resolve(),
+        extension,
         browser_name=arguments.browser,
         modes=arguments.mode,
         addon=arguments.addon.resolve() if arguments.addon else None,
@@ -890,7 +891,8 @@ def main() -> None:
         driver_path=arguments.driver.resolve() if arguments.driver else None,
         binary_path=arguments.browser_binary.resolve() if arguments.browser_binary else None,
     )
-    text = json.dumps(results, ensure_ascii=False, indent=2)
+    report = {"passed": True, "browser": arguments.browser, "cases": results, **identity}
+    text = json.dumps(report, ensure_ascii=False, indent=2)
     if arguments.report:
         arguments.report.write_text(text, encoding="utf-8")
     print(text)
